@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
   loadCaddyHosts,
   loadCompose,
   loadManifests,
+  readSiteList,
   type PlatformWiring,
 } from "./load.ts";
 
@@ -106,15 +107,31 @@ https://app.example.com:443 {
     expect(loadCaddyHosts(root)).toEqual(["example.com", "www.example.com", "app.example.com"]);
   });
 
-  it("loads platform.app.ts manifests and reports invalid ones", async () => {
-    write("apps/notes/platform.app.ts", `export default ${JSON.stringify(manifest("notes"))};\n`);
+  it("loads platform.app.json manifests only, never executing another checkout's code (#767)", async () => {
+    const marker = path.join(root, "executed.txt");
+    write("apps/notes/platform.app.json", JSON.stringify(manifest("notes")));
+    write("apps/notes/platform.app.ts", "throw new Error('the .ts must not be loaded when .json exists');\n");
     write("apps/bad/platform.app.json", JSON.stringify({ ...manifest("bad"), version: "one" }));
+    write(
+      "apps/tsonly/platform.app.ts",
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "x");\nexport default {};\n`,
+    );
     write("apps/plain/README.md", "no manifest here");
     const loaded = await loadManifests(root);
     expect(loaded.map((m) => [m.folder, m.manifest?.id, m.problems?.[0]?.path])).toEqual([
       ["bad", undefined, "version"],
       ["notes", "notes", undefined],
+      ["tsonly", undefined, ""],
     ]);
+    expect(loaded.find((m) => m.folder === "tsonly")?.problems?.[0]?.message).toMatch(
+      /only platform\.app\.json is read here/,
+    );
+    expect(existsSync(marker)).toBe(false); // the .ts-only manifest was never executed
+  });
+
+  it("reads an other-stack site list: one host per line, comments ignored", () => {
+    write("other-stack-sites.txt", "# the static site on the same edge\nasafarim.be\n\nwww.asafarim.be  # alias\n");
+    expect(readSiteList(path.join(root, "other-stack-sites.txt"))).toEqual(["asafarim.be", "www.asafarim.be"]);
   });
 });
 
@@ -160,6 +177,20 @@ function wiring(over: Partial<PlatformWiring> = {}): PlatformWiring {
 }
 
 describe("drift", () => {
+  it("lists other stacks' sites separately instead of as drift (#767)", () => {
+    const w = wiring({ caddyHosts: ["web.example.com", "asafarim.be", "www.asafarim.be", "stray.example.com"] });
+    const plain = computeDrift(w);
+    expect(plain.unclaimed.gateway).toEqual(["asafarim.be", "www.asafarim.be", "stray.example.com"]);
+    const report = computeDrift(w, { otherStackSites: ["asafarim.be", "www.asafarim.be"] });
+    expect(report.unclaimed.gateway).toEqual(["stray.example.com"]);
+    expect(report.otherStack).toEqual(["asafarim.be", "www.asafarim.be"]);
+    expect(formatDrift(report)).toContain("Other stacks on the same edge (not drift): asafarim.be, www.asafarim.be");
+    const onlyOther = computeDrift(wiring({ caddyHosts: ["web.example.com", "asafarim.be"] }), {
+      otherStackSites: ["asafarim.be"],
+    });
+    expect(onlyOther.ok).toBe(true);
+  });
+
   it("reports no drift when every place agrees (jobs and platform services claimed)", () => {
     const report = computeDrift(wiring());
     expect(report.ok).toBe(true);

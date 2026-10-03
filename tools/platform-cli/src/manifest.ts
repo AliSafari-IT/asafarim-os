@@ -5,8 +5,13 @@
  * default export is the manifest (`platform.app.ts`, usually
  * `export default defineApp({...})`). The CLI runs under tsx, so TypeScript
  * modules load directly.
+ *
+ * Security (#767): loading a .ts/.js manifest EXECUTES it. That is only for
+ * in-repo, trusted apps: a module manifest is refused unless it lies inside
+ * the workspace the command runs in. `sync --against` and any install path
+ * read `platform.app.json` only (`jsonOnly`) and never execute app code.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MANIFEST_JSON_FILE, ManifestError, formatProblems, validateManifest } from "@asafarim/app-manifest";
@@ -16,9 +21,44 @@ export interface CommandResult {
   lines: string[];
 }
 
+export interface LoadOptions {
+  /** Only `.json` is read; a module manifest is refused, never executed (--against, installs). */
+  jsonOnly?: boolean;
+  /** A module manifest must lie inside this directory to be executed. */
+  workspaceRoot?: string;
+}
+
+/** The nearest directory above `from` with a pnpm-workspace.yaml (the trusted workspace). */
+export function workspaceRootOf(from: string): string | undefined {
+  let dir = path.resolve(from);
+  for (;;) {
+    if (existsSync(path.join(dir, "pnpm-workspace.yaml"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+function isInside(file: string, root: string): boolean {
+  const rel = path.relative(path.resolve(root), path.resolve(file));
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 /** Read a manifest file into a plain value (not yet validated). */
-export async function loadManifestFile(file: string): Promise<unknown> {
+export async function loadManifestFile(file: string, opts: LoadOptions = {}): Promise<unknown> {
   if (file.endsWith(".json")) return JSON.parse(readFileSync(file, "utf8"));
+  if (opts.jsonOnly) {
+    throw new Error(
+      "only platform.app.json is read here, and manifest code is never executed; compile it in its own repository first (platform manifest compile)",
+    );
+  }
+  if (!opts.workspaceRoot || !isInside(file, opts.workspaceRoot)) {
+    throw new Error(
+      "refusing to execute a manifest module outside this workspace" +
+        (opts.workspaceRoot ? ` (${opts.workspaceRoot})` : "") +
+        "; module manifests are for in-repo, trusted apps only",
+    );
+  }
   const mod = (await import(pathToFileURL(path.resolve(file)).href)) as { default?: unknown };
   if (mod.default === undefined) throw new Error("the module has no default export");
   return mod.default;
@@ -29,7 +69,7 @@ async function check(file: string, cwd: string): Promise<CommandResult & { manif
   const shown = (path.relative(cwd, path.resolve(cwd, file)) || file).split(path.sep).join("/");
   let value: unknown;
   try {
-    value = await loadManifestFile(path.resolve(cwd, file));
+    value = await loadManifestFile(path.resolve(cwd, file), { workspaceRoot: workspaceRootOf(cwd) });
   } catch (error) {
     if (error instanceof ManifestError) {
       return { ok: false, lines: [`✖ ${shown}: ${error.problems.length} problem(s)`, formatProblems(error.problems)] };

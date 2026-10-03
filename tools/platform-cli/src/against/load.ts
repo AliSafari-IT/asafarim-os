@@ -50,19 +50,23 @@ export interface PlatformWiring {
 
 const posix = (p: string) => p.split(path.sep).join("/");
 
-/** `apps/<folder>/platform.app.ts`, or `.json` when there's no .ts. */
+/**
+ * `apps/<folder>/platform.app.json` only (#767): another checkout's manifest
+ * code is never executed. An app with only a platform.app.ts is reported as a
+ * problem ("compile it first"), not loaded.
+ */
 export async function loadManifests(root: string): Promise<LoadedManifest[]> {
   const appsDir = path.join(root, "apps");
   if (!existsSync(appsDir)) return [];
   const out: LoadedManifest[] = [];
   for (const entry of readdirSync(appsDir, { withFileTypes: true }).filter((e) => e.isDirectory())) {
-    const file = ["platform.app.ts", "platform.app.json"]
+    const file = ["platform.app.json", "platform.app.ts"]
       .map((f) => path.join(appsDir, entry.name, f))
       .find((f) => existsSync(f));
     if (!file) continue;
     const rel = posix(path.relative(root, file));
     try {
-      const result = validateManifest(await loadManifestFile(file));
+      const result = validateManifest(await loadManifestFile(file, { jsonOnly: true }));
       out.push(
         result.ok
           ? { file: rel, folder: entry.name, manifest: result.manifest }
@@ -73,6 +77,14 @@ export async function loadManifests(root: string): Promise<LoadedManifest[]> {
     }
   }
   return out.sort((a, b) => a.folder.localeCompare(b.folder));
+}
+
+/** `--other-stack-sites <file>`: one host per line; blank lines and # comments ignored. */
+export function readSiteList(file: string): string[] {
+  return readFileSync(file, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.replace(/#.*$/, "").trim())
+    .filter(Boolean);
 }
 
 /** The launcher registry (`PLATFORM_APPS` in packages/auth/src/apps.ts). */
