@@ -18,7 +18,8 @@
     "format:check": "prettier --check .",
     "platform": "turbo run build --filter=@asafarim/platform-cli^... --output-logs=errors-only && pnpm --filter @asafarim/platform-cli exec tsx src/cli.ts",
     "platform:sync": "pnpm platform sync",
-    "platform:sync:check": "pnpm platform sync --check"
+    "platform:sync:check": "pnpm platform sync --check",
+    "platform:boundaries": "pnpm platform boundaries"
   },
   "devDependencies": {
     "prettier": "^3.5.0",
