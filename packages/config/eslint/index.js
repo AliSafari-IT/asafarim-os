@@ -1,4 +1,4 @@
-// Shared ESLint flat config for ASafarIM OS workspaces.
+// Shared ESLint flat config for ASafariM OS workspaces.
 //
 //   // eslint.config.js in a package
 //   import config from "@asafarim/config/eslint";

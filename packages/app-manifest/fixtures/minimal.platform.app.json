@@ -3,7 +3,7 @@
   "name": "Notes",
   "version": "0.1.0",
   "platform": ">=0.1 <1",
-  "owner": "ASafarIM Digital",
+  "owner": "ASafariM Digital",
   "runtime": {
     "image": "notes",
     "port": 3000,

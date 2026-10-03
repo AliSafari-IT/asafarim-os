@@ -3,7 +3,7 @@
   "name": "Testora",
   "version": "1.8.0",
   "platform": ">=0.1 <1",
-  "owner": "ASafarIM Digital",
+  "owner": "ASafariM Digital",
   "domains": { "primary": "testora.cloud", "aliases": ["www.testora.cloud", "testora.asafarim.com"] },
   "runtime": {
     "image": "testora",

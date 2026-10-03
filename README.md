@@ -1,4 +1,4 @@
-# ASafarIM OS
+# ASafariM OS
 
 A small core platform for business applications, and apps that plug into it.
 

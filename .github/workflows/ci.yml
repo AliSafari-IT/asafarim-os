@@ -28,6 +28,9 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Brand spelling (ASafariM, #778)
+        run: pnpm check:brand
+
       - name: Format
         run: pnpm format:check
 

@@ -2,7 +2,7 @@
   "name": "@asafarim/config",
   "version": "0.1.0",
   "private": true,
-  "description": "Shared TypeScript and ESLint presets for ASafarIM OS packages, core services and apps",
+  "description": "Shared TypeScript and ESLint presets for ASafariM OS packages, core services and apps",
   "type": "module",
   "exports": {
     "./tsconfig/base.json": "./tsconfig/base.json",

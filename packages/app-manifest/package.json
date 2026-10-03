@@ -2,7 +2,7 @@
   "name": "@asafarim/app-manifest",
   "version": "0.1.0",
   "private": true,
-  "description": "The self-describing app contract: the manifest every ASafarIM OS app ships, its validator and its JSON Schema",
+  "description": "The self-describing app contract: the manifest every ASafariM OS app ships, its validator and its JSON Schema",
   "type": "module",
   "exports": {
     ".": {
