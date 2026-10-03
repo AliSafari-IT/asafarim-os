@@ -3,7 +3,7 @@
   "name": "Testora",
   "version": "1.8",
   "platform": ">=0.1 <1",
-  "owner": "ASafarIM Digital",
+  "owner": "ASafariM Digital",
   "runtime": {
     "image": "testora",
     "port": 3000,

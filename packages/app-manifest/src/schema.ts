@@ -339,7 +339,7 @@ export function appManifestJsonSchema(): Record<string, unknown> {
   return {
     ...schema,
     $id: "https://asafarim.site/schemas/app-manifest.schema.json",
-    title: "ASafarIM OS app manifest",
+    title: "ASafariM OS app manifest",
     description:
       "Structure of platform.app.json. Cross-field rules (namespacing, role grants, route permissions, duplicates, config default types) are enforced by @asafarim/app-manifest's validateManifest.",
   };
