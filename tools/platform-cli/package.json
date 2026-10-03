@@ -9,6 +9,9 @@
     "lint": "eslint .",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@asafarim/app-manifest": "workspace:*"
+  },
   "devDependencies": {
     "@asafarim/config": "workspace:*",
     "@types/node": "^24.0.0",

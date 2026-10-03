@@ -1,0 +1,18 @@
+{
+  "id": "notes",
+  "name": "Notes",
+  "version": "0.1.0",
+  "platform": ">=0.1 <1",
+  "owner": "ASafarIM Digital",
+  "runtime": {
+    "image": "notes",
+    "port": 3000,
+    "health": { "live": "/healthz", "ready": "/readyz" },
+    "resources": { "memory": "128m", "cpus": 0.25 }
+  },
+  "database": { "engine": "none" },
+  "auth": { "client": "none", "publicPaths": ["/"] },
+  "permissions": [],
+  "roles": [],
+  "ui": { "glyph": "NT", "color": "#0ea5e9", "nav": [], "status": "coming-soon" }
+}

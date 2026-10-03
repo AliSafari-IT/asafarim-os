@@ -1,0 +1,38 @@
+{
+  "name": "@asafarim/app-manifest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The self-describing app contract: the manifest every ASafarIM OS app ships, its validator and its JSON Schema",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema.json": "./schema/app-manifest.schema.json"
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "schema": "tsx scripts/write-schema.ts"
+  },
+  "dependencies": {
+    "semver": "^7.8.0",
+    "zod": "^4.6.0"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.0.0",
+    "@types/semver": "^7.7.0",
+    "eslint": "^9.39.4",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.3"
+  }
+}
