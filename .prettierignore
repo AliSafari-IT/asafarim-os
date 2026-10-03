@@ -1,3 +1,4 @@
 pnpm-lock.yaml
 LICENSE
 generated/
+packages/app-manifest/schema/

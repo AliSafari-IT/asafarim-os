@@ -1,0 +1,486 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "not": {
+        "enum": [
+          "admin",
+          "api",
+          "app",
+          "apps",
+          "asafarim",
+          "assets",
+          "auth",
+          "core",
+          "gateway",
+          "id",
+          "identity",
+          "internal",
+          "mail",
+          "platform",
+          "static",
+          "system",
+          "www"
+        ]
+      }
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "platform": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "domains": {
+      "type": "object",
+      "properties": {
+        "primary": {
+          "type": "string",
+          "pattern": "^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[._/-][a-z0-9]+)*(?::[\\w][\\w.-]{0,127})?$"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "health": {
+          "type": "object",
+          "properties": {
+            "live": {
+              "type": "string",
+              "pattern": "^\\/[^\\s?#]*$"
+            },
+            "ready": {
+              "type": "string",
+              "pattern": "^\\/[^\\s?#]*$"
+            }
+          },
+          "required": [
+            "live",
+            "ready"
+          ],
+          "additionalProperties": false
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "memory": {
+              "type": "string",
+              "pattern": "^(?:[1-9]\\d*|\\d+\\.\\d+)[mg]$"
+            },
+            "cpus": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 16
+            }
+          },
+          "required": [
+            "memory",
+            "cpus"
+          ],
+          "additionalProperties": false
+        },
+        "workers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+              },
+              "image": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:[._/-][a-z0-9]+)*(?::[\\w][\\w.-]{0,127})?$"
+              },
+              "network": {
+                "type": "string",
+                "enum": [
+                  "internal",
+                  "egress-only"
+                ]
+              },
+              "resources": {
+                "type": "object",
+                "properties": {
+                  "memory": {
+                    "type": "string",
+                    "pattern": "^(?:[1-9]\\d*|\\d+\\.\\d+)[mg]$"
+                  },
+                  "cpus": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 16
+                  }
+                },
+                "required": [
+                  "memory",
+                  "cpus"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "name",
+              "image",
+              "network",
+              "resources"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "image",
+        "port",
+        "health",
+        "resources"
+      ],
+      "additionalProperties": false
+    },
+    "database": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "engine": {
+              "type": "string",
+              "const": "postgres"
+            },
+            "migrations": {
+              "type": "string",
+              "enum": [
+                "drizzle",
+                "prisma",
+                "sql"
+              ]
+            },
+            "dedicated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "engine",
+            "migrations"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "engine": {
+              "type": "string",
+              "const": "none"
+            }
+          },
+          "required": [
+            "engine"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "client": {
+          "type": "string",
+          "enum": [
+            "oidc",
+            "none"
+          ]
+        },
+        "publicPaths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\/[^\\s?#]*$"
+          }
+        }
+      },
+      "required": [
+        "client",
+        "publicPaths"
+      ],
+      "additionalProperties": false
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "key",
+          "description"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$"
+          },
+          "grants": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "key",
+          "grants"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^\\/[A-Za-z0-9._~\\-/*[\\]:]*$"
+          },
+          "methods": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "GET",
+                "HEAD",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "OPTIONS"
+              ]
+            }
+          },
+          "permission": {
+            "type": "string"
+          },
+          "expose": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "events": {
+      "type": "object",
+      "properties": {
+        "publishes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.v[1-9]\\d*$"
+              },
+              "schema": {
+                "type": "string",
+                "pattern": "^\\.\\/[\\w./-]+\\.json$"
+              }
+            },
+            "required": [
+              "type",
+              "schema"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "subscribes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.v[1-9]\\d*$"
+              },
+              "handler": {
+                "type": "string",
+                "pattern": "^\\/[^\\s?#]*$"
+              }
+            },
+            "required": [
+              "type",
+              "handler"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "config": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-zA-Z0-9]*(?:\\.[a-z][a-zA-Z0-9]*)*$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "string",
+              "int",
+              "number",
+              "boolean"
+            ]
+          },
+          "default": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "key",
+          "type",
+          "default"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "secrets": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+      }
+    },
+    "ui": {
+      "type": "object",
+      "properties": {
+        "glyph": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{1,3}$"
+        },
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "nav": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "href": {
+                "type": "string",
+                "pattern": "^\\/[^\\s?#]*$"
+              }
+            },
+            "required": [
+              "label",
+              "href"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "coming-soon"
+          ]
+        }
+      },
+      "required": [
+        "glyph",
+        "color",
+        "nav",
+        "status"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "version",
+    "platform",
+    "owner",
+    "runtime",
+    "database",
+    "auth",
+    "permissions",
+    "roles",
+    "ui"
+  ],
+  "additionalProperties": false,
+  "$id": "https://asafarim.site/schemas/app-manifest.schema.json",
+  "title": "ASafarIM OS app manifest",
+  "description": "Structure of platform.app.json. Cross-field rules (namespacing, role grants, route permissions, duplicates, config default types) are enforced by @asafarim/app-manifest's validateManifest."
+}

@@ -16,7 +16,7 @@
     "test": "turbo test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "platform": "pnpm --filter @asafarim/platform-cli exec tsx src/cli.ts",
+    "platform": "turbo run build --filter=@asafarim/platform-cli^... --output-logs=errors-only && pnpm --filter @asafarim/platform-cli exec tsx src/cli.ts",
     "platform:sync": "pnpm platform sync",
     "platform:sync:check": "pnpm platform sync --check"
   },
