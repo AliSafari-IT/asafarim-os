@@ -455,6 +455,43 @@
             "active",
             "coming-soon"
           ]
+        },
+        "launcher": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "meta": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "access": {
+              "type": "string",
+              "enum": [
+                "public",
+                "authenticated"
+              ]
+            },
+            "requiresAccountToUse": {
+              "type": "boolean"
+            },
+            "order": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          },
+          "required": [
+            "description",
+            "meta",
+            "access",
+            "order"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

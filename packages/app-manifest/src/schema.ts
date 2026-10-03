@@ -184,6 +184,24 @@ const baseManifest = z.strictObject({
     color: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'must be a hex colour such as "#7c3aed"'),
     nav: z.array(z.strictObject({ label: z.string().min(1), href: urlPath })),
     status: z.enum(["active", "coming-soon"]),
+    /**
+     * The app's tile in platform launchers (Hub, app switchers); `platform sync`
+     * generates the launcher registry from it. Omit for an app that isn't
+     * listed in launchers.
+     */
+    launcher: z
+      .strictObject({
+        description: z.string().min(1).max(300),
+        /** Short technical line under the name, e.g. its host. */
+        meta: z.string().min(1).max(120),
+        /** Who may open it: everyone, or any signed-in user. */
+        access: z.enum(["public", "authenticated"]),
+        /** Public pages are open, but working in the app needs an account. */
+        requiresAccountToUse: z.boolean().optional(),
+        /** Position in launchers, ascending. */
+        order: z.number().int().min(0).max(10000),
+      })
+      .optional(),
   }),
 });
 

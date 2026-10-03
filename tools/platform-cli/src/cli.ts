@@ -1,8 +1,9 @@
 /**
  * The `platform` CLI.
  *
- *   pnpm platform sync                       generate generated/platform/ from the app manifests
- *   pnpm platform sync --check               fail when generated/platform/ has drifted (CI)
+ *   pnpm platform sync [--root <dir>]        generate <dir>/generated/platform/ from every
+ *                                            <dir>/apps/<id>/platform.app.json (default: this workspace)
+ *   pnpm platform sync --check [--root <dir>] fail when generated/platform/ has drifted (CI)
  *   pnpm platform sync --check --against <dir> [--other-stack-sites <file>]
  *                                            compare the manifests in <dir>/apps/* with that
  *                                            checkout's hand-written wiring; read-only.
@@ -22,7 +23,8 @@ import { findRepoRoot, sync } from "./sync.ts";
 
 const USAGE = [
   "Usage:",
-  "  platform sync [--check] [--against <dir> [--other-stack-sites <file>]]",
+  "  platform sync [--check] [--root <dir>]",
+  "  platform sync --check --against <dir> [--other-stack-sites <file>]",
   "  platform manifest validate <file>",
   "  platform manifest compile <file>",
   "  platform boundaries",
@@ -37,14 +39,17 @@ async function syncCommand(args: string[]): Promise<Result | null> {
   let check = false;
   let against: string | undefined;
   let otherStackFile: string | undefined;
+  let rootDir: string | undefined;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--check") check = true;
     else if (args[i] === "--against" && args[i + 1]) against = args[++i];
     else if (args[i] === "--other-stack-sites" && args[i + 1]) otherStackFile = args[++i];
+    else if (args[i] === "--root" && args[i + 1]) rootDir = args[++i];
     else return null;
   }
   if (otherStackFile !== undefined && against === undefined) return null;
-  if (against === undefined) return sync(findRepoRoot(cwd), { check });
+  if (rootDir !== undefined && against !== undefined) return null;
+  if (against === undefined) return sync(rootDir ? path.resolve(cwd, rootDir) : findRepoRoot(cwd), { check });
   if (!check) return { ok: false, lines: ["--against only reports drift; use it with --check."] };
   const root = path.resolve(cwd, against);
   const otherStackSites = otherStackFile ? readSiteList(path.resolve(cwd, otherStackFile)) : [];
