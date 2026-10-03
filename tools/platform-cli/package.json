@@ -10,7 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@asafarim/app-manifest": "workspace:*"
+    "@asafarim/app-manifest": "workspace:*",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@asafarim/config": "workspace:*",
