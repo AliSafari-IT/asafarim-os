@@ -11,10 +11,10 @@
   },
   "devDependencies": {
     "@asafarim/config": "workspace:*",
-    "@types/node": "^24.0.0",
-    "eslint": "^9.39.4",
+    "@types/node": "^26.6.3",
+    "eslint": "^10.11.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.7.0",
-    "vitest": "^4.1.11"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
   }
 }
