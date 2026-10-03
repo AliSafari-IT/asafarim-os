@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -52,6 +52,27 @@ describe("platform manifest validate", () => {
     expect(result.ok).toBe(false);
     expect(result.lines[0]).toMatch(/refusing to execute a manifest module outside this workspace/);
     expect(() => readFileSync(marker)).toThrow(); // never executed
+  });
+
+  it("a symlink inside the workspace that points outside it doesn't count as inside (realpath)", async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), "platform-outside-"));
+    try {
+      const marker = path.join(outside, "executed.txt");
+      writeFileSync(
+        path.join(outside, "platform.app.ts"),
+        `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "x");\nexport default {};\n`,
+      );
+      writeFileSync(path.join(dir, "pnpm-workspace.yaml"), "packages: []\n"); // dir is the workspace
+      mkdirSync(path.join(dir, "apps"));
+      // apps/ext → a directory outside the workspace ("junction" also works without admin rights on Windows).
+      symlinkSync(outside, path.join(dir, "apps", "ext"), "junction");
+      const result = await validateCommand(path.join(dir, "apps", "ext", "platform.app.ts"), dir);
+      expect(result.ok).toBe(false);
+      expect(result.lines[0]).toMatch(/refusing to execute a manifest module outside this workspace/);
+      expect(existsSync(marker)).toBe(false); // never executed
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("the JSON-only loader never executes a module (--against, installs)", async () => {

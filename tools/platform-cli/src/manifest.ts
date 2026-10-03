@@ -11,7 +11,7 @@
  * the workspace the command runs in. `sync --against` and any install path
  * read `platform.app.json` only (`jsonOnly`) and never execute app code.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MANIFEST_JSON_FILE, ManifestError, formatProblems, validateManifest } from "@asafarim/app-manifest";
@@ -39,8 +39,21 @@ export function workspaceRootOf(from: string): string | undefined {
   }
 }
 
+/**
+ * Real paths on both sides: a symlink inside the workspace that points outside
+ * it (or a symlinked workspace root) must not count as "inside". A path that
+ * can't be resolved is treated as outside.
+ */
 function isInside(file: string, root: string): boolean {
-  const rel = path.relative(path.resolve(root), path.resolve(file));
+  let realFile: string;
+  let realRoot: string;
+  try {
+    realFile = realpathSync(path.resolve(file));
+    realRoot = realpathSync(path.resolve(root));
+  } catch {
+    return false;
+  }
+  const rel = path.relative(realRoot, realFile);
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
