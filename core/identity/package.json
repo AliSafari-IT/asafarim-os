@@ -1,0 +1,33 @@
+{
+  "name": "@asafarim/identity",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ASafariM OS identity service: the OIDC provider for id.asafarim.site, with login delegated to Hub (ADR 0002, Addendum A)",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "dev": "node --watch src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "keys": "node scripts/generate-keys.ts"
+  },
+  "dependencies": {
+    "ioredis": "^6.0.0",
+    "jose": "^6.2.12",
+    "oidc-provider": "^9.12.2",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.1",
+    "@types/oidc-provider": "^9.12.1",
+    "@types/pg": "^8.23.1",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

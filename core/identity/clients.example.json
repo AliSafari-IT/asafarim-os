@@ -1,0 +1,12 @@
+{
+  "clients": [
+    {
+      "client_id": "testora",
+      "primary_domain": "testora.cloud",
+      "redirect_uris": ["https://testora.cloud/api/auth/callback/asafarim"],
+      "post_logout_redirect_uris": ["https://testora.cloud/"],
+      "backchannel_logout_uri": "https://testora.cloud/api/auth/backchannel-logout",
+      "client_secret_env": "IDENTITY_CLIENT_SECRET_TESTORA"
+    }
+  ]
+}
