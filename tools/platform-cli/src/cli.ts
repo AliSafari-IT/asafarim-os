@@ -3,23 +3,26 @@
  *
  *   pnpm platform sync                       generate generated/platform/ from the app manifests
  *   pnpm platform sync --check               fail when generated/platform/ has drifted (CI)
- *   pnpm platform sync --check --against <dir>
+ *   pnpm platform sync --check --against <dir> [--other-stack-sites <file>]
  *                                            compare the manifests in <dir>/apps/* with that
- *                                            checkout's hand-written wiring; read-only
+ *                                            checkout's hand-written wiring; read-only.
+ *                                            Reads platform.app.json only (never executes app code).
+ *                                            <file>: gateway sites of other stacks on the same edge,
+ *                                            one per line (# comments allowed); listed, not drift
  *   pnpm platform manifest validate <file>   check one manifest (.json, or a .ts default export)
  *   pnpm platform manifest compile <file>    validate and write platform.app.json beside it
  *   pnpm platform boundaries                 fail if core/ or packages/ import from apps/
  */
 import path from "node:path";
 import { computeDrift, formatDrift } from "./against/drift.ts";
-import { loadPlatformWiring } from "./against/load.ts";
+import { loadPlatformWiring, readSiteList } from "./against/load.ts";
 import { boundariesCommand } from "./boundaries.ts";
 import { compileCommand, validateCommand } from "./manifest.ts";
 import { findRepoRoot, sync } from "./sync.ts";
 
 const USAGE = [
   "Usage:",
-  "  platform sync [--check] [--against <dir>]",
+  "  platform sync [--check] [--against <dir> [--other-stack-sites <file>]]",
   "  platform manifest validate <file>",
   "  platform manifest compile <file>",
   "  platform boundaries",
@@ -33,15 +36,19 @@ type Result = { ok: boolean; lines: string[] };
 async function syncCommand(args: string[]): Promise<Result | null> {
   let check = false;
   let against: string | undefined;
+  let otherStackFile: string | undefined;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--check") check = true;
     else if (args[i] === "--against" && args[i + 1]) against = args[++i];
+    else if (args[i] === "--other-stack-sites" && args[i + 1]) otherStackFile = args[++i];
     else return null;
   }
+  if (otherStackFile !== undefined && against === undefined) return null;
   if (against === undefined) return sync(findRepoRoot(cwd), { check });
   if (!check) return { ok: false, lines: ["--against only reports drift; use it with --check."] };
   const root = path.resolve(cwd, against);
-  const report = computeDrift(await loadPlatformWiring(root));
+  const otherStackSites = otherStackFile ? readSiteList(path.resolve(cwd, otherStackFile)) : [];
+  const report = computeDrift(await loadPlatformWiring(root), { otherStackSites });
   return { ok: report.ok, lines: [`Drift report for ${root}`, "", ...formatDrift(report)] };
 }
 

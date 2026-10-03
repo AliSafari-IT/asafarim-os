@@ -30,6 +30,8 @@ export interface DriftReport {
   apps: AppDrift[];
   /** Present in the hand-written files, claimed by no manifest. */
   unclaimed: Record<Area, string[]>;
+  /** Gateway sites declared as another stack's (--other-stack-sites): listed, not drift. */
+  otherStack: string[];
   platformServices: string[];
   ok: boolean;
 }
@@ -102,7 +104,11 @@ function checkApp(m: AppManifest, w: PlatformWiring, coreNetworks: Set<string>) 
   return areas;
 }
 
-export function computeDrift(w: PlatformWiring, opts: { platformServices?: string[] } = {}): DriftReport {
+export function computeDrift(
+  w: PlatformWiring,
+  opts: { platformServices?: string[]; otherStackSites?: string[] } = {},
+): DriftReport {
+  const otherStackSites = new Set(opts.otherStackSites ?? []);
   const platformServices = opts.platformServices ?? DEFAULT_PLATFORM_SERVICES;
   const coreNetworks = new Set(
     w.compose.filter((s) => platformServices.includes(s.name) && s.name !== "caddy").flatMap((s) => s.networks),
@@ -146,13 +152,20 @@ export function computeDrift(w: PlatformWiring, opts: { platformServices?: strin
     compose: w.compose.map((s) => s.name).filter((n) => !claimed.compose.has(n)),
     bake: w.bakeTargets.filter((t) => !claimed.bake.has(t)),
     plan: w.planImages.filter((i) => !claimed.plan.has(i)),
-    gateway: w.caddyHosts.filter((h) => !claimed.gateway.has(h)),
+    gateway: w.caddyHosts.filter((h) => !claimed.gateway.has(h) && !otherStackSites.has(h)),
   };
+  const otherStack = w.caddyHosts.filter((h) => !claimed.gateway.has(h) && otherStackSites.has(h));
 
   const ok =
     apps.every((a) => !a.invalid && AREAS.every((area) => a.areas[area].length === 0)) &&
     AREAS.every((area) => unclaimed[area].length === 0);
-  return { apps, unclaimed, platformServices: platformServices.filter((s) => w.compose.some((c) => c.name === s)), ok };
+  return {
+    apps,
+    unclaimed,
+    otherStack,
+    platformServices: platformServices.filter((s) => w.compose.some((c) => c.name === s)),
+    ok,
+  };
 }
 
 /** A per-app ✔/✖ table, the reasons, then what no manifest claims. */
@@ -174,6 +187,8 @@ export function formatDrift(report: DriftReport): string[] {
     lines.push("", "Present by hand, claimed by no manifest:");
     for (const area of unclaimed) lines.push(`  ✖ ${area}: ${report.unclaimed[area].join(", ")}`);
   }
+  if (report.otherStack.length > 0)
+    lines.push("", `Other stacks on the same edge (not drift): ${report.otherStack.join(", ")}`);
   if (report.platformServices.length > 0)
     lines.push("", `Platform services (not apps): ${report.platformServices.join(", ")}`);
   lines.push("", report.ok ? "No drift." : "Drift found.");

@@ -4,27 +4,20 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # A Dependabot PR is a PR: merged one at a time, on green CI. Keep the queue short.
+    open-pull-requests-limit: 3
     groups:
       dev-tooling:
         dependency-type: development
-        # Majors come one at a time, not bundled: a grouped major bump of
-        # TypeScript, ESLint and @types/node broke main once.
         update-types: [minor, patch]
     ignore:
-      # TypeScript stays on 5.x until typescript-eslint supports TS 7.
-      - dependency-name: typescript
-        update-types: [version-update:semver-major]
-      # ESLint 10 needs a matching typescript-eslint and @eslint/js; move them together, by hand.
-      - dependency-name: eslint
-        update-types: [version-update:semver-major]
-      - dependency-name: "@eslint/js"
-        update-types: [version-update:semver-major]
-      # @types/node follows the runtime (Node 24, .nvmrc), not the latest major.
-      - dependency-name: "@types/node"
+      # No semver-major bumps from the bot, for any package. Toolchain majors
+      # (TypeScript, ESLint + typescript-eslint, @types/node, Zod, Vitest) are a
+      # deliberate, reviewed decision, made by hand.
+      - dependency-name: "*"
         update-types: [version-update:semver-major]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
