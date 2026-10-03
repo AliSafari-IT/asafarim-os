@@ -72,23 +72,27 @@ export interface LauncherEntry {
 
 /** The launcher registry: every manifest with a `ui.launcher`, by `order` then id. */
 export function launcherRegistry(manifests: AppManifest[]): LauncherEntry[] {
-  return manifests
-    .filter((m) => m.ui.launcher !== undefined)
-    .map((m) => {
-      const l = m.ui.launcher!;
-      return {
-        key: m.id,
-        name: m.name,
-        description: l.description,
-        glyph: m.ui.glyph,
-        meta: l.meta,
-        status: m.ui.status,
-        access: l.access,
-        ...(l.requiresAccountToUse === undefined ? {} : { requiresAccountToUse: l.requiresAccountToUse }),
-        order: l.order,
-      };
-    })
-    .sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+  return (
+    manifests
+      .filter((m) => m.ui.launcher !== undefined)
+      .map((m) => {
+        const l = m.ui.launcher!;
+        return {
+          key: m.id,
+          name: m.name,
+          description: l.description,
+          glyph: m.ui.glyph,
+          meta: l.meta,
+          status: m.ui.status,
+          access: l.access,
+          ...(l.requiresAccountToUse === undefined ? {} : { requiresAccountToUse: l.requiresAccountToUse }),
+          order: l.order,
+        };
+      })
+      // Code-unit tie-break, not localeCompare: --check compares bytes, so the
+      // order must not depend on the host's collation.
+      .sort((a, b) => a.order - b.order || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  );
 }
 
 export function renderLauncherRegistry(entries: LauncherEntry[]): string {
