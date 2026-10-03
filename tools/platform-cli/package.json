@@ -1,0 +1,20 @@
+{
+  "name": "@asafarim/platform-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The `platform` CLI: discovers app manifests and generates the platform wiring from them",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.39.4",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.11"
+  }
+}
