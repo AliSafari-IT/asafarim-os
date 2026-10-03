@@ -3,3 +3,21 @@
 
 # Ada Library Information
 *.ali
+
+# Dependencies and build output
+node_modules/
+dist/
+.next/
+.turbo/
+coverage/
+*.tsbuildinfo
+
+# Environment (secrets never go in git; manifests list secret names only)
+.env
+.env.*
+!.env.example
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,12 @@
+packages:
+  # Shared libraries (manifest contract, SDK, config presets).
+  - "packages/*"
+  # Core services (gateway generator, core-api, identity, admin). Never import an app.
+  - "core/*"
+  # Built-in apps, each a self-describing plugin.
+  - "apps/*"
+  # Developer tooling (the `platform` CLI).
+  - "tools/*"
+allowBuilds:
+  # tsx/vitest native binary (same as asafarim-platform)
+  esbuild: true

@@ -1,0 +1,28 @@
+{
+  "name": "asafarim-os",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ASafarIM OS — a small core platform and self-describing app plugins",
+  "author": "Ali Safari",
+  "license": "SEE LICENSE IN LICENSE",
+  "packageManager": "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "turbo build",
+    "typecheck": "turbo typecheck",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "platform": "pnpm --filter @asafarim/platform-cli exec tsx src/cli.ts",
+    "platform:sync": "pnpm platform sync",
+    "platform:sync:check": "pnpm platform sync --check"
+  },
+  "devDependencies": {
+    "prettier": "^3.5.0",
+    "turbo": "^2.10.13",
+    "typescript": "^5.7.0"
+  }
+}
