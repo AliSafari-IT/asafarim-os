@@ -4,8 +4,9 @@ The `platform` command: discovers app manifests and generates the platform
 wiring from them.
 
 ```bash
-pnpm platform sync                      # generate generated/platform/ from the app manifests
-pnpm platform sync --check              # fail when generated/platform/ has drifted (CI)
+pnpm platform sync [--root <dir>]       # generate <dir>/generated/platform/ from the app manifests
+pnpm platform sync --check [--root <dir>]
+                                        # fail when generated/platform/ has drifted (CI)
 pnpm platform sync --check --against <dir> [--other-stack-sites <file>]
                                         # compare <dir>/apps/*/platform.app.json with that
                                         # checkout's hand-written wiring (read-only)
@@ -18,6 +19,18 @@ pnpm platform boundaries                # fail if core/ or packages/ import from
 sharing the same edge** (one host per line, `#` comments allowed). The drift
 report shows them under "Other stacks on the same edge (not drift)" instead of
 as unclaimed sites.
+
+## Generators
+
+`sync` reads `<root>/apps/<id>/platform.app.json` only (compile a `platform.app.ts`
+first) and never executes app code, so `--root` can point at another checkout.
+
+| Output                                      | From                                                                   |
+| ------------------------------------------- | ---------------------------------------------------------------------- |
+| `generated/platform/launcher-registry.json` | every manifest with a `ui.launcher` block, ordered by `order`, then id |
+
+A file under `generated/platform/` that no generator produces is drift; `sync` refuses
+to leave it in place.
 
 ## Security: app code is never executed for apps you don't own
 

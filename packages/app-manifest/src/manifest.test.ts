@@ -184,6 +184,26 @@ describe("routes", () => {
   });
 });
 
+describe("ui.launcher", () => {
+  const launcher = { description: "Write, run and report tests.", meta: "testora", access: "public", order: 60 };
+  const withLauncher = (extra: Record<string, unknown> = {}) => {
+    const m = minimal();
+    return { ...m, ui: { ...m.ui, launcher: { ...launcher, ...extra } } };
+  };
+
+  it("is optional, and accepted with or without requiresAccountToUse", () => {
+    expect(validateManifest(minimal()).ok).toBe(true);
+    expect(validateManifest(withLauncher()).ok).toBe(true);
+    expect(validateManifest(withLauncher({ requiresAccountToUse: true })).ok).toBe(true);
+  });
+
+  it("refuses an unknown access level, a negative order and unknown fields", () => {
+    expectProblem(withLauncher({ access: "admins" }), "ui.launcher.access", /./);
+    expectProblem(withLauncher({ order: -1 }), "ui.launcher.order", /./);
+    expect(problems(withLauncher({ showcase: true })).length).toBeGreaterThan(0);
+  });
+});
+
 describe("secrets", () => {
   it("accepts environment variable names only", () => {
     expect(validateManifest({ ...minimal(), secrets: ["GITHUB_TOKEN", "DB_PASSWORD_2"] }).ok).toBe(true);
