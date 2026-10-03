@@ -1,0 +1,26 @@
+# Compose snippet for the identity service (P2.3 wires it into the host's
+# stack; this file is a reference, nothing deploys it yet).
+services:
+  identity:
+    image: ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG:-local}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 128m
+    cpus: 0.5
+    env_file:
+      - .env.identity # decrypted from its .age file at deploy time
+    environment:
+      IDENTITY_ISSUER: https://id.asafarim.site
+      IDENTITY_HUB_CONTINUE_URL: https://hub.asafarim.com/oidc/continue
+      IDENTITY_CLIENTS_FILE: /etc/identity/clients.json
+      # Logical DB 3 is reserved for the identity service (oidc: keys only).
+      IDENTITY_REDIS_URL: redis://redis:6379/3
+    volumes:
+      - ./identity/clients.json:/etc/identity/clients.json:ro
+    networks: [edge_net, default]
+    # No published ports: the edge Caddy reaches it on edge_net as identity:3000.

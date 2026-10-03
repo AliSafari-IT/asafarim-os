@@ -1,0 +1,8 @@
+# Build context filter for core/identity/Dockerfile (BuildKit reads <Dockerfile>.dockerignore).
+**/node_modules
+.git
+**/.turbo
+**/dist
+**/coverage
+**/.env*
+**/*.log
