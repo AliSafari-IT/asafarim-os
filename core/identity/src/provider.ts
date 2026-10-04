@@ -14,7 +14,7 @@ import type { OidcClient } from "./clients.ts";
 import { HandoffError, issueTicket, verifyAssertion, type ReplayGuard } from "./handoff.ts";
 import type { Logger } from "./log.ts";
 import { errorPage, loggedOutPage, logoutPage } from "./pages.ts";
-import { PENDING_TTL_SECONDS, hashSecret, secretMatches, type PendingLogins } from "./pending.ts";
+import { PENDING_TTL_SECONDS, hashSecret, type PendingLogins } from "./pending.ts";
 
 export const ACCESS_TOKEN_TTL = 600;
 export const SCOPES = ["openid", "offline_access", "email", "profile", "roles"];
@@ -339,9 +339,14 @@ export function createProvider(deps: ProviderDeps): Provider {
       ctx.set("Cache-Control", "no-store");
       const secret = ctx.cookies.get(COMPLETION_COOKIE, { signed: false });
       ctx.cookies.set(COMPLETION_COOKIE, null, { path: completePath(uid), signed: false });
-      const pending = await deps.pending.take(uid); // single use, whatever happens next
-      if (!secret || !pending || !secretMatches(secret, pending.completionHash)) {
-        log.warn("interaction.completion_refused", { uid, reason: pending ? "completion_cookie" : "no_pending_login" });
+      // Consumed only when this browser holds the matching secret (atomic
+      // compare-and-delete); a request without it can't burn the login.
+      const pending = secret ? await deps.pending.takeIfSecret(uid, secret) : null;
+      if (!pending) {
+        log.warn("interaction.completion_refused", {
+          uid,
+          reason: secret ? "completion_secret" : "no_completion_cookie",
+        });
         sendHtml(
           ctx,
           400,
