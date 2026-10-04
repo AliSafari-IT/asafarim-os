@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@asafarim/app-manifest": "workspace:*",
+    "@asafarim/registry-protocol": "workspace:*",
     "pg": "^8.23.1"
   },
   "devDependencies": {

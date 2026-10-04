@@ -97,3 +97,39 @@ jobs:
       - name: Tear down
         if: always()
         run: pnpm dev:reset --yes
+
+  # P3.2: the notes acceptance flow in a real browser against the real stack:
+  # install → self-registration → sign in through identity and the dev login
+  # stub → read-only (403 naming the permission) → grant → write → deactivate.
+  # Screenshots and the Playwright report are uploaded either way.
+  notes-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install the browser
+        run: pnpm --filter @asafarim/notes exec playwright install --with-deps chromium
+
+      - name: Notes end-to-end
+        run: pnpm e2e --down
+
+      - name: Upload screenshots and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-e2e
+          path: |
+            apps/notes/test-results/
+            apps/notes/playwright-report/
+          if-no-files-found: ignore

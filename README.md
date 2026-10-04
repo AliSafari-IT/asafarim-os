@@ -34,12 +34,14 @@ pnpm dev
 4. creates each service's database and login role, revokes `CONNECT` from `PUBLIC`, runs migrations and seeds synthetic users;
 5. runs `core/identity`, the dev login stub and every `apps/*` in watch mode.
 
-| What                      | URL                                                                                   |
-| ------------------------- | ------------------------------------------------------------------------------------- |
-| Identity (OIDC discovery) | <http://localhost:4010/.well-known/openid-configuration>                              |
-| Dev login stub            | <http://localhost:4000>                                                               |
-| Postgres / Redis          | `127.0.0.1:55440` (user `postgres`, password `postgres-dev-only`) / `127.0.0.1:56380` |
-| Dev OIDC client           | `client_id=dev-app`, public, PKCE S256, redirect `http://localhost:4100/callback`     |
+| What                      | URL                                                                                                                                 |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Identity (OIDC discovery) | <http://localhost:4010/.well-known/openid-configuration>                                                                            |
+| Dev login stub            | <http://localhost:4000>                                                                                                             |
+| Postgres / Redis          | `127.0.0.1:55440` (user `postgres`, password `postgres-dev-only`) / `127.0.0.1:56380`                                               |
+| Dev OIDC client           | `client_id=dev-app`, public, PKCE S256, redirect `http://localhost:4199/callback` (never served; the smoke test reads the redirect) |
+
+**Apps.** `pnpm dev` also compiles, installs and **activates** every app under `apps/` into core-api (its own database, a credential in `.dev/<id>.env`), then runs it, so it self-registers on boot. `apps/notes` is the reference app (<http://localhost:4100>): see its [README](apps/notes/README.md) for the walk-through (sign in, read-only, grant a role, write, deactivate). `pnpm e2e` runs that flow in a real browser.
 
 **Signing in locally.** In production, the identity service hands login to Hub (asafarim-platform). Locally it hands it to **`tools/dev-hub`**, a stub that lists the seeded **synthetic** users (`dev-owner`, `dev-admin`, `dev-member`, and `dev-inactive`, which is refused) and signs the hand-off with a dev-only key. You don't need an asafarim-platform checkout. The stub **refuses to start** unless `NODE_ENV=development` and the identity issuer is on `localhost`, and it never ships in an image. The users are in `tools/dev-hub/seed-users.json`.
 

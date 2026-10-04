@@ -60,7 +60,7 @@ The credential is `osk1.<keyId>.<PKCS#8 Ed25519 private key, base64url>`. core-a
 | `x-asafarim-key-id`    | the credential's key id                                                                |
 | `x-asafarim-signature` | `v1=<base64url Ed25519 signature>`                                                     |
 
-The signature covers the canonical string (lines joined with `\n`):
+The signature covers the canonical string (lines joined with `\n`; the protocol lives in `@asafarim/registry-protocol`, shared with the app SDK):
 
 ```
 v1
@@ -102,6 +102,33 @@ Response `200`:
 - An **unknown app** (no install record, or removed) can't register.
 - A **bad**, **expired** or **replayed** signature is refused. Signature checks run first, so a forged request can't burn a real nonce.
 
+## What an app may do (P3.2)
+
+### `GET /registry/v1/apps/<id>/subjects/<sub>` (signed by the app)
+
+The app asks what a subject may do **in this app**. The request is signed like a registration, but it's a `GET` with an empty body: the canonical string carries `GET` and the exact path, **including the subject**, so a signature for one subject can't be replayed for another, and a `POST` signature isn't a `GET` signature. The nonce is single use.
+
+```json
+{
+  "appId": "notes",
+  "subject": "dev-member",
+  "state": "active",
+  "roles": ["notes.viewer"],
+  "permissions": ["notes.read"]
+}
+```
+
+Only roles an admin granted count, and **deprecated roles and permissions grant nothing**. `state` lets an inactive app say so. The app SDK caches the answer for 60 s and fails closed when core-api is unreachable.
+
+### Granting roles (admin)
+
+Apps _declare_ roles; **only an admin grants them**. `PUT /admin/v1/roles/<role>/grants/<sub>` gives the subject (an identity `sub`) the role; `DELETE` takes it back. Both are idempotent and audited (`role.granted`, `role.revoked`; a repeat writes nothing). A role that doesn't exist (or, for a grant, is deprecated) → `404 role_not_found`.
+
+```bash
+pnpm platform role grant notes.editor dev-member
+pnpm platform role revoke notes.editor dev-member
+```
+
 ## Lifecycle (admin)
 
 `POST /admin/v1/apps/<id>/activate` (from `installed` or `inactive`) and `…/deactivate` (from `active`). Each writes an audit event. The gateway and launcher effects arrive in P3.3. `GET /admin/v1/apps/<id>` shows the app, its permissions and its roles.
@@ -110,20 +137,21 @@ Response `200`:
 
 Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"?: … }`:
 
-| Code                        | Status    | When                                                                    |
-| --------------------------- | --------- | ----------------------------------------------------------------------- |
-| `unauthorized`              | 401       | admin endpoint without the right bearer token                           |
-| `missing_signature`         | 401       | registration without the four `x-asafarim-*` headers, or malformed ones |
-| `bad_signature`             | 401       | the signature doesn't verify (wrong key, tampered body, wrong key id)   |
-| `expired_signature`         | 401       | timestamp outside ±60 s                                                 |
-| `replayed_signature`        | 401       | the nonce was already used                                              |
-| `unknown_app`               | 403       | no install record (or removed)                                          |
-| `app_id_mismatch`           | 422       | `manifest.id` ≠ the id in the URL                                       |
-| `invalid_manifest`          | 422       | fails manifest validation (`details`: path + message per problem)       |
-| `namespace_violation`       | 422       | declares something outside `<id>.*`                                     |
-| `already_installed`         | 409       | install of an installed app                                             |
-| `invalid_state`             | 409       | a lifecycle change not allowed from the current state                   |
-| `not_found` / `bad_request` | 404 / 400 | —                                                                       |
+| Code                        | Status    | When                                                                              |
+| --------------------------- | --------- | --------------------------------------------------------------------------------- |
+| `unauthorized`              | 401       | admin endpoint without the right bearer token                                     |
+| `missing_signature`         | 401       | registration without the four `x-asafarim-*` headers, or malformed ones           |
+| `bad_signature`             | 401       | the signature doesn't verify (wrong key, tampered body, wrong key id)             |
+| `expired_signature`         | 401       | timestamp outside ±60 s                                                           |
+| `replayed_signature`        | 401       | the nonce was already used                                                        |
+| `unknown_app`               | 403       | no install record (or removed)                                                    |
+| `app_id_mismatch`           | 422       | `manifest.id` ≠ the id in the URL                                                 |
+| `invalid_manifest`          | 422       | fails manifest validation (`details`: path + message per problem)                 |
+| `namespace_violation`       | 422       | declares something outside `<id>.*`                                               |
+| `already_installed`         | 409       | install of an installed app                                                       |
+| `invalid_state`             | 409       | a lifecycle change not allowed from the current state                             |
+| `role_not_found`            | 404       | a grant or revoke names a role that doesn't exist (or is deprecated, for a grant) |
+| `not_found` / `bad_request` | 404 / 400 | —                                                                                 |
 
 ## Test
 

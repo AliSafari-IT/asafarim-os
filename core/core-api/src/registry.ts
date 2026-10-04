@@ -164,7 +164,13 @@ export function createRegistry(deps: RegistryDeps) {
   }
 
   /** Verify the signed request; returns the app's current state. Doesn't touch the catalog. */
-  async function authenticate(appId: string, headers: Record<string, string | undefined>, body: string) {
+  async function authenticate(
+    appId: string,
+    method: string,
+    path: string,
+    headers: Record<string, string | undefined>,
+    body: string,
+  ) {
     const ts = headers["x-asafarim-timestamp"];
     const nonce = headers["x-asafarim-nonce"];
     const keyId = headers["x-asafarim-key-id"];
@@ -185,7 +191,7 @@ export function createRegistry(deps: RegistryDeps) {
     if (
       !c ||
       c.scheme !== scheme.name ||
-      !scheme.verify(c.verifier, canonicalString(ts, nonce, appId, body), Buffer.from(sig, "base64url"))
+      !scheme.verify(c.verifier, canonicalString(ts, nonce, method, path, body), Buffer.from(sig, "base64url"))
     ) {
       throw new ApiError("bad_signature");
     }
@@ -204,7 +210,7 @@ export function createRegistry(deps: RegistryDeps) {
 
   /** The app's signed self-registration: upsert manifest, permissions, roles, subscriptions. */
   async function register(appId: string, headers: Record<string, string | undefined>, body: string) {
-    const state = await authenticate(appId, headers, body);
+    const state = await authenticate(appId, "POST", `/registry/v1/apps/${appId}`, headers, body);
     let input: unknown;
     try {
       input = JSON.parse(body);
@@ -312,6 +318,65 @@ export function createRegistry(deps: RegistryDeps) {
     });
   }
 
+  /**
+   * The app asks (signed GET) what a subject may do in THIS app: the roles an
+   * admin granted them and the permissions those roles carry. Deprecated roles
+   * and permissions grant nothing. The app's state is returned too, so an
+   * inactive app can say so. Read-only; nothing here grants anything.
+   */
+  async function subjectAccess(
+    appId: string,
+    subject: string,
+    headers: Record<string, string | undefined>,
+    /** The request path exactly as the app signed it (percent-encoded). */
+    path = `/registry/v1/apps/${appId}/subjects/${encodeURIComponent(subject)}`,
+  ) {
+    const state = await authenticate(appId, "GET", path, headers, "");
+    const roles = (
+      await deps.pool.query<{ key: string }>(
+        `SELECT g.role_key AS key FROM role_grants g JOIN roles r ON r.key = g.role_key
+         WHERE g.subject = $1 AND r.app_id = $2 AND r.deprecated_at IS NULL ORDER BY g.role_key`,
+        [subject, appId],
+      )
+    ).rows.map((r) => r.key);
+    const permissions = (
+      await deps.pool.query<{ key: string }>(
+        `SELECT DISTINCT p.key FROM role_grants g
+           JOIN roles r ON r.key = g.role_key AND r.deprecated_at IS NULL
+           JOIN role_permissions rp ON rp.role_key = r.key
+           JOIN permissions p ON p.key = rp.permission_key AND p.deprecated_at IS NULL
+         WHERE g.subject = $1 AND r.app_id = $2 ORDER BY p.key`,
+        [subject, appId],
+      )
+    ).rows.map((r) => r.key);
+    return { appId, subject, state, roles, permissions };
+  }
+
+  /** Admin: give a subject a role (an app's declared role). Idempotent; audited. */
+  async function grantRole(roleKey: string, subject: string, actor: string) {
+    return inTx(async (c) => {
+      const role = (await c.query("SELECT app_id FROM roles WHERE key = $1 AND deprecated_at IS NULL", [roleKey]))
+        .rows[0];
+      if (!role) throw new ApiError("role_not_found", `no active role "${roleKey}"`);
+      const r = await c.query(
+        "INSERT INTO role_grants (role_key, subject, granted_by) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        [roleKey, subject, actor],
+      );
+      if (r.rowCount) await audit(c, actor, "role.granted", role.app_id, { role: roleKey, subject });
+      return { role: roleKey, subject, granted: (r.rowCount ?? 0) > 0 };
+    });
+  }
+
+  async function revokeRole(roleKey: string, subject: string, actor: string) {
+    return inTx(async (c) => {
+      const role = (await c.query("SELECT app_id FROM roles WHERE key = $1", [roleKey])).rows[0];
+      if (!role) throw new ApiError("role_not_found", `no role "${roleKey}"`);
+      const r = await c.query("DELETE FROM role_grants WHERE role_key = $1 AND subject = $2", [roleKey, subject]);
+      if (r.rowCount) await audit(c, actor, "role.revoked", role.app_id, { role: roleKey, subject });
+      return { role: roleKey, subject, revoked: (r.rowCount ?? 0) > 0 };
+    });
+  }
+
   async function get(appId: string) {
     const app = (
       await deps.pool.query("SELECT id, version, state, installed_at, registered_at FROM apps WHERE id = $1", [appId])
@@ -328,7 +393,7 @@ export function createRegistry(deps: RegistryDeps) {
     return { ...app, permissions, roles };
   }
 
-  return { install, register, transition, get, pruneNonces };
+  return { install, register, transition, get, pruneNonces, subjectAccess, grantRole, revokeRole };
 }
 
 export type Registry = ReturnType<typeof createRegistry>;

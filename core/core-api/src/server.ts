@@ -48,6 +48,20 @@ export function adminTokenMatches(authorization: string | undefined, token: stri
   return timingSafeEqual(digest(got), digest(token));
 }
 
+const SUBJECT = /^[A-Za-z0-9._:@-]{1,128}$/;
+
+/** A subject from a URL segment: percent-decoded, then validated (clients encode `:` and `@`). */
+export function decodeSubject(segment: string): string {
+  let subject: string;
+  try {
+    subject = decodeURIComponent(segment);
+  } catch {
+    throw new ApiError("bad_request", "the subject isn't valid percent-encoding");
+  }
+  if (!SUBJECT.test(subject)) throw new ApiError("bad_request", "the subject has characters that aren't allowed");
+  return subject;
+}
+
 /** The port put into an installed app's DATABASE_URL. URL.port is "" (not undefined) when the URL has none. */
 export function appDatabasePort(override: string | undefined, provisioner: URL): number {
   return Number(override || provisioner.port || 5432);
@@ -95,8 +109,32 @@ export function createHandler(opts: {
         return json(res, 200, out);
       }
 
+      m = new RegExp(`^/registry/v1/apps/${APP_ID}/subjects/([^/]{1,400})$`).exec(p);
+      if (m && req.method === "GET") {
+        const subject = decodeSubject(m[2]!);
+        const headers = Object.fromEntries(
+          ["x-asafarim-timestamp", "x-asafarim-nonce", "x-asafarim-key-id", "x-asafarim-signature"].map((h) => [
+            h,
+            header(req, h),
+          ]),
+        );
+        // The signature covers the path exactly as the app sent it (encoded), so verify against the raw path.
+        return json(res, 200, await opts.registry.subjectAccess(m[1]!, subject, headers, p));
+      }
+
       if (p.startsWith("/admin/v1/")) {
         if (!adminOk(req, opts.adminToken)) throw new ApiError("unauthorized");
+        m = /^\/admin\/v1\/roles\/([a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+)\/grants\/([^/]{1,400})$/.exec(p);
+        if (m && (req.method === "PUT" || req.method === "DELETE")) {
+          const subject = decodeSubject(m[2]!);
+          const out =
+            req.method === "PUT"
+              ? await opts.registry.grantRole(m[1]!, subject, "admin")
+              : await opts.registry.revokeRole(m[1]!, subject, "admin");
+          log({ msg: req.method === "PUT" ? "role.granted" : "role.revoked", role: m[1] });
+          return json(res, 200, out);
+        }
+
         m = new RegExp(`^/admin/v1/apps/${APP_ID}/install$`).exec(p);
         if (m && req.method === "POST") {
           let manifest: unknown;

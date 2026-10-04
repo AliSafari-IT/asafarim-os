@@ -16,18 +16,19 @@
  * over the canonical string
  *   v1\n<timestamp>\n<nonce>\nPOST\n/registry/v1/apps/<id>\n<sha256(body) hex>
  */
-import {
-  createHash,
-  createPrivateKey,
-  createPublicKey,
-  generateKeyPairSync,
-  randomBytes,
-  sign,
-  verify,
-} from "node:crypto";
+import { createPublicKey, generateKeyPairSync, randomBytes, verify } from "node:crypto";
 
-export const SIGNATURE_WINDOW_SECONDS = 60;
-export const NONCE_PATTERN = /^[A-Za-z0-9_-]{22,128}$/;
+import {
+  NONCE_PATTERN,
+  SIGNATURE_WINDOW_SECONDS,
+  canonicalString,
+  parseCredential,
+  signRequest,
+} from "@asafarim/registry-protocol";
+
+// The signing protocol itself lives in @asafarim/registry-protocol (shared
+// with the app SDK); re-exported so core-api's own code and tests keep one import.
+export { NONCE_PATTERN, SIGNATURE_WINDOW_SECONDS, canonicalString, parseCredential, signRequest };
 
 export interface IssuedCredential {
   keyId: string;
@@ -67,22 +68,7 @@ export const ed25519Scheme: CredentialScheme = {
   },
 };
 
-export function canonicalString(timestamp: string, nonce: string, appId: string, body: string): string {
-  const bodyHash = createHash("sha256").update(body).digest("hex");
-  return `v1\n${timestamp}\n${nonce}\nPOST\n/registry/v1/apps/${appId}\n${bodyHash}`;
-}
-
-/** Parse "osk1.<keyId>.<pkcs8>" (what install printed). */
-export function parseCredential(secret: string): { keyId: string; privateKeyDer: Buffer } {
-  const m = /^osk1\.([a-z0-9-]+\.[0-9a-f]{12})\.([A-Za-z0-9_-]+)$/.exec(secret);
-  if (!m) throw new Error("not an ASafariM OS registry credential (osk1.…)");
-  return { keyId: m[1]!, privateKeyDer: Buffer.from(m[2]!, "base64url") };
-}
-
-/**
- * The headers an app sends with its registration (the SDK's job; exported
- * for the CLI and tests).
- */
+/** Kept for the tests and the CLI: a signed POST to the registration endpoint. */
 export function signRegistration(opts: {
   appId: string;
   credential: string;
@@ -90,16 +76,15 @@ export function signRegistration(opts: {
   now?: Date;
   nonce?: string;
 }): Record<string, string> {
-  const { keyId, privateKeyDer } = parseCredential(opts.credential);
-  const timestamp = String(Math.floor((opts.now ?? new Date()).getTime() / 1000));
-  const nonce = opts.nonce ?? randomBytes(18).toString("base64url");
-  const key = createPrivateKey({ key: privateKeyDer, format: "der", type: "pkcs8" });
-  const signature = sign(null, Buffer.from(canonicalString(timestamp, nonce, opts.appId, opts.body)), key);
   return {
     "content-type": "application/json",
-    "x-asafarim-timestamp": timestamp,
-    "x-asafarim-nonce": nonce,
-    "x-asafarim-key-id": keyId,
-    "x-asafarim-signature": `v1=${signature.toString("base64url")}`,
+    ...signRequest({
+      credential: opts.credential,
+      method: "POST",
+      path: `/registry/v1/apps/${opts.appId}`,
+      body: opts.body,
+      now: opts.now,
+      nonce: opts.nonce,
+    }),
   };
 }

@@ -15,10 +15,11 @@
  *   pnpm platform boundaries                 fail if core/ or packages/ import from apps/
  *   pnpm platform app install <id> [--env-out <file>]   install apps/<id> via core-api (P3.1)
  *   pnpm platform app activate|deactivate <id>          change its lifecycle state
+ *   pnpm platform role grant|revoke <role> <subject>    an admin (un)grants an app's declared role
  */
 import path from "node:path";
 import { computeDrift, formatDrift } from "./against/drift.ts";
-import { appCommand } from "./app.ts";
+import { appCommand, roleCommand } from "./app.ts";
 import { loadPlatformWiring, readSiteList } from "./against/load.ts";
 import { boundariesCommand } from "./boundaries.ts";
 import { compileCommand, validateCommand } from "./manifest.ts";
@@ -33,6 +34,7 @@ const USAGE = [
   "  platform boundaries",
   "  platform app install <id> [--env-out <file>]",
   "  platform app activate|deactivate <id>",
+  "  platform role grant|revoke <role> <subject>",
 ].join("\n");
 
 /** pnpm runs the CLI from its package folder; INIT_CWD is where the user typed the command. */
@@ -71,6 +73,8 @@ async function main(argv: string[]): Promise<number> {
     result = rest[0] === "validate" ? await validateCommand(rest[1]!, cwd) : await compileCommand(rest[1]!, cwd);
   } else if (command === "boundaries" && rest.length === 0) {
     result = boundariesCommand(findRepoRoot(cwd));
+  } else if (command === "role") {
+    result = await roleCommand(rest, findRepoRoot(cwd));
   } else if (command === "app") {
     result = await appCommand(rest, findRepoRoot(cwd));
   }
