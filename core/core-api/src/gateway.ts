@@ -12,7 +12,8 @@
  *
  * It never reads the database per request: the app table is a short-lived
  * in-process snapshot, dropped on every lifecycle change, and the token is
- * verified locally (@asafarim/registry-protocol). Which app a request is for
+ * verified locally (@asafarim/registry-protocol) with no clock-skew allowance: this
+ * process issued it, so a token is good for exactly its lifetime and not a second more. Which app a request is for
  * comes from the generated Caddy config (`X-Asafarim-App`), not from the host.
  */
 import type { AppManifest } from "@asafarim/app-manifest";
@@ -203,7 +204,7 @@ export function createGateway(deps: GatewayDeps) {
 
     const token = cookieValue(req.cookie, ACCESS_COOKIE_NAME);
     const result = token
-      ? verifyAccessToken(token, { keys: deps.keys(), audience: app.id, now: now() })
+      ? verifyAccessToken(token, { keys: deps.keys(), audience: app.id, now: now(), skewSeconds: 0 })
       : ({ ok: false, reason: "missing" } as const);
     if (!result.ok) {
       const error = result.reason === "missing" ? "unauthenticated" : problemError(result.reason);

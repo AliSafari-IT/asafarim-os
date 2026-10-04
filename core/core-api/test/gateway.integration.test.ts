@@ -214,7 +214,10 @@ describe.skipIf(!ADMIN_URL)("access token and gateway hook (integration)", () =>
       publicJwk: { kty: "OKP", crv: "Ed25519", x: k.x as string },
     }));
     const verified = verifyAccessToken(body.token!, { keys, audience: APP, now: clock });
-    expect(verified).toMatchObject({ ok: true, claims: { sub: "dev-member", aud: APP, perms: [READ, WRITE] } });
+    expect(verified).toMatchObject({
+      ok: true,
+      claims: { sub: "dev-member", aud: APP, roles: [EDITOR], perms: [READ, WRITE] },
+    });
     expect(verifyAccessToken(body.token!, { keys, audience: OTHER, now: clock })).toMatchObject({ ok: false });
     await revoke(EDITOR, "dev-member");
   });

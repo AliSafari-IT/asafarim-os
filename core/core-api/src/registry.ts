@@ -36,6 +36,8 @@ export interface RegistryDeps {
   now?: () => Date;
   /** Signs the short-lived access tokens (P3.3a). Without it, issuing one is refused. */
   tokenKey?: SigningKey;
+  /** How long an access token lives, in seconds (default 60). This is also how long a revoked grant can still work. */
+  accessTokenTtlSeconds?: number;
   /** Called after every change that the gateway must see at once (install, activate, deactivate). */
   onLifecycleChange?: () => void;
 }
@@ -381,12 +383,14 @@ export function createRegistry(deps: RegistryDeps) {
     if (!deps.tokenKey) throw new ApiError("bad_request", "this core-api has no token signing key configured");
     const state = await authenticate(appId, "POST", path, headers, "");
     if (state !== "active") throw new ApiError("app_inactive", `the app is ${state}`);
-    const { permissions } = await grantsOf(appId, subject);
+    const { roles, permissions } = await grantsOf(appId, subject);
     const { token, claims } = signAccessToken({
       key: deps.tokenKey,
       subject,
       audience: appId,
+      roles,
       permissions,
+      ttlSeconds: deps.accessTokenTtlSeconds,
       now: now(),
     });
     return { token, expiresAt: new Date(claims.exp * 1000).toISOString(), expiresIn: claims.exp - claims.iat };

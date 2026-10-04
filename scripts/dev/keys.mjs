@@ -7,10 +7,11 @@
  *   .dev/identity.env   core/identity (node --env-file)
  *   .dev/dev-hub.env    tools/dev-hub, the dev login stub
  *   .dev/db.env         the bootstrap's database passwords
- *   .dev/clients.json   one public dev OIDC client ("dev-app")
+ *   .dev/clients.json   one public dev OIDC client ("dev-app") and one per app
+ *   .dev/gateway.env    where the dev gateway (Caddy, compose.dev.yml) finds each service
  */
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +22,8 @@ export const DEV = {
   identityPort: 4010,
   coreApiPort: 4020,
   devHubPort: 4000,
+  // The dev gateway (P3.3a): <id>.localhost:8080 for each app, id.localhost / api.localhost for the core.
+  gatewayPort: 8080,
   // The smoke test's OIDC client: its callback is never served (it only reads the redirect).
   devClientCallback: "http://localhost:4199/callback",
   // Dev ports of the apps under apps/*; each gets an OIDC client in .dev/clients.json.
@@ -59,9 +62,23 @@ function ensureCoreApiEnv(force) {
       // App install creates databases and roles: locally the dev superuser does it.
       line("CORE_API_PROVISIONER_URL", `postgres://${pg.adminUser}:${pg.adminPassword}@${pg.host}:${pg.port}/postgres`),
       line("CORE_API_ADMIN_TOKEN", randomBytes(32).toString("base64url")),
+      tokenKeyLine(),
       "",
     ].join("\n"),
   );
+  return true;
+}
+
+/** core-api's access-token signing key (P3.3a): an Ed25519 private JWK with a kid. Throwaway, dev only. */
+function tokenKeyLine() {
+  return line("CORE_API_TOKEN_SIGNING_JWK", { ...edPair().priv, kid: `dev-token-${Date.now()}` });
+}
+
+/** An env file written by an earlier version lacks the token key: add it, keep everything else. */
+function ensureCoreApiTokenKey(file) {
+  const text = readFileSync(file, "utf8");
+  if (/^CORE_API_TOKEN_SIGNING_JWK=/m.test(text)) return false;
+  writeFileSync(file, `${text.endsWith("\n") ? text : `${text}\n`}${tokenKeyLine()}\n`);
   return true;
 }
 
@@ -73,7 +90,7 @@ export function lockDownDevDir() {
 
 export function ensureDevKeys({ force = false, log = console.log } = {}) {
   mkdirSync(DEV_DIR, { recursive: true, mode: 0o700 });
-  const coreApi = ensureCoreApiEnv(force);
+  const coreApi = ensureCoreApiEnv(force) || ensureCoreApiTokenKey(path.join(DEV_DIR, "core-api.env"));
   try {
     return ensureDevKeysInner({ force, log, coreApi });
   } finally {
@@ -90,14 +107,37 @@ function writeClients() {
       redirect_uris: [DEV.devClientCallback],
       post_logout_redirect_uris: ["http://localhost:4199/"],
     },
-    ...Object.entries(DEV.apps).map(([id, port]) => ({
-      client_id: id,
-      primary_domain: "localhost",
-      redirect_uris: [`http://localhost:${port}/api/auth/callback/asafarim`],
-      post_logout_redirect_uris: [`http://localhost:${port}/`],
-    })),
+    // Each app is reachable directly (localhost:<port>) and through the dev gateway (<id>.localhost:8080).
+    ...Object.entries(DEV.apps).map(([id, port]) => {
+      const gateway = `http://${id}.localhost:${DEV.gatewayPort}`;
+      return {
+        client_id: id,
+        primary_domain: "localhost",
+        redirect_uris: [`http://localhost:${port}/api/auth/callback/asafarim`, `${gateway}/api/auth/callback/asafarim`],
+        post_logout_redirect_uris: [`http://localhost:${port}/`, `${gateway}/`],
+      };
+    }),
   ];
   writeFileSync(path.join(DEV_DIR, "clients.json"), JSON.stringify({ clients }, null, 2) + "\n");
+}
+
+/** The env var holding an app's upstream in the generated gateway (see gatewayUpstreamVar in tools/platform-cli). */
+export const upstreamVar = (appId) => `OS_APP_${appId.toUpperCase().replace(/-/g, "_")}_UPSTREAM`;
+
+/**
+ * Where the dev gateway finds each service. The gateway runs in a container, so the
+ * services (on the host) are reached as host.docker.internal; OS_GATEWAY_HOST overrides
+ * that for a gateway running directly on the host. Rewritten every run: it's only ports.
+ */
+export function writeGatewayEnv(host = process.env.OS_GATEWAY_HOST || "host.docker.internal") {
+  const lines = [
+    "# The dev gateway's upstreams (pnpm dev). Written on every run.",
+    line("OS_IDENTITY_UPSTREAM", `${host}:${DEV.identityPort}`),
+    line("OS_CORE_API_UPSTREAM", `${host}:${DEV.coreApiPort}`),
+    ...Object.entries(DEV.apps).map(([id, port]) => line(upstreamVar(id), `${host}:${port}`)),
+    "",
+  ];
+  writeFileSync(path.join(DEV_DIR, "gateway.env"), lines.join("\n"));
 }
 
 /** Env shared by every app under apps/* in development (.dev/app.env). */
@@ -121,6 +161,7 @@ function ensureAppEnv(force) {
 
 function ensureDevKeysInner({ force, log, coreApi }) {
   writeClients();
+  writeGatewayEnv();
   ensureAppEnv(force);
   const files = ["identity.env", "dev-hub.env", "db.env", "clients.json"].map((f) => path.join(DEV_DIR, f));
   if (!force && files.every((f) => existsSync(f))) {

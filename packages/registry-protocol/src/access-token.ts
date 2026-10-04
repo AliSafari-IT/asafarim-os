@@ -5,12 +5,14 @@
  * read, no signed call and no nonce write per request.
  *
  *   header   { alg: "EdDSA", typ: "JWT", kid }
- *   payload  { iss: "asafarim-core-api", sub, aud: <app id>, perms: [...], iat, exp }
+ *   payload  { iss: "asafarim-core-api", sub, aud: <app id>, roles: [...], perms: [...], iat, exp }
  *
  * Trade-off (also in core/core-api/README.md): the token carries the subject's
  * permissions as of issue time, so a revoked grant keeps working until the
- * token expires, at most `ACCESS_TOKEN_TTL_SECONDS` (60 s). The app's lifecycle
- * state is NOT in the token: the gateway reads it live.
+ * token expires: at most the token's lifetime (`ACCESS_TOKEN_TTL_SECONDS`, 60 s
+ * by default) at the gateway, plus `ACCESS_TOKEN_SKEW_SECONDS` in an app on
+ * another clock. The app's lifecycle state is NOT in the token: the gateway
+ * reads it live.
  */
 import { createPrivateKey, createPublicKey, sign, verify, type JsonWebKey, type KeyObject } from "node:crypto";
 
@@ -28,6 +30,7 @@ export interface AccessClaims {
   iss: typeof ACCESS_TOKEN_ISSUER;
   sub: string;
   aud: string;
+  roles: string[];
   perms: string[];
   iat: number;
   exp: number;
@@ -55,6 +58,7 @@ export interface SignAccessTokenOptions {
   key: SigningKey;
   subject: string;
   audience: string;
+  roles: string[];
   permissions: string[];
   ttlSeconds?: number;
   now?: Date;
@@ -66,6 +70,7 @@ export function signAccessToken(opts: SignAccessTokenOptions): { token: string; 
     iss: ACCESS_TOKEN_ISSUER,
     sub: opts.subject,
     aud: opts.audience,
+    roles: [...opts.roles].sort(),
     perms: [...opts.permissions].sort(),
     iat,
     exp: iat + (opts.ttlSeconds ?? ACCESS_TOKEN_TTL_SECONDS),
@@ -92,6 +97,8 @@ export interface VerifyAccessTokenOptions {
   /** The app the token must be for. A token for another app is refused. */
   audience: string;
   now?: Date;
+  /** Clock difference tolerated, in seconds. Default ACCESS_TOKEN_SKEW_SECONDS; 0 where the verifier shares the issuer's clock. */
+  skewSeconds?: number;
 }
 
 /** Verify signature, issuer, audience and expiry. Never throws: a bad token is a `reason`. */
@@ -125,6 +132,8 @@ export function verifyAccessToken(token: string, opts: VerifyAccessTokenOptions)
     c.iss !== ACCESS_TOKEN_ISSUER ||
     typeof c.sub !== "string" ||
     typeof c.aud !== "string" ||
+    !Array.isArray(c.roles) ||
+    !c.roles.every((x) => typeof x === "string") ||
     !Array.isArray(c.perms) ||
     !c.perms.every((x) => typeof x === "string") ||
     !Number.isInteger(c.iat) ||
@@ -135,9 +144,10 @@ export function verifyAccessToken(token: string, opts: VerifyAccessTokenOptions)
   const claims = c as unknown as AccessClaims;
   const nowSeconds = Math.floor((opts.now ?? new Date()).getTime() / 1000);
   if (claims.aud !== opts.audience) return { ok: false, reason: "wrong_audience" };
-  if (claims.exp <= nowSeconds - ACCESS_TOKEN_SKEW_SECONDS) return { ok: false, reason: "expired" };
+  const skew = opts.skewSeconds ?? ACCESS_TOKEN_SKEW_SECONDS;
+  if (claims.exp <= nowSeconds - skew) return { ok: false, reason: "expired" };
   // A token from the future is as untrustworthy as an expired one.
-  if (claims.iat > nowSeconds + ACCESS_TOKEN_SKEW_SECONDS) return { ok: false, reason: "malformed" };
+  if (claims.iat > nowSeconds + skew) return { ok: false, reason: "malformed" };
   return { ok: true, claims };
 }
 

@@ -46,6 +46,8 @@ export default defineApp({
   routes: [
     { path: "/api/notes", methods: ["GET"], permission: "notes.read" },
     { path: "/api/notes", methods: ["POST"], permission: "notes.write" },
+    // Exists in the app (an internal probe), but the gateway answers 404 for it on every host.
+    { path: "/internal/**", expose: false },
   ],
   config: [
     {

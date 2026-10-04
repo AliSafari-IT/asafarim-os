@@ -20,6 +20,7 @@ function issue(key = newKey(), over: Partial<Parameters<typeof signAccessToken>[
     key,
     subject: "dev-member",
     audience: "notes",
+    roles: ["notes.editor"],
     permissions: ["notes.write", "notes.read"],
     now: NOW,
     ...over,
@@ -34,6 +35,7 @@ describe("access tokens", () => {
     const r = verifyAccessToken(token, { keys, audience: "notes", now: at(1) });
     expect(r).toEqual({ ok: true, claims });
     expect(claims.perms).toEqual(["notes.read", "notes.write"]);
+    expect(claims.roles).toEqual(["notes.editor"]);
   });
 
   it("expires after its lifetime (plus a few seconds of clock skew), not before", () => {
@@ -41,6 +43,15 @@ describe("access tokens", () => {
     expect(verifyAccessToken(token, { keys, audience: "notes", now: at(59) }).ok).toBe(true);
     expect(verifyAccessToken(token, { keys, audience: "notes", now: at(60 + 4) }).ok).toBe(true);
     expect(verifyAccessToken(token, { keys, audience: "notes", now: at(60 + 6) })).toEqual({
+      ok: false,
+      reason: "expired",
+    });
+  });
+
+  it("tolerates no skew where the verifier shares the issuer's clock (skewSeconds: 0)", () => {
+    const { token, keys } = issue();
+    expect(verifyAccessToken(token, { keys, audience: "notes", now: at(59), skewSeconds: 0 }).ok).toBe(true);
+    expect(verifyAccessToken(token, { keys, audience: "notes", now: at(60), skewSeconds: 0 })).toEqual({
       ok: false,
       reason: "expired",
     });

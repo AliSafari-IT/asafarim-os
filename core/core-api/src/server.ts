@@ -231,6 +231,16 @@ export async function loadGatewayApps(pool: pg.Pool): Promise<GatewayApp[]> {
   return r.rows;
 }
 
+/** CORE_API_ACCESS_TOKEN_TTL_SECONDS: 5–300, default 60. */
+export function parseTokenTtl(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 5 || n > 300) {
+    throw new Error("CORE_API_ACCESS_TOKEN_TTL_SECONDS must be a whole number of seconds from 5 to 300");
+  }
+  return n;
+}
+
 /** CORE_API_TOKEN_SIGNING_JWK: an Ed25519 private JWK (with `kid`). */
 export function parseTokenKey(raw: string): SigningKey {
   let jwk: Record<string, unknown>;
@@ -266,6 +276,7 @@ async function main() {
   const registry = createRegistry({
     pool,
     tokenKey,
+    accessTokenTtlSeconds: parseTokenTtl(process.env.CORE_API_ACCESS_TOKEN_TTL_SECONDS),
     onLifecycleChange: () => snapshot.invalidate(),
     provisioner: async () => {
       const c = new pg.Client({ connectionString: provisionerUrl });

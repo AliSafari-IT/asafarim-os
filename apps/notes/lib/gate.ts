@@ -1,9 +1,16 @@
 /**
  * One place that decides what a request may do (P3.2): signed in? app active?
  * does the person hold the permission? The permission comes from core-api via
- * the SDK (granted by an admin), never from the sign-in token.
+ * the SDK (granted by an admin), never from the sign-in token. When the OS
+ * gateway issued the person's short-lived access token (P3.3a), the check uses
+ * that token, so the app and the gateway agree and share its staleness bound.
  */
-import { isAccessUnavailableError, isForbiddenError } from "@asafarim/app-sdk";
+async function accessToken(): Promise<string | undefined> {
+  return (await cookies()).get(ACCESS_COOKIE_NAME)?.value;
+}
+
+import { ACCESS_COOKIE_NAME, isAccessUnavailableError, isForbiddenError } from "@asafarim/app-sdk";
+import { cookies } from "next/headers";
 import { auth } from "./auth";
 import { getPlatform } from "./platform";
 
@@ -23,7 +30,8 @@ export async function gate(permission: string): Promise<GateResult> {
   try {
     const platform = getPlatform();
     // The app's state comes first: an inactive app answers 503 whatever the person may do.
-    const access = await platform.access.access(subject);
+    const token = await accessToken();
+    const access = await platform.access.access(subject, { token });
     if (access.state !== "active") {
       return {
         ok: false,
@@ -31,7 +39,7 @@ export async function gate(permission: string): Promise<GateResult> {
         body: { error: "app_inactive", state: access.state, message: `The app is ${access.state}.` },
       };
     }
-    await platform.access.require(session, permission); // throws ForbiddenError naming the permission (cached lookup)
+    await platform.access.require(session, permission, { token }); // throws ForbiddenError naming the permission
     return { ok: true, subject, roles: access.roles };
   } catch (err) {
     if (isForbiddenError(err)) {
@@ -59,7 +67,10 @@ export async function gate(permission: string): Promise<GateResult> {
 /** The app's state and the subject's permissions, for the page (no permission required). */
 export async function describeAccess(subject: string) {
   try {
-    return { available: true as const, ...(await getPlatform().access.access(subject)) };
+    return {
+      available: true as const,
+      ...(await getPlatform().access.access(subject, { token: await accessToken() })),
+    };
   } catch {
     return { available: false as const, state: "unknown", roles: [] as string[], permissions: [] as string[] };
   }

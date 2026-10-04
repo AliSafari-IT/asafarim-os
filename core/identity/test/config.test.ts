@@ -46,6 +46,20 @@ describe("client config", () => {
     expect(() => loadClients({ clients: [local] }, {})).toThrow();
     expect(loadClients({ clients: [local] }, {}, { allowLocalhost: true })).toHaveLength(1);
   });
+
+  it("allows http://<app>.localhost (the dev gateway's hosts) only when asked, never a look-alike", () => {
+    const gateway = {
+      ...base,
+      redirect_uris: ["http://notes.localhost:8080/api/auth/callback/asafarim"],
+      post_logout_redirect_uris: ["http://notes.localhost:8080/"],
+    };
+    expect(loadClients({ clients: [gateway] }, {}, { allowLocalhost: true })).toHaveLength(1);
+    expect(() => loadClients({ clients: [gateway] }, {})).toThrow(/must be https/);
+    for (const host of ["localhost.evil.example", "evillocalhost", "notlocalhost.com", "localhost.evil.example."]) {
+      const bad = { ...base, redirect_uris: [`http://${host}:8080/cb`] };
+      expect(() => loadClients({ clients: [bad] }, {}, { allowLocalhost: true }), host).toThrow(/must be https/);
+    }
+  });
 });
 
 describe("signing keys", () => {

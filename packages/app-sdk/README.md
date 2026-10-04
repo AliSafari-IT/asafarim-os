@@ -37,14 +37,32 @@ POSTs the manifest to `core-api /registry/v1/apps/<id>`, signed with the credent
 
 The app asks core-api, with a signed `GET /registry/v1/apps/<id>/subjects/<sub>`, what a subject may do **in this app**: the roles an admin granted them and the permissions those carry. The token carries no permissions.
 
-- `access(sub)` → `{ state, roles, permissions }`, cached for the TTL, and concurrent lookups share one request.
-- `can(session, permission)` → boolean. No session, or core-api down → `false`.
-- `require(session, permission)` → throws `ForbiddenError` (`.permission`, `.status = 403`).
+- `access(sub, { token? })` → `{ state, roles, permissions }`, cached for the TTL, and concurrent lookups share one request.
+- `can(session, permission, { token? })` → boolean. No session, or core-api down → `false`.
+- `require(session, permission, { token? })` → throws `ForbiddenError` (`.permission`, `.status = 403`).
+- **With the person's access token** (below) the answer is the token's own and core-api isn't asked at all; without one, or with a bad one, or one for **another person**, it falls back to the signed lookup above.
 - **Fails closed:** with core-api unreachable and no fresh answer, `access()` and `require()` throw `AccessUnavailableError`. A stale answer is never served.
 - All SDK `fetch` calls use `cache: "no-store"`: Next.js caches GET `fetch` in development, which would otherwise answer for core-api.
 - Use `isForbiddenError(err)` / `isAccessUnavailableError(err)` instead of `instanceof`: a framework can load this package twice (Next builds its instrumentation hook and each route separately).
 
 `state` is the app's lifecycle state (`installed`, `active`, `inactive`). An app should answer 503 unless it's `active`.
+
+## The access token and the gateway (P3.3a)
+
+Behind the OS gateway, core-api issues each signed-in person a short-lived **access token** (60 s by default) that the gateway and the SDK verify **locally**. See [core-api](../../core/core-api/README.md#the-gateway-and-the-access-token-p33a) for the model and the staleness trade-off. In an app:
+
+- `access.mintToken(sub)`: the signed `POST` that asks core-api for the token (`503` for an inactive app → `AccessUnavailableError`).
+- `createSessionHandler({ subject, mintToken })` → a `GET` handler for **`/api/asafarim/session`** (`ACCESS_SESSION_PATH`): signed in → sets the cookie (`accessCookie`) and goes back to `?next=` (same-site paths only: `safeNext` refuses `//evil`, `/\evil`, absolute URLs); not signed in → to sign-in with `callbackUrl`; core-api can't issue one → 503 (never a redirect back, which would loop through the gateway).
+- `createTokenVerifier({ appId, coreApiUrl })`: verifies a token against core-api's JWKS (cached; one rate-limited refetch for an unknown key id; **fails closed**). `createAccess` uses it when you pass `{ token }`.
+- `clearAccessCookie()`: on sign-out.
+- In a Next.js app read the cookie with `cookies().get(ACCESS_COOKIE_NAME)` and pass it as `{ token }`: see `apps/notes/lib/gate.ts`.
+
+**Auth.js behind a proxy:** a Next.js route handler sees its **own** origin in `request.url`, so Auth.js would send identity a `redirect_uri` for `http://localhost:4100` at the token exchange, while sign-in (a server action) used the visitor's host: identity answers `invalid_grant`. Wrap the Auth.js route handlers with `forwardedOrigin(...)` (`withForwardedOrigin` for one request) to restore the forwarded host and protocol; it accepts only a well-formed `x-forwarded-host` / `x-forwarded-proto`, which the gateway sets:
+
+```ts
+export const GET = forwardedOrigin(handlers.GET);
+export const POST = forwardedOrigin(handlers.POST);
+```
 
 ## Typed config (`createConfig`)
 

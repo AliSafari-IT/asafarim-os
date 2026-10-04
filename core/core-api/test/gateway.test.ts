@@ -39,6 +39,7 @@ const token = (permissions: string[], over: { ttl?: number; audience?: string; n
     key,
     subject: "dev-member",
     audience: over.audience ?? "notes",
+    roles: [],
     permissions,
     ttlSeconds: over.ttl,
     now: over.now ?? NOW,
@@ -140,6 +141,18 @@ describe("the gateway decision", () => {
     expect(JSON.parse((await ask(gw, { uri: "/api/notes", cookie: cookie(other) })).body).error).toBe("invalid_token");
     const forged = `${token(["notes.read"]).slice(0, -4)}AAAA`;
     expect(JSON.parse((await ask(gw, { uri: "/api/notes", cookie: cookie(forged) })).body).error).toBe("invalid_token");
+  });
+
+  it("a token is good for exactly its lifetime at the gateway: no skew allowance", async () => {
+    const t = cookie(token(["notes.read"]));
+    const at = (s: number) =>
+      createGateway({
+        apps: async () => [app()],
+        keys: () => [verificationKeyOf(key)],
+        now: () => new Date(NOW.getTime() + s * 1000),
+      });
+    expect((await ask(at(59), { uri: "/api/notes", cookie: t })).status).toBe(200);
+    expect((await ask(at(60), { uri: "/api/notes", cookie: t })).status).toBe(401);
   });
 
   it("a valid token without the permission: 403 naming it; with it: 200", async () => {

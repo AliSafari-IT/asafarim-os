@@ -31,6 +31,8 @@ pnpm platform app deactivate notes                 # the app reports inactive (5
 
 The permission cache is 1 s in development, so changes show on the next reload.
 
+**Through the gateway** (the front door: the lifecycle page, `expose: false` and permission-marked routes are enforced there): <http://notes.localhost:8080>. Sign in there and `GET /api/notes` is checked by the gateway before the app sees it (403 naming the permission, from the gateway). A role you grant or revoke applies within the access token's lifetime (60 s; 1 s of cache for direct access). `/internal/ping` answers when you go straight to :4100 and is a 404 at the gateway (`expose: false`).
+
 ## Test
 
 ```bash
@@ -38,7 +40,7 @@ pnpm --filter @asafarim/notes test   # the manifest
 pnpm e2e                             # the whole flow in a real browser (Playwright)
 ```
 
-`pnpm e2e` starts Postgres, Redis, identity, core-api, the dev stub and notes (a production build), installs the app, and runs `e2e/notes.spec.ts`. The first time: `pnpm --filter @asafarim/notes exec playwright install chromium`. Screenshots land in `apps/notes/test-results/screens/`. CI runs it as the `notes-e2e` job and uploads them.
+`pnpm e2e` starts Postgres, Redis, the dev gateway, identity, core-api (with a 6 s access-token lifetime), the dev stub and notes (a production build), installs the app, and runs `e2e/notes.spec.ts` (direct, P3.2) and `e2e/gateway.spec.ts` (through `http://notes.localhost:8080`, P3.3a). The first time: `pnpm --filter @asafarim/notes exec playwright install chromium`. Screenshots land in `apps/notes/test-results/screens/`. CI runs it as the `notes-e2e` job and uploads them.
 
 ## Layout
 
