@@ -58,7 +58,9 @@ export const dbEnv = () => ({
 export async function waitFor(url, ok = (r) => r.status === 200, tries = 120) {
   for (let i = 0; i < tries; i++) {
     try {
-      const r = await fetch(url);
+      // Each request is bounded too: a service that accepts the connection but never answers
+      // would otherwise outlast the tries × 500 ms window.
+      const r = await fetch(url, { signal: AbortSignal.timeout(3000) });
       if (ok(r)) return r;
     } catch {
       /* not up yet */

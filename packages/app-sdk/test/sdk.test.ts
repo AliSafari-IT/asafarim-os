@@ -130,6 +130,22 @@ describe("registerApp", () => {
     await expect(registerApp({ ...base, strict: true })).rejects.toBeInstanceOf(RegistrationError);
   });
 
+  it("encodes the app id in the registration path it signs and sends", async () => {
+    const c = credential();
+    const fetchMock = vi.fn(async () => reply(200, { state: "active", version: "1" }));
+    await registerApp({
+      appId: "a/b",
+      credential: c.secret,
+      coreApiUrl: "http://core",
+      manifest: {},
+      fetch: fetchMock,
+      log: silent,
+    });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://core/registry/v1/apps/a%2Fb");
+    expect(verifySigned(c.publicKey, "POST", "/registry/v1/apps/a%2Fb", init.headers!, String(init.body))).toBe(true);
+  });
+
   it("backoffDelay doubles up to the cap, with at most 25% jitter", () => {
     const none = () => 0;
     expect([1, 2, 3, 4, 5].map((n) => backoffDelay(n, 500, 4000, none))).toEqual([500, 1000, 2000, 4000, 4000]);
@@ -222,6 +238,37 @@ describe("createAccess (permission checks resolved from core-api)", () => {
     expect(await access.can(s, "notes.read")).toBe(false);
     await expect(access.access("dev-member")).rejects.toBeInstanceOf(AccessUnavailableError);
     await expect(access.require(s, "notes.read")).rejects.toBeInstanceOf(AccessUnavailableError);
+  });
+
+  it("a 200 that isn't the contract is unavailable, never cached as an empty grant", async () => {
+    const c = credential();
+    for (const bad of [
+      {},
+      { state: "active" },
+      { state: 7, roles: [], permissions: [] },
+      { state: "active", roles: "x", permissions: [] },
+    ]) {
+      const fetchMock = vi.fn(async () => reply(200, bad));
+      const access = createAccess({
+        appId: "notes",
+        credential: c.secret,
+        coreApiUrl: "http://core",
+        fetch: fetchMock,
+      });
+      await expect(access.access("dev-member")).rejects.toThrow(/malformed/);
+      await expect(access.access("dev-member")).rejects.toThrow(/malformed/); // not cached: asked again
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it("encodes the app id and the subject in the path it signs and sends", async () => {
+    const c = credential();
+    const fetchMock = vi.fn(async () => reply(200, { ...body, subject: "a@b" }));
+    const access = createAccess({ appId: "a b", credential: c.secret, coreApiUrl: "http://core", fetch: fetchMock });
+    await access.access("a@b");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://core/registry/v1/apps/a%20b/subjects/a%40b");
+    expect(verifySigned(c.publicKey, "GET", "/registry/v1/apps/a%20b/subjects/a%40b", init.headers!)).toBe(true);
   });
 
   it("a refusal from core-api (e.g. a revoked credential) is also unavailable, not an empty grant", async () => {

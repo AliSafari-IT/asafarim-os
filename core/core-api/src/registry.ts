@@ -324,8 +324,14 @@ export function createRegistry(deps: RegistryDeps) {
    * and permissions grant nothing. The app's state is returned too, so an
    * inactive app can say so. Read-only; nothing here grants anything.
    */
-  async function subjectAccess(appId: string, subject: string, headers: Record<string, string | undefined>) {
-    const state = await authenticate(appId, "GET", `/registry/v1/apps/${appId}/subjects/${subject}`, headers, "");
+  async function subjectAccess(
+    appId: string,
+    subject: string,
+    headers: Record<string, string | undefined>,
+    /** The request path exactly as the app signed it (percent-encoded). */
+    path = `/registry/v1/apps/${appId}/subjects/${encodeURIComponent(subject)}`,
+  ) {
+    const state = await authenticate(appId, "GET", path, headers, "");
     const roles = (
       await deps.pool.query<{ key: string }>(
         `SELECT g.role_key AS key FROM role_grants g JOIN roles r ON r.key = g.role_key

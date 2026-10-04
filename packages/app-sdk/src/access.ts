@@ -70,7 +70,7 @@ export function createAccess(opts: AccessOptions) {
   const inflight = new Map<string, Promise<SubjectAccess>>();
 
   async function fetchAccess(subject: string): Promise<SubjectAccess> {
-    const path = `/registry/v1/apps/${opts.appId}/subjects/${encodeURIComponent(subject)}`;
+    const path = `/registry/v1/apps/${encodeURIComponent(opts.appId)}/subjects/${encodeURIComponent(subject)}`;
     let res: Response;
     try {
       res = await doFetch(`${base}${path}`, {
@@ -83,12 +83,11 @@ export function createAccess(opts: AccessOptions) {
     }
     const json = (await res.json().catch(() => ({}))) as Partial<SubjectAccess> & { error?: string };
     if (!res.ok) throw new AccessUnavailableError(json.error ?? `http ${res.status}`);
-    return {
-      subject,
-      state: String(json.state),
-      roles: json.roles ?? [],
-      permissions: json.permissions ?? [],
-    };
+    // A success that isn't the contract is a broken core-api, not an empty grant: never cache it as an answer.
+    if (typeof json.state !== "string" || !Array.isArray(json.roles) || !Array.isArray(json.permissions)) {
+      throw new AccessUnavailableError("core-api sent a malformed answer");
+    }
+    return { subject, state: json.state, roles: json.roles, permissions: json.permissions };
   }
 
   /** What `subject` may do here, from core-api or the cache. */

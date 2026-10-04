@@ -277,6 +277,24 @@ describe.skipIf(!ADMIN_URL)("core-api registry (integration)", () => {
       expect(audit).toEqual(["role.granted", "role.revoked"]); // the repeated PUT wrote nothing
     });
 
+    it("a subject with ':' and '@' works end to end: both helpers percent-encode it, the signature covers the encoded path", async () => {
+      const sub = "user@example.test:1";
+      const enc = encodeURIComponent(sub);
+      expect(enc).toBe("user%40example.test%3A1");
+      const granted = await adminReq("PUT", `/admin/v1/roles/${roleKey}/grants/${enc}`);
+      expect(await granted.json()).toEqual({ role: roleKey, subject: sub, granted: true });
+
+      const headers = signRequest({ credential: credentials.get(APP)!, method: "GET", path: subjectPath(enc) });
+      const res = await fetch(`${base}${subjectPath(enc)}`, { headers });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ subject: sub, roles: [roleKey] });
+
+      const revoked = await adminReq("DELETE", `/admin/v1/roles/${roleKey}/grants/${enc}`);
+      expect(await revoked.json()).toMatchObject({ revoked: true });
+      const bad = await adminReq("PUT", `/admin/v1/roles/${roleKey}/grants/a%2Fb`);
+      expect(bad.status).toBe(400);
+    });
+
     it("a deprecated permission grants nothing", async () => {
       await adminReq("PUT", `/admin/v1/roles/${roleKey}/grants/user-2`);
       await pool.query("UPDATE permissions SET deprecated_at = now() WHERE key = $1", [`${APP}.notes.share`]);

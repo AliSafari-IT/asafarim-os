@@ -55,6 +55,14 @@ for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => running.forEach((
 services.on("exit", (code) => process.exit(code ?? 0));
 
 // Apps need core-api to install into, and their credential file before they start.
-await waitFor(`http://localhost:${DEV.coreApiPort}/readyz`);
-await installDevApps();
-running.push(turbo(["./apps/*"]));
+// If anything here fails, stop the services too: a watch process left running
+// would hold the ports and block the next `pnpm dev`.
+try {
+  await waitFor(`http://localhost:${DEV.coreApiPort}/readyz`);
+  await installDevApps();
+  running.push(turbo(["./apps/*"]));
+} catch (err) {
+  console.error(`\n${err.message}`);
+  running.forEach((c) => c.kill());
+  process.exit(1);
+}

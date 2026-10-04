@@ -67,7 +67,7 @@ export async function registerApp(opts: RegisterOptions): Promise<RegisterResult
   const maxAttempts = opts.maxAttempts ?? 6;
   const base = opts.baseDelayMs ?? 500;
   const max = opts.maxDelayMs ?? 15_000;
-  const path = `/registry/v1/apps/${opts.appId}`;
+  const path = `/registry/v1/apps/${encodeURIComponent(opts.appId)}`;
   const url = `${opts.coreApiUrl.replace(/\/$/, "")}${path}`;
   const body = JSON.stringify(opts.manifest);
 

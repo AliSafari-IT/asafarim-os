@@ -58,10 +58,22 @@ function readIfExists(file) {
   }
 }
 
-async function isInstalled(id) {
+/**
+ * The app's lifecycle state in core-api, or null when it isn't installed.
+ * ONLY a 404 means "not installed": any other failure (a 401, a 500, an
+ * unreachable core-api) throws, so a transient error can't make the caller
+ * delete a credential that is still valid.
+ */
+async function appState(id) {
   const { baseUrl, token } = coreApiAdmin();
-  const res = await fetch(`${baseUrl}/admin/v1/apps/${id}`, { headers: { authorization: `Bearer ${token}` } });
-  return res.status === 200;
+  const res = await fetch(`${baseUrl}/admin/v1/apps/${id}`, {
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(5000),
+  });
+  if (res.status === 404) return null;
+  if (res.status !== 200)
+    throw new Error(`core-api answered ${res.status} when asked about app ${id}; not touching its credential`);
+  return (await res.json()).state;
 }
 
 export async function installDevApps({ activate = true, log = console.log } = {}) {
@@ -76,10 +88,18 @@ export async function installDevApps({ activate = true, log = console.log } = {}
     if (!compiled.ok) throw new Error(`compiling apps/${id}/platform.app.ts failed:\n${compiled.output}`);
     if (before !== undefined && sameJson(before, readIfExists(jsonFile) ?? "")) writeFileSync(jsonFile, before);
 
-    const installed = await isInstalled(id);
+    const state = await appState(id);
+    const installed = state !== null;
     const hasCredential = readIfExists(envFile) !== undefined;
     if (installed && hasCredential) {
-      log(`app ${id}: already installed`);
+      // A prior e2e run or a manual command may have left it inactive: bring it up for development.
+      if (activate && state !== "active") {
+        const act = platform(["app", "activate", id]);
+        if (!act.ok) throw new Error(`activating ${id} failed:\n${act.output}`);
+        log(`app ${id}: already installed; ${act.output}`);
+      } else {
+        log(`app ${id}: already installed (${state})`);
+      }
       continue;
     }
     if (installed) {
