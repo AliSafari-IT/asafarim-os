@@ -52,6 +52,25 @@ Any failure shows a styled error page with a short code (`assertion_replayed`, `
 
 All of these live in the deployment's **encrypted** env file. A missing or malformed variable stops the service at startup with the variable's name (never its value).
 
+### Production secrets
+
+The secrets live in `core/identity/.env.production`, which is git-ignored. Only its encrypted copy, `core/identity/.env.production.age`, is committed. [`.env.production.example`](.env.production.example) lists every variable to fill in.
+
+```bash
+cp core/identity/.env.production.example core/identity/.env.production   # then fill it in
+pnpm env:encrypt:production                                              # writes core/identity/.env.production.age
+pnpm env:check                                                           # nothing plaintext is tracked or staged
+```
+
+On the VPS, decrypt with the plain `age` CLI, as asafarim-platform's deploy does (no Node needed):
+
+```bash
+age -d -i .age/key.txt core/identity/.env.production.age > .env.identity   # the env_file in compose.snippet.yml
+```
+
+- **Two keys on the VPS.** The server needs this repository's `.age/key.txt` (chmod 600) in addition to asafarim-platform's. The keys are different, so a leaked key exposes only one repository.
+- **One shared value.** The `identity_ro` password is owned here. asafarim-platform's `.env.production.age` holds a copy for the role itself, so update both files when it rotates.
+
 ## Client config
 
 ```json
