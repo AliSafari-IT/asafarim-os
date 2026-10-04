@@ -63,6 +63,11 @@ test.beforeAll(async () => {
   await revoke("notes.editor");
   await revoke("notes.viewer");
   await admin("POST", "/admin/v1/apps/notes/deactivate");
+  // The app caches a person's access, INCLUDING the app's state, for ASAFARIM_ACCESS_TTL_MS (1 s in
+  // development). A spec that ran before this one (gateway.spec.ts) leaves a fresh "active" answer for
+  // dev-member; without this wait, the first page below can be served that stale answer and never
+  // shows the "not active" notice. Let it expire.
+  await new Promise((resolve) => setTimeout(resolve, 1500));
 });
 
 test("the app registered itself with core-api on boot", async () => {
