@@ -197,6 +197,16 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     return res;
   }
 
+  /**
+   * Where Hub's POST sends the browser: the 200 page's meta refresh (it must NOT be a redirect, #40).
+   * Returns the absolute URL, or undefined for any response that isn't that page.
+   */
+  async function refreshTarget(res: Response): Promise<string | undefined> {
+    if (res.status !== 200) return undefined;
+    const m = /<meta http-equiv="refresh" content="0;url=([^"]+)">/.exec(await res.clone().text());
+    return m ? new URL(m[1]!.replace(/&amp;/g, "&"), issuer).href : undefined;
+  }
+
   /** Start an interaction in `jar`'s browser; returns its uid. */
   async function start(jar: Jar) {
     let res = await get(authUrl({ code_challenge: pkce().challenge, code_challenge_method: "S256" }), jar);
@@ -222,11 +232,13 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     expect(ticket.uid).toBe(uid);
 
     res = await postAssertion(uid, await hubAssertion(sub, uid), jar);
-    if (res.status !== 303) return { res, jar, uid };
-    expect(res.headers.get("location")).toBe(`/interaction/${uid}/complete`);
+    const target = await refreshTarget(res);
+    if (!target) return { res, jar, uid }; // an error page (400/403): nothing to follow
+    expect(target).toBe(`${issuer}/interaction/${uid}/complete`);
+    expect(res.headers.get("location")).toBeNull(); // not a redirect
 
-    // Follow the provider's redirects (resume, possibly consent) to the callback.
-    let location = new URL(res.headers.get("location")!, issuer).href;
+    // Follow the page's navigation to /complete, then the provider's redirects (resume, possibly consent) to the callback.
+    let location = target;
     for (let i = 0; i < 6 && !location.startsWith(`${rpBase}/cb`); i++) {
       res = await get(location, jar);
       location = new URL(res.headers.get("location")!, issuer).href;
@@ -364,10 +376,55 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     expect(await res.text()).toContain("assertion_wrong_uid");
 
     const good = await hubAssertion("u-2", uid);
-    expect((await postAssertion(uid, good)).status).toBe(303);
+    expect((await postAssertion(uid, good)).status).toBe(200);
     res = await postAssertion(uid, good);
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("assertion_replayed");
+  });
+
+  it("answers Hub's assertion POST with a 200 page, never a redirect (#40): Chromium applies Hub's form-action to every redirect", async () => {
+    accounts.rows.set("u-200", { sub: "u-200", email: null, name: null, picture: null, roles: [], isActive: true });
+    const a = new Jar();
+    const uid = await start(a);
+    const res = await postAssertion(uid, await hubAssertion("u-200", uid));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull(); // no redirect, so Hub's form-action can't block a hop
+    expect(res.headers.get("content-type")).toMatch(/^text\/html/);
+
+    // The completion cookie is still set by THIS response, scoped to /complete (the two-cookie check is unchanged).
+    const cookies = res.headers.getSetCookie();
+    const completion = cookies.find((c) => c.startsWith("identity_complete="))!;
+    expect(completion).toBeDefined();
+    expect(completion.toLowerCase()).toContain(`path=/interaction/${uid}/complete`.toLowerCase());
+    expect(completion).toMatch(/httponly/i);
+    expect(completion).toMatch(/samesite=lax/i);
+
+    // The page: a meta refresh and a visible link to /complete, and no script at all.
+    const html = await res.text();
+    expect(html).toContain(`<meta http-equiv="refresh" content="0;url=/interaction/${uid}/complete">`);
+    expect(html).toContain(`<a class="button" href="/interaction/${uid}/complete">Continue</a>`);
+    expect(html).toContain("Signing you in");
+    expect(html).not.toMatch(/<script/i);
+    expect(html).not.toMatch(/<form/i);
+
+    // Headers: not cached, no referrer, and a CSP that allows nothing but its own styles.
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("content-security-policy")).toBe(
+      "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    );
+  });
+
+  it("the hand-off's error responses are unchanged: 400 for a bad assertion, 403 for an inactive account, no refresh", async () => {
+    accounts.rows.set("u-off", { sub: "u-off", email: null, name: null, picture: null, roles: [], isActive: false });
+    const uid = await start(new Jar());
+    let res = await postAssertion(uid, "garbage");
+    expect(res.status).toBe(400);
+    expect(await refreshTarget(res)).toBeUndefined();
+    res = await postAssertion(uid, await hubAssertion("u-off", uid));
+    expect(res.status).toBe(403);
+    expect(await res.text()).not.toContain("http-equiv");
   });
 
   it("refuses to finish an interaction in a browser other than the one that started it (swap)", async () => {
@@ -380,11 +437,11 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     const b = new Jar();
     const uid = await start(a);
     let res = await postAssertion(uid, await hubAssertion("other", uid), b);
-    expect(res.status).toBe(303);
+    expect(res.status).toBe(200);
 
-    // B follows to /complete: it has the completion cookie but not A's
+    // B follows the page to /complete: it has the completion cookie but not A's
     // interaction cookie → error page, nothing finished.
-    res = await get(new URL(res.headers.get("location")!, issuer).href, b);
+    res = await get((await refreshTarget(res))!, b);
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("browser_mismatch");
 
@@ -410,7 +467,7 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     const a = new Jar();
     const uid = await start(a);
     // The assertion is posted from elsewhere (B keeps the completion cookie).
-    expect((await postAssertion(uid, await hubAssertion("attacker", uid), new Jar())).status).toBe(303);
+    expect((await postAssertion(uid, await hubAssertion("attacker", uid), new Jar())).status).toBe(200);
     const res = await get(`${issuer}/interaction/${uid}/complete`, a);
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("browser_mismatch");
@@ -424,7 +481,7 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     const uid = new URL(res.headers.get("location")!, issuer).pathname.split("/").pop()!;
     await get(`${issuer}/interaction/${uid}`, a);
     res = await postAssertion(uid, await hubAssertion("u-6", uid), a);
-    expect(res.status).toBe(303);
+    expect(res.status).toBe(200);
 
     // Someone else hits /complete first: no cookie, then a wrong one.
     expect((await get(`${issuer}/interaction/${uid}/complete`, new Jar())).status).toBe(400);

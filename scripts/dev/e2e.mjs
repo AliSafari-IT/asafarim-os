@@ -106,6 +106,9 @@ try {
     E2E_NOTES_CREDENTIAL: readEnvFile(path.join(DEV_DIR, "notes.env")).ASAFARIM_REGISTRY_CREDENTIAL,
     // The "migration needed" test simulates an app upgrade that deprecated a permission, in core-api's database.
     E2E_CORE_DATABASE_URL: core.CORE_API_DATABASE_URL,
+    // The hand-off spec plays Hub in the browser: it signs assertions with the dev stub's key (#40).
+    E2E_ISSUER: ISSUER,
+    E2E_HUB_ASSERTION_PRIVATE_JWK: readEnvFile(path.join(DEV_DIR, "dev-hub.env")).DEV_HUB_ASSERTION_PRIVATE_JWK,
   };
   // Both suites always run (they share the stack, one after the other); the exit code is the first failure.
   const results = ["@asafarim/notes", "@asafarim/admin"].map((pkg) => {

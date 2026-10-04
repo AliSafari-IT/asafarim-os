@@ -116,8 +116,10 @@ async function signIn(sub) {
     body: new URLSearchParams({ assertion }),
   });
   jar.take(res);
-  if (res.status !== 303) return { refused: res.status, body: await res.text() };
-  let location = new URL(need(res.headers.get("location"), "the post-hand-off redirect", res), ISSUER).href;
+  // Identity answers 200 with a page that navigates on (#40: a redirect would break Hub's form-action CSP).
+  if (res.status !== 200) return { refused: res.status, body: await res.text() };
+  const refresh = /<meta http-equiv="refresh" content="0;url=([^"]+)">/.exec(await res.text())?.[1];
+  let location = new URL(need(refresh, "the post-hand-off page's next step", res), ISSUER).href;
   for (let i = 0; i < 6 && !location.startsWith(DEV.devClientCallback); i++) {
     res = await get(location, jar);
     location = new URL(need(res.headers.get("location"), "a redirect while completing sign-in", res), ISSUER).href;
