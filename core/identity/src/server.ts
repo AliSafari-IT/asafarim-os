@@ -7,6 +7,7 @@ import { PgAccountStore } from "./accounts.ts";
 import { ConfigError, loadConfig } from "./config.ts";
 import { createLogger } from "./log.ts";
 import { createProvider } from "./provider.ts";
+import { RedisPendingLogins } from "./pending.ts";
 import { RedisReplayGuard, redisAdapterFactory } from "./redis-adapter.ts";
 
 const log = createLogger();
@@ -22,6 +23,7 @@ async function main() {
     adapter: redisAdapterFactory(redis),
     accounts,
     replay: new RedisReplayGuard(redis),
+    pending: new RedisPendingLogins(redis),
     log,
     readiness: async () => {
       const [r, d] = await Promise.allSettled([redis.ping(), accounts.ping()]);

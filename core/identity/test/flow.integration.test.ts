@@ -18,6 +18,7 @@ import { loadClients } from "../src/clients.ts";
 import { ASSERTION_AUDIENCE, ASSERTION_ISSUER, verifyTicket } from "../src/handoff.ts";
 import { createLogger } from "../src/log.ts";
 import { createProvider } from "../src/provider.ts";
+import { RedisPendingLogins } from "../src/pending.ts";
 import { RedisReplayGuard, redisAdapterFactory } from "../src/redis-adapter.ts";
 
 const REDIS_URL = process.env.IDENTITY_TEST_REDIS_URL;
@@ -122,6 +123,7 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
       adapter: redisAdapterFactory(redis),
       accounts,
       replay: new RedisReplayGuard(redis),
+      pending: new RedisPendingLogins(redis),
       readiness: async () => ({ redis: (await redis.ping()) === "PONG", database: true }),
       log,
       // oidc-provider refuses outbound requests to loopback (SSRF protection);
@@ -180,14 +182,28 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
       .sign(hubKeys.privateKey);
   }
 
-  /** Hub's auto-submitted POST: cross-site, so no identity cookies are sent. */
-  function postAssertion(uid: string, assertion: string) {
-    return fetch(`${issuer}/interaction/${uid}/hub`, {
+  /**
+   * Hub's auto-submitted POST: cross-site, so the browser sends no identity
+   * (SameSite=Lax) cookies, but it does store the cookies the response sets.
+   */
+  async function postAssertion(uid: string, assertion: string, jar?: Jar) {
+    const res = await fetch(`${issuer}/interaction/${uid}/hub`, {
       method: "POST",
       redirect: "manual",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ assertion }),
     });
+    jar?.take(res);
+    return res;
+  }
+
+  /** Start an interaction in `jar`'s browser; returns its uid. */
+  async function start(jar: Jar) {
+    let res = await get(authUrl({ code_challenge: pkce().challenge, code_challenge_method: "S256" }), jar);
+    const interaction = new URL(res.headers.get("location")!, issuer);
+    res = await get(interaction.href, jar);
+    expect(res.status).toBe(302); // → Hub, with a ticket
+    return interaction.pathname.split("/").pop()!;
   }
 
   /** Walk the browser side of a sign-in up to the client's callback. */
@@ -205,8 +221,9 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     const ticket = await verifyTicket(toHub.searchParams.get("ticket")!, identityHandoff.publicKey);
     expect(ticket.uid).toBe(uid);
 
-    res = await postAssertion(uid, await hubAssertion(sub, uid));
+    res = await postAssertion(uid, await hubAssertion(sub, uid), jar);
     if (res.status !== 303) return { res, jar, uid };
+    expect(res.headers.get("location")).toBe(`/interaction/${uid}/complete`);
 
     // Follow the provider's redirects (resume, possibly consent) to the callback.
     let location = new URL(res.headers.get("location")!, issuer).href;
@@ -351,6 +368,63 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     res = await postAssertion(uid, good);
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("assertion_replayed");
+  });
+
+  it("refuses to finish an interaction in a browser other than the one that started it (swap)", async () => {
+    accounts.rows.set("victim", { sub: "victim", email: null, name: null, picture: null, roles: [], isActive: true });
+    accounts.rows.set("other", { sub: "other", email: null, name: null, picture: null, roles: [], isActive: true });
+
+    // Browser A starts the interaction; browser B (signed in to Hub as
+    // "other") opens A's continue link and posts the assertion.
+    const a = new Jar();
+    const b = new Jar();
+    const uid = await start(a);
+    let res = await postAssertion(uid, await hubAssertion("other", uid), b);
+    expect(res.status).toBe(303);
+
+    // B follows to /complete: it has the completion cookie but not A's
+    // interaction cookie → error page, nothing finished.
+    res = await get(new URL(res.headers.get("location")!, issuer).href, b);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("browser_mismatch");
+
+    // A has the interaction (and resume) cookies but never the completion
+    // cookie: neither /complete nor resuming yields a code.
+    res = await get(`${issuer}/interaction/${uid}/complete`, a);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("browser_mismatch");
+    res = await get(`${issuer}/auth/${uid}`, a);
+    expect(res.headers.get("location") ?? "").not.toContain("code=");
+    expect(res.headers.get("location") ?? "").not.toContain(`${rpBase}/cb`);
+  });
+
+  it("refuses A completing with B's parked login, even before B tries (login CSRF direction)", async () => {
+    accounts.rows.set("attacker", {
+      sub: "attacker",
+      email: null,
+      name: null,
+      picture: null,
+      roles: [],
+      isActive: true,
+    });
+    const a = new Jar();
+    const uid = await start(a);
+    // The assertion is posted from elsewhere (B keeps the completion cookie).
+    expect((await postAssertion(uid, await hubAssertion("attacker", uid), new Jar())).status).toBe(303);
+    const res = await get(`${issuer}/interaction/${uid}/complete`, a);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("browser_mismatch");
+  });
+
+  it("a completion cookie works once only", async () => {
+    accounts.rows.set("u-5", { sub: "u-5", email: null, name: null, picture: null, roles: [], isActive: true });
+    const { callback, jar, uid } = await signIn("u-5", {
+      code_challenge: pkce().challenge,
+      code_challenge_method: "S256",
+    });
+    expect(callback!.searchParams.get("code")).toBeTruthy();
+    const again = await get(`${issuer}/interaction/${uid}/complete`, jar);
+    expect(again.status).toBe(400);
   });
 
   it("rotates refresh tokens (offline_access): the old one is rejected after use", async () => {

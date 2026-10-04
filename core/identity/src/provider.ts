@@ -6,6 +6,7 @@
  * ID tokens ES256, access tokens 10 min, refresh tokens only with
  * `offline_access` and rotated on every use, RP-initiated + back-channel logout.
  */
+import { randomBytes } from "node:crypto";
 import Provider, { type Configuration } from "oidc-provider";
 import type { CryptoKey, JWK, KeyObject } from "jose";
 import type { AccountStore } from "./accounts.ts";
@@ -13,6 +14,7 @@ import type { OidcClient } from "./clients.ts";
 import { HandoffError, issueTicket, verifyAssertion, type ReplayGuard } from "./handoff.ts";
 import type { Logger } from "./log.ts";
 import { errorPage, loggedOutPage, logoutPage } from "./pages.ts";
+import { PENDING_TTL_SECONDS, hashSecret, secretMatches, type PendingLogins } from "./pending.ts";
 
 export const ACCESS_TOKEN_TTL = 600;
 export const SCOPES = ["openid", "offline_access", "email", "profile", "roles"];
@@ -30,6 +32,8 @@ export interface ProviderDeps {
   adapter: Configuration["adapter"];
   accounts: AccountStore;
   replay: ReplayGuard;
+  /** Verified logins waiting for /interaction/:uid/complete in the starting browser. */
+  pending: PendingLogins;
   /** Readiness probes for /readyz (Redis, accounts DB). */
   readiness: () => Promise<Record<string, boolean>>;
   log: Logger;
@@ -42,6 +46,10 @@ export interface ProviderDeps {
 }
 
 const MAX_FORM_BYTES = 16 * 1024;
+
+/** The completion cookie, scoped to one interaction's /complete path. */
+const COMPLETION_COOKIE = "identity_complete";
+const completePath = (uid: string) => `/interaction/${uid}/complete`;
 
 /** The slice of a Koa context the helpers below use. */
 interface HttpContext {
@@ -271,10 +279,10 @@ export function createProvider(deps: ProviderDeps): Provider {
     if (back && ctx.method === "POST") {
       const uid = back[1]!;
       // This is a cross-site POST (hub.asafarim.com → id.asafarim.site), so the
-      // SameSite=Lax interaction cookie isn't sent. The interaction is loaded
-      // by its uid instead; the signed, uid-bound, single-use assertion is what
-      // authorises finishing it. The resume step (/auth/:uid) is a top-level
-      // GET, which does carry the resume cookie.
+      // SameSite=Lax interaction cookie isn't sent and the posting browser can't
+      // be tied to the one that started the interaction here. The assertion is
+      // verified now, but the login is finished by GET /interaction/:uid/complete
+      // (a top-level GET, which does carry the interaction cookie).
       const interaction = await provider.Interaction.find(uid);
       if (!interaction) {
         sendHtml(ctx, 400, errorPage({ message: "This sign-in has expired.", code: "interaction_expired" }));
@@ -301,12 +309,69 @@ export function createProvider(deps: ProviderDeps): Provider {
         sendHtml(ctx, 403, errorPage({ message: "This account can't sign in.", code: "account_inactive" }));
         return;
       }
-      interaction.result = { login: { accountId: sub } };
-      await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
-      log.info("interaction.login", { uid });
+      // Don't finish here: this POST can't prove it comes from the browser
+      // that started the interaction. Park the verified login and hand THIS
+      // browser a completion secret; /complete finishes only where both the
+      // provider's interaction cookie and this secret are present.
+      const secret = randomBytes(32).toString("base64url");
+      await deps.pending.put(uid, { sub, completionHash: hashSecret(secret) }, PENDING_TTL_SECONDS);
+      ctx.cookies.set(COMPLETION_COOKIE, secret, {
+        path: completePath(uid),
+        httpOnly: true,
+        sameSite: "lax",
+        secure: ctx.secure,
+        maxAge: PENDING_TTL_SECONDS * 1000,
+        signed: false,
+        overwrite: true,
+      });
+      log.info("interaction.assertion_accepted", { uid });
       ctx.status = 303;
       ctx.set("Cache-Control", "no-store");
-      ctx.redirect(interaction.returnTo);
+      ctx.redirect(completePath(uid));
+      return;
+    }
+
+    // GET /interaction/:uid/complete — finish only in the browser that started
+    // the interaction AND posted the assertion.
+    const complete = /^\/interaction\/([\w-]+)\/complete$/.exec(path);
+    if (complete && ctx.method === "GET") {
+      const uid = complete[1]!;
+      ctx.set("Cache-Control", "no-store");
+      const secret = ctx.cookies.get(COMPLETION_COOKIE, { signed: false });
+      ctx.cookies.set(COMPLETION_COOKIE, null, { path: completePath(uid), signed: false });
+      const pending = await deps.pending.take(uid); // single use, whatever happens next
+      if (!secret || !pending || !secretMatches(secret, pending.completionHash)) {
+        log.warn("interaction.completion_refused", { uid, reason: pending ? "completion_cookie" : "no_pending_login" });
+        sendHtml(
+          ctx,
+          400,
+          errorPage({ message: "This sign-in can't be completed in this browser.", code: "browser_mismatch" }),
+        );
+        return;
+      }
+      let details;
+      try {
+        details = await provider.interactionDetails(ctx.req, ctx.res);
+      } catch {
+        details = null;
+      }
+      if (!details || details.uid !== uid) {
+        log.warn("interaction.completion_refused", { uid, reason: "interaction_cookie" });
+        sendHtml(
+          ctx,
+          400,
+          errorPage({ message: "This sign-in can't be completed in this browser.", code: "browser_mismatch" }),
+        );
+        return;
+      }
+      log.info("interaction.login", { uid });
+      await provider.interactionFinished(
+        ctx.req,
+        ctx.res,
+        { login: { accountId: pending.sub } },
+        { mergeWithLastSubmission: false },
+      );
+      ctx.respond = false;
       return;
     }
 
