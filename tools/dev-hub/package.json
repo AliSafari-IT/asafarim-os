@@ -1,0 +1,27 @@
+{
+  "name": "@asafarim/dev-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DEV ONLY: the local login stub that stands in for Hub in the ASafariM OS sign-in hand-off (OS-D1, #26). Never shipped in an image.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.dev/dev-hub.env --watch src/server.ts",
+    "start": "node --env-file-if-exists=../../.dev/dev-hub.env src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "jose": "^6.2.12"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.1",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

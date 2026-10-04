@@ -1,0 +1,46 @@
+# Local development infrastructure for ASafariM OS (OS-D1, #26). Started by
+# `pnpm dev`; never used in production. Every port binds to 127.0.0.1 only.
+#
+#   pnpm dev          start it, bootstrap the databases, run the OS
+#   pnpm dev:reset    drop the dev volumes (asks first)
+name: asafarim-os-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      # A fixed, dev-only password: this server only listens on 127.0.0.1.
+      POSTGRES_PASSWORD: postgres-dev-only
+    ports:
+      - "127.0.0.1:55440:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:56380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # P4 (event bus): NATS with JetStream, added when the core needs it.
+  # nats:
+  #   image: nats:2-alpine
+  #   command: ["-js"]
+  #   ports:
+  #     - "127.0.0.1:4222:4222"
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,40 @@
+#!/usr/bin/env node
+/**
+ * `pnpm dev` (OS-D1, #26): the whole OS locally, in one command.
+ *   1. checks Docker;
+ *   2. creates throwaway dev keys if missing (.dev/, git-ignored);
+ *   3. starts Postgres and Redis (compose.dev.yml, 127.0.0.1 only);
+ *   4. bootstraps the per-service databases and roles, migrates, seeds;
+ *   5. runs core/identity, the dev login stub and every apps/* in watch mode.
+ */
+import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { bootstrap } from "./bootstrap.mjs";
+import { bold, compose, dbEnv, dim, green, requireDocker } from "./infra.mjs";
+import { DEV, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
+
+requireDocker();
+ensureDevKeys();
+console.log(bold("Starting Postgres and Redis…"));
+compose("up", "-d", "--wait");
+await bootstrap(dbEnv());
+
+const { users } = JSON.parse(readFileSync(path.join(ROOT, "tools/dev-hub/seed-users.json"), "utf8"));
+console.log(`
+${green(bold("ASafariM OS dev environment"))}
+  identity (OIDC)   ${ISSUER}/.well-known/openid-configuration
+  dev login stub    http://localhost:${DEV.devHubPort}   ${dim("(DEV ONLY: stands in for Hub)")}
+  Postgres          127.0.0.1:${DEV.postgres.port}   Redis 127.0.0.1:56380
+  dev OIDC client   client_id=dev-app, redirect ${DEV.devClientCallback}, PKCE S256
+  seeded users      ${users.map((u) => `${u.id}${u.isActive ? "" : " (inactive)"}`).join(", ")}
+  ${dim("Stop with Ctrl+C. Reset everything: pnpm dev:reset")}
+`);
+
+const turbo = spawn(
+  "pnpm",
+  ["exec", "turbo", "run", "dev", "--filter=@asafarim/identity", "--filter=@asafarim/dev-hub", "--filter=./apps/*"],
+  { cwd: ROOT, stdio: "inherit", shell: process.platform === "win32" },
+);
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => turbo.kill(sig));
+turbo.on("exit", (code) => process.exit(code ?? 0));

@@ -1,0 +1,37 @@
+{
+  "_comment": "Synthetic dev users (OS-D1, #26). Never real people. The same list seeds the dev accounts database and is shown by the dev login stub.",
+  "users": [
+    {
+      "id": "dev-owner",
+      "email": "owner@dev.asafarim.test",
+      "name": "Dev Owner",
+      "image": null,
+      "isActive": true,
+      "roles": ["owner", "admin"]
+    },
+    {
+      "id": "dev-admin",
+      "email": "admin@dev.asafarim.test",
+      "name": "Dev Admin",
+      "image": null,
+      "isActive": true,
+      "roles": ["admin"]
+    },
+    {
+      "id": "dev-member",
+      "email": "member@dev.asafarim.test",
+      "name": "Dev Member",
+      "image": null,
+      "isActive": true,
+      "roles": ["member"]
+    },
+    {
+      "id": "dev-inactive",
+      "email": "inactive@dev.asafarim.test",
+      "name": "Dev Inactive",
+      "image": null,
+      "isActive": false,
+      "roles": ["member"]
+    }
+  ]
+}

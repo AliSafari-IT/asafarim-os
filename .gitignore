@@ -16,6 +16,10 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.development.example
+
+# Local dev keys, secrets and generated config (pnpm dev:keys)
+.dev/
 
 # Logs and OS files
 *.log

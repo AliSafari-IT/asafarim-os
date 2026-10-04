@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.ts",
-    "dev": "node --watch src/server.ts",
+    "dev": "node --env-file-if-exists=../../.dev/identity.env --watch src/server.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",

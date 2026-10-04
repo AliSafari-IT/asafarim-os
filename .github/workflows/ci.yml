@@ -61,3 +61,23 @@ jobs:
 
       - name: Generated platform files are up to date
         run: pnpm platform:sync:check
+
+  # OS-D1 (#26): the local dev environment end to end: compose up, the
+  # per-service bootstrap twice (idempotent), identity /readyz green, a full
+  # sign-in through the dev login stub to an ID token, then everything down.
+  dev-env:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Dev environment smoke test
+        run: pnpm dev:smoke --down
