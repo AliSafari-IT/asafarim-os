@@ -17,6 +17,7 @@ export const ERRORS = {
   not_found: 404,
   role_not_found: 404, //         grant/revoke names a role that doesn't exist or is deprecated
   bad_request: 400,
+  app_inactive: 503, //           a token is only issued for an active app
 } as const;
 
 export type ErrorCode = keyof typeof ERRORS;

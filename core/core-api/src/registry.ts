@@ -12,6 +12,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { validateManifest, type AppManifest } from "@asafarim/app-manifest";
+import { signAccessToken, type SigningKey } from "@asafarim/registry-protocol";
 import type pg from "pg";
 import { ApiError } from "./errors.ts";
 import {
@@ -33,6 +34,10 @@ export interface RegistryDeps {
   appDatabaseHost: { host: string; port: number };
   scheme?: CredentialScheme;
   now?: () => Date;
+  /** Signs the short-lived access tokens (P3.3a). Without it, issuing one is refused. */
+  tokenKey?: SigningKey;
+  /** Called after every change that the gateway must see at once (install, activate, deactivate). */
+  onLifecycleChange?: () => void;
 }
 
 /** Parse and validate a manifest; refuse an id mismatch and anything outside the namespace. */
@@ -142,6 +147,7 @@ export function createRegistry(deps: RegistryDeps) {
       });
     });
 
+    deps.onLifecycleChange?.();
     const h = deps.appDatabaseHost;
     return {
       appId,
@@ -306,7 +312,7 @@ export function createRegistry(deps: RegistryDeps) {
   /** Admin: activate / deactivate. Gateway and launcher effects arrive in P3.3. */
   async function transition(appId: string, action: "activate" | "deactivate", actor: string) {
     const t = TRANSITIONS[action];
-    return inTx(async (c) => {
+    const out = await inTx(async (c) => {
       const row = (await c.query<{ state: AppState }>("SELECT state FROM apps WHERE id = $1 FOR UPDATE", [appId]))
         .rows[0];
       if (!row) throw new ApiError("not_found", `no app "${appId}"`);
@@ -316,6 +322,8 @@ export function createRegistry(deps: RegistryDeps) {
       await audit(c, actor, `app.${action}d`, appId, { from: row.state, to: t.to });
       return { appId, state: t.to, previous: row.state };
     });
+    deps.onLifecycleChange?.(); // the gateway serves (or stops serving) the app from this moment
+    return out;
   }
 
   /**
@@ -332,6 +340,11 @@ export function createRegistry(deps: RegistryDeps) {
     path = `/registry/v1/apps/${appId}/subjects/${encodeURIComponent(subject)}`,
   ) {
     const state = await authenticate(appId, "GET", path, headers, "");
+    return { appId, subject, state, ...(await grantsOf(appId, subject)) };
+  }
+
+  /** The roles an admin granted `subject` in this app, and the permissions those carry. Deprecated ones grant nothing. */
+  async function grantsOf(appId: string, subject: string) {
     const roles = (
       await deps.pool.query<{ key: string }>(
         `SELECT g.role_key AS key FROM role_grants g JOIN roles r ON r.key = g.role_key
@@ -349,7 +362,34 @@ export function createRegistry(deps: RegistryDeps) {
         [subject, appId],
       )
     ).rows.map((r) => r.key);
-    return { appId, subject, state, roles, permissions };
+    return { roles, permissions };
+  }
+
+  /**
+   * The app asks (signed POST, bound to this subject's path) for a short-lived
+   * access token for a person it has signed in: the gateway and the SDK verify
+   * it locally. The token carries this app's permissions only (audience = the
+   * app) and lives ACCESS_TOKEN_TTL_SECONDS. Only an ACTIVE app gets one.
+   */
+  async function issueAccessToken(
+    appId: string,
+    subject: string,
+    headers: Record<string, string | undefined>,
+    /** The request path exactly as the app signed it (percent-encoded). */
+    path = `/registry/v1/apps/${appId}/subjects/${encodeURIComponent(subject)}/token`,
+  ) {
+    if (!deps.tokenKey) throw new ApiError("bad_request", "this core-api has no token signing key configured");
+    const state = await authenticate(appId, "POST", path, headers, "");
+    if (state !== "active") throw new ApiError("app_inactive", `the app is ${state}`);
+    const { permissions } = await grantsOf(appId, subject);
+    const { token, claims } = signAccessToken({
+      key: deps.tokenKey,
+      subject,
+      audience: appId,
+      permissions,
+      now: now(),
+    });
+    return { token, expiresAt: new Date(claims.exp * 1000).toISOString(), expiresIn: claims.exp - claims.iat };
   }
 
   /** Admin: give a subject a role (an app's declared role). Idempotent; audited. */
@@ -393,7 +433,7 @@ export function createRegistry(deps: RegistryDeps) {
     return { ...app, permissions, roles };
   }
 
-  return { install, register, transition, get, pruneNonces, subjectAccess, grantRole, revokeRole };
+  return { install, register, transition, get, pruneNonces, subjectAccess, issueAccessToken, grantRole, revokeRole };
 }
 
 export type Registry = ReturnType<typeof createRegistry>;
