@@ -14,7 +14,13 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { formatProblems, validateManifest, type AppManifest } from "@asafarim/app-manifest";
+import {
+  formatProblems,
+  launcherEntries,
+  validateManifest,
+  type AppManifest,
+  type LauncherEntry,
+} from "@asafarim/app-manifest";
 
 /** Files that document the directory rather than being generator output. */
 const NOT_GENERATED = new Set(["README.md", ".gitkeep"]);
@@ -64,43 +70,10 @@ export function generatedFiles(root: string): string[] {
     .sort();
 }
 
-/** One launcher tile, as the platform's registry consumes it. */
-export interface LauncherEntry {
-  key: string;
-  name: string;
-  description: string;
-  glyph: string;
-  meta: string;
-  status: "active" | "coming-soon";
-  access: "public" | "authenticated";
-  requiresAccountToUse?: boolean;
-  order: number;
-}
+export type { LauncherEntry };
 
-/** The launcher registry: every manifest with a `ui.launcher`, by `order` then id. */
-export function launcherRegistry(manifests: AppManifest[]): LauncherEntry[] {
-  return (
-    manifests
-      .filter((m) => m.ui.launcher !== undefined)
-      .map((m) => {
-        const l = m.ui.launcher!;
-        return {
-          key: m.id,
-          name: m.name,
-          description: l.description,
-          glyph: m.ui.glyph,
-          meta: l.meta,
-          status: m.ui.status,
-          access: l.access,
-          ...(l.requiresAccountToUse === undefined ? {} : { requiresAccountToUse: l.requiresAccountToUse }),
-          order: l.order,
-        };
-      })
-      // Code-unit tie-break, not localeCompare: --check compares bytes, so the
-      // order must not depend on the host's collation.
-      .sort((a, b) => a.order - b.order || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-  );
-}
+/** The launcher registry: every manifest with a `ui.launcher`, by `order` then id (the shared projection). */
+export const launcherRegistry = (manifests: AppManifest[]): LauncherEntry[] => launcherEntries(manifests);
 
 export function renderLauncherRegistry(entries: LauncherEntry[]): string {
   const doc = {

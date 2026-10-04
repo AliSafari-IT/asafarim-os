@@ -12,13 +12,29 @@
  *   GET  /authz/check                                the gateway's forward_auth hook (Caddy)
  *   GET  /admin/v1/gateway/apps                      what the gateway serves right now (admin)
  *
- * Admin endpoints take `Authorization: Bearer <CORE_API_ADMIN_TOKEN>` for now;
- * OIDC admin sign-in replaces it when the admin console arrives.
+ * Admin endpoints take `Authorization: Bearer …` with either the static CLI token
+ * (CORE_API_ADMIN_TOKEN: bootstrap and CI; can be rotated or switched off) or a
+ * person's identity ID token from the Admin console, for a holder of `core.admin`
+ * (see admin-auth.ts). More admin endpoints (P3.3b):
+ *   GET  /admin/v1/session                       who the caller is
+ *   GET  /admin/v1/apps                          every app with its state
+ *   GET  /admin/v1/roles[?app=<id>]              roles, permissions, holders, what needs migrating
+ *   GET  /admin/v1/roles/<role>/grants           who holds a role
+ *   GET  /admin/v1/subjects/<sub>/grants         what a person holds
+ *   GET  /admin/v1/audit[?app=&actor=&limit=&before=]   the audit log, newest first
+ *   GET  /registry/v1/apps/:id/launcher/:sub     the apps a person can open (the app, signed)
  */
-import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import pg from "pg";
+import { createAdminQueries } from "./admin.ts";
+import {
+  CORE_ADMIN_ROLE,
+  bearerMatches,
+  createAdminAuth,
+  createIdentityVerifier,
+  type IdentityVerifier,
+} from "./admin-auth.ts";
 import { ApiError } from "./errors.ts";
 import { migrate } from "./migrate.ts";
 import { createAppSnapshot, createGateway, type GatewayApp } from "./gateway.ts";
@@ -44,15 +60,8 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-/**
- * Compare SHA-256 digests (always the same length) with timingSafeEqual, so
- * neither the content nor the length of the admin token leaks through timing.
- */
-export function adminTokenMatches(authorization: string | undefined, token: string): boolean {
-  const got = /^Bearer (.+)$/.exec(authorization ?? "")?.[1] ?? "";
-  const digest = (s: string) => createHash("sha256").update(s).digest();
-  return timingSafeEqual(digest(got), digest(token));
-}
+/** Kept for the tests and callers of the old name: see bearerMatches (admin-auth.ts). */
+export const adminTokenMatches = bearerMatches;
 
 const SUBJECT = /^[A-Za-z0-9._:@-]{1,128}$/;
 
@@ -73,8 +82,6 @@ export function appDatabasePort(override: string | undefined, provisioner: URL):
   return Number(override || provisioner.port || 5432);
 }
 
-const adminOk = (req: IncomingMessage, token: string) => adminTokenMatches(req.headers.authorization, token);
-
 const header = (req: IncomingMessage, name: string) => {
   const v = req.headers[name];
   return Array.isArray(v) ? v[0] : v;
@@ -83,7 +90,10 @@ const header = (req: IncomingMessage, name: string) => {
 export function createHandler(opts: {
   registry: Registry;
   pool: pg.Pool;
-  adminToken: string;
+  /** The static CLI token. Undefined = switched off (CORE_API_ADMIN_TOKEN_DISABLED): only people with core.admin may call the admin API. */
+  adminToken?: string;
+  /** Verifies the Admin console's identity tokens. Without it only the static token works. */
+  identity?: IdentityVerifier;
   log?: (line: object) => void;
   /** The token signing key (P3.3a). Without it there's no JWKS and the gateway hook refuses every permission-marked route. */
   tokenKey?: SigningKey;
@@ -96,6 +106,13 @@ export function createHandler(opts: {
   const snapshot = opts.snapshot ?? createAppSnapshot(() => loadGatewayApps(opts.pool));
   const keys = opts.tokenKey ? [verificationKeyOf(opts.tokenKey)] : [];
   const gateway = createGateway({ apps: snapshot.apps, keys: () => keys, now: opts.now });
+  const queries = createAdminQueries(opts.pool);
+  const authorizeAdmin = createAdminAuth({
+    staticToken: opts.adminToken,
+    identity: opts.identity,
+    holdsRole: queries.holdsRole,
+    log,
+  });
   return async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://core-api");
     const p = url.pathname;
@@ -165,8 +182,49 @@ export function createHandler(opts: {
         return json(res, 200, await opts.registry.issueAccessToken(m[1]!, subject, headers, p));
       }
 
+      m = new RegExp(`^/registry/v1/apps/${APP_ID}/launcher/([^/]{1,400})$`).exec(p);
+      if (m && req.method === "GET") {
+        const subject = decodeSubject(m[2]!);
+        const headers = Object.fromEntries(
+          ["x-asafarim-timestamp", "x-asafarim-nonce", "x-asafarim-key-id", "x-asafarim-signature"].map((h) => [
+            h,
+            header(req, h),
+          ]),
+        );
+        return json(res, 200, await opts.registry.launcher(m[1]!, subject, headers, p));
+      }
+
       if (p.startsWith("/admin/v1/")) {
-        if (!adminOk(req, opts.adminToken)) throw new ApiError("unauthorized");
+        const caller = await authorizeAdmin(req.headers.authorization);
+        const actor = caller.actor;
+        if (req.method === "GET" && p === "/admin/v1/session") return json(res, 200, caller);
+        if (req.method === "GET" && p === "/admin/v1/apps") return json(res, 200, { apps: await queries.listApps() });
+        if (req.method === "GET" && p === "/admin/v1/roles") {
+          const app = url.searchParams.get("app") ?? undefined;
+          if (app !== undefined && !new RegExp(`^${APP_ID}$`).test(app) && app !== "core") {
+            throw new ApiError("bad_request", "app isn't a valid app id");
+          }
+          return json(res, 200, { roles: await queries.listRoles(app) });
+        }
+        m = /^\/admin\/v1\/roles\/([a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+)\/grants$/.exec(p);
+        if (m && req.method === "GET") return json(res, 200, { role: m[1], grants: await queries.roleGrants(m[1]!) });
+        m = /^\/admin\/v1\/subjects\/([^/]{1,400})\/grants$/.exec(p);
+        if (m && req.method === "GET") {
+          const subject = decodeSubject(m[1]!);
+          return json(res, 200, { subject, grants: await queries.subjectGrants(subject) });
+        }
+        if (req.method === "GET" && p === "/admin/v1/audit") {
+          const num = (name: string) => {
+            const v = url.searchParams.get(name);
+            if (v === null || v === "") return undefined;
+            if (!/^\d{1,12}$/.test(v)) throw new ApiError("bad_request", `${name} must be a whole number`);
+            return Number(v);
+          };
+          const app = url.searchParams.get("app") || undefined;
+          const who = url.searchParams.get("actor") || undefined;
+          if (who !== undefined && who.length > 128) throw new ApiError("bad_request", "actor is too long");
+          return json(res, 200, await queries.audit({ app, actor: who, limit: num("limit"), before: num("before") }));
+        }
         if (req.method === "GET" && p === "/admin/v1/gateway/apps") {
           return json(res, 200, {
             apps: (await snapshot.apps()).map((a) => ({
@@ -180,11 +238,15 @@ export function createHandler(opts: {
         m = /^\/admin\/v1\/roles\/([a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+)\/grants\/([^/]{1,400})$/.exec(p);
         if (m && (req.method === "PUT" || req.method === "DELETE")) {
           const subject = decodeSubject(m[2]!);
+          // A person can't take core.admin away from themselves: that would lock them out of the console.
+          if (req.method === "DELETE" && m[1] === CORE_ADMIN_ROLE && caller.subject === subject) {
+            throw new ApiError("invalid_state", `you can't revoke your own ${CORE_ADMIN_ROLE}; ask another admin`);
+          }
           const out =
             req.method === "PUT"
-              ? await opts.registry.grantRole(m[1]!, subject, "admin")
-              : await opts.registry.revokeRole(m[1]!, subject, "admin");
-          log({ msg: req.method === "PUT" ? "role.granted" : "role.revoked", role: m[1] });
+              ? await opts.registry.grantRole(m[1]!, subject, actor)
+              : await opts.registry.revokeRole(m[1]!, subject, actor);
+          log({ msg: req.method === "PUT" ? "role.granted" : "role.revoked", role: m[1], actor });
           return json(res, 200, out);
         }
 
@@ -196,14 +258,14 @@ export function createHandler(opts: {
           } catch {
             throw new ApiError("bad_request", "the body must be the manifest as JSON");
           }
-          const out = await opts.registry.install(m[1]!, manifest, "admin");
-          log({ msg: "app.installed", appId: m[1] });
+          const out = await opts.registry.install(m[1]!, manifest, actor);
+          log({ msg: "app.installed", appId: m[1], actor });
           return json(res, 201, out);
         }
         m = new RegExp(`^/admin/v1/apps/${APP_ID}/(activate|deactivate)$`).exec(p);
         if (m && req.method === "POST") {
-          const out = await opts.registry.transition(m[1]!, m[2] as "activate" | "deactivate", "admin");
-          log({ msg: `app.${m[2]}d`, appId: m[1] });
+          const out = await opts.registry.transition(m[1]!, m[2] as "activate" | "deactivate", actor);
+          log({ msg: `app.${m[2]}d`, appId: m[1], actor });
           return json(res, 200, out);
         }
         m = new RegExp(`^/admin/v1/apps/${APP_ID}$`).exec(p);
@@ -263,9 +325,29 @@ function required(name: string): string {
   return v;
 }
 
+/** CORE_API_ADMIN_TOKEN: required (≥ 32 characters) unless CORE_API_ADMIN_TOKEN_DISABLED=true switches the CLI token off. */
+export function parseAdminToken(env: Record<string, string | undefined>): string | undefined {
+  if (env.CORE_API_ADMIN_TOKEN_DISABLED === "true") return undefined;
+  const token = env.CORE_API_ADMIN_TOKEN;
+  if (!token)
+    throw new Error("CORE_API_ADMIN_TOKEN is not set (or set CORE_API_ADMIN_TOKEN_DISABLED=true to switch it off)");
+  if (token.length < 32) throw new Error("CORE_API_ADMIN_TOKEN must be at least 32 characters");
+  return token;
+}
+
 async function main() {
-  const adminToken = required("CORE_API_ADMIN_TOKEN");
-  if (adminToken.length < 32) throw new Error("CORE_API_ADMIN_TOKEN must be at least 32 characters");
+  const adminToken = parseAdminToken(process.env);
+  // People sign in to the Admin console through core/identity; core-api verifies their ID token.
+  const identityIssuer = process.env.CORE_API_IDENTITY_ISSUER;
+  const identity = identityIssuer
+    ? createIdentityVerifier({
+        issuer: identityIssuer,
+        audience: process.env.CORE_API_ADMIN_CLIENT_ID ?? "core-admin",
+      })
+    : undefined;
+  if (adminToken === undefined && !identity) {
+    throw new Error("the admin token is off and CORE_API_IDENTITY_ISSUER isn't set: nobody could call the admin API");
+  }
   const pool = new pg.Pool({ connectionString: required("CORE_API_DATABASE_URL"), max: 8 });
   const applied = await migrate(pool);
   const provisionerUrl = required("CORE_API_PROVISIONER_URL");
@@ -277,6 +359,7 @@ async function main() {
     pool,
     tokenKey,
     accessTokenTtlSeconds: parseTokenTtl(process.env.CORE_API_ACCESS_TOKEN_TTL_SECONDS),
+    appUrlTemplate: process.env.CORE_API_APP_URL_TEMPLATE || undefined,
     onLifecycleChange: () => snapshot.invalidate(),
     provisioner: async () => {
       const c = new pg.Client({ connectionString: provisionerUrl });
@@ -291,7 +374,7 @@ async function main() {
   // Forget expired registration nonces even when nobody registers.
   setInterval(() => void registry.pruneNonces().catch(() => undefined), 60_000).unref();
   const port = Number(process.env.PORT ?? 4020);
-  createServer(createHandler({ registry, pool, adminToken, tokenKey, snapshot })).listen(port, () =>
+  createServer(createHandler({ registry, pool, adminToken, identity, tokenKey, snapshot })).listen(port, () =>
     process.stdout.write(
       `${JSON.stringify({ service: "core-api", msg: "core-api.started", port, migrations: applied })}\n`,
     ),

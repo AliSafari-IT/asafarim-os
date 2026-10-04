@@ -22,9 +22,13 @@ import {
   ed25519Scheme,
   type CredentialScheme,
 } from "./credentials.ts";
+import { launcherFor, type LauncherApp } from "./launcher.ts";
 import { appDatabaseNames, ensureDatabase, ensureRole } from "./provision.ts";
 
 export type AppState = "installed" | "active" | "inactive" | "removed";
+
+/** The platform's own catalog (migration 002): always active, never installed, deactivated or removed. */
+export const BUILT_IN_APP = "core";
 
 export interface RegistryDeps {
   pool: pg.Pool;
@@ -38,6 +42,8 @@ export interface RegistryDeps {
   tokenKey?: SigningKey;
   /** How long an access token lives, in seconds (default 60). This is also how long a revoked grant can still work. */
   accessTokenTtlSeconds?: number;
+  /** Where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset = https://<primary domain>. */
+  appUrlTemplate?: string;
   /** Called after every change that the gateway must see at once (install, activate, deactivate). */
   onLifecycleChange?: () => void;
 }
@@ -109,20 +115,24 @@ export function createRegistry(deps: RegistryDeps) {
   /** Admin: install an app. Returns the credential and DB password ONCE. */
   async function install(appId: string, manifestInput: unknown, actor: string) {
     const manifest = checkManifest(appId, manifestInput);
+    if (appId === BUILT_IN_APP) throw new ApiError("already_installed", `"${appId}" is built in`);
     const existing = await deps.pool.query<{ state: AppState }>("SELECT state FROM apps WHERE id = $1", [appId]);
     if (existing.rows[0] && existing.rows[0].state !== "removed") throw new ApiError("already_installed");
 
-    // The app's own database and login role (the OS-D1 bootstrap helper).
+    // The app's own database and login role (the OS-D1 bootstrap helper), unless it says it has none.
+    const wantsDatabase = manifest.database.engine !== "none";
     const { database, role } = appDatabaseNames(appId);
     const dbPassword = randomBytes(24).toString("base64url");
-    const prov = await deps.provisioner();
-    let roleResult: string;
-    let dbResult: string;
-    try {
-      roleResult = await ensureRole(prov, role, dbPassword);
-      dbResult = await ensureDatabase(prov, database, role);
-    } finally {
-      await prov.end();
+    let roleResult = "none";
+    let dbResult = "none";
+    if (wantsDatabase) {
+      const prov = await deps.provisioner();
+      try {
+        roleResult = await ensureRole(prov, role, dbPassword);
+        dbResult = await ensureDatabase(prov, database, role);
+      } finally {
+        await prov.end();
+      }
     }
 
     const credential = scheme.issue(appId);
@@ -131,7 +141,7 @@ export function createRegistry(deps: RegistryDeps) {
         `INSERT INTO apps (id, version, manifest, state, database_name) VALUES ($1, $2, $3, 'installed', $4)
          ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, manifest = EXCLUDED.manifest, state = 'installed',
            database_name = EXCLUDED.database_name, installed_at = now(), updated_at = now()`,
-        [appId, manifest.version, manifest, database],
+        [appId, manifest.version, manifest, wantsDatabase ? database : null],
       );
       await c.query("UPDATE app_credentials SET revoked_at = now() WHERE app_id = $1 AND revoked_at IS NULL", [appId]);
       await c.query("INSERT INTO app_credentials (key_id, app_id, scheme, verifier) VALUES ($1, $2, $3, $4)", [
@@ -156,7 +166,9 @@ export function createRegistry(deps: RegistryDeps) {
       state: "installed" as AppState,
       credential: credential.secret,
       keyId: credential.keyId,
-      database: { name: database, role, url: `postgres://${role}:${dbPassword}@${h.host}:${h.port}/${database}` },
+      database: wantsDatabase
+        ? { name: database, role, url: `postgres://${role}:${dbPassword}@${h.host}:${h.port}/${database}` }
+        : null,
     };
   }
 
@@ -314,6 +326,7 @@ export function createRegistry(deps: RegistryDeps) {
   /** Admin: activate / deactivate. Gateway and launcher effects arrive in P3.3. */
   async function transition(appId: string, action: "activate" | "deactivate", actor: string) {
     const t = TRANSITIONS[action];
+    if (appId === BUILT_IN_APP) throw new ApiError("invalid_state", `"${appId}" is built in and always active`);
     const out = await inTx(async (c) => {
       const row = (await c.query<{ state: AppState }>("SELECT state FROM apps WHERE id = $1 FOR UPDATE", [appId]))
         .rows[0];
@@ -396,6 +409,32 @@ export function createRegistry(deps: RegistryDeps) {
     return { token, expiresAt: new Date(claims.exp * 1000).toISOString(), expiresIn: claims.exp - claims.iat };
   }
 
+  /**
+   * The app asks (signed GET, bound to this person's path) which apps its signed-in person can open:
+   * active apps where they hold at least one role, plus public ones. See launcher.ts.
+   */
+  async function launcher(
+    appId: string,
+    subject: string,
+    headers: Record<string, string | undefined>,
+    path = `/registry/v1/apps/${appId}/launcher/${encodeURIComponent(subject)}`,
+  ) {
+    await authenticate(appId, "GET", path, headers, "");
+    const apps = (
+      await deps.pool.query<LauncherApp>("SELECT id, state, manifest FROM apps WHERE state = 'active' ORDER BY id")
+    ).rows;
+    const held = new Set(
+      (
+        await deps.pool.query<{ app_id: string }>(
+          `SELECT DISTINCT r.app_id FROM role_grants g JOIN roles r ON r.key = g.role_key
+            WHERE g.subject = $1 AND r.deprecated_at IS NULL`,
+          [subject],
+        )
+      ).rows.map((r) => r.app_id),
+    );
+    return { subject, apps: launcherFor(apps, held, { urlTemplate: deps.appUrlTemplate }) };
+  }
+
   /** Admin: give a subject a role (an app's declared role). Idempotent; audited. */
   async function grantRole(roleKey: string, subject: string, actor: string) {
     return inTx(async (c) => {
@@ -437,7 +476,18 @@ export function createRegistry(deps: RegistryDeps) {
     return { ...app, permissions, roles };
   }
 
-  return { install, register, transition, get, pruneNonces, subjectAccess, issueAccessToken, grantRole, revokeRole };
+  return {
+    install,
+    register,
+    transition,
+    get,
+    pruneNonces,
+    subjectAccess,
+    issueAccessToken,
+    launcher,
+    grantRole,
+    revokeRole,
+  };
 }
 
 export type Registry = ReturnType<typeof createRegistry>;

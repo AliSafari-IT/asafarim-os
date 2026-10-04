@@ -14,6 +14,7 @@ import { consoleLogger, registerApp, type RegisterResult, type SdkLogger } from 
 export * from "./access.ts";
 export * from "./auth.ts";
 export * from "./config.ts";
+export * from "./launcher.ts";
 export * from "./register.ts";
 export * from "./token.ts";
 
@@ -44,6 +45,7 @@ function notInstalledAccess(): Access {
     can: async () => false,
     require: unavailable,
     mintToken: unavailable,
+    launcher: unavailable,
     clearCache: () => undefined,
   } as Access;
 }

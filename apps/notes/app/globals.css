@@ -107,3 +107,6 @@ button.secondary {
   font-family: ui-monospace, monospace;
   font-size: 0.85em;
 }
+.asafarim-launcher {
+  margin: 0 0 16px;
+}
