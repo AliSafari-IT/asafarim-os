@@ -13,7 +13,6 @@
  * The FIRST administrator is made by the CLI token (what `platform role grant core.admin dev-admin` does):
  * nothing self-grants core.admin.
  */
-import { readFileSync } from "node:fs";
 import { signRequest } from "@asafarim/registry-protocol";
 import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import pg from "pg";
@@ -22,7 +21,8 @@ const ADMIN = process.env.E2E_ADMIN_URL ?? "http://core.localhost:8080";
 const NOTES = process.env.E2E_GATEWAY_URL ?? "http://notes.localhost:8080";
 const CORE_API = process.env.E2E_CORE_API_URL ?? "http://localhost:4020";
 const TOKEN = process.env.E2E_ADMIN_TOKEN ?? "";
-const NOTES_ENV = process.env.E2E_NOTES_ENV_FILE ?? "";
+// notes' registry credential, from the e2e runner (it reads .dev/notes.env): the spec itself reads no files.
+const NOTES_CREDENTIAL = process.env.E2E_NOTES_CREDENTIAL ?? "";
 const SHOTS = "test-results/screens";
 
 async function cli(method: string, path: string) {
@@ -34,9 +34,11 @@ const revoke = (role: string, sub: string) => cli("DELETE", `/admin/v1/roles/${r
 
 /** What notes (an app) gets from core-api's launcher endpoint for a person: the same signed call the SDK makes. */
 async function launcherFor(sub: string): Promise<string[]> {
-  const credential = /^ASAFARIM_REGISTRY_CREDENTIAL=(.+)$/m.exec(readFileSync(NOTES_ENV, "utf8"))![1]!;
+  expect(NOTES_CREDENTIAL, "E2E_NOTES_CREDENTIAL must be set (pnpm e2e sets it)").not.toBe("");
   const path = `/registry/v1/apps/notes/launcher/${encodeURIComponent(sub)}`;
-  const res = await fetch(`${CORE_API}${path}`, { headers: signRequest({ credential, method: "GET", path }) });
+  const res = await fetch(`${CORE_API}${path}`, {
+    headers: signRequest({ credential: NOTES_CREDENTIAL, method: "GET", path }),
+  });
   expect(res.status).toBe(200);
   return ((await res.json()) as { apps: { key: string }[] }).apps.map((a) => a.key);
 }

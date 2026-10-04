@@ -102,7 +102,8 @@ try {
     E2E_TOKEN_TTL: String(TOKEN_TTL),
     E2E_CORE_API_URL: core.CORE_API_URL,
     E2E_ADMIN_TOKEN: core.CORE_API_ADMIN_TOKEN,
-    E2E_NOTES_ENV_FILE: path.join(DEV_DIR, "notes.env"),
+    // notes' registry credential, for the console spec's launcher check (the spec reads no files).
+    E2E_NOTES_CREDENTIAL: readEnvFile(path.join(DEV_DIR, "notes.env")).ASAFARIM_REGISTRY_CREDENTIAL,
     // The "migration needed" test simulates an app upgrade that deprecated a permission, in core-api's database.
     E2E_CORE_DATABASE_URL: core.CORE_API_DATABASE_URL,
   };
