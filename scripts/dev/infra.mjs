@@ -30,4 +30,8 @@ export function compose(...args) {
   if (r.status !== 0) throw new Error(`docker compose ${args.join(" ")} failed`);
 }
 
-export const dbEnv = () => readEnvFile(path.join(DEV_DIR, "db.env"));
+/** The bootstrap's passwords: db.env plus core-api's own database password. */
+export const dbEnv = () => ({
+  ...readEnvFile(path.join(DEV_DIR, "db.env")),
+  ...readEnvFile(path.join(DEV_DIR, "core-api.env")),
+});

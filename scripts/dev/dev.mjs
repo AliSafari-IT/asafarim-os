@@ -24,6 +24,7 @@ const { users } = JSON.parse(readFileSync(path.join(ROOT, "tools/dev-hub/seed-us
 console.log(`
 ${green(bold("ASafariM OS dev environment"))}
   identity (OIDC)   ${ISSUER}/.well-known/openid-configuration
+  core-api          http://localhost:${DEV.coreApiPort}/readyz   ${dim("(pnpm platform app install <id>)")}
   dev login stub    http://localhost:${DEV.devHubPort}   ${dim("(DEV ONLY: stands in for Hub)")}
   Postgres          127.0.0.1:${DEV.postgres.port}   Redis 127.0.0.1:56380
   dev OIDC client   client_id=dev-app, redirect ${DEV.devClientCallback}, PKCE S256
@@ -33,7 +34,16 @@ ${green(bold("ASafariM OS dev environment"))}
 
 const turbo = spawn(
   "pnpm",
-  ["exec", "turbo", "run", "dev", "--filter=@asafarim/identity", "--filter=@asafarim/dev-hub", "--filter=./apps/*"],
+  [
+    "exec",
+    "turbo",
+    "run",
+    "dev",
+    "--filter=@asafarim/identity",
+    "--filter=@asafarim/core-api",
+    "--filter=@asafarim/dev-hub",
+    "--filter=./apps/*",
+  ],
   { cwd: ROOT, stdio: "inherit", shell: process.platform === "win32" },
 );
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => turbo.kill(sig));

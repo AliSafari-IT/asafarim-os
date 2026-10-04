@@ -1,0 +1,29 @@
+{
+  "name": "@asafarim/core-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ASafariM OS core-api: the app registry, install records, signed self-registration, lifecycle and the permission catalog (P3.1, ADR 0001 §3–4)",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "dev": "node --env-file-if-exists=../../.dev/core-api.env --watch src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@asafarim/app-manifest": "workspace:*",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.1",
+    "@types/pg": "^8.23.1",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}
