@@ -25,9 +25,13 @@ Endpoints: discovery (`/.well-known/openid-configuration`), `/jwks`, `/auth`, `/
 1. A client starts the code flow at `/auth`. The provider creates an interaction (`uid`) and sends the browser to `/interaction/<uid>`.
 2. The service signs a **ticket** (Ed25519, `iss=id`, `aud=hub`, `uid`, a nonce, `exp` ≤ 120 s) and redirects to `IDENTITY_HUB_CONTINUE_URL?ticket=…`.
 3. Hub signs the person in (or reuses its session) and auto-POSTs an **assertion** to `/interaction/<uid>/hub` as the form field `assertion`. The assertion is an Ed25519 JWS with `iss=hub`, `aud=id`, `sub` (the platform user id), the same `uid`, `exp` ≤ 60 s and a single-use `jti`.
-4. The service verifies it: the signature (with Hub's pinned key), the issuer, the audience, the lifetime, the `uid`, and that the `jti` hasn't been seen (Redis). The account must exist and be active. Only then does it finish the interaction with `accountId = sub`.
+4. The service verifies it: the signature (with Hub's pinned key), the issuer, the audience, the lifetime, the `uid`, and that the `jti` hasn't been seen (Redis). The account must exist and be active.
+5. It does **not** finish the login yet. Hub's POST is cross-site, so the browser doesn't send the provider's (SameSite=Lax) interaction cookie with it, and nothing proves the posting browser is the one that started the sign-in. Instead it **parks** the verified `sub` in Redis (keyed by `uid`, 60 s, single-use), sets a random **completion cookie** scoped to `/interaction/<uid>/complete` (only its SHA-256 is stored), and answers `303` to that path.
+6. `GET /interaction/<uid>/complete` is a top-level GET, so the browser sends both cookies. It finishes the interaction with `accountId = sub` **only** if the completion cookie matches the parked login **and** the provider's interaction cookie is there (`interactionDetails` succeeds for this `uid`). That means the same browser started the sign-in and posted the assertion. Otherwise: `browser_mismatch`, and nothing is finished.
 
-Any failure shows a styled error page with a short code (`assertion_replayed`, `account_inactive`, …) and logs nothing that identifies the person; there is no partial login. Hub's POST is cross-site, so the interaction is loaded by its `uid`, not from the (SameSite=Lax) interaction cookie. The signed, `uid`-bound, single-use assertion is what authorises it.
+**Why both cookies:** if someone else's signed-in browser opens your continue link, it can post an assertion for _their_ account, but it doesn't hold your interaction cookie, so it can't finish your sign-in. Your browser holds the interaction cookie but never received the completion cookie, so it can't finish with their account either. Without this step, an interaction could be completed with a different person's account (asafarim-platform#723, review of #23).
+
+Any failure shows a styled error page with a short code (`assertion_replayed`, `account_inactive`, `browser_mismatch`, …) and logs nothing that identifies the person; there is no partial login.
 
 ## Configuration (env)
 
