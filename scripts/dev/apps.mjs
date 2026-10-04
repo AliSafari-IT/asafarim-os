@@ -38,9 +38,24 @@ export function platform(args) {
   return { ok: r.status === 0, output: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
 }
 
+/** The local core-api and its admin token, from .dev/core-api.env. Loopback only: it's a dev file. */
 export function coreApiAdmin() {
   const env = readEnvFile(path.join(DEV_DIR, "core-api.env"));
-  return { baseUrl: env.CORE_API_URL, token: env.CORE_API_ADMIN_TOKEN };
+  const url = new URL(env.CORE_API_URL);
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
+    throw new Error(`.dev/core-api.env points core-api at ${url.hostname}, which isn't loopback`);
+  }
+  return { baseUrl: url.origin, token: env.CORE_API_ADMIN_TOKEN };
+}
+
+/** The file's text, or undefined when it doesn't exist (no check-then-read race). */
+function readIfExists(file) {
+  try {
+    return readFileSync(file, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return undefined;
+    throw err;
+  }
 }
 
 async function isInstalled(id) {
@@ -56,13 +71,14 @@ export async function installDevApps({ activate = true, log = console.log } = {}
     // nothing changed: the compiler's formatting differs from Prettier's, and a
     // dev run must not dirty the working tree.
     const jsonFile = path.join(ROOT, "apps", id, "platform.app.json");
-    const before = existsSync(jsonFile) ? readFileSync(jsonFile, "utf8") : undefined;
+    const before = readIfExists(jsonFile);
     const compiled = platform(["manifest", "compile", `apps/${id}/platform.app.ts`]);
     if (!compiled.ok) throw new Error(`compiling apps/${id}/platform.app.ts failed:\n${compiled.output}`);
-    if (before !== undefined && sameJson(before, readFileSync(jsonFile, "utf8"))) writeFileSync(jsonFile, before);
+    if (before !== undefined && sameJson(before, readIfExists(jsonFile) ?? "")) writeFileSync(jsonFile, before);
 
     const installed = await isInstalled(id);
-    if (installed && existsSync(envFile)) {
+    const hasCredential = readIfExists(envFile) !== undefined;
+    if (installed && hasCredential) {
       log(`app ${id}: already installed`);
       continue;
     }
@@ -71,7 +87,7 @@ export async function installDevApps({ activate = true, log = console.log } = {}
         `${id} is installed in core-api but .dev/${id}.env (its credential) is missing. Run pnpm dev:reset, then pnpm dev.`,
       );
     }
-    if (existsSync(envFile)) rmSync(envFile); // a stale credential from a reset database
+    rmSync(envFile, { force: true }); // a stale credential from a reset database
 
     const out = platform(["app", "install", id, "--env-out", path.join(".dev", `${id}.env`)]);
     if (!out.ok) throw new Error(`installing ${id} failed:\n${out.output}`);

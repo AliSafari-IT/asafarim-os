@@ -18,13 +18,50 @@ type Result = { ok: boolean; lines: string[] };
 
 function devEnv(root: string): Record<string, string> {
   const file = path.join(root, ".dev", "core-api.env");
-  if (!existsSync(file)) return {};
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return {}; // not there: nothing to fall back to
+  }
   const env: Record<string, string> = {};
-  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+  for (const line of text.split(/\r?\n/)) {
     const m = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line);
     if (m) env[m[1]!] = m[2]!.replace(/^'(.*)'$|^"(.*)"$/, "$1$2");
   }
   return env;
+}
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Where to send admin requests, and with which token. CORE_API_URL and
+ * CORE_API_ADMIN_TOKEN from the environment are used as given (point them at
+ * any core-api). The `.dev/core-api.env` fallback is for local development
+ * only, so a URL that comes from that file must be loopback: a tampered dev
+ * file can't redirect the admin token to another host.
+ */
+export function adminEndpoint(
+  root: string,
+  env: Record<string, string | undefined>,
+): { baseUrl: string; token: string } | { error: string } {
+  const fallback = devEnv(root);
+  const baseUrl = (env.CORE_API_URL ?? fallback.CORE_API_URL ?? "http://localhost:4020").replace(/\/$/, "");
+  const token = env.CORE_API_ADMIN_TOKEN ?? fallback.CORE_API_ADMIN_TOKEN;
+  if (!token) return { error: "CORE_API_ADMIN_TOKEN is not set (run `pnpm dev` once locally, or export it)." };
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return { error: `CORE_API_URL is not a URL: ${baseUrl}` };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return { error: "CORE_API_URL must be http(s)." };
+  if (env.CORE_API_URL === undefined && !LOOPBACK.has(url.hostname)) {
+    return {
+      error: `.dev/core-api.env points core-api at ${url.hostname}, which isn't loopback; set CORE_API_URL explicitly if that's intended.`,
+    };
+  }
+  return { baseUrl, token };
 }
 
 export async function appCommand(
@@ -54,11 +91,9 @@ export async function appCommand(
     envTarget = target;
   }
 
-  const fallback = devEnv(root);
-  const baseUrl = (env.CORE_API_URL ?? fallback.CORE_API_URL ?? "http://localhost:4020").replace(/\/$/, "");
-  const token = env.CORE_API_ADMIN_TOKEN ?? fallback.CORE_API_ADMIN_TOKEN;
-  if (!token)
-    return { ok: false, lines: ["CORE_API_ADMIN_TOKEN is not set (run `pnpm dev` once locally, or export it)."] };
+  const target = adminEndpoint(root, env);
+  if ("error" in target) return { ok: false, lines: [target.error] };
+  const { baseUrl, token } = target;
 
   let body: string | undefined;
   if (action === "install") {
@@ -133,11 +168,9 @@ export async function roleCommand(
   if (!role || !subject || args.length !== 3) return null;
   if (!/^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/.test(role) || !/^[A-Za-z0-9._:@-]{1,128}$/.test(subject)) return null;
 
-  const fallback = devEnv(root);
-  const baseUrl = (env.CORE_API_URL ?? fallback.CORE_API_URL ?? "http://localhost:4020").replace(/\/$/, "");
-  const token = env.CORE_API_ADMIN_TOKEN ?? fallback.CORE_API_ADMIN_TOKEN;
-  if (!token)
-    return { ok: false, lines: ["CORE_API_ADMIN_TOKEN is not set (run `pnpm dev` once locally, or export it)."] };
+  const target = adminEndpoint(root, env);
+  if ("error" in target) return { ok: false, lines: [target.error] };
+  const { baseUrl, token } = target;
 
   let res: Response;
   try {

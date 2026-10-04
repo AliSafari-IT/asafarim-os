@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { appCommand, roleCommand } from "./app.ts";
+import { adminEndpoint, appCommand, roleCommand } from "./app.ts";
 
 function workspace(withManifest = true) {
   const root = mkdtempSync(path.join(tmpdir(), "app-cmd-"));
@@ -142,5 +142,52 @@ describe("platform role (P3.2)", () => {
     ]) {
       expect(await roleCommand(bad, root, { CORE_API_ADMIN_TOKEN: "t" }, reply(200, {}))).toBeNull();
     }
+  });
+});
+
+describe("where the admin token may be sent (adminEndpoint)", () => {
+  function rootWithDevEnv(url: string) {
+    const root = workspace(false);
+    mkdirSync(path.join(root, ".dev"));
+    writeFileSync(
+      path.join(root, ".dev", "core-api.env"),
+      `CORE_API_URL=${url}
+CORE_API_ADMIN_TOKEN=dev-token
+`,
+    );
+    return root;
+  }
+
+  it("a loopback URL from the dev env file is fine", () => {
+    for (const url of ["http://localhost:4020", "http://127.0.0.1:4020", "http://[::1]:4020"]) {
+      expect(adminEndpoint(rootWithDevEnv(url), {})).toMatchObject({ token: "dev-token" });
+    }
+  });
+
+  it("a non-loopback URL from the dev env file is refused, so a tampered file can't redirect the token", () => {
+    const r = adminEndpoint(rootWithDevEnv("https://evil.example"), {});
+    expect(r).toEqual({ error: expect.stringContaining("isn't loopback") });
+  });
+
+  it("an explicit CORE_API_URL is used as given (any host), but must be a http(s) URL", () => {
+    const root = workspace(false);
+    expect(adminEndpoint(root, { CORE_API_URL: "https://core.asafarim.site/", CORE_API_ADMIN_TOKEN: "t" })).toEqual({
+      baseUrl: "https://core.asafarim.site",
+      token: "t",
+    });
+    expect(adminEndpoint(root, { CORE_API_URL: "ftp://x", CORE_API_ADMIN_TOKEN: "t" })).toEqual({
+      error: "CORE_API_URL must be http(s).",
+    });
+    expect(adminEndpoint(root, { CORE_API_URL: "not a url", CORE_API_ADMIN_TOKEN: "t" })).toEqual({
+      error: expect.stringContaining("not a URL"),
+    });
+  });
+
+  it("the commands refuse before sending anything", async () => {
+    const root = rootWithDevEnv("https://evil.example");
+    const fetchImpl = reply(200, {});
+    const r = await roleCommand(["grant", "notes.editor", "u"], root, {}, fetchImpl);
+    expect(r?.ok).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
