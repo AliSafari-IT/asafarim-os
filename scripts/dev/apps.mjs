@@ -6,10 +6,19 @@
  * left alone.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { readEnvFile } from "./bootstrap.mjs";
 import { DEV_DIR, ROOT } from "./keys.mjs";
+
+/** True when two JSON texts hold the same value, whatever their formatting. */
+export function sameJson(a, b) {
+  try {
+    return JSON.stringify(JSON.parse(a)) === JSON.stringify(JSON.parse(b));
+  } catch {
+    return false;
+  }
+}
 
 export function appIds() {
   const dir = path.join(ROOT, "apps");
@@ -43,8 +52,14 @@ async function isInstalled(id) {
 export async function installDevApps({ activate = true, log = console.log } = {}) {
   for (const id of appIds()) {
     const envFile = path.join(DEV_DIR, `${id}.env`);
+    // Compile the manifest, but leave the committed platform.app.json alone when
+    // nothing changed: the compiler's formatting differs from Prettier's, and a
+    // dev run must not dirty the working tree.
+    const jsonFile = path.join(ROOT, "apps", id, "platform.app.json");
+    const before = existsSync(jsonFile) ? readFileSync(jsonFile, "utf8") : undefined;
     const compiled = platform(["manifest", "compile", `apps/${id}/platform.app.ts`]);
     if (!compiled.ok) throw new Error(`compiling apps/${id}/platform.app.ts failed:\n${compiled.output}`);
+    if (before !== undefined && sameJson(before, readFileSync(jsonFile, "utf8"))) writeFileSync(jsonFile, before);
 
     const installed = await isInstalled(id);
     if (installed && existsSync(envFile)) {
