@@ -228,6 +228,60 @@ describe.skipIf(!ADMIN_URL)("core-api registry (integration)", () => {
     ]);
   });
 
+  it("prunes expired registration nonces (on register and on demand), keeps live ones", async () => {
+    await pool.query(
+      "INSERT INTO registry_nonces (nonce, app_id, expires_at) VALUES ('expired-nonce-aaaaaaaaaaaaaaaa', $1, now() - interval '1 second'), ('live-nonce-aaaaaaaaaaaaaaaaaaaa', $1, now() + interval '60 seconds')",
+      [APP],
+    );
+    const registry = createRegistry({
+      pool,
+      provisioner: async () => new pg.Client(),
+      appDatabaseHost: { host: "h", port: 1 },
+    });
+    expect(await registry.pruneNonces()).toBe(1);
+    expect(
+      await count("SELECT count(*) AS n FROM registry_nonces WHERE nonce = 'expired-nonce-aaaaaaaaaaaaaaaa'"),
+    ).toBe(0);
+    expect(
+      await count("SELECT count(*) AS n FROM registry_nonces WHERE nonce = 'live-nonce-aaaaaaaaaaaaaaaaaaaa'"),
+    ).toBe(1);
+
+    // A registration prunes too: seed another expired row, register, and it's gone.
+    await pool.query(
+      "INSERT INTO registry_nonces (nonce, app_id, expires_at) VALUES ('expired-two-aaaaaaaaaaaaaaaaaa', $1, now() - interval '5 seconds')",
+      [APP],
+    );
+    const m = manifest(APP, {
+      version: "0.3.1",
+      permissions: [`${APP}.notes.read`, `${APP}.notes.share`, `${APP}.notes.write`],
+    });
+    expect((await register(APP, m)).status).toBe(200);
+    expect(
+      await count("SELECT count(*) AS n FROM registry_nonces WHERE nonce = 'expired-two-aaaaaaaaaaaaaaaaaa'"),
+    ).toBe(0);
+    // An unexpired nonce still blocks a replay.
+    expect(
+      await count("SELECT count(*) AS n FROM registry_nonces WHERE nonce = 'live-nonce-aaaaaaaaaaaaaaaaaaaa'"),
+    ).toBe(1);
+  });
+
+  it("two core-api processes migrating at once don't fail (advisory lock)", async () => {
+    const dbName = `core_race_${run}`;
+    await admin.query(`CREATE DATABASE "${dbName}"`);
+    const url = new URL(ADMIN_URL!);
+    url.pathname = `/${dbName}`;
+    const poolA = new pg.Pool({ connectionString: url.href, max: 2 });
+    const poolB = new pg.Pool({ connectionString: url.href, max: 2 });
+    try {
+      const [a, b] = await Promise.all([migrate(poolA), migrate(poolB)]);
+      expect([...a, ...b]).toEqual(["001_core.sql"]); // applied exactly once, by exactly one of them
+    } finally {
+      await poolA.end();
+      await poolB.end();
+      await admin.query(`DROP DATABASE IF EXISTS "${dbName}"`);
+    }
+  });
+
   describe("safety rules", () => {
     it("an unknown app (no install record) can't register", async () => {
       const someone = credentials.get(APP)!; // a valid credential, but for another app

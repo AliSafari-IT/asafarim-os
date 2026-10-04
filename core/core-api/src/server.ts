@@ -11,7 +11,7 @@
  * Admin endpoints take `Authorization: Bearer <CORE_API_ADMIN_TOKEN>` for now;
  * OIDC admin sign-in replaces it when the admin console arrives.
  */
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import pg from "pg";
@@ -38,12 +38,22 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function adminOk(req: IncomingMessage, token: string): boolean {
-  const got = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
-  const a = Buffer.from(got);
-  const b = Buffer.from(token);
-  return a.length === b.length && timingSafeEqual(a, b);
+/**
+ * Compare SHA-256 digests (always the same length) with timingSafeEqual, so
+ * neither the content nor the length of the admin token leaks through timing.
+ */
+export function adminTokenMatches(authorization: string | undefined, token: string): boolean {
+  const got = /^Bearer (.+)$/.exec(authorization ?? "")?.[1] ?? "";
+  const digest = (s: string) => createHash("sha256").update(s).digest();
+  return timingSafeEqual(digest(got), digest(token));
 }
+
+/** The port put into an installed app's DATABASE_URL. URL.port is "" (not undefined) when the URL has none. */
+export function appDatabasePort(override: string | undefined, provisioner: URL): number {
+  return Number(override || provisioner.port || 5432);
+}
+
+const adminOk = (req: IncomingMessage, token: string) => adminTokenMatches(req.headers.authorization, token);
 
 const header = (req: IncomingMessage, name: string) => {
   const v = req.headers[name];
@@ -137,6 +147,7 @@ async function main() {
   const applied = await migrate(pool);
   const provisionerUrl = required("CORE_API_PROVISIONER_URL");
   const appDb = new URL(provisionerUrl);
+  const appDbPort = appDatabasePort(process.env.CORE_API_APP_DB_PORT, appDb);
   const registry = createRegistry({
     pool,
     provisioner: async () => {
@@ -146,9 +157,11 @@ async function main() {
     },
     appDatabaseHost: {
       host: process.env.CORE_API_APP_DB_HOST ?? appDb.hostname,
-      port: Number(process.env.CORE_API_APP_DB_PORT ?? appDb.port ?? 5432),
+      port: appDbPort,
     },
   });
+  // Forget expired registration nonces even when nobody registers.
+  setInterval(() => void registry.pruneNonces().catch(() => undefined), 60_000).unref();
   const port = Number(process.env.PORT ?? 4020);
   createServer(createHandler({ registry, pool, adminToken })).listen(port, () =>
     process.stdout.write(

@@ -80,16 +80,19 @@ export function isLoopbackHost(hostname: string): boolean {
 }
 
 /**
- * Defence in depth (architect, OS-D1 review): in production, never hand logins
- * to a loopback host. A dev env file copied into production (whose continue
- * URL is the local dev login stub) then fails loudly at startup instead of
- * trusting a stub that signs in anyone.
+ * Defence in depth (architect, OS-D1 review; CodeRabbit on #30): loopback
+ * hand-off targets are allowed ONLY when NODE_ENV is exactly "development".
+ * Anything else (production, a typo, an unset variable) refuses them, so a dev
+ * env file copied into a deployment fails loudly at startup instead of
+ * trusting the local dev login stub that signs in anyone.
  */
-export function refuseLoopbackInProduction(env: Env, urls: Record<string, string>): void {
-  if (env.NODE_ENV !== "production") return;
+export function refuseLoopbackOutsideDevelopment(env: Env, urls: Record<string, string>): void {
+  if (env.NODE_ENV === "development") return;
   for (const [name, url] of Object.entries(urls)) {
     if (isLoopbackHost(new URL(url).hostname)) {
-      throw new ConfigError(`${name} points at a loopback host with NODE_ENV=production (a development env file?)`);
+      throw new ConfigError(
+        `${name} points at a loopback host, which is only allowed with NODE_ENV=development (got "${env.NODE_ENV ?? ""}")`,
+      );
     }
   }
 }
@@ -111,7 +114,7 @@ export async function loadConfig(env: Env = process.env): Promise<IdentityConfig
   const hubContinueUrl = required(env, "IDENTITY_HUB_CONTINUE_URL");
   if (new URL(hubContinueUrl).protocol !== "https:" && !local)
     throw new ConfigError("IDENTITY_HUB_CONTINUE_URL must be https");
-  refuseLoopbackInProduction(env, { IDENTITY_HUB_CONTINUE_URL: hubContinueUrl, IDENTITY_ISSUER: issuer });
+  refuseLoopbackOutsideDevelopment(env, { IDENTITY_HUB_CONTINUE_URL: hubContinueUrl, IDENTITY_ISSUER: issuer });
 
   const clientsFile = required(env, "IDENTITY_CLIENTS_FILE");
   let clientConfig: ClientConfigFile;

@@ -10,7 +10,7 @@
  *   .dev/clients.json   one public dev OIDC client ("dev-app")
  */
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -62,9 +62,23 @@ function ensureCoreApiEnv(force) {
   return true;
 }
 
+/** mkdir/writeFile modes don't change an EXISTING path: tighten .dev/ and every file in it. */
+export function lockDownDevDir() {
+  chmodSync(DEV_DIR, 0o700);
+  for (const f of readdirSync(DEV_DIR)) chmodSync(path.join(DEV_DIR, f), 0o600);
+}
+
 export function ensureDevKeys({ force = false, log = console.log } = {}) {
-  mkdirSync(DEV_DIR, { recursive: true });
+  mkdirSync(DEV_DIR, { recursive: true, mode: 0o700 });
   const coreApi = ensureCoreApiEnv(force);
+  try {
+    return ensureDevKeysInner({ force, log, coreApi });
+  } finally {
+    lockDownDevDir();
+  }
+}
+
+function ensureDevKeysInner({ force, log, coreApi }) {
   const files = ["identity.env", "dev-hub.env", "db.env", "clients.json"].map((f) => path.join(DEV_DIR, f));
   if (!force && files.every((f) => existsSync(f))) {
     log(`dev keys: present in .dev/${coreApi ? " (core-api.env added)" : ""} (pnpm dev:keys --force to replace)`);

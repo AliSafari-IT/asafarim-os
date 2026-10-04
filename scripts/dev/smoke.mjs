@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { bootstrap } from "./bootstrap.mjs";
-import { bold, compose, dbEnv, green, red, requireDocker } from "./infra.mjs";
+import { bold, buildWorkspaceDependencies, compose, dbEnv, green, red, requireDocker } from "./infra.mjs";
 import { DEV, DEV_DIR, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
 
 const HUB = `http://localhost:${DEV.devHubPort}`;
@@ -62,6 +62,14 @@ async function get(url, jar) {
   return res;
 }
 
+/** A header or form field the flow depends on; fail with the status when it's missing. */
+function need(value, what, res) {
+  if (value === undefined || value === null || value === "") {
+    throw new Error(`${what} is missing (HTTP ${res?.status ?? "?"})`);
+  }
+  return value;
+}
+
 const field = (html, name) => new RegExp(`name="${name}" value="([^"]+)"`).exec(html)?.[1];
 
 /** One browser signing in as `sub` through the dev stub. Returns the token response or the refusal. */
@@ -82,7 +90,7 @@ async function signIn(sub) {
     auth.searchParams.set(k, v);
 
   let res = await get(auth.href, jar);
-  const interaction = new URL(res.headers.get("location"), ISSUER);
+  const interaction = new URL(need(res.headers.get("location"), "the authorization redirect", res), ISSUER);
   res = await get(interaction.href, jar);
   const continueUrl = res.headers.get("location");
   if (!continueUrl?.startsWith(`${HUB}/oidc/continue?ticket=`))
@@ -90,15 +98,15 @@ async function signIn(sub) {
 
   // The dev hub: list → pick `sub` → auto-POST page.
   const list = await (await get(continueUrl)).text();
-  const ticket = field(list, "ticket");
+  const ticket = need(field(list, "ticket"), "the dev hub's ticket field", res);
   res = await fetch(`${HUB}/oidc/continue/select`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ ticket, sub }),
   });
   const page = await res.text();
-  const action = /<form id="handoff" method="post" action="([^"]+)">/.exec(page)?.[1];
-  const assertion = field(page, "assertion");
+  const action = need(/<form id="handoff" method="post" action="([^"]+)">/.exec(page)?.[1], "the hand-off form", res);
+  const assertion = need(field(page, "assertion"), "the assertion field", res);
 
   // The auto-POST (cross-site: no identity cookies sent), then the browser follows.
   res = await fetch(action, {
@@ -109,12 +117,12 @@ async function signIn(sub) {
   });
   jar.take(res);
   if (res.status !== 303) return { refused: res.status, body: await res.text() };
-  let location = new URL(res.headers.get("location"), ISSUER).href;
+  let location = new URL(need(res.headers.get("location"), "the post-hand-off redirect", res), ISSUER).href;
   for (let i = 0; i < 6 && !location.startsWith(DEV.devClientCallback); i++) {
     res = await get(location, jar);
-    location = new URL(res.headers.get("location"), ISSUER).href;
+    location = new URL(need(res.headers.get("location"), "a redirect while completing sign-in", res), ISSUER).href;
   }
-  const code = new URL(location).searchParams.get("code");
+  const code = need(new URL(location).searchParams.get("code"), "the authorization code", res);
   const tokens = await (
     await fetch(`${ISSUER}/token`, {
       method: "POST",
@@ -137,6 +145,8 @@ let failed = false;
 try {
   requireDocker();
   ensureDevKeys();
+  buildWorkspaceDependencies();
+  step("workspace dependencies built");
   compose("up", "-d", "--wait");
   step("Postgres and Redis up (127.0.0.1 only)");
   await bootstrap(dbEnv());
