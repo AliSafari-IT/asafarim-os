@@ -1,0 +1,9 @@
+{
+  "extends": "@asafarim/config/tsconfig/base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "types": ["node"]
+  },
+  "include": ["src", "test"]
+}

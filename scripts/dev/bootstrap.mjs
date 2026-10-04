@@ -13,6 +13,13 @@ import { ROOT } from "./keys.mjs";
 /** The services that own a database in dev. Add one entry per new service. */
 export const SERVICES = [
   {
+    // core-api (P3.1): its registry database. core-api runs its own migrations at start.
+    database: "core",
+    owner: { role: "core_api", passwordEnv: "CORE_API_DB_PASSWORD" },
+    readers: [],
+    migrations: [],
+  },
+  {
     database: "os_accounts",
     owner: { role: "os_accounts", passwordEnv: "OS_ACCOUNTS_PASSWORD" },
     // Read-only login roles of OTHER services that may connect.

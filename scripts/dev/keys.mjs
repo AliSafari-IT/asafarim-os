@@ -19,6 +19,7 @@ export const DEV_DIR = path.join(ROOT, ".dev");
 
 export const DEV = {
   identityPort: 4010,
+  coreApiPort: 4020,
   devHubPort: 4000,
   devClientCallback: "http://localhost:4100/callback",
   postgres: { host: "127.0.0.1", port: 55440, adminUser: "postgres", adminPassword: "postgres-dev-only" },
@@ -37,11 +38,36 @@ function edPair() {
 /** KEY='json' lines: node --env-file reads single-quoted values verbatim. */
 const line = (k, v) => `${k}=${typeof v === "string" ? v : `'${JSON.stringify(v)}'`}`;
 
+/** core-api's dev env (P3.1): its own database role, the provisioner, the admin token. */
+function ensureCoreApiEnv(force) {
+  const file = path.join(DEV_DIR, "core-api.env");
+  if (!force && existsSync(file)) return false;
+  const pg = DEV.postgres;
+  const dbPassword = secret();
+  writeFileSync(
+    file,
+    [
+      "# core/core-api in local development (pnpm dev). Throwaway values.",
+      line("NODE_ENV", "development"),
+      line("PORT", String(DEV.coreApiPort)),
+      line("CORE_API_URL", `http://localhost:${DEV.coreApiPort}`),
+      line("CORE_API_DB_PASSWORD", dbPassword),
+      line("CORE_API_DATABASE_URL", `postgres://core_api:${dbPassword}@${pg.host}:${pg.port}/core`),
+      // App install creates databases and roles: locally the dev superuser does it.
+      line("CORE_API_PROVISIONER_URL", `postgres://${pg.adminUser}:${pg.adminPassword}@${pg.host}:${pg.port}/postgres`),
+      line("CORE_API_ADMIN_TOKEN", randomBytes(32).toString("base64url")),
+      "",
+    ].join("\n"),
+  );
+  return true;
+}
+
 export function ensureDevKeys({ force = false, log = console.log } = {}) {
   mkdirSync(DEV_DIR, { recursive: true });
+  const coreApi = ensureCoreApiEnv(force);
   const files = ["identity.env", "dev-hub.env", "db.env", "clients.json"].map((f) => path.join(DEV_DIR, f));
   if (!force && files.every((f) => existsSync(f))) {
-    log("dev keys: present in .dev/ (pnpm dev:keys --force to replace)");
+    log(`dev keys: present in .dev/${coreApi ? " (core-api.env added)" : ""} (pnpm dev:keys --force to replace)`);
     return;
   }
 

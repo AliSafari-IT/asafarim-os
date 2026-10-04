@@ -16,7 +16,7 @@
     "test": {
       "dependsOn": ["^build"],
       "outputs": [],
-      "passThroughEnv": ["IDENTITY_TEST_REDIS_URL", "CI"]
+      "passThroughEnv": ["IDENTITY_TEST_REDIS_URL", "CI", "CORE_API_TEST_ADMIN_URL", "CORE_API_TEST_REQUIRED"]
     },
     "dev": {
       "cache": false,

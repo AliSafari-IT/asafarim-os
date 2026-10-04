@@ -145,9 +145,12 @@ try {
 
   start("identity", "identity.env", "core/identity/src/server.ts");
   start("dev-hub", "dev-hub.env", "tools/dev-hub/src/server.ts");
+  start("core-api", "core-api.env", "core/core-api/src/server.ts");
   await waitFor(`${HUB}/healthz`);
   const ready = await (await waitFor(`${ISSUER}/readyz`)).json();
   step(`identity /readyz: ${JSON.stringify(ready)}`);
+  const coreReady = await (await waitFor(`http://localhost:${DEV.coreApiPort}/readyz`)).json();
+  step(`core-api /readyz: ${JSON.stringify(coreReady)}`);
   const discovery = await (await fetch(`${ISSUER}/.well-known/openid-configuration`)).json();
   step(`discovery: issuer=${discovery.issuer}`);
 
