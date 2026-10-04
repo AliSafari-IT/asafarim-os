@@ -32,8 +32,6 @@
     "env:key:init": "envage init-key",
     "env:encrypt": "envage encrypt --all --env root",
     "env:decrypt": "envage decrypt --all --env root",
-    "env:encrypt:development": "envage encrypt --all --env development",
-    "env:decrypt:development": "envage decrypt --all --env development",
     "env:encrypt:production": "envage encrypt --all --env production",
     "env:decrypt:production": "envage decrypt --all --env production"
   },
@@ -41,7 +39,6 @@
     "@asafarim/envage": "^0.4.2",
     "pg": "^8.23.1",
     "prettier": "^3.5.0",
-    "tsx": "^4.23.15",
     "turbo": "^2.11.7",
     "typescript": "^5.9.0"
   },
