@@ -416,6 +416,41 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     expect(await res.text()).toContain("browser_mismatch");
   });
 
+  it("a request that only knows the uid can't burn a parked login (compare-and-delete)", async () => {
+    accounts.rows.set("u-6", { sub: "u-6", email: null, name: null, picture: null, roles: [], isActive: true });
+    const a = new Jar();
+    const { verifier, challenge } = pkce();
+    let res = await get(authUrl({ code_challenge: challenge, code_challenge_method: "S256" }), a);
+    const uid = new URL(res.headers.get("location")!, issuer).pathname.split("/").pop()!;
+    await get(`${issuer}/interaction/${uid}`, a);
+    res = await postAssertion(uid, await hubAssertion("u-6", uid), a);
+    expect(res.status).toBe(303);
+
+    // Someone else hits /complete first: no cookie, then a wrong one.
+    expect((await get(`${issuer}/interaction/${uid}/complete`, new Jar())).status).toBe(400);
+    const wrong = await fetch(`${issuer}/interaction/${uid}/complete`, {
+      redirect: "manual",
+      headers: { cookie: "identity_complete=not-the-secret" },
+    });
+    expect(wrong.status).toBe(400);
+
+    // The real browser still completes and gets a code.
+    let location = new URL(`/interaction/${uid}/complete`, issuer).href;
+    for (let i = 0; i < 6 && !location.startsWith(`${rpBase}/cb`); i++) {
+      res = await get(location, a);
+      location = new URL(res.headers.get("location")!, issuer).href;
+    }
+    const code = new URL(location).searchParams.get("code");
+    expect(code).toBeTruthy();
+    const t = await token({
+      grant_type: "authorization_code",
+      code: code!,
+      redirect_uri: `${rpBase}/cb`,
+      code_verifier: verifier,
+    });
+    expect(decodeJwt(t.json.id_token as string).sub).toBe("u-6");
+  });
+
   it("a completion cookie works once only", async () => {
     accounts.rows.set("u-5", { sub: "u-5", email: null, name: null, picture: null, roles: [], isActive: true });
     const { callback, jar, uid } = await signIn("u-5", {
