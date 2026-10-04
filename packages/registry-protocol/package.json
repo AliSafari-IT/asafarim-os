@@ -1,0 +1,29 @@
+{
+  "name": "@asafarim/registry-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The signing protocol between an app and core-api (P3.1/P3.2): the canonical string, the credential format and the request signer. Shared by core-api (verifies) and @asafarim/app-sdk (signs); no other dependencies.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.1",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

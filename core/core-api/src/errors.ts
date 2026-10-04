@@ -15,6 +15,7 @@ export const ERRORS = {
   already_installed: 409, //      install of an app that's already installed
   invalid_state: 409, //          a lifecycle change that isn't allowed from the current state
   not_found: 404,
+  role_not_found: 404, //         grant/revoke names a role that doesn't exist or is deprecated
   bad_request: 400,
 } as const;
 

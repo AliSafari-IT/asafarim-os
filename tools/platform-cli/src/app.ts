@@ -116,3 +116,53 @@ export async function appCommand(
     ],
   };
 }
+
+/**
+ * `platform role grant|revoke <role> <subject>` (P3.2): an admin gives a person
+ * (their identity `sub`) one of an app's declared roles, or takes it back.
+ * Apps only DECLARE roles; this is the only way they're granted.
+ */
+export async function roleCommand(
+  args: string[],
+  root: string,
+  env: Record<string, string | undefined> = process.env,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Result | null> {
+  const [action, role, subject] = args;
+  if (action !== "grant" && action !== "revoke") return null;
+  if (!role || !subject || args.length !== 3) return null;
+  if (!/^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/.test(role) || !/^[A-Za-z0-9._:@-]{1,128}$/.test(subject)) return null;
+
+  const fallback = devEnv(root);
+  const baseUrl = (env.CORE_API_URL ?? fallback.CORE_API_URL ?? "http://localhost:4020").replace(/\/$/, "");
+  const token = env.CORE_API_ADMIN_TOKEN ?? fallback.CORE_API_ADMIN_TOKEN;
+  if (!token)
+    return { ok: false, lines: ["CORE_API_ADMIN_TOKEN is not set (run `pnpm dev` once locally, or export it)."] };
+
+  let res: Response;
+  try {
+    res = await fetchImpl(`${baseUrl}/admin/v1/roles/${role}/grants/${encodeURIComponent(subject)}`, {
+      method: action === "grant" ? "PUT" : "DELETE",
+      headers: { authorization: `Bearer ${token}` },
+    });
+  } catch {
+    return { ok: false, lines: [`core-api isn't reachable at ${baseUrl} (is \`pnpm dev\` running?).`] };
+  }
+  const out = (await res.json()) as Record<string, unknown>;
+  if (!res.ok) {
+    return {
+      ok: false,
+      lines: [`core-api refused: ${String(out.error)}${out.message ? ` (${String(out.message)})` : ""}`],
+    };
+  }
+  const changed = action === "grant" ? out.granted : out.revoked;
+  const verb = action === "grant" ? "granted to" : "revoked from";
+  return {
+    ok: true,
+    lines: [
+      changed
+        ? `${role} ${verb} ${subject}`
+        : `${role}: no change for ${subject} (already ${action === "grant" ? "granted" : "not granted"})`,
+    ],
+  };
+}

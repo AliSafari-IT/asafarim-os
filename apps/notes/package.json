@@ -1,0 +1,35 @@
+{
+  "name": "@asafarim/notes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Notes: the first ASafariM OS reference app (P3.2). Tiny on purpose: it proves the plug-and-play contract end to end.",
+  "scripts": {
+    "dev": "next dev --port 4100",
+    "build": "next build",
+    "start": "next start --port 4100",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p e2e",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@asafarim/app-manifest": "workspace:*",
+    "@asafarim/app-sdk": "workspace:*",
+    "next": "^16.3.8",
+    "next-auth": "5.0.0-beta.32",
+    "pg": "^8.23.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.19.1",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

@@ -12,7 +12,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { signRegistration } from "../src/credentials.ts";
+import { signRegistration, signRequest } from "../src/credentials.ts";
 import { migrate } from "../src/migrate.ts";
 import { appDatabaseNames } from "../src/provision.ts";
 import { createRegistry } from "../src/registry.ts";
@@ -25,6 +25,7 @@ const run = Date.now().toString(36);
 const coreDb = `core_test_${run}`;
 const APP = `notes-${run}`; // unique per run: app databases are cluster-wide
 const OTHER = `crm-${run}`;
+const THIRD = `wiki-${run}`; // only the subject-access tests install it
 const ADMIN_TOKEN = "t".repeat(40);
 
 /** The JSON responses the tests read. */
@@ -103,7 +104,7 @@ describe.skipIf(!ADMIN_URL)("core-api registry (integration)", () => {
     await pool?.end();
     if (admin) {
       await admin.query(`DROP DATABASE IF EXISTS "${coreDb}"`);
-      for (const id of [APP, OTHER]) {
+      for (const id of [APP, OTHER, THIRD]) {
         const { database, role } = appDatabaseNames(id);
         await admin.query(`DROP DATABASE IF EXISTS "${database}"`);
         await admin.query(`DROP ROLE IF EXISTS "${role}"`);
@@ -226,6 +227,88 @@ describe.skipIf(!ADMIN_URL)("core-api registry (integration)", () => {
       "app.deactivated",
       "app.registered",
     ]);
+  });
+
+  describe("subject access and role grants (P3.2)", () => {
+    const roleKey = `${APP}.editor`;
+    const adminReq = (method: string, path: string, token = ADMIN_TOKEN) =>
+      fetch(`${base}${path}`, { method, headers: { authorization: `Bearer ${token}` } });
+    const subjectPath = (sub: string) => `/registry/v1/apps/${APP}/subjects/${sub}`;
+    type AccessBody = { error?: string; roles?: string[]; permissions?: string[] };
+    async function access(sub: string, opts: { credential?: string; signedFor?: string } = {}) {
+      const headers = signRequest({
+        credential: opts.credential ?? credentials.get(APP)!,
+        method: "GET",
+        path: subjectPath(opts.signedFor ?? sub),
+      });
+      const res = await fetch(`${base}${subjectPath(sub)}`, { headers });
+      return { status: res.status, body: (await res.json()) as AccessBody };
+    }
+    const errorOf = async (res: Response) => ((await res.json()) as { error: string }).error;
+
+    it("a subject with no grant has no roles and no permissions; the app's state is reported", async () => {
+      const r = await access("nobody");
+      expect(r).toMatchObject({
+        status: 200,
+        body: { appId: APP, subject: "nobody", state: "inactive", roles: [], permissions: [] },
+      });
+    });
+
+    it("an admin grants a role: the subject gets its permissions (idempotent, audited); revoking removes them", async () => {
+      let res = await adminReq("PUT", `/admin/v1/roles/${roleKey}/grants/user-1`);
+      expect(await res.json()).toEqual({ role: roleKey, subject: "user-1", granted: true });
+      const again = await adminReq("PUT", `/admin/v1/roles/${roleKey}/grants/user-1`);
+      expect(await again.json()).toMatchObject({ granted: false });
+
+      const r = await access("user-1");
+      expect(r.body.roles).toEqual([roleKey]);
+      expect(r.body.permissions).toEqual([`${APP}.notes.read`, `${APP}.notes.share`, `${APP}.notes.write`]);
+      expect((await access("someone-else")).body.permissions).toEqual([]); // grants are per subject
+
+      res = await adminReq("DELETE", `/admin/v1/roles/${roleKey}/grants/user-1`);
+      expect(await res.json()).toMatchObject({ revoked: true });
+      expect((await access("user-1")).body.permissions).toEqual([]);
+
+      const audit = (
+        await pool.query("SELECT action FROM audit_events WHERE action LIKE 'role.%' AND app_id = $1 ORDER BY id", [
+          APP,
+        ])
+      ).rows.map((x) => x.action);
+      expect(audit).toEqual(["role.granted", "role.revoked"]); // the repeated PUT wrote nothing
+    });
+
+    it("a deprecated permission grants nothing", async () => {
+      await adminReq("PUT", `/admin/v1/roles/${roleKey}/grants/user-2`);
+      await pool.query("UPDATE permissions SET deprecated_at = now() WHERE key = $1", [`${APP}.notes.share`]);
+      expect((await access("user-2")).body.permissions).toEqual([`${APP}.notes.read`, `${APP}.notes.write`]);
+      await pool.query("UPDATE permissions SET deprecated_at = NULL WHERE key = $1", [`${APP}.notes.share`]);
+      await adminReq("DELETE", `/admin/v1/roles/${roleKey}/grants/user-2`);
+    });
+
+    it("granting needs the admin token and an existing role", async () => {
+      expect((await adminReq("PUT", `/admin/v1/roles/${roleKey}/grants/x`, "wrong")).status).toBe(401);
+      const res = await adminReq("PUT", `/admin/v1/roles/${APP}.ghost/grants/x`);
+      expect(res.status).toBe(404);
+      expect(await errorOf(res)).toBe("role_not_found");
+      expect(await count("SELECT count(*) AS n FROM role_grants")).toBe(0);
+    });
+
+    it("the signed GET is bound to the subject path, the method and the app: a signature can't be reused", async () => {
+      // Signed for subject A, sent for subject B.
+      expect((await access("user-3", { signedFor: "user-1" })).body.error).toBe("bad_signature");
+      // A POST signature for the same path isn't a GET signature.
+      const post = signRequest({ credential: credentials.get(APP)!, method: "POST", path: subjectPath("user-3") });
+      expect(await errorOf(await fetch(`${base}${subjectPath("user-3")}`, { headers: post }))).toBe("bad_signature");
+      // Another app's credential, an unsigned request and a replay are refused.
+      const other = (await (await adminPost(`/admin/v1/apps/${THIRD}/install`, manifest(THIRD))).json()) as {
+        credential: string;
+      };
+      expect((await access("user-3", { credential: other.credential })).body.error).toBe("bad_signature");
+      expect(await errorOf(await fetch(`${base}${subjectPath("user-3")}`))).toBe("missing_signature");
+      const headers = signRequest({ credential: credentials.get(APP)!, method: "GET", path: subjectPath("user-3") });
+      expect((await fetch(`${base}${subjectPath("user-3")}`, { headers })).status).toBe(200);
+      expect(await errorOf(await fetch(`${base}${subjectPath("user-3")}`, { headers }))).toBe("replayed_signature");
+    });
   });
 
   it("prunes expired registration nonces (on register and on demand), keeps live ones", async () => {

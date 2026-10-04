@@ -95,8 +95,29 @@ export function createHandler(opts: {
         return json(res, 200, out);
       }
 
+      m = new RegExp(`^/registry/v1/apps/${APP_ID}/subjects/([A-Za-z0-9._:@-]{1,128})$`).exec(p);
+      if (m && req.method === "GET") {
+        const headers = Object.fromEntries(
+          ["x-asafarim-timestamp", "x-asafarim-nonce", "x-asafarim-key-id", "x-asafarim-signature"].map((h) => [
+            h,
+            header(req, h),
+          ]),
+        );
+        return json(res, 200, await opts.registry.subjectAccess(m[1]!, m[2]!, headers));
+      }
+
       if (p.startsWith("/admin/v1/")) {
         if (!adminOk(req, opts.adminToken)) throw new ApiError("unauthorized");
+        m = /^\/admin\/v1\/roles\/([a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+)\/grants\/([A-Za-z0-9._:@-]{1,128})$/.exec(p);
+        if (m && (req.method === "PUT" || req.method === "DELETE")) {
+          const out =
+            req.method === "PUT"
+              ? await opts.registry.grantRole(m[1]!, m[2]!, "admin")
+              : await opts.registry.revokeRole(m[1]!, m[2]!, "admin");
+          log({ msg: req.method === "PUT" ? "role.granted" : "role.revoked", role: m[1] });
+          return json(res, 200, out);
+        }
+
         m = new RegExp(`^/admin/v1/apps/${APP_ID}/install$`).exec(p);
         if (m && req.method === "POST") {
           let manifest: unknown;

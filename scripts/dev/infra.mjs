@@ -56,3 +56,17 @@ export const dbEnv = () => ({
   ...readEnvFile(path.join(DEV_DIR, "db.env")),
   ...readEnvFile(path.join(DEV_DIR, "core-api.env")),
 });
+
+/** Poll `url` until `ok(response)` (default: HTTP 200); throws after `tries` × 500 ms. */
+export async function waitFor(url, ok = (r) => r.status === 200, tries = 120) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(url);
+      if (ok(r)) return r;
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(`timed out waiting for ${url}`);
+}

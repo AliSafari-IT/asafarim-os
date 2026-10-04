@@ -1,0 +1,70 @@
+/**
+ * notes: the first ASafariM OS reference app (P3.2). Tiny on purpose: it
+ * exists to prove the plug-and-play contract end to end: install → register →
+ * sign in through core/identity → permissions granted by an admin.
+ * Schema: @asafarim/app-manifest.
+ */
+import { defineApp } from "@asafarim/app-manifest";
+
+export default defineApp({
+  id: "notes",
+  name: "Notes",
+  version: "0.1.0",
+  platform: ">=0.1 <1",
+  owner: "ASafariM Digital",
+  domains: {
+    primary: "notes.asafarim.site",
+  },
+  runtime: {
+    image: "notes",
+    port: 3000,
+    health: {
+      live: "/api/health",
+      ready: "/api/health",
+    },
+    resources: {
+      memory: "192m",
+      cpus: 0.5,
+    },
+  },
+  database: {
+    engine: "postgres",
+    migrations: "sql",
+  },
+  auth: {
+    client: "oidc",
+    publicPaths: ["/api/health"],
+  },
+  permissions: [
+    { key: "notes.read", description: "Read notes" },
+    { key: "notes.write", description: "Create notes" },
+  ],
+  roles: [
+    { key: "notes.viewer", grants: ["notes.read"], description: "Can read notes" },
+    { key: "notes.editor", grants: ["notes.read", "notes.write"], description: "Can read and create notes" },
+  ],
+  routes: [
+    { path: "/api/notes", methods: ["GET"], permission: "notes.read" },
+    { path: "/api/notes", methods: ["POST"], permission: "notes.write" },
+  ],
+  config: [
+    {
+      key: "limits.maxNotes",
+      type: "int",
+      default: 100,
+      description: "The most notes the app keeps; creating one more is refused",
+    },
+  ],
+  ui: {
+    glyph: "NT",
+    color: "#7c3aed",
+    nav: [{ label: "Notes", href: "/" }],
+    status: "active",
+    launcher: {
+      description: "Write and read short notes. The reference app for building on ASafariM OS.",
+      meta: "notes.asafarim.site",
+      access: "authenticated",
+      order: 10,
+    },
+  },
+});

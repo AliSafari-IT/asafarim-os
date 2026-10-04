@@ -21,7 +21,10 @@ export const DEV = {
   identityPort: 4010,
   coreApiPort: 4020,
   devHubPort: 4000,
-  devClientCallback: "http://localhost:4100/callback",
+  // The smoke test's OIDC client: its callback is never served (it only reads the redirect).
+  devClientCallback: "http://localhost:4199/callback",
+  // Dev ports of the apps under apps/*; each gets an OIDC client in .dev/clients.json.
+  apps: { notes: 4100 },
   postgres: { host: "127.0.0.1", port: 55440, adminUser: "postgres", adminPassword: "postgres-dev-only" },
   redisUrl: "redis://127.0.0.1:56380/3",
 };
@@ -78,7 +81,47 @@ export function ensureDevKeys({ force = false, log = console.log } = {}) {
   }
 }
 
+/** The dev OIDC clients: public (PKCE only), no secrets, so it's rewritten on every run. */
+function writeClients() {
+  const clients = [
+    {
+      client_id: "dev-app",
+      primary_domain: "localhost",
+      redirect_uris: [DEV.devClientCallback],
+      post_logout_redirect_uris: ["http://localhost:4199/"],
+    },
+    ...Object.entries(DEV.apps).map(([id, port]) => ({
+      client_id: id,
+      primary_domain: "localhost",
+      redirect_uris: [`http://localhost:${port}/api/auth/callback/asafarim`],
+      post_logout_redirect_uris: [`http://localhost:${port}/`],
+    })),
+  ];
+  writeFileSync(path.join(DEV_DIR, "clients.json"), JSON.stringify({ clients }, null, 2) + "\n");
+}
+
+/** Env shared by every app under apps/* in development (.dev/app.env). */
+function ensureAppEnv(force) {
+  const file = path.join(DEV_DIR, "app.env");
+  if (!force && existsSync(file)) return;
+  writeFileSync(
+    file,
+    [
+      "# Shared by the apps under apps/* in local development (pnpm dev). Throwaway values.",
+      line("CORE_API_URL", `http://localhost:${DEV.coreApiPort}`),
+      line("OIDC_ISSUER", ISSUER),
+      line("AUTH_SECRET", randomBytes(32).toString("base64url")),
+      line("AUTH_TRUST_HOST", "true"),
+      // Permission changes show up within a second instead of the production 60 s.
+      line("ASAFARIM_ACCESS_TTL_MS", "1000"),
+      "",
+    ].join("\n"),
+  );
+}
+
 function ensureDevKeysInner({ force, log, coreApi }) {
+  writeClients();
+  ensureAppEnv(force);
   const files = ["identity.env", "dev-hub.env", "db.env", "clients.json"].map((f) => path.join(DEV_DIR, f));
   if (!force && files.every((f) => existsSync(f))) {
     log(`dev keys: present in .dev/${coreApi ? " (core-api.env added)" : ""} (pnpm dev:keys --force to replace)`);
@@ -105,24 +148,6 @@ function ensureDevKeysInner({ force, log, coreApi }) {
       line("IDENTITY_RO_PASSWORD", identityRoPassword),
       "",
     ].join("\n"),
-  );
-
-  writeFileSync(
-    path.join(DEV_DIR, "clients.json"),
-    JSON.stringify(
-      {
-        clients: [
-          {
-            client_id: "dev-app",
-            primary_domain: "localhost",
-            redirect_uris: [DEV.devClientCallback],
-            post_logout_redirect_uris: ["http://localhost:4100/"],
-          },
-        ],
-      },
-      null,
-      2,
-    ) + "\n",
   );
 
   writeFileSync(

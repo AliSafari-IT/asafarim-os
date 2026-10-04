@@ -24,7 +24,8 @@
     "dev": "node scripts/dev/dev.mjs",
     "dev:keys": "node scripts/dev/keys.mjs",
     "dev:reset": "node scripts/dev/reset.mjs",
-    "dev:smoke": "node scripts/dev/smoke.mjs"
+    "dev:smoke": "node scripts/dev/smoke.mjs",
+    "e2e": "node scripts/dev/e2e.mjs"
   },
   "devDependencies": {
     "pg": "^8.23.1",

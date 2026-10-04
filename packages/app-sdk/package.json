@@ -1,0 +1,33 @@
+{
+  "name": "@asafarim/app-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The ASafariM OS app SDK (P3.2): self-registration with core-api, permission checks resolved from core-api, typed config from the manifest, and an Auth.js OIDC configuration for core/identity",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@asafarim/app-manifest": "workspace:*",
+    "@asafarim/registry-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.1",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}
