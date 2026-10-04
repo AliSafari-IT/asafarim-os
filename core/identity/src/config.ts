@@ -71,6 +71,29 @@ export function parseSigningJwks(env: Env): { keys: JWK[] } {
   return { keys: keys.map((k) => ({ ...k, alg: "ES256", use: "sig" })) };
 }
 
+/** localhost, *.localhost, 127.0.0.0/8, ::1 and 0.0.0.0. */
+export function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return (
+    h === "localhost" || h.endsWith(".localhost") || /^127\.\d+\.\d+\.\d+$/.test(h) || h === "::1" || h === "0.0.0.0"
+  );
+}
+
+/**
+ * Defence in depth (architect, OS-D1 review): in production, never hand logins
+ * to a loopback host. A dev env file copied into production (whose continue
+ * URL is the local dev login stub) then fails loudly at startup instead of
+ * trusting a stub that signs in anyone.
+ */
+export function refuseLoopbackInProduction(env: Env, urls: Record<string, string>): void {
+  if (env.NODE_ENV !== "production") return;
+  for (const [name, url] of Object.entries(urls)) {
+    if (isLoopbackHost(new URL(url).hostname)) {
+      throw new ConfigError(`${name} points at a loopback host with NODE_ENV=production (a development env file?)`);
+    }
+  }
+}
+
 export async function loadConfig(env: Env = process.env): Promise<IdentityConfig> {
   const issuer = required(env, "IDENTITY_ISSUER").replace(/\/$/, "");
   const issuerUrl = new URL(issuer);
@@ -88,6 +111,7 @@ export async function loadConfig(env: Env = process.env): Promise<IdentityConfig
   const hubContinueUrl = required(env, "IDENTITY_HUB_CONTINUE_URL");
   if (new URL(hubContinueUrl).protocol !== "https:" && !local)
     throw new ConfigError("IDENTITY_HUB_CONTINUE_URL must be https");
+  refuseLoopbackInProduction(env, { IDENTITY_HUB_CONTINUE_URL: hubContinueUrl, IDENTITY_ISSUER: issuer });
 
   const clientsFile = required(env, "IDENTITY_CLIENTS_FILE");
   let clientConfig: ClientConfigFile;
