@@ -1,5 +1,6 @@
 /** Shared helpers for the dev scripts (OS-D1, #26): Docker, compose, env. */
 import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { DEV_DIR, ROOT } from "./keys.mjs";
 import { readEnvFile } from "./bootstrap.mjs";
@@ -38,14 +39,10 @@ export function compose(...args) {
  */
 export function buildWorkspaceDependencies() {
   const services = ["@asafarim/identity", "@asafarim/core-api", "@asafarim/dev-hub"];
-  const args = [
-    "exec",
-    "turbo",
-    "run",
-    "build",
-    "--output-logs=errors-only",
-    ...services.map((s) => `--filter=${s}^...`),
-  ];
+  // Every app under apps/* imports workspace packages too (@asafarim/app-sdk).
+  const hasApps = existsSync(path.join(ROOT, "apps")) && readdirSync(path.join(ROOT, "apps")).length > 0;
+  const filters = [...services.map((s) => `--filter=${s}^...`), ...(hasApps ? ["--filter=./apps/*^..."] : [])];
+  const args = ["exec", "turbo", "run", "build", "--output-logs=errors-only", ...filters];
   console.log(bold("Building workspace dependencies (first run on a fresh clone only)…"));
   const r = spawnSync("pnpm", args, { cwd: ROOT, stdio: "inherit", shell: process.platform === "win32" });
   if (r.status !== 0) throw new Error("building the workspace dependencies failed");
