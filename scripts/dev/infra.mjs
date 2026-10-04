@@ -1,6 +1,7 @@
 /** Shared helpers for the dev scripts (OS-D1, #26): Docker, compose, env. */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import http from "node:http";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { DEV_DIR, ROOT } from "./keys.mjs";
 import { readEnvFile } from "./bootstrap.mjs";
@@ -88,6 +89,27 @@ export function buildWorkspaceDependencies() {
   if (r.status !== 0) throw new Error("building the workspace dependencies failed");
 }
 
+/**
+ * The environment variables the generated dev gateway reads (`{$NAME}` in its Caddyfile). A
+ * variable .dev/gateway.env doesn't define would make Caddy refuse to start, so say so early,
+ * and in terms of the cause: a manifest gained an app that has no dev port in keys.mjs.
+ */
+export function gatewayEnvProblems(caddyfile, env) {
+  const needed = [...new Set([...caddyfile.matchAll(/\{\$([A-Z0-9_]+)\}/g)].map((m) => m[1]))].sort();
+  return needed.filter((name) => !env[name]);
+}
+
+export function checkGatewayEnv() {
+  const caddyfile = readFileSync(path.join(ROOT, "generated/platform/gateway/dev.Caddyfile"), "utf8");
+  const missing = gatewayEnvProblems(caddyfile, readEnvFile(path.join(DEV_DIR, "gateway.env")));
+  if (missing.length > 0) {
+    throw new Error(
+      `the dev gateway needs ${missing.join(", ")} but .dev/gateway.env doesn't define them. ` +
+        "A new app under apps/ needs a dev port in DEV.apps (scripts/dev/keys.mjs).",
+    );
+  }
+}
+
 /** The bootstrap's passwords: db.env plus core-api's own database password. */
 export const dbEnv = () => ({
   ...readEnvFile(path.join(DEV_DIR, "db.env")),
@@ -108,4 +130,35 @@ export async function waitFor(url, ok = (r) => r.status === 200, tries = 120) {
     await new Promise((r) => setTimeout(r, 500));
   }
   throw new Error(`timed out waiting for ${url}`);
+}
+
+/**
+ * One GET to 127.0.0.1:`port` as if for `host` (e.g. notes.localhost:8080), resolving to the status.
+ * node:http, not fetch: fetch silently ignores a Host header, and Node doesn't resolve *.localhost
+ * everywhere (Chromium does), so the gateway is reached by address with the Host set by hand.
+ */
+export function statusFor(port, host, urlPath = "/") {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: "127.0.0.1", port, path: urlPath, headers: { host }, timeout: 3000 }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    });
+    req.on("timeout", () => req.destroy(new Error("timed out")));
+    req.on("error", reject);
+  });
+}
+
+/** Poll until the gateway answers `want` for `host` + `urlPath`; throws after `tries` × 500 ms. */
+export async function waitForGateway(port, host, urlPath, want, tries = 120) {
+  let last = "no answer";
+  for (let i = 0; i < tries; i++) {
+    try {
+      last = await statusFor(port, host, urlPath);
+      if (last === want) return;
+    } catch (err) {
+      last = err.message;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(`the gateway didn't answer ${want} for ${host}${urlPath} (last: ${last})`);
 }

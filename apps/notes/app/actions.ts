@@ -1,6 +1,8 @@
 "use server";
 
+import { ACCESS_COOKIE_NAME } from "@asafarim/app-sdk";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { signIn, signOut } from "@/lib/auth";
 import { countNotes, createNote } from "@/lib/db";
@@ -12,6 +14,15 @@ export async function signInAction() {
 }
 
 export async function signOutAction() {
+  // Drop the gateway's access token with the session. A __Host- cookie is only accepted (or removed)
+  // with Secure, Path=/ and no Domain, so it's set expired with exactly those attributes.
+  (await cookies()).set(ACCESS_COOKIE_NAME, "", {
+    maxAge: 0,
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    sameSite: "lax",
+  });
   await signOut({ redirectTo: "/" });
 }
 

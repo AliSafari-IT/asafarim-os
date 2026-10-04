@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminTokenMatches, appDatabasePort, decodeSubject } from "../src/server.ts";
+import { adminTokenMatches, appDatabasePort, decodeSubject, parseTokenKey, parseTokenTtl } from "../src/server.ts";
 
 const TOKEN = "t".repeat(40);
 
@@ -46,5 +46,26 @@ describe("decodeSubject (subjects arrive percent-encoded)", () => {
     for (const bad of ["%E0%A4%A", "a%2Fb", "a%20b", "%00", "x".repeat(129), ""]) {
       expect(() => decodeSubject(bad), bad).toThrow(/bad_request|subject/);
     }
+  });
+});
+
+describe("the access token settings", () => {
+  it("the lifetime defaults, and only 5–300 whole seconds are accepted", () => {
+    expect(parseTokenTtl(undefined)).toBeUndefined();
+    expect(parseTokenTtl("")).toBeUndefined();
+    expect(parseTokenTtl("8")).toBe(8);
+    for (const bad of ["4", "301", "1.5", "abc", "-60", "0"]) expect(() => parseTokenTtl(bad), bad).toThrow(/5 to 300/);
+  });
+
+  it("the signing key must be an Ed25519 private JWK with a kid", () => {
+    const good = { kty: "OKP", crv: "Ed25519", d: "d", x: "x", kid: "k1" };
+    expect(parseTokenKey(JSON.stringify(good))).toEqual({
+      kid: "k1",
+      privateJwk: { kty: "OKP", crv: "Ed25519", d: "d", x: "x" },
+    });
+    expect(() => parseTokenKey("{nope")).toThrow(/valid JSON/);
+    expect(() => parseTokenKey(JSON.stringify({ ...good, crv: "P-256" }))).toThrow(/Ed25519 private JWK/);
+    expect(() => parseTokenKey(JSON.stringify({ ...good, d: undefined }))).toThrow(/Ed25519 private JWK/);
+    expect(() => parseTokenKey(JSON.stringify({ ...good, kid: undefined }))).toThrow(/kid/);
   });
 });

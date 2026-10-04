@@ -101,9 +101,12 @@ jobs:
         if: always()
         run: pnpm dev:reset --yes
 
-  # P3.2: the notes acceptance flow in a real browser against the real stack:
+  # P3.2 and P3.3a: the notes acceptance flows in a real browser against the real stack:
   # install → self-registration → sign in through identity and the dev login
-  # stub → read-only (403 naming the permission) → grant → write → deactivate.
+  # stub → read-only (403 naming the permission) → grant → write → deactivate;
+  # and the same app through the dev gateway (Caddy, notes.localhost:8080): the
+  # unavailable page, 401/403 at the gateway, expose:false → 404, and a revoked
+  # grant taking effect within the access token's lifetime.
   # Screenshots and the Playwright report are uploaded either way.
   notes-e2e:
     runs-on: ubuntu-latest

@@ -83,3 +83,44 @@ export function asafarimAuthConfig(opts: AuthConfigOptions) {
     },
   };
 }
+
+const FORWARDED_HOST = /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:\d{1,5})?$/;
+
+/**
+ * The request as the visitor made it: behind the OS gateway (or any proxy) a Next.js route
+ * handler sees its OWN origin in `request.url` (http://localhost:4100), and Auth.js builds the
+ * OIDC `redirect_uri` for the token exchange from it, so it no longer matches the one sent
+ * when sign-in started (that one comes from the forwarded headers, in the server action) and
+ * identity answers `invalid_grant`. This puts the forwarded host and protocol back into the URL.
+ *
+ * It honours `x-forwarded-host` / `x-forwarded-proto` only when they look like a host and a
+ * scheme, and only the same way `trustHost: true` already does for sign-in: the gateway
+ * sets them, and an app is never exposed except through it (ADR 0001 §7).
+ */
+export function withForwardedOrigin(request: Request): Request {
+  const host = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const proto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  if (!host || !FORWARDED_HOST.test(host)) return request;
+  const url = new URL(request.url);
+  if (proto === "http" || proto === "https") url.protocol = `${proto}:`;
+  // Hostname and port separately: setting `host` without a port would keep the app's own (4100).
+  const [hostname, port = ""] = host.split(":") as [string, string?];
+  url.hostname = hostname;
+  url.port = port;
+  if (url.href === request.url) return request;
+  const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  return new Request(url, {
+    method: request.method,
+    headers: request.headers,
+    body: hasBody ? request.body : undefined,
+    redirect: request.redirect,
+    signal: request.signal,
+    // A streamed body needs this in Node's fetch implementation.
+    ...(hasBody ? { duplex: "half" } : {}),
+  } as RequestInit);
+}
+
+/** Wrap an Auth.js route handler (`handlers.GET` / `handlers.POST`) so it sees the visitor's origin. */
+export function forwardedOrigin<R extends Request, T>(handler: (request: R) => T): (request: R) => T {
+  return (request) => handler(withForwardedOrigin(request) as R);
+}

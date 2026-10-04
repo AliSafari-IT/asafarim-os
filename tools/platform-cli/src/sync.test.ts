@@ -2,7 +2,19 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LAUNCHER_REGISTRY, discoverManifests, findRepoRoot, generatedFiles, launcherRegistry, sync } from "./sync.ts";
+import type { AppManifest } from "@asafarim/app-manifest";
+import {
+  GATEWAY_CADDYFILE,
+  LAUNCHER_REGISTRY,
+  caddyPathPatterns,
+  discoverManifests,
+  findRepoRoot,
+  gatewayUpstreamVar,
+  generatedFiles,
+  launcherRegistry,
+  renderGatewayCaddyfile,
+  sync,
+} from "./sync.ts";
 
 let root: string;
 
@@ -46,10 +58,13 @@ describe("platform sync", () => {
     expect(findRepoRoot(path.join(root, "tools", "platform-cli", "src"))).toBe(root);
   });
 
-  it("passes --check on an empty platform: no manifests, no generated files", () => {
+  it("with no manifests only the dev gateway's core services are generated (no launcher registry)", () => {
+    expect(sync(root, { check: true }).ok).toBe(false); // the committed gateway file is missing
+    expect(sync(root, { check: false }).ok).toBe(true);
     const result = sync(root, { check: true });
     expect(result.ok).toBe(true);
-    expect(result.lines.at(-1)).toBe("generated/platform/ is up to date (0 file(s)).");
+    expect(result.lines.at(-1)).toBe("generated/platform/ is up to date (1 file(s)).");
+    expect(generatedFiles(root)).toEqual([GATEWAY_CADDYFILE]);
   });
 
   it("ignores the directory's own README and .gitkeep", () => {
@@ -133,5 +148,86 @@ describe("platform sync", () => {
 
   it("launcherRegistry keeps only manifests with a launcher block", () => {
     expect(launcherRegistry([])).toEqual([]);
+  });
+});
+
+describe("the dev gateway (P3.3a)", () => {
+  const notes = (extra: Record<string, unknown> = {}) => manifest("notes", undefined, extra) as unknown as AppManifest;
+
+  it("serves core services and an unknown-host catch-all, with no app block for no app", () => {
+    const text = renderGatewayCaddyfile([]);
+    expect(text).toContain("http://id.localhost:8080 {\n\treverse_proxy {$OS_IDENTITY_UPSTREAM}\n}");
+    expect(text).toContain("http://api.localhost:8080 {\n\treverse_proxy {$OS_CORE_API_UPSTREAM}\n}");
+    expect(text).toContain(
+      'http://:8080 {\n\thandle /gateway-health {\n\t\trespond "ok" 200\n\t}\n\thandle {\n\t\trespond "Not found" 404\n\t}\n}',
+    );
+    expect(text).toContain("admin off");
+    expect(text).toContain("auto_https off");
+  });
+
+  it("gives each app its host: every request is checked by core-api (stamped with the app id), then proxied", () => {
+    const text = renderGatewayCaddyfile([notes()]);
+    expect(text).toContain(
+      [
+        "http://notes.localhost:8080 {",
+        "\thandle {",
+        "\t\tforward_auth {$OS_CORE_API_UPSTREAM} {",
+        "\t\t\turi /authz/check",
+        "\t\t\theader_up X-Asafarim-App notes",
+        "\t\t}",
+        "\t\treverse_proxy {$OS_APP_NOTES_UPSTREAM}",
+        "\t}",
+        "}",
+      ].join("\n"),
+    );
+  });
+
+  it("expose: false routes answer 404 in the gateway before anything is checked or proxied", () => {
+    const text = renderGatewayCaddyfile([
+      notes({
+        routes: [
+          { path: "/internal/**", expose: false },
+          { path: "/debug", methods: ["GET", "POST"], expose: false },
+          { path: "/api/notes", methods: ["GET"], permission: "notes.read" },
+        ],
+      }),
+    ]);
+    expect(text).toContain(
+      '\t@hidden1 {\n\t\tpath /internal /internal/*\n\t}\n\thandle @hidden1 {\n\t\trespond "Not found" 404\n\t}',
+    );
+    expect(text).toContain("\t@hidden2 {\n\t\tpath /debug\n\t\tmethod GET POST\n\t}");
+    expect(text.indexOf("@hidden1")).toBeLessThan(text.indexOf("forward_auth {")); // 404s come first
+    expect(text).not.toContain("notes.read"); // permission routes are core-api's decision, not Caddy's
+  });
+
+  it("is deterministic: apps sorted by id, the same input twice gives the same file", () => {
+    const a = { ...notes(), id: "alpha" } as AppManifest;
+    const z = { ...notes(), id: "zeta" } as AppManifest;
+    expect(renderGatewayCaddyfile([z, a])).toBe(renderGatewayCaddyfile([a, z]));
+    const text = renderGatewayCaddyfile([z, a]);
+    expect(text.indexOf("alpha.localhost")).toBeLessThan(text.indexOf("zeta.localhost"));
+  });
+
+  it("names each app's upstream variable from its id", () => {
+    expect(gatewayUpstreamVar("notes")).toBe("OS_APP_NOTES_UPSTREAM");
+    expect(gatewayUpstreamVar("task-board")).toBe("OS_APP_TASK_BOARD_UPSTREAM");
+  });
+
+  it("translates route globs to Caddy patterns (only ever over-blocking)", () => {
+    expect(caddyPathPatterns("/internal/**")).toEqual(["/internal", "/internal/*"]);
+    expect(caddyPathPatterns("/**")).toEqual(["/", "/*"]);
+    expect(caddyPathPatterns("/api/*/secret")).toEqual(["/api/*/secret"]);
+    expect(caddyPathPatterns("/a/**/b")).toEqual(["/a/*/b"]);
+    expect(caddyPathPatterns("/exact")).toEqual(["/exact"]);
+  });
+
+  it("sync writes it, --check catches a hand edit", () => {
+    app("notes");
+    expect(sync(root, { check: false }).ok).toBe(true);
+    expect(sync(root, { check: true }).ok).toBe(true);
+    writeFileSync(path.join(root, GATEWAY_CADDYFILE), "# hand edited\n");
+    const drift = sync(root, { check: true });
+    expect(drift.ok).toBe(false);
+    expect(drift.lines.join("\n")).toContain(GATEWAY_CADDYFILE);
   });
 });

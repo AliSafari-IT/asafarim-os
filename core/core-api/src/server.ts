@@ -7,6 +7,10 @@
  *   POST /admin/v1/apps/:id/install            body: the manifest JSON (admin)
  *   POST /admin/v1/apps/:id/activate|deactivate                         (admin)
  *   GET  /admin/v1/apps/:id                                             (admin)
+ *   POST /registry/v1/apps/:id/subjects/:sub/token   a short-lived access token (the app, signed)
+ *   GET  /.well-known/jwks.json                      the keys that verify those tokens
+ *   GET  /authz/check                                the gateway's forward_auth hook (Caddy)
+ *   GET  /admin/v1/gateway/apps                      what the gateway serves right now (admin)
  *
  * Admin endpoints take `Authorization: Bearer <CORE_API_ADMIN_TOKEN>` for now;
  * OIDC admin sign-in replaces it when the admin console arrives.
@@ -17,7 +21,9 @@ import path from "node:path";
 import pg from "pg";
 import { ApiError } from "./errors.ts";
 import { migrate } from "./migrate.ts";
+import { createAppSnapshot, createGateway, type GatewayApp } from "./gateway.ts";
 import { createRegistry, type Registry } from "./registry.ts";
+import { jwksOf, verificationKeyOf, type SigningKey } from "@asafarim/registry-protocol";
 
 const MAX_BODY = 256 * 1024;
 const APP_ID = "([a-z][a-z0-9-]{1,31})";
@@ -79,8 +85,17 @@ export function createHandler(opts: {
   pool: pg.Pool;
   adminToken: string;
   log?: (line: object) => void;
+  /** The token signing key (P3.3a). Without it there's no JWKS and the gateway hook refuses every permission-marked route. */
+  tokenKey?: SigningKey;
+  /** The snapshot the gateway reads the apps from; share it with the registry so lifecycle changes drop it. */
+  snapshot?: ReturnType<typeof createAppSnapshot>;
+  /** The clock tokens are checked against (tests move it; production uses the real one). */
+  now?: () => Date;
 }) {
   const log = opts.log ?? ((l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`));
+  const snapshot = opts.snapshot ?? createAppSnapshot(() => loadGatewayApps(opts.pool));
+  const keys = opts.tokenKey ? [verificationKeyOf(opts.tokenKey)] : [];
+  const gateway = createGateway({ apps: snapshot.apps, keys: () => keys, now: opts.now });
   return async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://core-api");
     const p = url.pathname;
@@ -93,6 +108,22 @@ export function createHandler(opts: {
         } catch {
           return json(res, 503, { ok: false, checks: { database: false } });
         }
+      }
+
+      if (req.method === "GET" && p === "/.well-known/jwks.json") {
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=60" });
+        return void res.end(JSON.stringify(jwksOf(keys)));
+      }
+      if (p === "/authz/check" && (req.method === "GET" || req.method === "HEAD")) {
+        const out = await gateway.check({
+          appId: header(req, "x-asafarim-app"),
+          method: header(req, "x-forwarded-method"),
+          uri: header(req, "x-forwarded-uri"),
+          cookie: header(req, "cookie"),
+          accept: header(req, "accept"),
+        });
+        res.writeHead(out.status, out.headers);
+        return void res.end(out.body);
       }
 
       let m = new RegExp(`^/registry/v1/apps/${APP_ID}$`).exec(p);
@@ -122,8 +153,30 @@ export function createHandler(opts: {
         return json(res, 200, await opts.registry.subjectAccess(m[1]!, subject, headers, p));
       }
 
+      m = new RegExp(`^/registry/v1/apps/${APP_ID}/subjects/([^/]{1,400})/token$`).exec(p);
+      if (m && req.method === "POST") {
+        const subject = decodeSubject(m[2]!);
+        const headers = Object.fromEntries(
+          ["x-asafarim-timestamp", "x-asafarim-nonce", "x-asafarim-key-id", "x-asafarim-signature"].map((h) => [
+            h,
+            header(req, h),
+          ]),
+        );
+        return json(res, 200, await opts.registry.issueAccessToken(m[1]!, subject, headers, p));
+      }
+
       if (p.startsWith("/admin/v1/")) {
         if (!adminOk(req, opts.adminToken)) throw new ApiError("unauthorized");
+        if (req.method === "GET" && p === "/admin/v1/gateway/apps") {
+          return json(res, 200, {
+            apps: (await snapshot.apps()).map((a) => ({
+              id: a.id,
+              state: a.state,
+              serving: a.state === "active",
+              routes: a.manifest.routes ?? [],
+            })),
+          });
+        }
         m = /^\/admin\/v1\/roles\/([a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+)\/grants\/([^/]{1,400})$/.exec(p);
         if (m && (req.method === "PUT" || req.method === "DELETE")) {
           const subject = decodeSubject(m[2]!);
@@ -172,6 +225,38 @@ export function createHandler(opts: {
   };
 }
 
+/** Every app the gateway might be asked about (removed ones are gone). */
+export async function loadGatewayApps(pool: pg.Pool): Promise<GatewayApp[]> {
+  const r = await pool.query<GatewayApp>("SELECT id, state, manifest FROM apps WHERE state <> 'removed' ORDER BY id");
+  return r.rows;
+}
+
+/** CORE_API_ACCESS_TOKEN_TTL_SECONDS: 5–300, default 60. */
+export function parseTokenTtl(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 5 || n > 300) {
+    throw new Error("CORE_API_ACCESS_TOKEN_TTL_SECONDS must be a whole number of seconds from 5 to 300");
+  }
+  return n;
+}
+
+/** CORE_API_TOKEN_SIGNING_JWK: an Ed25519 private JWK (with `kid`). */
+export function parseTokenKey(raw: string): SigningKey {
+  let jwk: Record<string, unknown>;
+  try {
+    jwk = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    throw new Error("CORE_API_TOKEN_SIGNING_JWK isn't valid JSON");
+  }
+  if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.d !== "string" || typeof jwk.x !== "string") {
+    throw new Error("CORE_API_TOKEN_SIGNING_JWK must be an Ed25519 private JWK (kty OKP, crv Ed25519, d, x)");
+  }
+  if (typeof jwk.kid !== "string" || !jwk.kid) throw new Error("CORE_API_TOKEN_SIGNING_JWK needs a kid");
+  const { kid, ...privateJwk } = jwk as { kid: string } & Record<string, unknown>;
+  return { kid, privateJwk: privateJwk as SigningKey["privateJwk"] };
+}
+
 function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`${name} is not set`);
@@ -186,8 +271,13 @@ async function main() {
   const provisionerUrl = required("CORE_API_PROVISIONER_URL");
   const appDb = new URL(provisionerUrl);
   const appDbPort = appDatabasePort(process.env.CORE_API_APP_DB_PORT, appDb);
+  const tokenKey = parseTokenKey(required("CORE_API_TOKEN_SIGNING_JWK"));
+  const snapshot = createAppSnapshot(() => loadGatewayApps(pool));
   const registry = createRegistry({
     pool,
+    tokenKey,
+    accessTokenTtlSeconds: parseTokenTtl(process.env.CORE_API_ACCESS_TOKEN_TTL_SECONDS),
+    onLifecycleChange: () => snapshot.invalidate(),
     provisioner: async () => {
       const c = new pg.Client({ connectionString: provisionerUrl });
       await c.connect();
@@ -201,7 +291,7 @@ async function main() {
   // Forget expired registration nonces even when nobody registers.
   setInterval(() => void registry.pruneNonces().catch(() => undefined), 60_000).unref();
   const port = Number(process.env.PORT ?? 4020);
-  createServer(createHandler({ registry, pool, adminToken })).listen(port, () =>
+  createServer(createHandler({ registry, pool, adminToken, tokenKey, snapshot })).listen(port, () =>
     process.stdout.write(
       `${JSON.stringify({ service: "core-api", msg: "core-api.started", port, migrations: applied })}\n`,
     ),

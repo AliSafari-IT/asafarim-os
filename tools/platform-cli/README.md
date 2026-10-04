@@ -25,9 +25,10 @@ as unclaimed sites.
 `sync` reads `<root>/apps/<id>/platform.app.json` only (compile a `platform.app.ts`
 first) and never executes app code, so `--root` can point at another checkout.
 
-| Output                                      | From                                                                   |
-| ------------------------------------------- | ---------------------------------------------------------------------- |
-| `generated/platform/launcher-registry.json` | every manifest with a `ui.launcher` block, ordered by `order`, then id |
+| Output                                      | From                                                                                                                                                                             |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `generated/platform/launcher-registry.json` | every manifest with a `ui.launcher` block, ordered by `order`, then id                                                                                                           |
+| `generated/platform/gateway/dev.Caddyfile`  | the dev gateway: a host per app (`<id>.localhost:8080`), `expose: false` → 404, `forward_auth` to core-api; always generated (it also serves `id.localhost` and `api.localhost`) |
 
 A file under `generated/platform/` that no generator produces is drift; `sync` refuses
 to leave it in place.

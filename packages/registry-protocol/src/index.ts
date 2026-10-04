@@ -60,3 +60,5 @@ export function signRequest(opts: SignOptions): Record<string, string> {
     "x-asafarim-signature": `v1=${signature.toString("base64url")}`,
   };
 }
+
+export * from "./access-token.ts";

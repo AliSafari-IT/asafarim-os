@@ -58,7 +58,10 @@ function checkUri(clientId: string, field: string, uri: string, domain: string, 
     throw new ClientConfigError(`${clientId}: ${field} "${uri}" isn't a URL`);
   }
   if (u.hash) throw new ClientConfigError(`${clientId}: ${field} must not have a fragment`);
-  const local = allowLocalhost && (u.hostname === "localhost" || u.hostname === "127.0.0.1");
+  // Local development only: localhost, 127.0.0.1 and any *.localhost (the OS dev gateway serves each
+  // app at <id>.localhost). A look-alike such as localhost.evil.example or evillocalhost isn't local.
+  const local =
+    allowLocalhost && (u.hostname === "localhost" || u.hostname.endsWith(".localhost") || u.hostname === "127.0.0.1");
   if (local) return;
   if (u.protocol !== "https:") throw new ClientConfigError(`${clientId}: ${field} must be https`);
   if (u.hostname !== domain) {

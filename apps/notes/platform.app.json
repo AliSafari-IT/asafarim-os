@@ -59,6 +59,10 @@
       "path": "/api/notes",
       "methods": ["POST"],
       "permission": "notes.write"
+    },
+    {
+      "path": "/internal/**",
+      "expose": false
     }
   ],
   "config": [

@@ -15,6 +15,7 @@ export * from "./access.ts";
 export * from "./auth.ts";
 export * from "./config.ts";
 export * from "./register.ts";
+export * from "./token.ts";
 
 export interface StartAppOptions {
   manifest: AppManifest;
@@ -38,7 +39,13 @@ function notInstalledAccess(): Access {
   const unavailable = async () => {
     throw new Error("the app isn't installed (ASAFARIM_REGISTRY_CREDENTIAL / CORE_API_URL are not set)");
   };
-  return { access: unavailable, can: async () => false, require: unavailable, clearCache: () => undefined } as Access;
+  return {
+    access: unavailable,
+    can: async () => false,
+    require: unavailable,
+    mintToken: unavailable,
+    clearCache: () => undefined,
+  } as Access;
 }
 
 /**

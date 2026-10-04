@@ -4,7 +4,7 @@
  *   1. checks Docker;
  *   2. creates throwaway dev keys if missing (.dev/, git-ignored) and builds the
  *      workspace packages the services import (a fresh clone has no dist/);
- *   3. starts Postgres and Redis (compose.dev.yml, 127.0.0.1 only);
+ *   3. starts Postgres, Redis and the dev gateway (compose.dev.yml, 127.0.0.1 only);
  *   4. bootstraps the per-service databases and roles, migrates, seeds;
  *   5. runs core/identity, core-api and the dev login stub in watch mode;
  *   6. installs (and activates) every apps/* into core-api, then runs them in
@@ -15,13 +15,24 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { bootstrap } from "./bootstrap.mjs";
 import { installDevApps } from "./apps.mjs";
-import { bold, buildWorkspaceDependencies, compose, dbEnv, dim, green, requireDocker, waitFor } from "./infra.mjs";
+import {
+  bold,
+  buildWorkspaceDependencies,
+  checkGatewayEnv,
+  compose,
+  dbEnv,
+  dim,
+  green,
+  requireDocker,
+  waitFor,
+} from "./infra.mjs";
 import { DEV, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
 
 requireDocker();
 ensureDevKeys();
 buildWorkspaceDependencies();
-console.log(bold("Starting Postgres and Redis…"));
+checkGatewayEnv();
+console.log(bold("Starting Postgres, Redis and the gateway…"));
 compose("up", "-d", "--wait");
 await bootstrap(dbEnv());
 
@@ -37,6 +48,9 @@ ${green(bold("ASafariM OS dev environment"))}
       .map(([id, port]) => `${id} http://localhost:${port}`)
       .join(", ") || "none yet"
   }
+  gateway           ${Object.keys(DEV.apps)
+    .map((id) => `http://${id}.localhost:${DEV.gatewayPort}`)
+    .join(", ")}   ${dim("(the front door: lifecycle, 404s and permissions are enforced here)")}
   dev OIDC client   client_id=dev-app, redirect ${DEV.devClientCallback}, PKCE S256
   seeded users      ${users.map((u) => `${u.id}${u.isActive ? "" : " (inactive)"}`).join(", ")}
   ${dim("Stop with Ctrl+C. Reset everything: pnpm dev:reset")}
