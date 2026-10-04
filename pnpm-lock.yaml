@@ -109,6 +109,9 @@ importers:
 
   .:
     devDependencies:
+      pg:
+        specifier: ^8.23.1
+        version: 8.23.1
       prettier:
         specifier: ^3.5.0
         version: 3.9.9
@@ -118,6 +121,34 @@ importers:
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
+
+  core/core-api:
+    dependencies:
+      '@asafarim/app-manifest':
+        specifier: workspace:*
+        version: link:../../packages/app-manifest
+      pg:
+        specifier: ^8.23.1
+        version: 8.23.1
+    devDependencies:
+      '@asafarim/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@types/node':
+        specifier: ^24.19.1
+        version: 24.19.1
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
+      eslint:
+        specifier: ^9.39.5
+        version: 9.39.5(supports-color@7.2.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^5.0.3
+        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1))
 
   core/identity:
     dependencies:
@@ -154,7 +185,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^5.0.3
-        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
+        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1))
 
   packages/app-manifest:
     dependencies:
@@ -185,7 +216,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^5.0.3
-        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
+        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1))
 
   packages/config:
     dependencies:
@@ -201,6 +232,28 @@ importers:
       typescript-eslint:
         specifier: ^8.64.0
         version: 8.71.0(eslint@9.39.5(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
+
+  tools/dev-hub:
+    dependencies:
+      jose:
+        specifier: ^6.2.12
+        version: 6.2.12
+    devDependencies:
+      '@asafarim/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@types/node':
+        specifier: ^24.19.1
+        version: 24.19.1
+      eslint:
+        specifier: ^9.39.5
+        version: 9.39.5(supports-color@7.2.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^5.0.3
+        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1))
 
   tools/platform-cli:
     dependencies:
@@ -228,7 +281,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^5.0.3
-        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
+        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1))
 
 packages:
 
@@ -1962,7 +2015,7 @@ snapshots:
       '@typescript-eslint/types': 8.71.0
       eslint-visitor-keys: 5.0.1
 
-  '@vitest/mocker@5.0.3(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))':
+  '@vitest/mocker@5.0.3(vite@8.3.2(@types/node@24.19.1))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@vitest/spy': 5.0.3
@@ -2646,10 +2699,10 @@ snapshots:
       tsx: 4.23.15
       yaml: 2.9.1
 
-  vitest@5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1)):
+  vitest@5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.3(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
+      '@vitest/mocker': 5.0.3(vite@8.3.2(@types/node@24.19.1))
       chai: 6.2.2
       es-module-lexer: 2.3.2
       expect-type: 1.4.0

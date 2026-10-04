@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { accountFromRow } from "../src/accounts.ts";
 import { ClientConfigError, loadClients } from "../src/clients.ts";
-import { ConfigError, parseSigningJwks } from "../src/config.ts";
+import { ConfigError, isLoopbackHost, parseSigningJwks, refuseLoopbackInProduction } from "../src/config.ts";
 import { createLogger, safe } from "../src/log.ts";
 
 const SECRET = "s".repeat(40);
@@ -118,5 +118,44 @@ describe("logging", () => {
     createLogger((l) => lines.push(l)).info("m", { id_token: "secret", uid: "u" });
     expect(lines[0]).not.toContain("secret");
     expect(JSON.parse(lines[0]!)).toMatchObject({ level: "info", service: "identity", msg: "m", uid: "u" });
+  });
+});
+
+describe("production refuses loopback hand-off targets (OS-D1 review)", () => {
+  const dev = {
+    IDENTITY_HUB_CONTINUE_URL: "http://localhost:4000/oidc/continue",
+    IDENTITY_ISSUER: "http://localhost:4010",
+  };
+
+  it("refuses a dev env file in production: loopback continue URL or issuer", () => {
+    expect(() => refuseLoopbackInProduction({ NODE_ENV: "production" }, dev)).toThrow(
+      /IDENTITY_HUB_CONTINUE_URL points at a loopback host/,
+    );
+    expect(() =>
+      refuseLoopbackInProduction(
+        { NODE_ENV: "production" },
+        { ...dev, IDENTITY_HUB_CONTINUE_URL: "https://hub.asafarim.com/oidc/continue" },
+      ),
+    ).toThrow(/IDENTITY_ISSUER/);
+  });
+
+  it("allows the production hosts, and allows loopback outside production", () => {
+    expect(() =>
+      refuseLoopbackInProduction(
+        { NODE_ENV: "production" },
+        {
+          IDENTITY_HUB_CONTINUE_URL: "https://hub.asafarim.com/oidc/continue",
+          IDENTITY_ISSUER: "https://id.asafarim.site",
+        },
+      ),
+    ).not.toThrow();
+    expect(() => refuseLoopbackInProduction({ NODE_ENV: "development" }, dev)).not.toThrow();
+  });
+
+  it("recognises every loopback form", () => {
+    for (const h of ["localhost", "LOCALHOST", "dev.localhost", "127.0.0.1", "127.8.9.10", "[::1]", "::1", "0.0.0.0"])
+      expect(isLoopbackHost(h)).toBe(true);
+    for (const h of ["hub.asafarim.com", "localhost.evil.example", "10.0.0.1", "128.0.0.1"])
+      expect(isLoopbackHost(h)).toBe(false);
   });
 });

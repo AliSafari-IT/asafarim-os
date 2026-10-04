@@ -20,9 +20,14 @@
     "platform:sync": "pnpm platform sync",
     "platform:sync:check": "pnpm platform sync --check",
     "platform:boundaries": "pnpm platform boundaries",
-    "check:brand": "node scripts/check-brand-spelling.mjs && node --test scripts/check-brand-spelling.test.mjs"
+    "check:brand": "node scripts/check-brand-spelling.mjs && node --test scripts/check-brand-spelling.test.mjs",
+    "dev": "node scripts/dev/dev.mjs",
+    "dev:keys": "node scripts/dev/keys.mjs",
+    "dev:reset": "node scripts/dev/reset.mjs",
+    "dev:smoke": "node scripts/dev/smoke.mjs"
   },
   "devDependencies": {
+    "pg": "^8.23.1",
     "prettier": "^3.5.0",
     "turbo": "^2.11.7",
     "typescript": "^5.9.0"

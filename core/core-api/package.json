@@ -1,30 +1,26 @@
 {
-  "name": "@asafarim/identity",
+  "name": "@asafarim/core-api",
   "version": "0.1.0",
   "private": true,
-  "description": "ASafariM OS identity service: the OIDC provider for id.asafarim.site, with login delegated to Hub (ADR 0002, Addendum A)",
+  "description": "ASafariM OS core-api: the app registry, install records, signed self-registration, lifecycle and the permission catalog (P3.1, ADR 0001 §3–4)",
   "type": "module",
   "engines": {
     "node": ">=24"
   },
   "scripts": {
     "start": "node src/server.ts",
-    "dev": "node --env-file-if-exists=../../.dev/identity.env --watch src/server.ts",
+    "dev": "node --env-file-if-exists=../../.dev/core-api.env --watch src/server.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
-    "keys": "node scripts/generate-keys.ts"
+    "test": "vitest run"
   },
   "dependencies": {
-    "ioredis": "^6.0.0",
-    "jose": "^6.2.12",
-    "oidc-provider": "^9.12.2",
+    "@asafarim/app-manifest": "workspace:*",
     "pg": "^8.23.1"
   },
   "devDependencies": {
     "@asafarim/config": "workspace:*",
     "@types/node": "^24.19.1",
-    "@types/oidc-provider": "^9.12.1",
     "@types/pg": "^8.23.1",
     "eslint": "^9.39.5",
     "typescript": "^5.9.3",
