@@ -8,13 +8,15 @@
  *   4. bootstraps the per-service databases and roles, migrates, seeds;
  *   5. runs core/identity, core-api and the dev login stub in watch mode;
  *   6. installs (and activates) every apps/* into core-api, then runs them in
- *      watch mode, so each one self-registers on boot.
+ *      watch mode, so each one self-registers on boot;
+ *   7. runs the Admin console (core/admin) and makes the seeded dev-admin its first
+ *      administrator (the CLI does that: nothing self-grants core.admin).
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { bootstrap } from "./bootstrap.mjs";
-import { installDevApps } from "./apps.mjs";
+import { bootstrapDevAdmin, installDevApps } from "./apps.mjs";
 import {
   bold,
   buildWorkspaceDependencies,
@@ -51,6 +53,7 @@ ${green(bold("ASafariM OS dev environment"))}
   gateway           ${Object.keys(DEV.apps)
     .map((id) => `http://${id}.localhost:${DEV.gatewayPort}`)
     .join(", ")}   ${dim("(the front door: lifecycle, 404s and permissions are enforced here)")}
+  admin console     http://core.localhost:${DEV.gatewayPort}/admin ${dim(`(or http://localhost:${DEV.adminPort}/admin; sign in as Dev Admin)`)}
   dev OIDC client   client_id=dev-app, redirect ${DEV.devClientCallback}, PKCE S256
   seeded users      ${users.map((u) => `${u.id}${u.isActive ? "" : " (inactive)"}`).join(", ")}
   ${dim("Stop with Ctrl+C. Reset everything: pnpm dev:reset")}
@@ -74,7 +77,8 @@ services.on("exit", (code) => process.exit(code ?? 0));
 try {
   await waitFor(`http://localhost:${DEV.coreApiPort}/readyz`);
   await installDevApps();
-  running.push(turbo(["./apps/*"]));
+  bootstrapDevAdmin();
+  running.push(turbo(["./apps/*", "@asafarim/admin"]));
 } catch (err) {
   console.error(`\n${err.message}`);
   running.forEach((c) => c.kill());

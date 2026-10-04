@@ -8,7 +8,9 @@
  * databases and drops them all afterwards. Skipped without it, except when
  * CORE_API_TEST_REQUIRED is set (CI), where it fails instead.
  */
+import { readdirSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import path from "node:path";
 import type { AddressInfo } from "node:net";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -375,7 +377,9 @@ describe.skipIf(!ADMIN_URL)("core-api registry (integration)", () => {
     const poolB = new pg.Pool({ connectionString: url.href, max: 2 });
     try {
       const [a, b] = await Promise.all([migrate(poolA), migrate(poolB)]);
-      expect([...a, ...b]).toEqual(["001_core.sql"]); // applied exactly once, by exactly one of them
+      // Every migration applied exactly once, each by exactly one of them (whatever migrations exist).
+      const all = readdirSync(path.join(import.meta.dirname, "../migrations")).filter((f) => f.endsWith(".sql"));
+      expect([...a, ...b].sort()).toEqual(all.sort());
     } finally {
       await poolA.end();
       await poolB.end();

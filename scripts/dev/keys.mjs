@@ -9,6 +9,7 @@
  *   .dev/db.env         the bootstrap's database passwords
  *   .dev/clients.json   one public dev OIDC client ("dev-app") and one per app
  *   .dev/gateway.env    where the dev gateway (Caddy, compose.dev.yml) finds each service
+ *   .dev/admin.env      the Admin console's own settings (the seeded users it can search)
  */
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -24,6 +25,10 @@ export const DEV = {
   devHubPort: 4000,
   // The dev gateway (P3.3a): <id>.localhost:8080 for each app, id.localhost / api.localhost for the core.
   gatewayPort: 8080,
+  // The Admin console (core/admin): a core service, not an app. Its OIDC client id is what core-api
+  // accepts ID tokens for; in the gateway it is core.localhost.
+  adminPort: 4030,
+  adminClientId: "core-admin",
   // The smoke test's OIDC client: its callback is never served (it only reads the redirect).
   devClientCallback: "http://localhost:4199/callback",
   // Dev ports of the apps under apps/*; each gets an OIDC client in .dev/clients.json.
@@ -63,10 +68,20 @@ function ensureCoreApiEnv(force) {
       line("CORE_API_PROVISIONER_URL", `postgres://${pg.adminUser}:${pg.adminPassword}@${pg.host}:${pg.port}/postgres`),
       line("CORE_API_ADMIN_TOKEN", randomBytes(32).toString("base64url")),
       tokenKeyLine(),
+      ...coreApiAdminLines(),
       "",
     ].join("\n"),
   );
   return true;
+}
+
+/** How core-api knows the Admin console's people (P3.3b) and where an app opens in the launcher. */
+function coreApiAdminLines() {
+  return [
+    line("CORE_API_IDENTITY_ISSUER", ISSUER),
+    line("CORE_API_ADMIN_CLIENT_ID", DEV.adminClientId),
+    line("CORE_API_APP_URL_TEMPLATE", `http://{id}.localhost:${DEV.gatewayPort}`),
+  ];
 }
 
 /** core-api's access-token signing key (P3.3a): an Ed25519 private JWK with a kid. Throwaway, dev only. */
@@ -74,11 +89,16 @@ function tokenKeyLine() {
   return line("CORE_API_TOKEN_SIGNING_JWK", { ...edPair().priv, kid: `dev-token-${Date.now()}` });
 }
 
-/** An env file written by an earlier version lacks the token key: add it, keep everything else. */
-function ensureCoreApiTokenKey(file) {
+/**
+ * An env file written by an earlier version lacks settings added since (the token key, the admin
+ * settings): add each missing one and keep everything else. Returns true when it added anything.
+ */
+function ensureCoreApiSettings(file) {
   const text = readFileSync(file, "utf8");
-  if (/^CORE_API_TOKEN_SIGNING_JWK=/m.test(text)) return false;
-  writeFileSync(file, `${text.endsWith("\n") ? text : `${text}\n`}${tokenKeyLine()}\n`);
+  const wanted = [tokenKeyLine(), ...coreApiAdminLines()];
+  const missing = wanted.filter((l) => !new RegExp(`^${l.split("=")[0]}=`, "m").test(text));
+  if (missing.length === 0) return false;
+  writeFileSync(file, `${text.endsWith("\n") ? text : `${text}\n`}${missing.join("\n")}\n`);
   return true;
 }
 
@@ -90,7 +110,7 @@ export function lockDownDevDir() {
 
 export function ensureDevKeys({ force = false, log = console.log } = {}) {
   mkdirSync(DEV_DIR, { recursive: true, mode: 0o700 });
-  const coreApi = ensureCoreApiEnv(force) || ensureCoreApiTokenKey(path.join(DEV_DIR, "core-api.env"));
+  const coreApi = ensureCoreApiEnv(force) || ensureCoreApiSettings(path.join(DEV_DIR, "core-api.env"));
   try {
     return ensureDevKeysInner({ force, log, coreApi });
   } finally {
@@ -106,6 +126,19 @@ function writeClients() {
       primary_domain: "localhost",
       redirect_uris: [DEV.devClientCallback],
       post_logout_redirect_uris: ["http://localhost:4199/"],
+    },
+    // The Admin console: a public client too. Directly (localhost:4030) and through the dev gateway.
+    {
+      client_id: DEV.adminClientId,
+      primary_domain: "localhost",
+      redirect_uris: [
+        `http://localhost:${DEV.adminPort}/api/auth/callback/asafarim`,
+        `http://core.localhost:${DEV.gatewayPort}/api/auth/callback/asafarim`,
+      ],
+      post_logout_redirect_uris: [
+        `http://localhost:${DEV.adminPort}/signin`,
+        `http://core.localhost:${DEV.gatewayPort}/signin`,
+      ],
     },
     // Each app is reachable directly (localhost:<port>) and through the dev gateway (<id>.localhost:8080).
     ...Object.entries(DEV.apps).map(([id, port]) => {
@@ -134,10 +167,24 @@ export function writeGatewayEnv(host = process.env.OS_GATEWAY_HOST || "host.dock
     "# The dev gateway's upstreams (pnpm dev). Written on every run.",
     line("OS_IDENTITY_UPSTREAM", `${host}:${DEV.identityPort}`),
     line("OS_CORE_API_UPSTREAM", `${host}:${DEV.coreApiPort}`),
+    line("OS_ADMIN_UPSTREAM", `${host}:${DEV.adminPort}`),
     ...Object.entries(DEV.apps).map(([id, port]) => line(upstreamVar(id), `${host}:${port}`)),
     "",
   ];
   writeFileSync(path.join(DEV_DIR, "gateway.env"), lines.join("\n"));
+}
+
+/** The Admin console's own env (.dev/admin.env): the seeded synthetic users it can search when granting roles. */
+function writeAdminEnv() {
+  writeFileSync(
+    path.join(DEV_DIR, "admin.env"),
+    [
+      "# core/admin in local development (pnpm dev). Written on every run.",
+      line("ADMIN_OIDC_CLIENT_ID", DEV.adminClientId),
+      line("ADMIN_USER_DIRECTORY_FILE", path.join(ROOT, "tools/dev-hub/seed-users.json")),
+      "",
+    ].join("\n"),
+  );
 }
 
 /** Env shared by every app under apps/* in development (.dev/app.env). */
@@ -162,6 +209,7 @@ function ensureAppEnv(force) {
 function ensureDevKeysInner({ force, log, coreApi }) {
   writeClients();
   writeGatewayEnv();
+  writeAdminEnv();
   ensureAppEnv(force);
   const files = ["identity.env", "dev-hub.env", "db.env", "clients.json"].map((f) => path.join(DEV_DIR, f));
   if (!force && files.every((f) => existsSync(f))) {

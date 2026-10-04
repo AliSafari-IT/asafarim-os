@@ -2,7 +2,7 @@
   "name": "@asafarim/core-api",
   "version": "0.1.0",
   "private": true,
-  "description": "ASafariM OS core-api: the app registry, install records, signed self-registration, lifecycle and the permission catalog (P3.1, ADR 0001 §3–4)",
+  "description": "ASafariM OS core-api: the app registry, install records, signed self-registration, lifecycle and the permission catalog (P3.1, ADR 0001 \u00a73\u20134)",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -17,6 +17,7 @@
   "dependencies": {
     "@asafarim/app-manifest": "workspace:*",
     "@asafarim/registry-protocol": "workspace:*",
+    "jose": "^6.2.12",
     "pg": "^8.23.1"
   },
   "devDependencies": {

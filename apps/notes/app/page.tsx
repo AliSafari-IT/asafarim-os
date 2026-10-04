@@ -1,7 +1,9 @@
+import { Launcher } from "@asafarim/app-sdk/react";
 import { createNoteAction, signInAction, signOutAction } from "./actions";
 import { auth } from "@/lib/auth";
 import { listNotes } from "@/lib/db";
 import { describeAccess } from "@/lib/gate";
+import { getPlatform } from "@/lib/platform";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +38,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
   }
 
   const access = await describeAccess(subject);
+  // The apps this person can open (active, and they hold a role or it is public), decided by core-api.
+  // A launcher that can't be loaded is left out: it must never break the page.
+  const apps = await getPlatform()
+    .access.launcher(subject)
+    .catch(() => []);
   const canRead = access.permissions.includes("notes.read");
   const canWrite = access.permissions.includes("notes.write");
   const notes = access.state === "active" && canRead ? await listNotes(100) : [];
@@ -55,6 +62,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           </button>
         </form>
       </header>
+
+      <Launcher apps={apps} current="notes" label="Your apps" />
 
       {error ? (
         <div className="notice bad" role="alert" data-testid="error">
