@@ -32,12 +32,14 @@ pnpm dev
 2. creates throwaway dev keys and passwords in `.dev/` (git-ignored) if they're missing;
 3. starts Postgres 16, Redis 7 and the **dev gateway** (Caddy) from `compose.dev.yml`, on **127.0.0.1 only**;
 4. creates each service's database and login role, revokes `CONNECT` from `PUBLIC`, runs migrations and seeds synthetic users;
-5. runs `core/identity`, the dev login stub and every `apps/*` in watch mode.
+5. runs `core/identity`, the dev login stub and every `apps/*` in watch mode;
+6. runs the **Admin console** and makes the seeded `dev-admin` its first administrator (with the CLI: nothing self-grants `core.admin`).
 
 | What                      | URL                                                                                                                                 |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Identity (OIDC discovery) | <http://localhost:4010/.well-known/openid-configuration>                                                                            |
 | Dev login stub            | <http://localhost:4000>                                                                                                             |
+| Admin console             | <http://core.localhost:8080/admin> (or <http://localhost:4030/admin>): sign in as **Dev Admin**; a member gets a 403                |
 | Dev gateway               | <http://notes.localhost:8080> (each app at `<id>.localhost:8080`; `id.localhost:8080` and `api.localhost:8080` for the core)        |
 | Postgres / Redis          | `127.0.0.1:55440` (user `postgres`, password `postgres-dev-only`) / `127.0.0.1:56380`                                               |
 | Dev OIDC client           | `client_id=dev-app`, public, PKCE S256, redirect `http://localhost:4199/callback` (never served; the smoke test reads the redirect) |
@@ -57,7 +59,7 @@ pnpm dev:reset   # delete the local dev databases and Redis data (asks first; --
 **Troubleshooting**
 
 - **"Docker isn't running":** start Docker Desktop and run `pnpm dev` again.
-- **A port is in use (4000, 4010, 8080, 55440, 56380):** stop whatever holds it. These ports were picked to avoid asafarim-platform's.
+- **A port is in use (4000, 4010, 4030, 8080, 55440, 56380):** stop whatever holds it. These ports were picked to avoid asafarim-platform's.
 - **Sign-in says `browser_mismatch`:** finish the sign-in in the same browser tab you started it in.
 - **Anything odd with the data:** `pnpm dev:reset`, then `pnpm dev`.
 

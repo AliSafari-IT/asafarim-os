@@ -3,7 +3,8 @@
  * Stable: clients (the CLI, the app SDK) branch on them. See README "Errors".
  */
 export const ERRORS = {
-  unauthorized: 401, //            admin endpoints: missing or wrong admin token
+  unauthorized: 401, //            admin endpoints: missing or wrong admin token, or an identity token that isn't valid
+  forbidden: 403, //               an admin endpoint, and a signed-in person who doesn't hold core.admin
   missing_signature: 401, //      registration without the x-asafarim-* headers
   bad_signature: 401, //          signature doesn't verify with the app's credential
   expired_signature: 401, //      timestamp outside ±60 s

@@ -4,7 +4,9 @@
  *   compose up (Postgres, Redis, the dev gateway) → bootstrap → identity + core-api (with a short
  *   access-token lifetime, so the revocation bound is tested for real) + dev login stub →
  *   install notes (NOT activated: the tests do that) → build and start notes →
- *   Playwright: notes.spec.ts (direct) and gateway.spec.ts (through http://notes.localhost:8080) →
+ *   the Admin console (build and start) →
+ *   Playwright: notes.spec.ts (direct) and gateway.spec.ts (through http://notes.localhost:8080) in
+ *   apps/notes, then admin.spec.ts (the console at http://core.localhost:8080, P3.3b) in core/admin →
  *   stop everything. `--down` also removes the dev volumes (CI).
  *
  * First time on a machine: `pnpm --filter @asafarim/notes exec playwright install chromium`.
@@ -28,6 +30,9 @@ import {
 import { DEV, DEV_DIR, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
 
 const NOTES_DIR = path.join(ROOT, "apps/notes");
+const ADMIN_DIR = path.join(ROOT, "core/admin");
+const ADMIN_URL = `http://localhost:${DEV.adminPort}`;
+const ADMIN_GATEWAY_URL = `http://core.localhost:${DEV.gatewayPort}`;
 const NOTES_URL = `http://localhost:${DEV.apps.notes}`;
 const GATEWAY_URL = `http://notes.localhost:${DEV.gatewayPort}`;
 // Access tokens live this long in the e2e (production: 60 s); the gateway spec asserts against it.
@@ -78,21 +83,44 @@ try {
   await waitForGateway(DEV.gatewayPort, `notes.localhost:${DEV.gatewayPort}`, "/api/health", 503);
   console.log(`${green("✔")} the gateway answers for notes at ${GATEWAY_URL}`);
 
+  // The Admin console (P3.3b): a core service on its own port and its own gateway host.
+  console.log(bold("Building the Admin console…"));
+  const adminNext = path.join(ADMIN_DIR, "node_modules/next/dist/bin/next");
+  const adminBuild = spawnSync(process.execPath, [adminNext, "build"], { cwd: ADMIN_DIR, stdio: "inherit" });
+  if (adminBuild.status !== 0) throw new Error("next build (admin) failed");
+  start("admin", [adminNext, "start", "--port", String(DEV.adminPort)], ADMIN_DIR);
+  await waitFor(`${ADMIN_URL}/api/health`);
+  await waitForGateway(DEV.gatewayPort, `core.localhost:${DEV.gatewayPort}`, "/api/health", 200);
+  console.log(`${green("✔")} the Admin console is up at ${ADMIN_URL} and at ${ADMIN_GATEWAY_URL}`);
+
   const core = readEnvFile(path.join(DEV_DIR, "core-api.env"));
-  const run = spawnSync("pnpm", ["--filter", "@asafarim/notes", "e2e"], {
-    cwd: ROOT,
-    stdio: "inherit",
-    shell: process.platform === "win32",
-    env: {
-      ...process.env,
-      E2E_BASE_URL: NOTES_URL,
-      E2E_GATEWAY_URL: GATEWAY_URL,
-      E2E_TOKEN_TTL: String(TOKEN_TTL),
-      E2E_CORE_API_URL: core.CORE_API_URL,
-      E2E_ADMIN_TOKEN: core.CORE_API_ADMIN_TOKEN,
-    },
+  const e2eEnv = {
+    ...process.env,
+    E2E_BASE_URL: NOTES_URL,
+    E2E_GATEWAY_URL: GATEWAY_URL,
+    E2E_ADMIN_URL: ADMIN_GATEWAY_URL,
+    E2E_TOKEN_TTL: String(TOKEN_TTL),
+    E2E_CORE_API_URL: core.CORE_API_URL,
+    E2E_ADMIN_TOKEN: core.CORE_API_ADMIN_TOKEN,
+    // notes' registry credential, for the console spec's launcher check (the spec reads no files).
+    E2E_NOTES_CREDENTIAL: readEnvFile(path.join(DEV_DIR, "notes.env")).ASAFARIM_REGISTRY_CREDENTIAL,
+    // The "migration needed" test simulates an app upgrade that deprecated a permission, in core-api's database.
+    E2E_CORE_DATABASE_URL: core.CORE_API_DATABASE_URL,
+    // The hand-off spec plays Hub in the browser: it signs assertions with the dev stub's key (#40).
+    E2E_ISSUER: ISSUER,
+    E2E_HUB_ASSERTION_PRIVATE_JWK: readEnvFile(path.join(DEV_DIR, "dev-hub.env")).DEV_HUB_ASSERTION_PRIVATE_JWK,
+  };
+  // Both suites always run (they share the stack, one after the other); the exit code is the first failure.
+  const results = ["@asafarim/notes", "@asafarim/admin"].map((pkg) => {
+    const run = spawnSync("pnpm", ["--filter", pkg, "e2e"], {
+      cwd: ROOT,
+      stdio: "inherit",
+      shell: process.platform === "win32",
+      env: e2eEnv,
+    });
+    return run.status ?? 1;
   });
-  exitCode = run.status ?? 1;
+  exitCode = results.find((code) => code !== 0) ?? 0;
   console.log(exitCode === 0 ? green(bold("\ne2e: OK")) : red(bold("\ne2e: FAILED")));
 } catch (err) {
   console.error(red(`\ne2e setup FAILED: ${err.message}`));

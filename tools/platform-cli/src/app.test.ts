@@ -17,6 +17,40 @@ function workspace(withManifest = true) {
 const reply = (status: number, body: object) => vi.fn(async () => new Response(JSON.stringify(body), { status }));
 
 describe("platform app (P3.1)", () => {
+  it("an app with no database (database: none) installs with only its credential", async () => {
+    const root = workspace();
+    const fetchImpl = reply(201, {
+      appId: "notes",
+      state: "installed",
+      credential: "osk1.notes.abcdef012345.KEY",
+      database: null,
+    });
+    const r = await appCommand(
+      ["install", "notes"],
+      root,
+      { CORE_API_URL: "http://localhost:4020", CORE_API_ADMIN_TOKEN: "t".repeat(40) },
+      fetchImpl as unknown as typeof fetch,
+    );
+    expect(r?.ok).toBe(true);
+    const text = r!.lines.join("\n");
+    expect(text).toContain("installed (no database)");
+    expect(text).toContain("ASAFARIM_REGISTRY_CREDENTIAL=osk1.notes.abcdef012345.KEY");
+    expect(text).not.toContain("DATABASE_URL");
+
+    const out = path.join(root, ".dev", "notes.env");
+    mkdirSync(path.dirname(out), { recursive: true });
+    const written = await appCommand(
+      ["install", "notes", "--env-out", ".dev/notes.env"],
+      root,
+      { CORE_API_URL: "http://localhost:4020", CORE_API_ADMIN_TOKEN: "t".repeat(40) },
+      fetchImpl as unknown as typeof fetch,
+    );
+    expect(written?.ok).toBe(true);
+    expect(readFileSync(out, "utf8")).toBe(
+      "ASAFARIM_APP_ID=notes\nASAFARIM_REGISTRY_CREDENTIAL=osk1.notes.abcdef012345.KEY\n",
+    );
+  });
+
   it("install posts the compiled manifest with the admin token and prints the secrets once", async () => {
     const root = workspace();
     const fetchImpl = reply(201, {

@@ -125,3 +125,13 @@ export async function installDevApps({ activate = true, log = console.log } = {}
     }
   }
 }
+
+/**
+ * The bootstrap (P3.3b): the first administrator is made by the CLI, never by the console itself.
+ * Locally that's the seeded `dev-admin`. Idempotent (a repeat grants nothing and writes no audit event).
+ */
+export function bootstrapDevAdmin({ log = console.log } = {}) {
+  const r = platform(["role", "grant", "core.admin", "dev-admin"]);
+  if (!r.ok) throw new Error(`granting core.admin to dev-admin failed:\n${r.output}`);
+  log(`admin: dev-admin holds core.admin (dev bootstrap)`);
+}

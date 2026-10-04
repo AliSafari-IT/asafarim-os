@@ -13,7 +13,7 @@ import type { AccountStore } from "./accounts.ts";
 import type { OidcClient } from "./clients.ts";
 import { HandoffError, issueTicket, verifyAssertion, type ReplayGuard } from "./handoff.ts";
 import type { Logger } from "./log.ts";
-import { errorPage, loggedOutPage, logoutPage } from "./pages.ts";
+import { CONTINUE_PAGE_CSP, continuePage, errorPage, loggedOutPage, logoutPage } from "./pages.ts";
 import { PENDING_TTL_SECONDS, hashSecret, type PendingLogins } from "./pending.ts";
 
 export const ACCESS_TOKEN_TTL = 600;
@@ -325,9 +325,16 @@ export function createProvider(deps: ProviderDeps): Provider {
         overwrite: true,
       });
       log.info("interaction.assertion_accepted", { uid });
-      ctx.status = 303;
-      ctx.set("Cache-Control", "no-store");
-      ctx.redirect(completePath(uid));
+      // 200 with a page that navigates to /complete, NOT a redirect: Hub's assertion page has
+      // `form-action <issuer>`, which Chromium applies to every redirect in the chain (asafarim-os#40).
+      ctx.status = 200;
+      ctx.type = "html";
+      ctx.set({
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": CONTINUE_PAGE_CSP,
+      });
+      ctx.body = continuePage(uid);
       return;
     }
 

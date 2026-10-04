@@ -9,6 +9,7 @@
  * answer is never served.
  */
 import { signRequest } from "@asafarim/registry-protocol";
+import { parseLauncher, type LauncherTile } from "./launcher.ts";
 import { createTokenVerifier } from "./token.ts";
 
 export interface SubjectAccess {
@@ -84,6 +85,49 @@ export function createAccess(opts: AccessOptions) {
       fetch: opts.fetch,
       now: opts.now && (() => new Date(now())),
     });
+
+  const launcherCache = new Map<string, { at: number; value: LauncherTile[] }>();
+  const launcherInflight = new Map<string, Promise<LauncherTile[]>>();
+
+  /**
+   * The apps this signed-in person can open (active, and they hold a role or it is public), from
+   * core-api (signed GET, bound to the person's path). Cached for the same short TTL as permissions,
+   * so deactivating an app takes it off the launcher within that time. Fails closed: an outage or a
+   * malformed answer throws `AccessUnavailableError`; a stale answer is never served.
+   */
+  async function launcher(subject: string): Promise<LauncherTile[]> {
+    const hit = launcherCache.get(subject);
+    if (hit && now() - hit.at < ttl) return hit.value;
+    let pending = launcherInflight.get(subject);
+    if (!pending) {
+      pending = fetchLauncher(subject)
+        .then((value) => {
+          launcherCache.set(subject, { at: now(), value });
+          return value;
+        })
+        .finally(() => launcherInflight.delete(subject));
+      launcherInflight.set(subject, pending);
+    }
+    return pending;
+  }
+
+  async function fetchLauncher(subject: string): Promise<LauncherTile[]> {
+    const path = `/registry/v1/apps/${encodeURIComponent(opts.appId)}/launcher/${encodeURIComponent(subject)}`;
+    let res: Response;
+    try {
+      res = await doFetch(`${base}${path}`, {
+        headers: signRequest({ credential: opts.credential, method: "GET", path }),
+        cache: "no-store",
+      });
+    } catch {
+      throw new AccessUnavailableError("core-api is unreachable");
+    }
+    const json = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) throw new AccessUnavailableError(json.error ?? `http ${res.status}`);
+    const tiles = parseLauncher(json);
+    if (!tiles) throw new AccessUnavailableError("core-api sent a malformed launcher answer");
+    return tiles;
+  }
 
   /**
    * Ask core-api for a short-lived access token for a person this app has
@@ -192,7 +236,17 @@ export function createAccess(opts: AccessOptions) {
     return result;
   }
 
-  return { access, can, require, mintToken, clearCache: () => cache.clear() };
+  return {
+    access,
+    can,
+    require,
+    mintToken,
+    launcher,
+    clearCache: () => {
+      cache.clear();
+      launcherCache.clear();
+    },
+  };
 }
 
 export type Access = ReturnType<typeof createAccess>;

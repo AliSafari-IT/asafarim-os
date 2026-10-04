@@ -17,6 +17,12 @@ http://api.localhost:8080 {
 	reverse_proxy {$OS_CORE_API_UPSTREAM}
 }
 
+# The Admin console (core/admin) is a core service, not a manifest app: it signs people in itself and
+# answers 403 to anyone who isn't an administrator, so there's no forward_auth in front of it.
+http://core.localhost:8080 {
+	reverse_proxy {$OS_ADMIN_UPSTREAM}
+}
+
 http://notes.localhost:8080 {
 	@hidden1 {
 		path /internal /internal/*

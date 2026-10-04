@@ -14,7 +14,13 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { formatProblems, validateManifest, type AppManifest } from "@asafarim/app-manifest";
+import {
+  formatProblems,
+  launcherEntries,
+  validateManifest,
+  type AppManifest,
+  type LauncherEntry,
+} from "@asafarim/app-manifest";
 
 /** Files that document the directory rather than being generator output. */
 const NOT_GENERATED = new Set(["README.md", ".gitkeep"]);
@@ -64,43 +70,10 @@ export function generatedFiles(root: string): string[] {
     .sort();
 }
 
-/** One launcher tile, as the platform's registry consumes it. */
-export interface LauncherEntry {
-  key: string;
-  name: string;
-  description: string;
-  glyph: string;
-  meta: string;
-  status: "active" | "coming-soon";
-  access: "public" | "authenticated";
-  requiresAccountToUse?: boolean;
-  order: number;
-}
+export type { LauncherEntry };
 
-/** The launcher registry: every manifest with a `ui.launcher`, by `order` then id. */
-export function launcherRegistry(manifests: AppManifest[]): LauncherEntry[] {
-  return (
-    manifests
-      .filter((m) => m.ui.launcher !== undefined)
-      .map((m) => {
-        const l = m.ui.launcher!;
-        return {
-          key: m.id,
-          name: m.name,
-          description: l.description,
-          glyph: m.ui.glyph,
-          meta: l.meta,
-          status: m.ui.status,
-          access: l.access,
-          ...(l.requiresAccountToUse === undefined ? {} : { requiresAccountToUse: l.requiresAccountToUse }),
-          order: l.order,
-        };
-      })
-      // Code-unit tie-break, not localeCompare: --check compares bytes, so the
-      // order must not depend on the host's collation.
-      .sort((a, b) => a.order - b.order || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-  );
-}
+/** The launcher registry: every manifest with a `ui.launcher`, by `order` then id (the shared projection). */
+export const launcherRegistry = (manifests: AppManifest[]): LauncherEntry[] => launcherEntries(manifests);
 
 export function renderLauncherRegistry(entries: LauncherEntry[]): string {
   const doc = {
@@ -118,6 +91,7 @@ export function renderLauncherRegistry(entries: LauncherEntry[]): string {
 export const gatewayUpstreamVar = (appId: string) => `OS_APP_${appId.toUpperCase().replace(/-/g, "_")}_UPSTREAM`;
 export const GATEWAY_CORE_API_VAR = "OS_CORE_API_UPSTREAM";
 export const GATEWAY_IDENTITY_VAR = "OS_IDENTITY_UPSTREAM";
+export const GATEWAY_ADMIN_VAR = "OS_ADMIN_UPSTREAM";
 
 /**
  * A route glob (`*` one segment, `**` any depth) as Caddy `path` patterns. Caddy's `*` also crosses
@@ -160,6 +134,12 @@ export function renderGatewayCaddyfile(manifests: AppManifest[]): string {
     "",
     `http://api.localhost:${port} {`,
     `\treverse_proxy {$${GATEWAY_CORE_API_VAR}}`,
+    "}",
+    "",
+    "# The Admin console (core/admin) is a core service, not a manifest app: it signs people in itself and",
+    "# answers 403 to anyone who isn't an administrator, so there's no forward_auth in front of it.",
+    `http://core.localhost:${port} {`,
+    `\treverse_proxy {$${GATEWAY_ADMIN_VAR}}`,
     "}",
   ];
   for (const m of apps) {

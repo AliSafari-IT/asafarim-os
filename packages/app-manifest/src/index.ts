@@ -1,3 +1,4 @@
+import type { AppManifest } from "./schema.ts";
 export {
   AppManifestSchema,
   HTTP_METHODS,
@@ -26,4 +27,47 @@ export const MANIFEST_SOURCE_FILE = "platform.app.ts";
 /** The app's default host when the manifest declares no primary domain. */
 export function defaultHost(appId: string, homeDomain = "asafarim.site"): string {
   return `${appId}.${homeDomain}`;
+}
+
+/** One launcher tile, as the platform's registry and the launchers consume it. */
+export interface LauncherEntry {
+  key: string;
+  name: string;
+  description: string;
+  glyph: string;
+  meta: string;
+  status: "active" | "coming-soon";
+  access: "public" | "authenticated";
+  requiresAccountToUse?: boolean;
+  order: number;
+}
+
+/**
+ * The launcher tiles for these manifests (those with a `ui.launcher` block), by `order` then id.
+ * ONE projection for both consumers: `platform sync` writes it to generated/platform/launcher-registry.json,
+ * and core-api builds each person's launcher from the installed manifests with it, so names, icons and
+ * order can't differ between the generated file and what people see.
+ */
+export function launcherEntries(manifests: readonly Pick<AppManifest, "id" | "name" | "ui">[]): LauncherEntry[] {
+  return (
+    manifests
+      .filter((m) => m.ui?.launcher !== undefined)
+      .map((m) => {
+        const l = m.ui.launcher!;
+        return {
+          key: m.id,
+          name: m.name,
+          description: l.description,
+          glyph: m.ui.glyph,
+          meta: l.meta,
+          status: m.ui.status,
+          access: l.access,
+          ...(l.requiresAccountToUse === undefined ? {} : { requiresAccountToUse: l.requiresAccountToUse }),
+          order: l.order,
+        };
+      })
+      // Code-unit tie-break, not localeCompare: --check compares bytes, so the
+      // order must not depend on the host's collation.
+      .sort((a, b) => a.order - b.order || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  );
 }

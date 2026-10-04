@@ -7,6 +7,7 @@ import {
   defaultHost,
   defineApp,
   formatPath,
+  launcherEntries,
   validateManifest,
   type AppManifestInput,
   type ManifestProblem,
@@ -297,5 +298,57 @@ describe("helpers and the JSON Schema", () => {
     expect(schema.properties.id.not.enum).toContain("admin");
     expect(new RegExp(schema.properties.secrets.items.pattern).test("GITHUB_TOKEN")).toBe(true);
     expect(schema.additionalProperties).toBe(false);
+  });
+});
+
+describe("launcherEntries (shared by `platform sync` and core-api)", () => {
+  const withLauncher = (id: string, order: number, extra: object = {}) => {
+    const m = validateManifest({
+      ...minimal(),
+      id,
+      name: id.toUpperCase(),
+      permissions: [],
+      roles: [],
+      ui: {
+        glyph: "XX",
+        color: "#000000",
+        nav: [],
+        status: "active",
+        launcher: { description: "d", meta: "m", access: "authenticated", order, ...extra },
+      },
+    });
+    if (!m.ok) throw new Error(JSON.stringify(m.problems));
+    return m.manifest;
+  };
+
+  it("keeps only manifests with a launcher block, ordered by `order` then id (code-unit order)", () => {
+    const quiet = {
+      ...withLauncher("quiet", 1),
+      ui: { glyph: "QQ", color: "#000000", nav: [], status: "active" as const },
+    };
+    const list = launcherEntries([withLauncher("zeta", 5), withLauncher("beta", 10), withLauncher("alpha", 10), quiet]);
+    expect(list.map((e) => e.key)).toEqual(["zeta", "alpha", "beta"]);
+  });
+
+  it("projects exactly the tile fields, and requiresAccountToUse only when declared", () => {
+    const [plain, flagged] = launcherEntries([
+      withLauncher("aa", 1),
+      withLauncher("bb", 2, { requiresAccountToUse: true }),
+    ]);
+    expect(plain).toEqual({
+      key: "aa",
+      name: "AA",
+      description: "d",
+      glyph: "XX",
+      meta: "m",
+      status: "active",
+      access: "authenticated",
+      order: 1,
+    });
+    expect(flagged).toMatchObject({ requiresAccountToUse: true });
+  });
+
+  it("copes with a built-in app that has no `ui` at all (core's own row)", () => {
+    expect(launcherEntries([{ id: "core", name: "Core" } as never])).toEqual([]);
   });
 });

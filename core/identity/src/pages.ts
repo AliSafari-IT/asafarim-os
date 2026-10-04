@@ -20,9 +20,10 @@ export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
-export function page(title: string, body: string): string {
+/** `head` is extra, already-safe markup for the document head (the hand-off's meta refresh). */
+export function page(title: string, body: string, head = ""): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex"><title>${escapeHtml(title)} · ASafariM</title><style>${STYLE}</style></head>
+<meta name="robots" content="noindex">${head}<title>${escapeHtml(title)} · ASafariM</title><style>${STYLE}</style></head>
 <body><main><p class="brand">ASafariM</p>${body}</main></body></html>`;
 }
 
@@ -49,3 +50,26 @@ export function logoutPage(form: string): string {
 export function loggedOutPage(): string {
   return page("Signed out", "<h1>You're signed out</h1><p>You can close this tab.</p>");
 }
+
+/**
+ * The answer to Hub's assertion POST (asafarim-os#40). It must NOT redirect: Hub's assertion page sends
+ * `form-action <issuer>`, and Chromium applies that to EVERY redirect in the chain a form submission
+ * starts, so a 303 chain that ends on the client's origin is blocked and sign-in dead-ends (with the login
+ * already consumed). A navigation THIS page starts is a new navigation, so Hub's `form-action` no longer
+ * applies. No script: a meta refresh, plus a visible link as the fallback.
+ *
+ * The `uid` is already restricted to `[\w-]+` by the route, and is escaped anyway.
+ */
+export function continuePage(uid: string): string {
+  const next = `/interaction/${escapeHtml(uid)}/complete`;
+  return page(
+    "Signing you in",
+    `<h1>Signing you in…</h1><p>Taking you back to the app.</p>
+<p><a class="button" href="${next}">Continue</a></p>`,
+    `<meta http-equiv="refresh" content="0;url=${next}">`,
+  );
+}
+
+/** This page runs no script and starts no form: nothing but its own navigation, and nobody may frame it. */
+export const CONTINUE_PAGE_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
