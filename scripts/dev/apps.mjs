@@ -22,8 +22,14 @@ export function sameJson(a, b) {
 
 export function appIds() {
   const dir = path.join(ROOT, "apps");
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+  return entries
     .filter((d) => d.isDirectory() && existsSync(path.join(dir, d.name, "platform.app.ts")))
     .map((d) => d.name);
 }
