@@ -65,6 +65,15 @@ pnpm dev:reset   # delete the local dev databases and Redis data (asks first; --
 
 `.env.development.example` documents every generated variable. You never copy it by hand.
 
+### Environment and secrets
+
+Two mechanisms, each with one job:
+
+- **Local development: `.dev/`.** `pnpm dev:keys` generates throwaway keys and passwords on each machine. Nothing is encrypted or committed, and CI needs no secrets.
+- **Production: [envage](https://alisafari-it.github.io/envage/).** Each service keeps its real secrets in `<service>/.env.production`, which is git-ignored. You commit only the encrypted `.env.production.age`, which `pnpm env:encrypt:production` writes. The private key `.age/key.txt` is never committed. This repository has its own key, separate from asafarim-platform's.
+
+`pnpm env:check` (also run in CI) fails if a decrypted env file, a private key or anything under `.dev/` is tracked or staged. Identity's production setup is in [core/identity](core/identity/README.md#production-secrets).
+
 ### Checks
 
 ```bash

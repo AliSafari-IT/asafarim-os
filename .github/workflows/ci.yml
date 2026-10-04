@@ -46,6 +46,9 @@ jobs:
       - name: Brand spelling (ASafariM, #778)
         run: pnpm check:brand
 
+      - name: No plaintext secrets in git (envage)
+        run: pnpm env:check
+
       - name: Dev script tests (the dev dependency build covers every app, #34)
         run: pnpm test:scripts
 

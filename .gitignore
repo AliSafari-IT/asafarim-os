@@ -12,12 +12,6 @@ dist/
 coverage/
 *.tsbuildinfo
 
-# Environment (secrets never go in git; manifests list secret names only)
-.env
-.env.*
-!.env.example
-!.env.development.example
-
 # Local dev keys, secrets and generated config (pnpm dev:keys)
 .dev/
 
@@ -31,11 +25,14 @@ test-results/
 playwright-report/
 
 # --- envage managed ---
+# Environment: secrets never go in git as plaintext; manifests list secret names only.
 # Decrypted env files — never commit
 .env*
 !.env*.age
 !.env.example
+!.env.*.example
 !.env.template
-# Age private key
-.age/key.txt
+# Age keys: commit only the public recipient, never the private identity
+.age/*
+!.age/key.pub
 # --- end envage ---
