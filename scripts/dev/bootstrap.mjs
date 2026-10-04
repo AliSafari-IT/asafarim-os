@@ -80,6 +80,15 @@ async function exec(client, template, ...idents) {
  * Returns a short report per service.
  */
 export async function bootstrap(env, { log = console.log } = {}) {
+  // A missing password would reach Postgres as NULL ("PASSWORD NULL" is valid),
+  // leaving a role passwordless; fail before changing anything.
+  const required = [
+    "POSTGRES_ADMIN_URL",
+    ...SERVICES.flatMap((s) => [s.owner.passwordEnv, ...s.readers.map((r) => r.passwordEnv)]),
+  ];
+  for (const key of required) {
+    if (!env[key]) throw new Error(`${key} is missing in .dev/ (run pnpm dev:keys --force)`);
+  }
   const admin = new pg.Client({ connectionString: env.POSTGRES_ADMIN_URL });
   await admin.connect();
   const report = [];

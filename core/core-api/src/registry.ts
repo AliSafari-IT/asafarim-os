@@ -152,6 +152,17 @@ export function createRegistry(deps: RegistryDeps) {
     };
   }
 
+  /**
+   * Forget nonces that can no longer be replayed. A signature is accepted for
+   * ±SIGNATURE_WINDOW_SECONDS around its timestamp, so a nonce must be kept
+   * for twice that window (first use at the far edge of the future side).
+   * Runs on every registration and on a timer in the server; returns how many.
+   */
+  async function pruneNonces(): Promise<number> {
+    const r = await deps.pool.query("DELETE FROM registry_nonces WHERE expires_at < now()");
+    return r.rowCount ?? 0;
+  }
+
   /** Verify the signed request; returns the app's current state. Doesn't touch the catalog. */
   async function authenticate(appId: string, headers: Record<string, string | undefined>, body: string) {
     const ts = headers["x-asafarim-timestamp"];
@@ -182,7 +193,7 @@ export function createRegistry(deps: RegistryDeps) {
     // forged one can't burn a real nonce.
     const skew = Math.abs(now().getTime() / 1000 - Number(ts));
     if (skew > SIGNATURE_WINDOW_SECONDS) throw new ApiError("expired_signature");
-    await deps.pool.query("DELETE FROM registry_nonces WHERE expires_at < now()");
+    await pruneNonces();
     const fresh = await deps.pool.query(
       "INSERT INTO registry_nonces (nonce, app_id, expires_at) VALUES ($1, $2, now() + make_interval(secs => $3)) ON CONFLICT DO NOTHING",
       [nonce, appId, SIGNATURE_WINDOW_SECONDS * 2],
@@ -317,7 +328,7 @@ export function createRegistry(deps: RegistryDeps) {
     return { ...app, permissions, roles };
   }
 
-  return { install, register, transition, get };
+  return { install, register, transition, get, pruneNonces };
 }
 
 export type Registry = ReturnType<typeof createRegistry>;

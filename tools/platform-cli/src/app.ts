@@ -10,7 +10,7 @@
  * `pnpm dev` creates. The registry credential and the app's database URL are
  * shown ONCE: `--env-out` writes them to a file (mode 600) instead of printing.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadManifestFile } from "./manifest.ts";
 
@@ -36,6 +36,23 @@ export async function appCommand(
   const [action, id, ...rest] = args;
   if (!action || !id || !/^[a-z][a-z0-9-]{1,31}$/.test(id)) return null;
   if (!["install", "activate", "deactivate"].includes(action)) return null;
+
+  // --env-out is checked BEFORE anything is installed: the credential is shown
+  // once, so a bad path must not be discovered afterwards. It may only point
+  // inside the workspace (never an arbitrary path).
+  let envTarget: string | undefined;
+  if (action === "install" && rest[0] === "--env-out") {
+    const given = rest[1];
+    const target = given ? path.resolve(root, given) : undefined;
+    const rel = target ? path.relative(root, target) : "";
+    if (!target || !rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      return {
+        ok: false,
+        lines: [`--env-out must name a file inside ${root} (got "${given ?? ""}"). Nothing was installed.`],
+      };
+    }
+    envTarget = target;
+  }
 
   const fallback = devEnv(root);
   const baseUrl = (env.CORE_API_URL ?? fallback.CORE_API_URL ?? "http://localhost:4020").replace(/\/$/, "");
@@ -80,13 +97,13 @@ export async function appCommand(
     `ASAFARIM_REGISTRY_CREDENTIAL=${String(out.credential)}`,
     `DATABASE_URL=${db.url}`,
   ];
-  const envOut = rest[0] === "--env-out" ? rest[1] : undefined;
-  if (envOut) {
-    writeFileSync(path.resolve(root, envOut), `${secrets.join("\n")}\n`, { mode: 0o600 });
+  if (envTarget) {
+    writeFileSync(envTarget, `${secrets.join("\n")}\n`, { mode: 0o600 });
+    chmodSync(envTarget, 0o600); // writeFile's mode doesn't change an existing file
     return {
       ok: true,
       lines: [
-        `${id} installed (database ${db.name}). Credential and DATABASE_URL written to ${envOut} (shown once; keep it secret).`,
+        `${id} installed (database ${db.name}). Credential and DATABASE_URL written to ${path.relative(root, envTarget)} (shown once; keep it secret).`,
       ],
     };
   }

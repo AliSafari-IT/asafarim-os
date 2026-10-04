@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { accountFromRow } from "../src/accounts.ts";
 import { ClientConfigError, loadClients } from "../src/clients.ts";
-import { ConfigError, isLoopbackHost, parseSigningJwks, refuseLoopbackInProduction } from "../src/config.ts";
+import { ConfigError, isLoopbackHost, parseSigningJwks, refuseLoopbackOutsideDevelopment } from "../src/config.ts";
 import { createLogger, safe } from "../src/log.ts";
 
 const SECRET = "s".repeat(40);
@@ -121,27 +121,35 @@ describe("logging", () => {
   });
 });
 
-describe("production refuses loopback hand-off targets (OS-D1 review)", () => {
+describe("loopback hand-off targets only with NODE_ENV=development (OS-D1 review)", () => {
   const dev = {
     IDENTITY_HUB_CONTINUE_URL: "http://localhost:4000/oidc/continue",
     IDENTITY_ISSUER: "http://localhost:4010",
   };
 
   it("refuses a dev env file in production: loopback continue URL or issuer", () => {
-    expect(() => refuseLoopbackInProduction({ NODE_ENV: "production" }, dev)).toThrow(
+    expect(() => refuseLoopbackOutsideDevelopment({ NODE_ENV: "production" }, dev)).toThrow(
       /IDENTITY_HUB_CONTINUE_URL points at a loopback host/,
     );
     expect(() =>
-      refuseLoopbackInProduction(
+      refuseLoopbackOutsideDevelopment(
         { NODE_ENV: "production" },
         { ...dev, IDENTITY_HUB_CONTINUE_URL: "https://hub.asafarim.com/oidc/continue" },
       ),
     ).toThrow(/IDENTITY_ISSUER/);
   });
 
-  it("allows the production hosts, and allows loopback outside production", () => {
+  it("refuses loopback for any NODE_ENV that isn't exactly development: unset, a typo, test", () => {
+    for (const NODE_ENV of [undefined, "", "prod", "Development", "test"]) {
+      expect(() => refuseLoopbackOutsideDevelopment({ NODE_ENV }, dev), String(NODE_ENV)).toThrow(
+        /only allowed with NODE_ENV=development/,
+      );
+    }
+  });
+
+  it("allows the production hosts, and allows loopback in development", () => {
     expect(() =>
-      refuseLoopbackInProduction(
+      refuseLoopbackOutsideDevelopment(
         { NODE_ENV: "production" },
         {
           IDENTITY_HUB_CONTINUE_URL: "https://hub.asafarim.com/oidc/continue",
@@ -149,7 +157,7 @@ describe("production refuses loopback hand-off targets (OS-D1 review)", () => {
         },
       ),
     ).not.toThrow();
-    expect(() => refuseLoopbackInProduction({ NODE_ENV: "development" }, dev)).not.toThrow();
+    expect(() => refuseLoopbackOutsideDevelopment({ NODE_ENV: "development" }, dev)).not.toThrow();
   });
 
   it("recognises every loopback form", () => {

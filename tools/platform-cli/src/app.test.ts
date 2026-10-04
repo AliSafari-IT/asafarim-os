@@ -71,6 +71,21 @@ describe("platform app (P3.1)", () => {
     ).toBe("Bearer from-dev");
   });
 
+  it("--env-out outside the workspace is refused BEFORE anything is installed", async () => {
+    const fetchImpl = reply(201, {});
+    for (const out of ["../outside.env", path.join(tmpdir(), "elsewhere.env"), ".", ""]) {
+      const r = await appCommand(
+        ["install", "notes", "--env-out", out],
+        workspace(),
+        { CORE_API_ADMIN_TOKEN: "tok" },
+        fetchImpl,
+      );
+      expect(r?.ok, out).toBe(false);
+      expect(r?.lines[0], out).toMatch(/--env-out must name a file inside .*Nothing was installed/);
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("refuses without a token, without a compiled manifest, and on a bad id", async () => {
     expect((await appCommand(["install", "notes"], workspace(), {}, reply(200, {})))?.lines[0]).toMatch(
       /CORE_API_ADMIN_TOKEN/,

@@ -5,10 +5,16 @@ import type pg from "pg";
 
 const DIR = path.join(import.meta.dirname, "../migrations");
 
+/** One migration run at a time across processes (replicas, rolling deploys). */
+const MIGRATION_LOCK_ID = 7_243_001;
+
 export async function migrate(pool: pg.Pool): Promise<string[]> {
   const client = await pool.connect();
   const applied: string[] = [];
   try {
+    // Session-level advisory lock: a second core-api starting at the same time
+    // waits here, then finds every migration already applied.
+    await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_ID]);
     await client.query(
       "CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
     );
@@ -31,6 +37,7 @@ export async function migrate(pool: pg.Pool): Promise<string[]> {
       }
     }
   } finally {
+    await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_ID]).catch(() => undefined);
     client.release();
   }
   return applied;

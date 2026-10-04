@@ -8,7 +8,7 @@
  *   POST /oidc/continue/select        re-verify, sign for the chosen user, auto-POST
  */
 import { readFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { LISTEN_HOST, assertDevOnly } from "./guard.ts";
 import { importEd25519, signAssertion, verifyTicket } from "./handoff.ts";
@@ -23,13 +23,30 @@ function send(res: ServerResponse, status: number, html: string) {
   res.end(html);
 }
 
-async function readForm(req: IncomingMessage): Promise<URLSearchParams> {
-  let body = "";
+export const MAX_FORM_BYTES = 16_384;
+
+export class FormTooLargeError extends Error {}
+
+/**
+ * Read a small form body. Counts BYTES, keeps draining the request (breaking
+ * out of the iterator would destroy the socket before we can answer) and
+ * throws FormTooLargeError once the limit is crossed.
+ */
+export async function readForm(
+  req: AsyncIterable<Buffer | string>,
+  maxBytes = MAX_FORM_BYTES,
+): Promise<URLSearchParams> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let tooLarge = false;
   for await (const chunk of req) {
-    body += chunk;
-    if (body.length > 16_384) break;
+    const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    size += buf.length;
+    if (size > maxBytes) tooLarge = true;
+    else chunks.push(buf);
   }
-  return new URLSearchParams(body);
+  if (tooLarge) throw new FormTooLargeError();
+  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
 }
 
 export async function createDevHub(env: Record<string, string | undefined> = process.env) {
@@ -63,7 +80,8 @@ export async function createDevHub(env: Record<string, string | undefined> = pro
         return res.end('{"ok":true,"devOnly":true}');
       }
       send(res, 404, errorPage("Not found."));
-    } catch {
+    } catch (err) {
+      if (err instanceof FormTooLargeError) return send(res, 413, errorPage("The request is too large."));
       send(res, 400, errorPage("The sign-in ticket is invalid or expired."));
     }
   });

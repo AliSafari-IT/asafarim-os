@@ -30,6 +30,27 @@ export function compose(...args) {
   if (r.status !== 0) throw new Error(`docker compose ${args.join(" ")} failed`);
 }
 
+/**
+ * Build the workspace packages the dev services import (@asafarim/app-manifest
+ * and friends export their built dist/). A fresh clone has no dist/, so `pnpm
+ * dev` and `pnpm dev:smoke` run this first; turbo caches it, so repeat runs
+ * cost almost nothing. `<project>^...` = that project's dependencies, not itself.
+ */
+export function buildWorkspaceDependencies() {
+  const services = ["@asafarim/identity", "@asafarim/core-api", "@asafarim/dev-hub"];
+  const args = [
+    "exec",
+    "turbo",
+    "run",
+    "build",
+    "--output-logs=errors-only",
+    ...services.map((s) => `--filter=${s}^...`),
+  ];
+  console.log(bold("Building workspace dependencies (first run on a fresh clone only)…"));
+  const r = spawnSync("pnpm", args, { cwd: ROOT, stdio: "inherit", shell: process.platform === "win32" });
+  if (r.status !== 0) throw new Error("building the workspace dependencies failed");
+}
+
 /** The bootstrap's passwords: db.env plus core-api's own database password. */
 export const dbEnv = () => ({
   ...readEnvFile(path.join(DEV_DIR, "db.env")),
