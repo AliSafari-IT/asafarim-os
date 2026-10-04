@@ -27,6 +27,15 @@ export interface AuthConfigOptions {
   clientSecret?: string;
   /** Auth.js's own secret (AUTH_SECRET); signs and encrypts the session JWT. */
   secret?: string;
+  /**
+   * Keep the ID token inside the encrypted session cookie (as `token.idToken`), for an app that has
+   * to present it to core-api on the person's behalf: the Admin console. It is NOT put in the
+   * session object, which `/api/auth/session` hands to the browser; read it on the server with
+   * `getToken` from `next-auth/jwt`.
+   */
+  keepIdToken?: boolean;
+  /** Session lifetime in seconds (Auth.js default: 30 days). The console sets it to the ID token's lifetime. */
+  sessionMaxAgeSeconds?: number;
 }
 
 export function asafarimAuthConfig(opts: AuthConfigOptions) {
@@ -35,7 +44,10 @@ export function asafarimAuthConfig(opts: AuthConfigOptions) {
     secret: opts.secret,
     // Behind the OS gateway or on localhost the Host header is the app's own.
     trustHost: true,
-    session: { strategy: "jwt" as const },
+    session: {
+      strategy: "jwt" as const,
+      ...(opts.sessionMaxAgeSeconds ? { maxAge: opts.sessionMaxAgeSeconds } : {}),
+    },
     providers: [
       {
         id: "asafarim",
@@ -61,13 +73,17 @@ export function asafarimAuthConfig(opts: AuthConfigOptions) {
       jwt<T extends Record<string, unknown>>({
         token,
         profile,
+        account,
       }: {
         token: T;
         profile?: { sub?: string | null; roles?: unknown };
+        account?: { id_token?: string | null } | null;
       }): T {
         const t = token as Record<string, unknown>;
         if (profile?.sub) t.sub = String(profile.sub);
         if (Array.isArray(profile?.roles)) t.roles = profile.roles;
+        // Only at sign-in (that's when `account` exists), and only when asked for.
+        if (opts.keepIdToken && account?.id_token) t.idToken = account.id_token;
         return token;
       },
       session<S extends { user?: object | null }>({

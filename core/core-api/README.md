@@ -12,13 +12,19 @@ Node 24 (runs the TypeScript directly), Postgres (its own `core` database), no f
 node --env-file=../../.dev/core-api.env src/server.ts
 ```
 
-| Env                              | What                                                                                                  |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `CORE_API_DATABASE_URL`          | the `core` database as its owner role `core_api`; migrations in `migrations/` run at start            |
-| `CORE_API_PROVISIONER_URL`       | a role that may `CREATE ROLE` / `CREATE DATABASE`; used only to install apps                          |
-| `CORE_API_ADMIN_TOKEN`           | ≥ 32 characters; the admin endpoints' bearer token until the admin console's OIDC sign-in replaces it |
-| `PORT`                           | default `4020`                                                                                        |
-| `CORE_API_APP_DB_HOST` / `_PORT` | host and port put into an installed app's `DATABASE_URL` (default: the provisioner's)                 |
+| Env                                 | What                                                                                                            |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `CORE_API_DATABASE_URL`             | the `core` database as its owner role `core_api`; migrations in `migrations/` run at start                      |
+| `CORE_API_PROVISIONER_URL`          | a role that may `CREATE ROLE` / `CREATE DATABASE`; used only to install apps                                    |
+| `CORE_API_ADMIN_TOKEN`              | ≥ 32 characters: the **CLI's** bearer token (bootstrap, CI). Optional once switched off (below)                 |
+| `CORE_API_ADMIN_TOKEN_DISABLED`     | `true` switches that token off; people with `core.admin` can still use the admin API                            |
+| `CORE_API_IDENTITY_ISSUER`          | e.g. `https://id.asafarim.site`: how core-api verifies the Admin console's people. Required if the token is off |
+| `CORE_API_ADMIN_CLIENT_ID`          | the console's OIDC client id; ID tokens for any other client are refused (default `core-admin`)                 |
+| `CORE_API_TOKEN_SIGNING_JWK`        | an Ed25519 private JWK with a `kid`: signs the access tokens (P3.3a)                                            |
+| `CORE_API_ACCESS_TOKEN_TTL_SECONDS` | 5 to 300, default 60: the access token's lifetime                                                               |
+| `CORE_API_APP_URL_TEMPLATE`         | where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset → `https://<its primary domain>` |
+| `PORT`                              | default `4020`                                                                                                  |
+| `CORE_API_APP_DB_HOST` / `_PORT`    | host and port put into an installed app's `DATABASE_URL` (default: the provisioner's)                           |
 
 ## Install (admin)
 
@@ -174,6 +180,55 @@ The alternative, a core-api call per request, would cost a signed request and a 
 - Reaching an app directly (`http://localhost:4100`) **bypasses the gateway**; the app's own checks still apply. Only the gateway enforces `expose: false` and the lifecycle page.
 - Per-organisation grants and multiple signing keys at once (zero-downtime rotation) aren't built.
 
+## The admin API: the CLI and people (P3.3b)
+
+Two kinds of caller, both with `Authorization: Bearer …`:
+
+| Caller                                                        | Token                                                        | Audited as   |
+| ------------------------------------------------------------- | ------------------------------------------------------------ | ------------ |
+| **the CLI** (`pnpm platform …`, CI)                           | the static `CORE_API_ADMIN_TOKEN`                            | `admin`      |
+| **a person**, through the [Admin console](../admin/README.md) | their **identity ID token** (audience: the console's client) | `user:<sub>` |
+
+core-api verifies a person's token against identity's published keys (`CORE_API_IDENTITY_ISSUER`; ES256 only, issuer and audience checked; the JWKS is discovered from the issuer's metadata and must be on the issuer's own origin) and then checks that `sub` holds **`core.admin`** in its own catalog **on every request**. So revoking someone's `core.admin` stops them at once, even with a still-valid identity token; there is no staleness window here. A valid person without the role gets `403 forbidden`; a bad, expired or other-client token gets `401`.
+
+**`core.admin` is core-api's own catalog**: a migration creates the built-in app `core` with the permission and role `core.admin` (the id is reserved, so no app can claim it). `core` is always active and can't be installed, deactivated or removed. **Nothing self-grants it**: only an administrator grants it, and the first one is made by the CLI:
+
+```bash
+pnpm platform role grant core.admin dev-admin      # the bootstrap (pnpm dev does this for the seeded dev-admin)
+```
+
+An administrator can't revoke their **own** `core.admin` (`409 invalid_state`): ask another one.
+
+More endpoints, for the console (all read-only except where noted; every write is audited):
+
+| Endpoint                                           |                                                                                                                                                    |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /admin/v1/session`                            | who the caller is                                                                                                                                  |
+| `GET /admin/v1/apps`                               | every app with its state (`core` first, `system: true`)                                                                                            |
+| `GET /admin/v1/roles[?app=<id>]`                   | roles with their permissions, holders, and **`migrationNeeded`**: a role that still grants a permission the app no longer declares (ADR 0001 §3.4) |
+| `GET /admin/v1/roles/<role>/grants`                | who holds a role                                                                                                                                   |
+| `GET /admin/v1/subjects/<sub>/grants`              | what a person holds, across apps                                                                                                                   |
+| `GET /admin/v1/audit[?app=&actor=&limit=&before=]` | the audit log, newest first (`actor` is a case-insensitive part; `next` pages)                                                                     |
+
+### The CLI token: bootstrap, rotation, switching off
+
+The static token is for the **bootstrap and for automation**; people use the console.
+
+- **Bootstrap.** Set `CORE_API_ADMIN_TOKEN` (≥ 32 random characters) and `CORE_API_IDENTITY_ISSUER`, start core-api, then grant `core.admin` to the first administrator with the CLI (above). From then on they sign in to the console and grant it to others.
+- **Rotation.** Generate a new value, set `CORE_API_ADMIN_TOKEN`, restart core-api, and update wherever the CLI reads it (`.dev/core-api.env` locally). The old one stops working at the restart. There is one token, so rotation isn't zero-downtime: it only affects the CLI.
+- **Switching off.** Once an administrator exists, set `CORE_API_ADMIN_TOKEN_DISABLED=true` and remove the token: the CLI's admin commands then answer 401 and only people with `core.admin` can change anything. core-api **refuses to start** with the token off and no `CORE_API_IDENTITY_ISSUER` (nobody could call the admin API). For a break-glass, set the token again and restart; that and the grants it makes are audited as `admin`.
+
+### What it does not cover
+
+- A person's identity ID token lives one hour (identity's setting), so the console signs people out after an hour. Disabling an account in identity doesn't stop an already-issued ID token before it expires; removing `core.admin` does, at once.
+- Using an ID token as a bearer is only sound because the console is a server-side client that never hands it to the browser. If another client ever needs the admin API, give it its own audience.
+
+## The launcher (P3.3b)
+
+`GET /registry/v1/apps/<id>/launcher/<sub>`, **signed by the calling app** (the same scheme as the subject lookup, bound to `GET` and that exact path). It answers the apps the signed-in person can open: **active** apps where they hold **at least one role**, plus **public** ones (`ui.launcher.access: "public"`). An app with no `ui.launcher` block, and `core`, never appear. Each tile is the launcher registry entry (name, glyph, description, order) plus `href`.
+
+The tiles come from `launcherEntries` in `@asafarim/app-manifest`, **the same projection `platform sync` uses for `generated/platform/launcher-registry.json`**, applied to the installed manifests, so the generated file and what people see can't disagree. The SDK caches an answer for the access TTL: an app deactivated in the console leaves launchers within that time.
+
 ## Lifecycle (admin)
 
 `POST /admin/v1/apps/<id>/activate` (from `installed` or `inactive`) and `…/deactivate` (from `active`). Each writes an audit event, and **the gateway follows at once** (see below): activating makes the app's host proxy, deactivating makes it serve the "unavailable" page, with no restart and no reload. `GET /admin/v1/apps/<id>` shows the app, its permissions and its roles.
@@ -182,22 +237,23 @@ The alternative, a core-api call per request, would cost a signed request and a 
 
 Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"?: … }`:
 
-| Code                        | Status    | When                                                                              |
-| --------------------------- | --------- | --------------------------------------------------------------------------------- |
-| `unauthorized`              | 401       | admin endpoint without the right bearer token                                     |
-| `missing_signature`         | 401       | registration without the four `x-asafarim-*` headers, or malformed ones           |
-| `bad_signature`             | 401       | the signature doesn't verify (wrong key, tampered body, wrong key id)             |
-| `expired_signature`         | 401       | timestamp outside ±60 s                                                           |
-| `replayed_signature`        | 401       | the nonce was already used                                                        |
-| `unknown_app`               | 403       | no install record (or removed)                                                    |
-| `app_id_mismatch`           | 422       | `manifest.id` ≠ the id in the URL                                                 |
-| `invalid_manifest`          | 422       | fails manifest validation (`details`: path + message per problem)                 |
-| `namespace_violation`       | 422       | declares something outside `<id>.*`                                               |
-| `already_installed`         | 409       | install of an installed app                                                       |
-| `invalid_state`             | 409       | a lifecycle change not allowed from the current state                             |
-| `role_not_found`            | 404       | a grant or revoke names a role that doesn't exist (or is deprecated, for a grant) |
-| `app_inactive`              | 503       | an access token was asked for an app that isn't `active`                          |
-| `not_found` / `bad_request` | 404 / 400 | —                                                                                 |
+| Code                        | Status    | When                                                                                      |
+| --------------------------- | --------- | ----------------------------------------------------------------------------------------- |
+| `unauthorized`              | 401       | admin endpoint without a valid bearer token (the CLI token, or a person's identity token) |
+| `missing_signature`         | 401       | registration without the four `x-asafarim-*` headers, or malformed ones                   |
+| `bad_signature`             | 401       | the signature doesn't verify (wrong key, tampered body, wrong key id)                     |
+| `expired_signature`         | 401       | timestamp outside ±60 s                                                                   |
+| `replayed_signature`        | 401       | the nonce was already used                                                                |
+| `unknown_app`               | 403       | no install record (or removed)                                                            |
+| `app_id_mismatch`           | 422       | `manifest.id` ≠ the id in the URL                                                         |
+| `invalid_manifest`          | 422       | fails manifest validation (`details`: path + message per problem)                         |
+| `namespace_violation`       | 422       | declares something outside `<id>.*`                                                       |
+| `already_installed`         | 409       | install of an installed app                                                               |
+| `invalid_state`             | 409       | a lifecycle change not allowed from the current state                                     |
+| `role_not_found`            | 404       | a grant or revoke names a role that doesn't exist (or is deprecated, for a grant)         |
+| `app_inactive`              | 503       | an access token was asked for an app that isn't `active`                                  |
+| `forbidden`                 | 403       | signed in to the admin API, but without the role `core.admin`                             |
+| `not_found` / `bad_request` | 404 / 400 | —                                                                                         |
 
 ## Test
 

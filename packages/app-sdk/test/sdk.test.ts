@@ -387,3 +387,34 @@ describe("startApp", () => {
     expect(await p.registered).toMatchObject({ ok: true, state: "active" });
   });
 });
+
+describe("asafarimAuthConfig: the ID token and session lifetime (the Admin console)", () => {
+  const jwt = (cfg: ReturnType<typeof asafarimAuthConfig>, args: object) =>
+    (cfg.callbacks.jwt as (a: object) => Record<string, unknown>)({ token: {}, ...args });
+
+  it("doesn't keep the ID token by default", () => {
+    const cfg = asafarimAuthConfig({ issuer: "http://id", clientId: "notes" });
+    expect(jwt(cfg, { profile: { sub: "u1" }, account: { id_token: "a.b.c" } })).toEqual({ sub: "u1" });
+    expect(cfg.session).toEqual({ strategy: "jwt" });
+  });
+
+  it("keeps it in the token (never the session) when asked, and only at sign-in", () => {
+    const cfg = asafarimAuthConfig({
+      issuer: "http://id",
+      clientId: "core-admin",
+      keepIdToken: true,
+      sessionMaxAgeSeconds: 3600,
+    });
+    expect(jwt(cfg, { profile: { sub: "u1" }, account: { id_token: "a.b.c" } })).toEqual({
+      sub: "u1",
+      idToken: "a.b.c",
+    });
+    expect(jwt(cfg, {})).toEqual({}); // a later request has no `account`
+    const session = (cfg.callbacks.session as (a: object) => { user: Record<string, unknown> })({
+      session: { user: {} },
+      token: { sub: "u1", idToken: "a.b.c" },
+    });
+    expect(JSON.stringify(session)).not.toContain("a.b.c");
+    expect(cfg.session).toEqual({ strategy: "jwt", maxAge: 3600 });
+  });
+});

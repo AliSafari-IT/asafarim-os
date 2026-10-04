@@ -91,6 +91,7 @@ export function renderLauncherRegistry(entries: LauncherEntry[]): string {
 export const gatewayUpstreamVar = (appId: string) => `OS_APP_${appId.toUpperCase().replace(/-/g, "_")}_UPSTREAM`;
 export const GATEWAY_CORE_API_VAR = "OS_CORE_API_UPSTREAM";
 export const GATEWAY_IDENTITY_VAR = "OS_IDENTITY_UPSTREAM";
+export const GATEWAY_ADMIN_VAR = "OS_ADMIN_UPSTREAM";
 
 /**
  * A route glob (`*` one segment, `**` any depth) as Caddy `path` patterns. Caddy's `*` also crosses
@@ -133,6 +134,12 @@ export function renderGatewayCaddyfile(manifests: AppManifest[]): string {
     "",
     `http://api.localhost:${port} {`,
     `\treverse_proxy {$${GATEWAY_CORE_API_VAR}}`,
+    "}",
+    "",
+    "# The Admin console (core/admin) is a core service, not a manifest app: it signs people in itself and",
+    "# answers 403 to anyone who isn't an administrator, so there's no forward_auth in front of it.",
+    `http://core.localhost:${port} {`,
+    `\treverse_proxy {$${GATEWAY_ADMIN_VAR}}`,
     "}",
   ];
   for (const m of apps) {

@@ -29,6 +29,29 @@ const STATIC = "t".repeat(40);
 const ISSUER = "http://identity.test";
 const AUDIENCE = "core-admin";
 
+/** The shapes of the admin API's answers that these tests read. */
+interface RoleRow {
+  key: string;
+  holders: number;
+  migrationNeeded: boolean;
+  permissions: { key: string; deprecated: boolean }[];
+  deprecatedPermissions: string[];
+}
+interface AppRow {
+  id: string;
+  name: string;
+  state: string;
+  system: boolean;
+  permissions: number;
+  roles: number;
+}
+interface EventRow {
+  id: number;
+  actor: string;
+  action: string;
+  appId: string | null;
+}
+
 function manifest(
   id: string,
   over: { launcher?: "public" | "authenticated"; database?: "none" | "postgres"; order?: number } = {},
@@ -159,7 +182,7 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
   /** A person, through the Admin console: their identity token. */
   const as = async (sub: string, method: string, path: string, body?: unknown) =>
     call(method, path, `Bearer ${await idToken(sub)}`, body);
-  const json = async (r: Response) => (await r.json()) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const json = async <T = Record<string, unknown>>(r: Response) => (await r.json()) as T;
   const auditOf = async (where: string, params: unknown[]) =>
     (await pool.query(`SELECT actor, action, app_id, detail FROM audit_events WHERE ${where} ORDER BY id`, params))
       .rows;
@@ -265,9 +288,10 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
     const self = await as("dev-admin", "DELETE", "/admin/v1/roles/core.admin/grants/dev-admin");
     expect(self.status).toBe(409);
     expect((await json(self)).error).toBe("invalid_state");
-    expect(
-      (await json(await cli("GET", "/admin/v1/roles/core.admin/grants"))).grants.map((g: any) => g.subject),
-    ).toContain("dev-admin"); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const holders = await json<{ grants: { subject: string }[] }>(
+      await cli("GET", "/admin/v1/roles/core.admin/grants"),
+    );
+    expect(holders.grants.map((g) => g.subject)).toContain("dev-admin");
 
     const token = await idToken("dev-owner");
     expect((await call("GET", "/admin/v1/session", `Bearer ${token}`)).status).toBe(200);
@@ -277,7 +301,7 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
   });
 
   it("lists: apps (core first, flagged built in, with states), roles with holders, a person's grants, a role's holders", async () => {
-    const apps = (await json(await as("dev-admin", "GET", "/admin/v1/apps"))).apps as Record<string, any>[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const apps = (await json<{ apps: AppRow[] }>(await as("dev-admin", "GET", "/admin/v1/apps"))).apps;
     expect(apps[0]).toMatchObject({ id: "core", system: true, state: "active" });
     expect(apps.find((a) => a.id === NOTES)).toMatchObject({
       name: NOTES.toUpperCase(),
@@ -288,18 +312,18 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
     });
     expect(apps.find((a) => a.id === DOCS)).toMatchObject({ state: "installed" });
 
-    const roles = (await json(await as("dev-admin", "GET", `/admin/v1/roles?app=${NOTES}`))).roles as Record<
-      string,
-      any
-    >[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const roles = (await json<{ roles: RoleRow[] }>(await as("dev-admin", "GET", `/admin/v1/roles?app=${NOTES}`)))
+      .roles;
     expect(roles.map((r) => r.key)).toEqual([`${NOTES}.editor`, `${NOTES}.viewer`]);
     expect(roles.find((r) => r.key === `${NOTES}.viewer`)).toMatchObject({ holders: 1, migrationNeeded: false });
-    expect(roles.find((r) => r.key === `${NOTES}.editor`)!.permissions.map((p: any) => p.key)).toEqual([
+    expect(roles.find((r) => r.key === `${NOTES}.editor`)!.permissions.map((p) => p.key)).toEqual([
       `${NOTES}.notes.read`,
       `${NOTES}.notes.write`,
-    ]); // eslint-disable-line @typescript-eslint/no-explicit-any
+    ]);
 
-    const grants = await json(await as("dev-admin", "GET", "/admin/v1/subjects/dev-member/grants"));
+    const grants = await json<{ grants: unknown[] }>(
+      await as("dev-admin", "GET", "/admin/v1/subjects/dev-member/grants"),
+    );
     expect(grants.grants).toMatchObject([{ role: `${NOTES}.viewer`, appId: NOTES, granted_by: "user:dev-admin" }]);
     expect((await as("dev-admin", "GET", "/admin/v1/subjects/a%2Fb/grants")).status).toBe(400);
     expect((await as("dev-admin", "GET", "/admin/v1/roles?app=Bad%20Id")).status).toBe(400);
@@ -307,38 +331,48 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
 
   it("a role that still grants a deprecated permission is flagged: migration needed", async () => {
     await pool.query("UPDATE permissions SET deprecated_at = now() WHERE key = $1", [`${NOTES}.notes.write`]);
-    const roles = (await json(await as("dev-admin", "GET", `/admin/v1/roles?app=${NOTES}`))).roles as Record<
-      string,
-      any
-    >[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const roles = (await json<{ roles: RoleRow[] }>(await as("dev-admin", "GET", `/admin/v1/roles?app=${NOTES}`)))
+      .roles;
     const editor = roles.find((r) => r.key === `${NOTES}.editor`)!;
     expect(editor).toMatchObject({ migrationNeeded: true, deprecatedPermissions: [`${NOTES}.notes.write`] });
-    expect(editor.permissions.find((p: any) => p.key === `${NOTES}.notes.write`)).toMatchObject({ deprecated: true }); // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(editor.permissions.find((p) => p.key === `${NOTES}.notes.write`)).toMatchObject({ deprecated: true });
     expect(roles.find((r) => r.key === `${NOTES}.viewer`)!.migrationNeeded).toBe(false);
     await pool.query("UPDATE permissions SET deprecated_at = NULL WHERE key = $1", [`${NOTES}.notes.write`]);
   });
 
   it("the audit log: newest first, filtered by app and by actor, paged, with validated parameters", async () => {
-    const all = await json(await as("dev-admin", "GET", "/admin/v1/audit?limit=200"));
-    const ids = all.events.map((e: any) => e.id); // eslint-disable-line @typescript-eslint/no-explicit-any
-    expect([...ids].sort((a: number, b: number) => b - a)).toEqual(ids);
+    const all = await json<{ events: EventRow[]; next: number | null }>(
+      await as("dev-admin", "GET", "/admin/v1/audit?limit=200"),
+    );
+    const ids = all.events.map((e) => e.id);
+    expect([...ids].sort((a, b) => b - a)).toEqual(ids);
 
-    const byApp = await json(await as("dev-admin", "GET", `/admin/v1/audit?app=${NOTES}&limit=200`));
-    expect(byApp.events.every((e: any) => e.appId === NOTES)).toBe(true); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const byApp = await json<{ events: EventRow[]; next: number | null }>(
+      await as("dev-admin", "GET", `/admin/v1/audit?app=${NOTES}&limit=200`),
+    );
+    expect(byApp.events.every((e) => e.appId === NOTES)).toBe(true);
     expect(byApp.events.length).toBeGreaterThanOrEqual(6);
 
-    const byActor = await json(await as("dev-admin", "GET", "/admin/v1/audit?actor=DEV-ADMIN&limit=200"));
+    const byActor = await json<{ events: EventRow[]; next: number | null }>(
+      await as("dev-admin", "GET", "/admin/v1/audit?actor=DEV-ADMIN&limit=200"),
+    );
     expect(byActor.events.length).toBeGreaterThan(0);
-    expect(byActor.events.every((e: any) => e.actor === "user:dev-admin")).toBe(true); // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(byActor.events.every((e) => e.actor === "user:dev-admin")).toBe(true);
 
-    const page1 = await json(await as("dev-admin", "GET", `/admin/v1/audit?app=${NOTES}&limit=2`));
+    const page1 = await json<{ events: EventRow[]; next: number | null }>(
+      await as("dev-admin", "GET", `/admin/v1/audit?app=${NOTES}&limit=2`),
+    );
     expect(page1.events).toHaveLength(2);
-    expect(page1.next).toBe(page1.events[1].id);
-    const page2 = await json(await as("dev-admin", "GET", `/admin/v1/audit?app=${NOTES}&limit=2&before=${page1.next}`));
-    expect(page2.events[0].id).toBeLessThan(page1.events[1].id);
+    expect(page1.next).toBe(page1.events[1]!.id);
+    const page2 = await json<{ events: EventRow[]; next: number | null }>(
+      await as("dev-admin", "GET", `/admin/v1/audit?app=${NOTES}&limit=2&before=${page1.next}`),
+    );
+    expect(page2.events[0]!.id).toBeLessThan(page1.events[1]!.id);
 
     // a % or _ in the actor filter matches literally, not as a wildcard
-    expect((await json(await as("dev-admin", "GET", "/admin/v1/audit?actor=%25"))).events).toEqual([]);
+    expect(
+      (await json<{ events: EventRow[] }>(await as("dev-admin", "GET", "/admin/v1/audit?actor=%25"))).events,
+    ).toEqual([]);
     for (const bad of ["limit=abc", "before=-1", `actor=${"x".repeat(200)}`]) {
       expect((await as("dev-admin", "GET", `/admin/v1/audit?${bad}`)).status, bad).toBe(400);
     }

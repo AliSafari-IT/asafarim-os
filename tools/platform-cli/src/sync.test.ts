@@ -158,6 +158,11 @@ describe("the dev gateway (P3.3a)", () => {
     const text = renderGatewayCaddyfile([]);
     expect(text).toContain("http://id.localhost:8080 {\n\treverse_proxy {$OS_IDENTITY_UPSTREAM}\n}");
     expect(text).toContain("http://api.localhost:8080 {\n\treverse_proxy {$OS_CORE_API_UPSTREAM}\n}");
+    // the Admin console: a core service on its own host, proxied straight through (it enforces access itself)
+    expect(text).toContain("http://core.localhost:8080 {\n\treverse_proxy {$OS_ADMIN_UPSTREAM}\n}");
+    expect(text.slice(text.indexOf("http://core.localhost:8080"), text.indexOf("http://:8080"))).not.toContain(
+      "forward_auth",
+    );
     expect(text).toContain(
       'http://:8080 {\n\thandle /gateway-health {\n\t\trespond "ok" 200\n\t}\n\thandle {\n\t\trespond "Not found" 404\n\t}\n}',
     );

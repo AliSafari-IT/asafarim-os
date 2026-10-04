@@ -126,29 +126,25 @@ export async function appCommand(
 
   if (action !== "install") return { ok: true, lines: [`${id}: ${String(out.previous)} → ${String(out.state)}`] };
 
-  const db = out.database as { name: string; url: string };
-  const secrets = [
-    `ASAFARIM_APP_ID=${id}`,
-    `ASAFARIM_REGISTRY_CREDENTIAL=${String(out.credential)}`,
-    `DATABASE_URL=${db.url}`,
-  ];
+  // An app whose manifest says `database: none` is installed without one.
+  const db = out.database as { name: string; url: string } | null;
+  const secrets = [`ASAFARIM_APP_ID=${id}`, `ASAFARIM_REGISTRY_CREDENTIAL=${String(out.credential)}`];
+  if (db) secrets.push(`DATABASE_URL=${db.url}`);
+  const what = db ? `database ${db.name}` : "no database";
+  const written = db ? "Credential and DATABASE_URL" : "Credential";
   if (envTarget) {
     writeFileSync(envTarget, `${secrets.join("\n")}\n`, { mode: 0o600 });
     chmodSync(envTarget, 0o600); // writeFile's mode doesn't change an existing file
     return {
       ok: true,
       lines: [
-        `${id} installed (database ${db.name}). Credential and DATABASE_URL written to ${path.relative(root, envTarget)} (shown once; keep it secret).`,
+        `${id} installed (${what}). ${written} written to ${path.relative(root, envTarget)} (shown once; keep it secret).`,
       ],
     };
   }
   return {
     ok: true,
-    lines: [
-      `${id} installed (database ${db.name}). These are shown ONCE; store them in the app's env now:`,
-      "",
-      ...secrets,
-    ],
+    lines: [`${id} installed (${what}). These are shown ONCE; store them in the app's env now:`, "", ...secrets],
   };
 }
 

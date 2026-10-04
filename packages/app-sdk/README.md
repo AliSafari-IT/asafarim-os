@@ -64,6 +64,20 @@ export const GET = forwardedOrigin(handlers.GET);
 export const POST = forwardedOrigin(handlers.POST);
 ```
 
+## The launcher (P3.3b)
+
+The apps the signed-in person can open: **active** apps where they hold a role, plus public ones. core-api decides and supplies the tiles (names, glyphs, order: the same projection as the generated launcher registry); the SDK only asks.
+
+```tsx
+import { Launcher } from "@asafarim/app-sdk/react";
+
+const apps = await platform.access.launcher(subject).catch(() => []); // never break the page
+<Launcher apps={apps} current="notes" label="Your apps" />;
+```
+
+- `access.launcher(sub)`: a signed `GET`, cached for the access TTL, **fails closed** (`AccessUnavailableError`; a stale or malformed answer is never served).
+- `<Launcher>` (from `@asafarim/app-sdk/react`; React is an optional peer): a labelled `<nav>` of links, `aria-current` on the current app, a visible focus style, light and dark, the host's tokens (`--card`, `--ink`, `--line`, `--accent`) when present, nothing for an empty list, and **http(s) links only**.
+
 ## Typed config (`createConfig`)
 
 Reads the manifest's `config` block: each key has a type and a default. `getString`, `getInt`, `getNumber`, `getBoolean` check the declared type; an undeclared key, the wrong type or a malformed override throws (at startup for overrides).
@@ -81,6 +95,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth(
 - Authorization code + **PKCE (S256)** + state + nonce, scopes `openid email profile roles`; a public client unless you pass `clientSecret`.
 - The session is a JWT in a **host-only `__Host-` cookie**: `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`, so another app or subdomain can't read it. (Browsers accept `Secure` cookies on `http://localhost`, so it works in development.)
 - `session.user.id` is the identity `sub`: the subject permissions are resolved for.
+- `keepIdToken: true` keeps the ID token inside the encrypted session cookie (`token.idToken`) for an app that must present it on the person's behalf: the Admin console. It is **not** in the session object (that goes to the browser); read it on the server with `getToken`. `sessionMaxAgeSeconds` caps the session (the console uses the ID token's hour).
 
 The app's OIDC client must exist in identity's client config (in development `pnpm dev:keys` writes one per app in `apps/*`).
 
