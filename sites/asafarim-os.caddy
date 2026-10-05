@@ -1,0 +1,26 @@
+# asafarim-os stack's site file on the shared edge (asafarim-platform #770; asafarim-os#45).
+# Published by deploy/vps-deploy.sh through the edge's edge-deploy-site.sh, which validates the
+# WHOLE edge config before swapping this file in. Nobody edits another stack's file.
+#
+# Snippet names share one namespace across every stack's file: keep the asafarim_os_ prefix
+# (there are no snippets here yet).
+#
+# Only id.asafarim.site lives here. The asafarim.site landing page stays in
+# asafarim-com.caddy until the OS stack takes it over.
+
+# The OpenID Connect provider. Reached on the shared edge_net under the unique alias
+# os-identity (never the bare service name: upstream names on edge_net are shared).
+id.asafarim.site {
+  header {
+    # HTTPS only (Caddy sends no HSTS by default). Same value as the asafarim.site block.
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options nosniff
+    # An authentication host: never leak its URLs (interaction ids) in a Referer. This is
+    # the value identity sets itself on the hand-off page, so the two never disagree.
+    Referrer-Policy no-referrer
+  }
+  # No Content-Security-Policy here on purpose: identity sets a strict one per page (the
+  # hand-off page's CSP forbids scripts and forms), and a second one from the edge would
+  # intersect with it and could break that page.
+  reverse_proxy os-identity:3000
+}

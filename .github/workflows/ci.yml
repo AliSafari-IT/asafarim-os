@@ -70,6 +70,38 @@ jobs:
       - name: Generated platform files are up to date
         run: pnpm platform:sync:check
 
+  # The production deploy files (#45). No secrets and no Docker daemon of ours: Compose renders the
+  # file, shellcheck reads the scripts, and the edge's pinned Caddy validates the site files. The
+  # tests of these files run with the others, in `checks` (pnpm test:scripts).
+  deploy-files:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: The production compose file renders
+        run: |
+          # An empty stand-in: Compose refuses a missing env_file, and the real one is secret and git-ignored.
+          : > .env.identity
+          IMAGE_TAG=ci docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+
+      - name: shellcheck the deploy scripts
+        run: shellcheck -S warning deploy/vps-deploy.sh deploy/lib/env-check.sh deploy/test-fixtures/run-env-check.sh
+
+      # The same pinned image the edge's own edge-deploy-site.sh validates with.
+      - name: The site files validate in the edge's Caddy
+        run: |
+          for site in sites/asafarim-os.caddy deploy/rollback.caddy; do
+            dir="$(mktemp -d)"
+            mkdir "$dir/sites"
+            echo 'import sites/*.caddy' > "$dir/Caddyfile"
+            cp "$site" "$dir/sites/asafarim-os.caddy"
+            docker run --rm -v "$dir:/etc/caddy:ro" -w /etc/caddy caddy:2.11.4 \
+              caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          done
+
   # OS-D1 (#26): the local dev environment end to end: compose up, the
   # per-service bootstrap twice (idempotent), identity and core-api /readyz
   # green, a full sign-in through the dev login stub to an ID token; then

@@ -1,5 +1,6 @@
-# Compose snippet for the identity service (P2.3 wires it into the host's
-# stack; this file is a reference, nothing deploys it yet).
+# Compose snippet for the identity service: a reference. The production file that is
+# actually deployed is deploy/compose.prod.yml (#45), with its own Redis and the
+# identity_db network; keep the two in step.
 services:
   identity:
     image: ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG:-local}

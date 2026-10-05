@@ -21,7 +21,7 @@
     "platform:sync:check": "pnpm platform sync --check",
     "platform:boundaries": "pnpm platform boundaries",
     "check:brand": "node scripts/check-brand-spelling.mjs && node --test scripts/check-brand-spelling.test.mjs",
-    "test:scripts": "node --test scripts/dev/infra.test.mjs scripts/check-env-safety.test.mjs",
+    "test:scripts": "node --test scripts/dev/infra.test.mjs scripts/check-env-safety.test.mjs deploy/compose.prod.test.mjs deploy/vps-deploy.test.mjs",
     "dev": "node scripts/dev/dev.mjs",
     "dev:keys": "node scripts/dev/keys.mjs",
     "dev:reset": "node scripts/dev/reset.mjs",

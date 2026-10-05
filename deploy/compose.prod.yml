@@ -1,0 +1,85 @@
+# ASafariM OS production stack: the identity service (id.asafarim.site) and its own Redis.
+# asafarim-os#45, part of #22 (P2.3). The owner deploys it with deploy/vps-deploy.sh; nothing else
+# runs this file. See deploy/README.md for the deploy, the rollback and the network rules.
+#
+#   IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config
+#
+# Paths here are relative to THIS file (deploy/), not to the repository root.
+name: asafarim-os
+
+services:
+  identity:
+    # Published by .github/workflows/identity-image.yml (#44). IMAGE_TAG is the full commit sha of the
+    # build to run; there is no default, so a deploy without one fails instead of pulling a wrong tag.
+    image: ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG:?set IMAGE_TAG to the identity image's commit sha}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 128m
+    cpus: 0.5
+    # Decrypted from core/identity/.env.production.age by deploy/vps-deploy.sh, at the repository root.
+    env_file:
+      - ../.env.identity
+    environment:
+      IDENTITY_ISSUER: https://id.asafarim.site
+      IDENTITY_HUB_CONTINUE_URL: https://hub.asafarim.com/oidc/continue
+      IDENTITY_CLIENTS_FILE: /etc/identity/clients.json
+      # Logical DB 3 is reserved for the identity service (oidc: keys only). This stack's OWN Redis:
+      # it never uses asafarim-com's (stacks share nothing but the edge).
+      IDENTITY_REDIS_URL: redis://os-redis:6379/3
+    volumes:
+      # The client config is the owner's, put there at deploy time (the dark launch's test client).
+      # It is not in git: see deploy/README.md. vps-deploy.sh refuses to start without it, because
+      # Docker would otherwise create a directory at that path.
+      - ./identity/clients.json:/etc/identity/clients.json:ro
+    networks:
+      edge_net:
+        # edge_net is shared by every stack, and upstream names on it must be unique (infra/edge/README.md,
+        # rule 4 in asafarim-platform). The site file proxies to this alias.
+        aliases:
+          - os-identity
+      # The platform's Postgres, read-only (identity_ro), under the alias platform-postgres.
+      identity_db:
+      # This stack's private network: identity and its Redis only.
+      os_net:
+
+  os-redis:
+    # Pinned to a minor line, not a floating tag. Identity's sessions and grants live here, so a
+    # restart keeps them: append-only persistence on a named volume, and no eviction (a full Redis
+    # must fail loudly, not silently drop someone's session).
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.25
+    volumes:
+      - os_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # os_net ONLY. Redis never joins edge_net, and publishes no port.
+    networks:
+      - os_net
+
+networks:
+  # The shared edge's network, created with the edge. identity joins it to be reachable by the edge's Caddy.
+  edge_net:
+    external: true
+    name: edge_net
+  # The private link to the platform's Postgres. Created by asafarim-platform's vps-deploy.sh
+  # (ensure_identity_db_net); only that stack's postgres and this stack's identity join it.
+  identity_db:
+    external: true
+    name: identity_db
+  os_net:
+
+volumes:
+  os_redis_data:
