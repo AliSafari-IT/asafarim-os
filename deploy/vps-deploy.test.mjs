@@ -28,7 +28,14 @@ function check(envText, exampleText) {
     writeFileSync(path.join(dir, "example"), exampleText);
     const run = spawnSync(
       "bash",
-      ["-c", `source "${root}/deploy/lib/env-check.sh" && require_env_vars "${dir}/env" "${dir}/example"`],
+      [
+        "-c",
+        'source "$1" && require_env_vars "$2" "$3"',
+        "bash",
+        path.join(root, "deploy/lib/env-check.sh"),
+        path.join(dir, "env"),
+        path.join(dir, "example"),
+      ],
       { encoding: "utf8" },
     );
     return { status: run.status, output: `${run.stdout}${run.stderr}` };
@@ -100,7 +107,14 @@ test("the real example lists the five required variables, and a filled file pass
     writeFileSync(path.join(dir, "env"), filled);
     const run = spawnSync(
       "bash",
-      ["-c", `source "${root}/deploy/lib/env-check.sh" && require_env_vars "${dir}/env" "${realExample}"`],
+      [
+        "-c",
+        'source "$1" && require_env_vars "$2" "$3"',
+        "bash",
+        path.join(root, "deploy/lib/env-check.sh"),
+        path.join(dir, "env"),
+        realExample,
+      ],
       { encoding: "utf8" },
     );
     assert.equal(run.status, 0, run.stderr);
