@@ -15,6 +15,10 @@ coverage/
 # Local dev keys, secrets and generated config (pnpm dev:keys)
 .dev/
 
+# Production deploy (#45): the owner's client config and the deploy lock, never committed
+deploy/identity/
+.vps-deploy.lock
+
 # Logs and OS files
 *.log
 .DS_Store

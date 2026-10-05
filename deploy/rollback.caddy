@@ -1,0 +1,3 @@
+# asafarim-os: no sites. Publishing THIS file as the asafarim-os stack's site file removes
+# id.asafarim.site from the shared edge: the rollback in deploy/README.md. The edge validates it
+# like any site file, keeps the previous one as sites/asafarim-os.caddy.prev, reloads and verifies.
