@@ -38,8 +38,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: identity-image-${{ github.ref }}
-  # A newer PR push replaces the stale PR build. A publish on main is never cancelled half-way.
+  # A newer push to a PR replaces that PR's stale build. On main every commit gets its OWN group: a group keeps
+  # only one pending run and cancels the others, so a shared group would drop a commit's publish and that commit
+  # would never get its identity-<sha> tag.
+  group: identity-image-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -53,6 +55,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      # Publish only from main, and never for a pull request.
+      PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -62,35 +67,74 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: env.PUBLISH == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Decide what to publish. (a) The commit tag is immutable: a re-run must never replace it, because the
+      # floating base image may have moved and the same sha would then name a different image. (b) identity-main
+      # only moves FORWARD: it is published only when this commit is still the head of main, so a re-run of an
+      # older commit cannot point it back. If a check itself fails we publish the new commit tag and leave
+      # identity-main alone.
+      - name: Plan the tags
+        id: plan
+        if: env.PUBLISH == 'true'
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha_tag="${IMAGE}:identity-${SHA}"
+          if docker buildx imagetools inspect "$sha_tag" >/dev/null 2>&1; then
+            echo "::notice::${sha_tag} is already published: leaving it unchanged."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tags="$sha_tag"
+          head="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | cut -f1 || true)"
+          if [[ "$head" == "$SHA" ]]; then
+            tags+=$'\n'"${IMAGE}:identity-main"
+          else
+            echo "::notice::${SHA} is not the head of main (head: ${head:-unknown}): not moving identity-main."
+          fi
+          {
+            echo "publish=true"
+            echo "tags<<TAGS"
+            echo "$tags"
+            echo "TAGS"
+          } >> "$GITHUB_OUTPUT"
+
+      # On a pull request the plan step is skipped: the image is built (to catch Dockerfile errors) and not pushed.
       - name: Build (and push, on main)
         id: build
+        if: steps.plan.outputs.publish != 'false'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: core/identity/Dockerfile
-          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-          provenance: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-          tags: |
-            ${{ env.IMAGE }}:identity-${{ github.sha }}
-            ${{ env.IMAGE }}:identity-main
+          push: ${{ steps.plan.outputs.publish == 'true' }}
+          provenance: ${{ steps.plan.outputs.publish == 'true' }}
+          tags: ${{ steps.plan.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Summary
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: env.PUBLISH == 'true'
         env:
+          PLANNED: ${{ steps.plan.outputs.publish }}
+          TAGS: ${{ steps.plan.outputs.tags }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          if [[ "$PLANNED" == "false" ]]; then
+            echo "\`${IMAGE}:identity-${GITHUB_SHA}\` was already published: left unchanged." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           {
-            echo "Published \`${IMAGE}:identity-${GITHUB_SHA}\` (also \`identity-main\`)."
+            echo "Published:"
+            while IFS= read -r tag; do echo "- \`${tag}\`"; done <<< "$TAGS"
             echo "Digest: \`${DIGEST}\`"
             echo "On the VPS: \`docker pull ${IMAGE}:identity-${GITHUB_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
