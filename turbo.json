@@ -16,7 +16,18 @@
     "test": {
       "dependsOn": ["^build"],
       "outputs": [],
-      "passThroughEnv": ["IDENTITY_TEST_REDIS_URL", "CI", "CORE_API_TEST_ADMIN_URL", "CORE_API_TEST_REQUIRED"]
+      "passThroughEnv": [
+        "IDENTITY_TEST_REDIS_URL",
+        "CI",
+        "CORE_API_TEST_ADMIN_URL",
+        "CORE_API_TEST_NATS_URL",
+        "CORE_API_TEST_REQUIRED",
+        "EVENTS_TEST_ADMIN_URL",
+        "EVENTS_TEST_NATS_URL",
+        "EVENTS_TEST_NATS_STOP",
+        "EVENTS_TEST_NATS_START",
+        "EVENTS_TEST_REQUIRED"
+      ]
     },
     "dev": {
       "cache": false,

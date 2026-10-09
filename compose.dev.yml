@@ -2,7 +2,7 @@
 # `pnpm dev`; never used in production. Every port binds to 127.0.0.1 only.
 #
 #   pnpm dev          start it, bootstrap the databases, run the OS
-#   pnpm dev:reset    drop the dev volumes (asks first)
+#   pnpm dev:reset    drop the dev volumes (asks first): Postgres, Redis and the NATS store
 name: asafarim-os-dev
 
 services:
@@ -59,13 +59,26 @@ services:
       timeout: 3s
       retries: 30
 
-  # P4 (event bus): NATS with JetStream, added when the core needs it.
-  # nats:
-  #   image: nats:2-alpine
-  #   command: ["-js"]
-  #   ports:
-  #     - "127.0.0.1:4222:4222"
+  # P4.1: the event bus. NATS with JetStream, its file store on a dev volume. Apps publish through
+  # their outbox relay; core-api creates each publishing app's stream (APP_<ID>) at install.
+  # 8222 is NATS's monitoring port, used only by the healthcheck inside the container.
+  nats:
+    image: nats:2-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "127.0.0.1:54222:4222"
+    volumes:
+      - nats_data:/data
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      # /healthz?js-enabled-only=true answers 200 once JetStream is up.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
 volumes:
   postgres_data:
   redis_data:
+  nats_data:

@@ -10,6 +10,7 @@
  *   .dev/clients.json   one public dev OIDC client ("dev-app") and one per app
  *   .dev/gateway.env    where the dev gateway (Caddy, compose.dev.yml) finds each service
  *   .dev/admin.env      the Admin console's own settings (the seeded users it can search)
+ *   .dev/app.env        shared by the apps under apps/* (core-api, identity, the bus)
  */
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -35,6 +36,8 @@ export const DEV = {
   apps: { notes: 4100 },
   postgres: { host: "127.0.0.1", port: 55440, adminUser: "postgres", adminPassword: "postgres-dev-only" },
   redisUrl: "redis://127.0.0.1:56380/3",
+  // P4.1: the event bus (NATS JetStream, compose.dev.yml).
+  natsUrl: "nats://127.0.0.1:54222",
 };
 export const ISSUER = `http://localhost:${DEV.identityPort}`;
 
@@ -81,6 +84,8 @@ function coreApiAdminLines() {
     line("CORE_API_IDENTITY_ISSUER", ISSUER),
     line("CORE_API_ADMIN_CLIENT_ID", DEV.adminClientId),
     line("CORE_API_APP_URL_TEMPLATE", `http://{id}.localhost:${DEV.gatewayPort}`),
+    // P4.1: install creates the stream of an app that publishes events.
+    line("CORE_API_NATS_URL", DEV.natsUrl),
   ];
 }
 
@@ -94,12 +99,7 @@ function tokenKeyLine() {
  * settings): add each missing one and keep everything else. Returns true when it added anything.
  */
 function ensureCoreApiSettings(file) {
-  const text = readFileSync(file, "utf8");
-  const wanted = [tokenKeyLine(), ...coreApiAdminLines()];
-  const missing = wanted.filter((l) => !new RegExp(`^${l.split("=")[0]}=`, "m").test(text));
-  if (missing.length === 0) return false;
-  writeFileSync(file, `${text.endsWith("\n") ? text : `${text}\n`}${missing.join("\n")}\n`);
-  return true;
+  return addMissingLines(file, [tokenKeyLine(), ...coreApiAdminLines()]);
 }
 
 /** mkdir/writeFile modes don't change an EXISTING path: tighten .dev/ and every file in it. */
@@ -187,10 +187,28 @@ function writeAdminEnv() {
   );
 }
 
+/** Settings added to .dev/app.env after it was first written: an older file gains them on the next run. */
+const appEnvAdditions = () => [
+  // P4.1: the outbox relay publishes to the dev bus.
+  line("ASAFARIM_NATS_URL", DEV.natsUrl),
+];
+
+/** Append each `KEY=…` line whose key the file doesn't set yet. Returns true when it added anything. */
+export function addMissingLines(file, wanted) {
+  const text = readFileSync(file, "utf8");
+  const missing = wanted.filter((l) => !new RegExp(`^${l.split("=")[0]}=`, "m").test(text));
+  if (missing.length === 0) return false;
+  writeFileSync(file, `${text.endsWith("\n") ? text : `${text}\n`}${missing.join("\n")}\n`);
+  return true;
+}
+
 /** Env shared by every app under apps/* in development (.dev/app.env). */
 function ensureAppEnv(force) {
   const file = path.join(DEV_DIR, "app.env");
-  if (!force && existsSync(file)) return;
+  if (!force && existsSync(file)) {
+    addMissingLines(file, appEnvAdditions());
+    return;
+  }
   writeFileSync(
     file,
     [
@@ -201,6 +219,7 @@ function ensureAppEnv(force) {
       line("AUTH_TRUST_HOST", "true"),
       // Permission changes show up within a second instead of the production 60 s.
       line("ASAFARIM_ACCESS_TTL_MS", "1000"),
+      ...appEnvAdditions(),
       "",
     ].join("\n"),
   );
