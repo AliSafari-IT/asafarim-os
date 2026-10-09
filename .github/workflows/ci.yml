@@ -141,8 +141,7 @@ jobs:
         env:
           EVENTS_TEST_ADMIN_URL: postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres
           EVENTS_TEST_NATS_URL: nats://127.0.0.1:54222
-          EVENTS_TEST_NATS_STOP: docker compose -f ${{ github.workspace }}/compose.dev.yml stop nats
-          EVENTS_TEST_NATS_START: docker compose -f ${{ github.workspace }}/compose.dev.yml start nats
+          EVENTS_TEST_NATS_CONTROL: compose
           EVENTS_TEST_REQUIRED: "1"
         run: pnpm turbo run test --concurrency=1 --filter=@asafarim/events --filter=@asafarim/notes
 

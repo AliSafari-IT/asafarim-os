@@ -24,8 +24,7 @@
         "CORE_API_TEST_REQUIRED",
         "EVENTS_TEST_ADMIN_URL",
         "EVENTS_TEST_NATS_URL",
-        "EVENTS_TEST_NATS_STOP",
-        "EVENTS_TEST_NATS_START",
+        "EVENTS_TEST_NATS_CONTROL",
         "EVENTS_TEST_REQUIRED"
       ]
     },

@@ -10,13 +10,14 @@
  * way core-api's install creates it (`createStreamAdmin().ensureAppStream`).
  *
  * Needs EVENTS_TEST_ADMIN_URL (a superuser URL on a DEV Postgres) and EVENTS_TEST_NATS_URL. The
- * bus-down test also needs EVENTS_TEST_NATS_STOP and EVENTS_TEST_NATS_START: shell commands that
- * stop and start that NATS server (CI: `docker compose -f compose.dev.yml stop nats` / `start nats`).
+ * bus-down test also needs EVENTS_TEST_NATS_CONTROL=compose: it then stops and starts the dev
+ * stack's NATS container (`docker compose -f compose.dev.yml stop|start nats`, fixed arguments, no shell).
  * Skipped without them, except when EVENTS_TEST_REQUIRED is set (CI), where it fails instead.
  * It uses a throwaway database (dropped afterwards); the APP_NOTES stream is the dev one, so it
  * only reads messages published after it started.
  */
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
 import { createStreamAdmin, streamName, type CloudEvent, type StreamAdmin } from "@asafarim/app-sdk/events";
 import { jetstream, jetstreamManager, type JetStreamManager } from "@nats-io/jetstream";
 import type { NatsConnection } from "@nats-io/nats-core";
@@ -28,12 +29,13 @@ import type * as NotesDb from "../lib/db";
 
 const ADMIN_URL = process.env.EVENTS_TEST_ADMIN_URL;
 const NATS_URL = process.env.EVENTS_TEST_NATS_URL;
-const NATS_STOP = process.env.EVENTS_TEST_NATS_STOP;
-const NATS_START = process.env.EVENTS_TEST_NATS_START;
-if (process.env.EVENTS_TEST_REQUIRED && (!ADMIN_URL || !NATS_URL || !NATS_STOP || !NATS_START)) {
-  throw new Error(
-    "EVENTS_TEST_ADMIN_URL, EVENTS_TEST_NATS_URL, EVENTS_TEST_NATS_STOP and EVENTS_TEST_NATS_START must be set",
-  );
+/** The bus-down test controls the dev stack's NATS container; nothing else is accepted. */
+const CONTROL_NATS = process.env.EVENTS_TEST_NATS_CONTROL === "compose";
+const COMPOSE_FILE = path.resolve(import.meta.dirname, "../../../compose.dev.yml");
+const natsContainer = (action: "stop" | "start") =>
+  execFileSync("docker", ["compose", "-f", COMPOSE_FILE, action, "nats"], { stdio: "inherit" });
+if (process.env.EVENTS_TEST_REQUIRED && (!ADMIN_URL || !NATS_URL || !CONTROL_NATS)) {
+  throw new Error("EVENTS_TEST_ADMIN_URL and EVENTS_TEST_NATS_URL must be set, and EVENTS_TEST_NATS_CONTROL=compose");
 }
 
 const STREAM = streamName("notes");
@@ -130,11 +132,11 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)(
       expect(row.sent_at).not.toBeNull();
     });
 
-    it.skipIf(!NATS_STOP || !NATS_START)(
+    it.skipIf(!CONTROL_NATS)(
       "bus down: NATS stopped, 3 notes created (rows wait in the outbox), NATS started → all 3 delivered once",
       async () => {
         const from = (await lastSeq()) + 1;
-        execSync(NATS_STOP!, { stdio: "inherit" });
+        natsContainer("stop");
         try {
           const created = [];
           for (const t of ["one", "two", "three"])
@@ -144,7 +146,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)(
           await new Promise((r) => setTimeout(r, 1500));
           expect(await pending()).toBe(3);
         } finally {
-          execSync(NATS_START!, { stdio: "inherit" });
+          natsContainer("start");
         }
 
         await expect.poll(pending, { timeout: 60_000, interval: 500 }).toBe(0);
