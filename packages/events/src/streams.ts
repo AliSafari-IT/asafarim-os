@@ -113,16 +113,18 @@ export async function ensureDeadLetterStream(jsm: JetStreamManager): Promise<Ens
 /** How long the bus waits for an ack before it redelivers (the handler crashed or hung). */
 export const DEFAULT_ACK_WAIT_MS = 30_000;
 
+/**
+ * The bus's own delivery cap is always -1 (unlimited) and isn't an option: the subscriber counts
+ * attempts and dead-letters after ITS `maxDeliver` failures (that is the configurable limit). A
+ * finite cap on the bus would stop delivering before the dead letter is stored, and the event
+ * would sit in the stream, neither handled nor dead-lettered.
+ */
+export const CONSUMER_MAX_DELIVER = -1;
+
 export interface ConsumerOptions {
   /** Default 30 s. */
   ackWaitMs?: number;
-  /**
-   * The bus's own delivery cap. Default -1 (unlimited): the subscriber counts attempts itself and
-   * dead-letters after its `maxDeliver` failures, so a dead letter that couldn't be published yet
-   * is still redelivered (and dead-lettered then) rather than silently dropped by the bus.
-   */
-  maxDeliver?: number;
-  /** Redelivery delays the bus applies when an ack times out (JetStream `backoff`). */
+  /** Redelivery delays the bus applies when an ack times out (JetStream `backoff`). Unset = none. */
   backoffMs?: number[];
 }
 
@@ -142,7 +144,7 @@ export async function ensureConsumer(
   const stream = streamName(publisherOf(type));
   const name = consumerName(consumerApp, type);
   const ackWait = nanos(opts.ackWaitMs ?? DEFAULT_ACK_WAIT_MS);
-  const maxDeliver = opts.maxDeliver ?? -1;
+  const maxDeliver = CONSUMER_MAX_DELIVER;
   const backoff = opts.backoffMs?.map((ms) => nanos(ms));
   try {
     await jsm.streams.info(stream);
@@ -163,7 +165,7 @@ export async function ensureConsumer(
       filter_subject: type,
       ack_wait: ackWait,
       max_deliver: maxDeliver,
-      ...(backoff ? { backoff } : {}),
+      backoff: backoff ?? [], // an explicit empty list clears a backoff that is no longer configured
     });
     return "updated";
   } catch (err) {

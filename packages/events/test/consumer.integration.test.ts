@@ -132,6 +132,21 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("subscribe: inbox, ack after commit, de
     expect((await jsm.streams.info(DEADLETTER_STREAM)).config.subjects).toEqual(["deadletter.>"]);
   }, 30_000);
 
+  it("ensureConsumer brings a drifted consumer back in line: a removed backoff is cleared, a finite max_deliver goes back to -1", async () => {
+    const app = `drift${run}`;
+    expect(await ensureConsumer(jsm, app, TYPE, { backoffMs: [1000, 5000] })).toBe("created");
+    expect((await jsm.consumers.info(streamName(PUB), consumerName(app, TYPE))).config.backoff).toHaveLength(2);
+    // The backoff option is gone: the update must clear it, not keep it (and then say "updated" for ever).
+    expect(await ensureConsumer(jsm, app, TYPE)).toBe("updated");
+    expect((await jsm.consumers.info(streamName(PUB), consumerName(app, TYPE))).config.backoff ?? []).toEqual([]);
+    expect(await ensureConsumer(jsm, app, TYPE)).toBe("exists");
+    // Someone capped deliveries on the bus by hand: core-api puts it back to unlimited (the subscriber dead-letters).
+    await jsm.consumers.update(streamName(PUB), consumerName(app, TYPE), { max_deliver: 3 });
+    expect(await ensureConsumer(jsm, app, TYPE)).toBe("updated");
+    expect((await jsm.consumers.info(streamName(PUB), consumerName(app, TYPE))).config.max_deliver).toBe(-1);
+    expect(await ensureConsumer(jsm, app, TYPE)).toBe("exists");
+  }, 30_000);
+
   it("an event is handled exactly once, with the envelope as published; the inbox has its row", async () => {
     const app = `once${run}`;
     const seen: CloudEvent[] = [];
