@@ -22,6 +22,14 @@ import {
   ed25519Scheme,
   type CredentialScheme,
 } from "./credentials.ts";
+import {
+  WAITING_FOR_PUBLISHER,
+  consumerOutcome,
+  planEventPlumbing,
+  waitingForPublisher,
+  type EventPlumbingPlan,
+  type InstalledApp,
+} from "./event-plumbing.ts";
 import { launcherFor, type LauncherApp } from "./launcher.ts";
 import { appDatabaseNames, ensureDatabase, ensureRole } from "./provision.ts";
 
@@ -48,9 +56,11 @@ export interface RegistryDeps {
   onLifecycleChange?: () => void;
   /**
    * The event bus (P4.1): install and registration (an upgrade) create the JetStream stream of an
-   * app that declares `events.publishes` (APP_<ID> on <id>.>), and a durable consumer
-   * `<id>.<type>` for every `events.subscribes` type whose publisher's stream exists. Unset = no
-   * bus configured: recorded as `no_bus`, nothing is created, and the app's events wait in its outbox.
+   * app that declares `events.publishes` (APP_<ID> on <id>.>), a durable consumer `<id>.<type>` for
+   * every `events.subscribes` type whose publisher's stream exists (`waiting_for_publisher`
+   * otherwise), the consumers of already installed subscribers of what a new publisher declares,
+   * and delete the consumers of subscriptions an upgrade dropped (see event-plumbing.ts). Unset =
+   * no bus configured: recorded as `no_bus`, nothing is created, and the app's events wait in its outbox.
    */
   bus?: EventBus;
 }
@@ -60,38 +70,90 @@ export interface EventBus {
   ensureAppStream(appId: string): Promise<{ stream: string; result: string }>;
   /** `result` is "no_stream" when the publisher's stream doesn't exist (yet): nothing is created. */
   ensureConsumer(consumerApp: string, type: string): Promise<{ consumer: string; result: string }>;
+  /** `result` is "absent" when the consumer (or its stream) is already gone: not an error. */
+  deleteConsumer(consumerApp: string, type: string): Promise<{ consumer: string; result: string }>;
 }
 
 type StreamOutcome = { stream: string; result: string } | "none" | "no_bus";
-type ConsumersOutcome = Record<string, string> | "none" | "no_bus";
+type PerType = Record<string, string> | "none" | "no_bus";
+type PerApp = Record<string, Record<string, string>> | "none" | "no_bus";
+
+/** What an install or a registration did on the bus, per type. In the response and the audit entry. */
+export interface EventsOutcome {
+  stream: StreamOutcome;
+  /** The app's own subscriptions: created / updated / exists / waiting_for_publisher. */
+  consumers: PerType;
+  /** Subscriptions an upgrade dropped: their consumers deleted (or already absent). */
+  removedConsumers: PerType;
+  /** Installed subscribers of what this app publishes, by app, then type. */
+  dependentConsumers: PerApp;
+  /** Subscriptions whose publisher isn't installed: nothing is blocked, the consumer comes with the publisher. */
+  warnings: { type: string; code: typeof WAITING_FOR_PUBLISHER }[];
+}
+
+/** Serialises event plumbing across concurrent installs/registrations (a publisher and its subscriber at once). */
+const EVENT_PLUMBING_LOCK = 4_049_100_053;
 
 /**
- * The app's stream (if it publishes) and its durable consumers (one per subscribed type). Runs
- * before anything is recorded: if the bus fails, nothing is written and the caller can retry.
+ * Run the plan on the bus. Called inside the install/registration transaction, under the event
+ * plumbing lock, BEFORE anything is written: a bus failure throws `bus_unavailable`, the
+ * transaction rolls back, nothing is recorded, and the caller can retry (every step is idempotent).
  */
-async function ensureEventPlumbing(
+async function runEventPlumbing(
   bus: EventBus | undefined,
-  m: AppManifest,
-): Promise<{ stream: StreamOutcome; consumers: ConsumersOutcome }> {
-  const publishes = (m.events?.publishes?.length ?? 0) > 0;
-  const subscribes = [...new Set((m.events?.subscribes ?? []).map((s) => s.type))];
-  let stream: StreamOutcome = "none";
-  let consumers: ConsumersOutcome = "none";
-  if (!publishes && subscribes.length === 0) return { stream, consumers };
-  if (!bus) return { stream: publishes ? "no_bus" : "none", consumers: subscribes.length ? "no_bus" : "none" };
-  try {
-    if (publishes) stream = await bus.ensureAppStream(m.id);
-    if (subscribes.length) {
-      consumers = {};
-      for (const type of subscribes) consumers[type] = (await bus.ensureConsumer(m.id, type)).result;
+  appId: string,
+  plan: EventPlumbingPlan,
+  waiting: string[],
+): Promise<EventsOutcome> {
+  const out: EventsOutcome = {
+    stream: plan.stream ? "no_bus" : "none",
+    consumers: plan.own.length ? "no_bus" : "none",
+    removedConsumers: plan.remove.length ? "no_bus" : "none",
+    dependentConsumers: plan.dependents.length ? "no_bus" : "none",
+    warnings: [],
+  };
+  const warn = new Set(waiting);
+  if (bus) {
+    try {
+      if (plan.stream) out.stream = await bus.ensureAppStream(appId);
+      if (plan.own.length) {
+        const consumers: Record<string, string> = {};
+        for (const type of plan.own) {
+          consumers[type] = consumerOutcome((await bus.ensureConsumer(appId, type)).result);
+          if (consumers[type] === WAITING_FOR_PUBLISHER) warn.add(type);
+        }
+        out.consumers = consumers;
+      }
+      if (plan.dependents.length) {
+        const deps: Record<string, Record<string, string>> = {};
+        for (const { app, type } of plan.dependents)
+          (deps[app] ??= {})[type] = consumerOutcome((await bus.ensureConsumer(app, type)).result);
+        out.dependentConsumers = deps;
+      }
+      if (plan.remove.length) {
+        const removed: Record<string, string> = {};
+        for (const type of plan.remove) removed[type] = (await bus.deleteConsumer(appId, type)).result;
+        out.removedConsumers = removed;
+      }
+    } catch (err) {
+      throw new ApiError(
+        "bus_unavailable",
+        `the event plumbing for ${appId} couldn't be set up: ${(err as Error).message}`,
+      );
     }
-  } catch (err) {
-    throw new ApiError(
-      "bus_unavailable",
-      `the event plumbing for ${m.id} couldn't be set up: ${(err as Error).message}`,
-    );
   }
-  return { stream, consumers };
+  out.warnings = [...warn].sort().map((type) => ({ type, code: WAITING_FOR_PUBLISHER }));
+  return out;
+}
+
+/** Take the plumbing lock and read the other installed apps (their current manifests). */
+async function lockAndReadInstalled(c: pg.PoolClient, appId: string): Promise<InstalledApp[]> {
+  await c.query("SELECT pg_advisory_xact_lock($1)", [EVENT_PLUMBING_LOCK]);
+  return (
+    await c.query<InstalledApp>("SELECT id, manifest FROM apps WHERE state <> 'removed' AND id <> $1 ORDER BY id", [
+      appId,
+    ])
+  ).rows;
 }
 
 /** Parse and validate a manifest; refuse an id mismatch and anything outside the namespace. */
@@ -181,12 +243,15 @@ export function createRegistry(deps: RegistryDeps) {
       }
     }
 
-    // The app's stream and consumers, before anything is recorded: if the bus can't create them,
-    // nothing is installed and the admin can simply retry (the database and role steps are idempotent).
-    const { stream, consumers } = await ensureEventPlumbing(deps.bus, manifest);
-
     const credential = scheme.issue(appId);
-    await inTx(async (c) => {
+    const events = await inTx(async (c) => {
+      // The app's stream and consumers (and those of subscribers installed before it), before
+      // anything is recorded: if the bus can't create them, the transaction rolls back, nothing is
+      // installed and the admin can simply retry (the database and role steps are idempotent).
+      const installed = await lockAndReadInstalled(c, appId);
+      const plan = planEventPlumbing({ appId, manifest, installed });
+      const events = await runEventPlumbing(deps.bus, appId, plan, waitingForPublisher(appId, manifest, installed));
+
       await c.query(
         `INSERT INTO apps (id, version, manifest, state, database_name) VALUES ($1, $2, $3, 'installed', $4)
          ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, manifest = EXCLUDED.manifest, state = 'installed',
@@ -206,9 +271,9 @@ export function createRegistry(deps: RegistryDeps) {
         role: roleResult,
         db: dbResult,
         keyId: credential.keyId,
-        stream,
-        consumers,
+        ...events,
       });
+      return events;
     });
 
     deps.onLifecycleChange?.();
@@ -221,6 +286,7 @@ export function createRegistry(deps: RegistryDeps) {
       database: wantsDatabase
         ? { name: database, role, url: `postgres://${role}:${dbPassword}@${h.host}:${h.port}/${database}` }
         : null,
+      events,
     };
   }
 
@@ -291,11 +357,17 @@ export function createRegistry(deps: RegistryDeps) {
     }
     const m = checkManifest(appId, input);
 
-    // An upgrade can start publishing or subscribing: the same idempotent stream and consumer
-    // steps as install, before anything is written (a bus failure → 503, the app registers again).
-    const { stream, consumers } = await ensureEventPlumbing(deps.bus, m);
-
     return inTx(async (c) => {
+      // An upgrade can start publishing or subscribing, or drop a subscription: the same idempotent
+      // stream and consumer steps as install, plus deleting dropped consumers, before anything is
+      // written (a bus failure → 503, the transaction rolls back, the app registers again).
+      const installed = await lockAndReadInstalled(c, appId);
+      const previous = (
+        await c.query<{ manifest: AppManifest | null }>("SELECT manifest FROM apps WHERE id = $1 FOR UPDATE", [appId])
+      ).rows[0]?.manifest;
+      const plan = planEventPlumbing({ appId, manifest: m, previous, installed });
+      const events = await runEventPlumbing(deps.bus, appId, plan, waitingForPublisher(appId, m, installed));
+
       await c.query(
         "UPDATE apps SET version = $2, manifest = $3, registered_at = now(), updated_at = now() WHERE id = $1",
         [appId, m.version, m],
@@ -372,11 +444,10 @@ export function createRegistry(deps: RegistryDeps) {
         version: m.version,
         permissions: perms,
         roles,
-        stream,
-        consumers,
+        ...events,
       });
       // Registration never changes the state and never writes role_grants.
-      return { appId, version: m.version, state, permissions: perms, roles };
+      return { appId, version: m.version, state, permissions: perms, roles, events };
     });
   }
 

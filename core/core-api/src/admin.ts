@@ -5,6 +5,7 @@
  */
 import type pg from "pg";
 import { CORE_ADMIN_ROLE } from "./admin-auth.ts";
+import { waitingForPublisher, type EventsManifest } from "./event-plumbing.ts";
 
 export interface AdminApp {
   id: string;
@@ -17,6 +18,8 @@ export interface AdminApp {
   registered_at: string | null;
   permissions: number;
   roles: number;
+  /** Event types the app subscribes to whose publisher isn't installed (a warning; nothing is blocked). */
+  waitingForPublisher: string[];
 }
 
 export interface AdminRole {
@@ -53,12 +56,13 @@ export function createAdminQueries(pool: pg.Pool) {
 
   async function listApps(): Promise<AdminApp[]> {
     const r = await pool.query(
-      `SELECT a.id, a.manifest->>'name' AS name, a.version, a.state, a.installed_at, a.registered_at,
+      `SELECT a.id, a.manifest->>'name' AS name, a.manifest->'events' AS events, a.version, a.state, a.installed_at, a.registered_at,
               (SELECT count(*) FROM permissions p WHERE p.app_id = a.id AND p.deprecated_at IS NULL) AS permissions,
               (SELECT count(*) FROM roles r WHERE r.app_id = a.id AND r.deprecated_at IS NULL) AS roles
          FROM apps a WHERE a.state <> 'removed' ORDER BY (a.id = 'core') DESC, a.id`,
     );
-    return r.rows.map((x) => ({
+    const installed = r.rows.map((x) => ({ id: x.id as string, manifest: { events: x.events } as EventsManifest }));
+    return r.rows.map((x, i) => ({
       id: x.id,
       name: x.name ?? x.id,
       version: x.version,
@@ -68,6 +72,7 @@ export function createAdminQueries(pool: pg.Pool) {
       registered_at: x.registered_at ? new Date(x.registered_at).toISOString() : null,
       permissions: Number(x.permissions),
       roles: Number(x.roles),
+      waitingForPublisher: waitingForPublisher(x.id, installed[i]!.manifest, installed),
     }));
   }
 
