@@ -112,6 +112,9 @@ importers:
       '@asafarim/envage':
         specifier: ^0.4.2
         version: 0.4.2
+      '@nats-io/nkeys':
+        specifier: ^2.0.3
+        version: 2.0.3
       pg:
         specifier: ^8.23.1
         version: 8.23.1
@@ -249,6 +252,15 @@ importers:
       '@asafarim/registry-protocol':
         specifier: workspace:*
         version: link:../../packages/registry-protocol
+      '@nats-io/nats-core':
+        specifier: ^3.4.0
+        version: 3.4.0
+      '@nats-io/nkeys':
+        specifier: ^2.0.3
+        version: 2.0.3
+      '@nats-io/transport-node':
+        specifier: ^3.4.0
+        version: 3.4.0
       jose:
         specifier: ^6.2.12
         version: 6.2.12
@@ -260,9 +272,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/config
       '@nats-io/jetstream':
-        specifier: ^3.4.0
-        version: 3.4.0
-      '@nats-io/transport-node':
         specifier: ^3.4.0
         version: 3.4.0
       '@types/node':

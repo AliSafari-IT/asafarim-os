@@ -19,6 +19,7 @@
 import { jetstream, type JetStreamClient, type JsMsg } from "@nats-io/jetstream";
 import type { NatsConnection } from "@nats-io/nats-core";
 import { connect } from "@nats-io/transport-node";
+import { busAuthenticator, type BusAuth } from "./bus-auth.ts";
 import { EVENT_TYPE, sourceFor, type CloudEvent } from "./envelope.ts";
 import { INBOX_TABLE } from "./inbox-sql.ts";
 import type { Queryable } from "./publisher.ts";
@@ -292,6 +293,8 @@ export interface SubscribeOptions {
   pool: RelayPool | (() => Promise<RelayPool>);
   /** NATS server URL(s); the subscriber connects (and reconnects) itself. */
   servers?: string | string[];
+  /** How the subscriber signs in to a bus that checks identities; see RelayOptions.auth. */
+  auth?: BusAuth;
   /** Or hand it a JetStream client (tests); the subscriber then never closes it. */
   jetstream?: () => Promise<JetStreamClient>;
   /** Handler failures before the event is dead-lettered (default 5). */
@@ -333,6 +336,7 @@ export function subscribe<T = unknown>(type: string, handler: EventHandler<T>, o
     if (opts.jetstream) return opts.jetstream();
     nc ??= connect({
       servers: opts.servers!,
+      ...(opts.auth ? { authenticator: busAuthenticator(opts.auth) } : {}),
       name: `${opts.appId}-subscriber`,
       timeout: 3000,
       maxReconnectAttempts: -1,

@@ -39,6 +39,12 @@ import {
   type Subscription,
 } from "../src/index.ts";
 
+/** The bus checks every client (P4.1 PR 4): the tests sign in as core-api's own `core` user (NATS_CORE_PASSWORD, from .dev/nats.env). */
+const NATS_AUTH = process.env.NATS_CORE_PASSWORD ? { user: "core", pass: process.env.NATS_CORE_PASSWORD } : {};
+const BUS_AUTH = process.env.NATS_CORE_PASSWORD
+  ? { auth: { user: "core", pass: () => process.env.NATS_CORE_PASSWORD! } }
+  : {};
+
 const ADMIN_URL = process.env.EVENTS_TEST_ADMIN_URL;
 const NATS_URL = process.env.EVENTS_TEST_NATS_URL;
 if (process.env.EVENTS_TEST_REQUIRED && (!ADMIN_URL || !NATS_URL)) {
@@ -78,6 +84,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("subscribe: inbox, ack after commit, de
       appId: app,
       pool,
       servers: NATS_URL,
+      ...BUS_AUTH,
       maxDeliver: extra.maxDeliver ?? 50,
       backoff: { initialMs: 50, maxMs: 200 },
       log: quiet,
@@ -103,10 +110,10 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("subscribe: inbox, ack after commit, de
     await pool.query(INBOX_SQL);
     await pool.query(INBOX_SQL); // idempotent
     await pool.query("CREATE TABLE effects (event_id text NOT NULL, consumer text NOT NULL)");
-    nc = await connect({ servers: NATS_URL! });
+    nc = await connect({ servers: NATS_URL!, ...NATS_AUTH });
     js = jetstream(nc);
     jsm = await jetstreamManager(nc);
-    busAdmin = createStreamAdmin({ servers: NATS_URL! });
+    busAdmin = createStreamAdmin({ servers: NATS_URL!, ...NATS_AUTH });
   });
 
   // Every consumer app here shares one test database (one inbox): only one subscriber runs at a time.

@@ -39,6 +39,7 @@ import {
 import { ApiError } from "./errors.ts";
 import { migrate } from "./migrate.ts";
 import { createAppSnapshot, createGateway, type GatewayApp } from "./gateway.ts";
+import { startAuthCallout } from "./nats-auth.ts";
 import { createRegistry, type Registry } from "./registry.ts";
 import { jwksOf, verificationKeyOf, type SigningKey } from "@asafarim/registry-protocol";
 
@@ -320,6 +321,43 @@ export function parseTokenKey(raw: string): SigningKey {
   return { kid, privateJwk: privateJwk as SigningKey["privateJwk"] };
 }
 
+export interface BusConfig {
+  servers: string[];
+  /** core-api's own (privileged) identity on the bus. Both or neither. */
+  user?: string;
+  pass?: string;
+  /** Serve the NATS auth callout (P4.1 PR 4): the issuer key the NATS config trusts, and the account apps are put in. */
+  callout?: { issuerSeed: string; account: string };
+}
+
+/**
+ * CORE_API_NATS_URL (comma-separated), CORE_API_NATS_USER + CORE_API_NATS_PASSWORD (core-api's own
+ * bus identity) and CORE_API_NATS_ISSUER_SEED (+ CORE_API_NATS_ACCOUNT, default "OS"): with the seed,
+ * core-api answers the bus's auth callout and every app connects as itself. Undefined without a URL.
+ */
+export function parseBusConfig(env: Record<string, string | undefined>): BusConfig | undefined {
+  const url = env.CORE_API_NATS_URL;
+  if (!url) return undefined;
+  const servers = url
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const user = env.CORE_API_NATS_USER || undefined;
+  const pass = env.CORE_API_NATS_PASSWORD || undefined;
+  if (Boolean(user) !== Boolean(pass)) {
+    throw new Error("CORE_API_NATS_USER and CORE_API_NATS_PASSWORD must be set together");
+  }
+  const issuerSeed = env.CORE_API_NATS_ISSUER_SEED || undefined;
+  if (issuerSeed && !/^SA[A-Z2-7]{50,}$/.test(issuerSeed)) {
+    throw new Error("CORE_API_NATS_ISSUER_SEED must be an account nkey seed (SA…)");
+  }
+  if (issuerSeed && !user) {
+    throw new Error("CORE_API_NATS_ISSUER_SEED needs core-api's own bus identity (CORE_API_NATS_USER / _PASSWORD)");
+  }
+  const account = env.CORE_API_NATS_ACCOUNT || "OS";
+  return { servers, user, pass, ...(issuerSeed ? { callout: { issuerSeed, account } } : {}) };
+}
+
 function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`${name} is not set`);
@@ -358,8 +396,25 @@ async function main() {
   const snapshot = createAppSnapshot(() => loadGatewayApps(pool));
   // P4.1: with a bus configured, installing (or re-registering) an app creates its JetStream stream
   // when it publishes, and its durable consumers when it subscribes.
-  const natsUrl = process.env.CORE_API_NATS_URL;
-  const bus = natsUrl ? createStreamAdmin({ servers: natsUrl.split(","), name: "core-api" }) : undefined;
+  const busConfig = parseBusConfig(process.env);
+  const bus = busConfig
+    ? createStreamAdmin({ servers: busConfig.servers, user: busConfig.user, pass: busConfig.pass, name: "core-api" })
+    : undefined;
+  // P4.1 PR 4: apps sign in to the bus as themselves; core-api answers the bus's auth callout from the
+  // registry. It keeps trying while the bus is down, so core-api can start first.
+  const callout =
+    busConfig?.callout && busConfig.user && busConfig.pass
+      ? startAuthCallout({
+          servers: busConfig.servers,
+          user: busConfig.user,
+          pass: busConfig.pass,
+          issuerSeed: busConfig.callout.issuerSeed,
+          account: busConfig.callout.account,
+          pool,
+          log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
+        })
+      : undefined;
+  void callout;
   // The shared DEADLETTER stream: ensured at boot, and again before any consumer is created, so a
   // bus that is down now doesn't stop core-api from starting.
   void bus?.ensureDeadLetterStream().then(

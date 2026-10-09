@@ -4,7 +4,7 @@
 //   node --test scripts/dev/compose.dev.test.mjs        (needs the docker CLI; no daemon, no network)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -13,13 +13,14 @@ import { DEV } from "./keys.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** Render compose.dev.yml in a throwaway copy, with an EMPTY .dev/gateway.env (Compose refuses a missing env_file). */
+/** Render compose.dev.yml in a throwaway copy, with an EMPTY .dev/gateway.env and a stand-in .dev/nats.env (Compose refuses a missing env_file). */
 function render() {
   const dir = mkdtempSync(path.join(tmpdir(), "compose-dev-"));
   try {
     cpSync(path.join(root, "compose.dev.yml"), path.join(dir, "compose.dev.yml"));
     mkdirSync(path.join(dir, ".dev"));
     writeFileSync(path.join(dir, ".dev", "gateway.env"), "");
+    writeFileSync(path.join(dir, ".dev", "nats.env"), "NATS_CORE_PASSWORD=pw\nNATS_AUTH_ISSUER=issuer\n");
     const run = spawnSync("docker", ["compose", "-f", "compose.dev.yml", "config", "--format", "json"], {
       cwd: dir,
       encoding: "utf8",
@@ -64,4 +65,33 @@ test("NATS has a healthcheck that waits for JetStream (pnpm dev's `up --wait` re
   const cmd = nats.healthcheck?.test?.join(" ") ?? "";
   assert.match(cmd, /healthz\?js-enabled-only=true/);
   assert.ok(nats.command.includes("-m"), "the monitoring endpoint the healthcheck reads is enabled");
+});
+
+test("NATS checks every client: it runs nats.conf (the auth callout) and reads its two values from .dev/nats.env", () => {
+  const c = nats.command;
+  const at = c.indexOf("-c");
+  assert.ok(at >= 0, "a config file is passed (-c)");
+  const conf = c[at + 1];
+  assert.match(conf, /nats\.conf$/);
+  const dir = path.posix.dirname(conf);
+  const mount = nats.volumes.find((v) => v.target === dir);
+  assert.ok(mount && mount.type === "bind" && mount.read_only, `${dir} is a read-only bind mount`);
+  assert.ok(
+    mount.source.endsWith(path.join("scripts", "dev", "nats")),
+    `the mount is scripts/dev/nats (a directory, not a file)`,
+  );
+  assert.deepEqual(
+    { password: nats.environment?.NATS_CORE_PASSWORD, issuer: nats.environment?.NATS_AUTH_ISSUER },
+    { password: "pw", issuer: "issuer" },
+    "the container gets both values from .dev/nats.env",
+  );
+});
+
+test("nats.conf has no secrets: both values come from the environment, and anonymous clients go to the callout", () => {
+  const text = readFileSync(path.join(root, "scripts", "dev", "nats", "nats.conf"), "utf8");
+  assert.match(text, /password:\s*\$NATS_CORE_PASSWORD/);
+  assert.match(text, /issuer:\s*\$NATS_AUTH_ISSUER/);
+  assert.match(text, /auth_users:\s*\[\s*core\s*\]/);
+  assert.ok(!/no_auth_user/.test(text), "no anonymous user");
+  assert.ok(!/\b[AU][A-Z2-7]{55}\b/.test(text), "no nkey in the file");
 });

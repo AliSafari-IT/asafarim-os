@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { adminTokenMatches, appDatabasePort, decodeSubject, parseTokenKey, parseTokenTtl } from "../src/server.ts";
+import {
+  adminTokenMatches,
+  appDatabasePort,
+  decodeSubject,
+  parseBusConfig,
+  parseTokenKey,
+  parseTokenTtl,
+} from "../src/server.ts";
 
 const TOKEN = "t".repeat(40);
 
@@ -67,5 +74,46 @@ describe("the access token settings", () => {
     expect(() => parseTokenKey(JSON.stringify({ ...good, crv: "P-256" }))).toThrow(/Ed25519 private JWK/);
     expect(() => parseTokenKey(JSON.stringify({ ...good, d: undefined }))).toThrow(/Ed25519 private JWK/);
     expect(() => parseTokenKey(JSON.stringify({ ...good, kid: undefined }))).toThrow(/kid/);
+  });
+});
+
+describe("the bus settings (P4.1 PR 4)", () => {
+  const SEED = `SA${"A".repeat(54)}`;
+
+  it("is off without CORE_API_NATS_URL", () => {
+    expect(parseBusConfig({})).toBeUndefined();
+  });
+
+  it("an open bus: servers only", () => {
+    expect(parseBusConfig({ CORE_API_NATS_URL: "nats://a:4222, nats://b:4222" })).toEqual({
+      servers: ["nats://a:4222", "nats://b:4222"],
+      user: undefined,
+      pass: undefined,
+    });
+  });
+
+  it("with the issuer seed, core-api serves the callout for the account (default OS)", () => {
+    const env = {
+      CORE_API_NATS_URL: "nats://a:4222",
+      CORE_API_NATS_USER: "core",
+      CORE_API_NATS_PASSWORD: "pw",
+      CORE_API_NATS_ISSUER_SEED: SEED,
+    };
+    expect(parseBusConfig(env)?.callout).toEqual({ issuerSeed: SEED, account: "OS" });
+    expect(parseBusConfig({ ...env, CORE_API_NATS_ACCOUNT: "APPS" })?.callout?.account).toBe("APPS");
+  });
+
+  it("refuses half a login, a seed that isn't an account seed, and a callout without core-api's own login", () => {
+    const base = { CORE_API_NATS_URL: "nats://a:4222" };
+    expect(() => parseBusConfig({ ...base, CORE_API_NATS_USER: "core" })).toThrow(/set together/);
+    expect(() =>
+      parseBusConfig({
+        ...base,
+        CORE_API_NATS_USER: "core",
+        CORE_API_NATS_PASSWORD: "pw",
+        CORE_API_NATS_ISSUER_SEED: "SUAAA",
+      }),
+    ).toThrow(/account nkey seed/);
+    expect(() => parseBusConfig({ ...base, CORE_API_NATS_ISSUER_SEED: SEED })).toThrow(/own bus identity/);
   });
 });

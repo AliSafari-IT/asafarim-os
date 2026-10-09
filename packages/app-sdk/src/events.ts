@@ -7,10 +7,30 @@
  *   startAppRelay({ appId, pool });                                    // on boot: outbox → JetStream
  *   subscribe(type, async (event, tx) => {…}, { appId, pool, servers }); // exactly once per event id (inbox)
  */
-import { startRelay, type Relay, type RelayOptions } from "@asafarim/events";
+import { startRelay, type BusAuth, type Relay, type RelayOptions } from "@asafarim/events";
+import { signNatsConnect } from "@asafarim/registry-protocol";
 import { consoleLogger } from "./register.ts";
 
 export * from "@asafarim/events";
+
+/**
+ * The app's identity on the bus (P4.1 PR 4): user = the app id, password = a fresh signed assertion
+ * from ASAFARIM_REGISTRY_CREDENTIAL on every connect and reconnect. Pass it as `auth` to
+ * `subscribe()` (and `startRelay()`). Undefined without a credential (a bus that checks nobody).
+ */
+export function busAuthFromEnv(
+  appId: string,
+  env: Record<string, string | undefined> = process.env,
+): BusAuth | undefined {
+  // A plain login for a bus that doesn't use the callout (the integration tests sign in as `core`).
+  if (env.ASAFARIM_NATS_USER && env.ASAFARIM_NATS_PASSWORD) {
+    const pass = env.ASAFARIM_NATS_PASSWORD;
+    return { user: env.ASAFARIM_NATS_USER, pass: () => pass };
+  }
+  const credential = env.ASAFARIM_REGISTRY_CREDENTIAL;
+  if (!credential) return undefined;
+  return { user: appId, pass: () => signNatsConnect({ appId, credential }) };
+}
 
 export interface StartAppRelayOptions extends Omit<RelayOptions, "servers" | "jetstream"> {
   /** Defaults to process.env: ASAFARIM_NATS_URL (comma-separated servers). */
@@ -35,5 +55,6 @@ export function startAppRelay(opts: StartAppRelayOptions): Relay | undefined {
     });
     return undefined;
   }
-  return startRelay({ ...opts, servers, log });
+  const auth = opts.auth ?? busAuthFromEnv(opts.appId, env);
+  return startRelay({ ...opts, servers, log, ...(auth ? { auth } : {}) });
 }

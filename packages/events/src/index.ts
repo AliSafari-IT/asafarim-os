@@ -8,6 +8,7 @@
  *   await createStreamAdmin({ servers }).ensureConsumer(appId, type);  // core-api: durable <app>.<type> on the publisher's stream
  *   const sub = subscribe(type, async (event, tx) => {…}, { appId, pool, servers }); // inbox + handler in one tx, ack after commit
  */
+export * from "./bus-auth.ts";
 export * from "./envelope.ts";
 export * from "./inbox-sql.ts";
 export * from "./outbox-sql.ts";
