@@ -56,7 +56,8 @@ const FAKESUB = `fsub${run}`; // fake bus: subscriber first, then FAKEPUB
 const FAKEPUB = `fpub${run}`;
 const FAILPUB = `xpub${run}`; // publisher whose waiting subscriber's consumer can't be created
 const FAILSUB = `xsub${run}`;
-const FAILDROP = `xdrop${run}`; // an upgrade drops a subscription and the delete fails
+const FAILDROP = `xdrop${run}`;
+const BUSY = `busy${run}`; // waits for the plumbing lock another install holds // an upgrade drops a subscription and the delete fails
 const PUB_TYPE = `${PUB}.thing.created.v1`;
 const typeOf = (id: string) => `${id}.thing.created.v1`;
 const subDb = `core_events_sub_${run}`;
@@ -104,8 +105,9 @@ describe.skipIf(!ADMIN_URL)(
     const subs: Subscription[] = [];
 
     /** A core-api over HTTP with the given bus; returns its base URL. */
-    async function coreApi(bus: RegistryDeps["bus"]) {
+    async function coreApi(bus: RegistryDeps["bus"], extra: Partial<RegistryDeps> = {}) {
       const registry = createRegistry({
+        ...extra,
         pool,
         bus,
         provisioner: async () => {
@@ -594,6 +596,23 @@ describe.skipIf(!ADMIN_URL)(
       expect(up.status).toBe(503);
       expect((await json<{ error: string }>(up)).error).toBe("bus_unavailable");
       expect(await snapshot()).toEqual(before);
+    });
+
+    it("another install holding the event plumbing lock too long: 503 registry_busy and nothing installed; once it's free, the install goes through", async () => {
+      const base = await coreApi(recordingBus([]), { plumbingLockTimeoutMs: 200 });
+      const holder = await pool.connect();
+      try {
+        await holder.query("BEGIN");
+        await holder.query("SELECT pg_advisory_xact_lock(4049100053)"); // the registry's lock
+        const res = await install(base, BUSY);
+        expect(res.status).toBe(503);
+        expect((await json<{ error: string }>(res)).error).toBe("registry_busy");
+        expect((await pool.query("SELECT 1 FROM apps WHERE id = $1", [BUSY])).rowCount).toBe(0);
+      } finally {
+        await holder.query("ROLLBACK");
+        holder.release();
+      }
+      expect((await install(base, BUSY)).status).toBe(201);
     });
   },
 );

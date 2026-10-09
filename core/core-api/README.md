@@ -95,7 +95,8 @@ POST
 - **Roles:** the same rules. Their permissions come from `grants`: the app's own keys, or `<id>.*` for all of them.
 - **Event subscriptions** are replaced with what the manifest declares.
 - **Events (P4.1), an upgrade:** before anything is written, the same idempotent steps as install: the app's stream if it now declares `events.publishes`, a durable consumer for every subscribed type whose publisher's stream exists (`waiting_for_publisher` otherwise), and the consumers of installed subscribers of what it now publishes. A subscription the new manifest **drops** has its durable consumer **deleted** (`removedConsumers`; one that is already gone is `absent`, not an error), then `event_subscriptions` is rewritten. A bus failure answers `503 bus_unavailable` and nothing changes (the app registers again on its next try); without a bus it's recorded as `no_bus`. The response carries the same `events` outcome as install.
-- Writes an audit event (with `stream` and `consumers`).
+- Writes an audit event with the full `events` outcome (`stream`, `consumers`, `removedConsumers`, `dependentConsumers`, `warnings`).
+- The event steps run under one lock shared by every install and registration. If another one holds it for longer than `plumbingLockTimeoutMs` (default 10 s), the request answers `503 registry_busy` and nothing changes; the app registers again on its next try.
 
 **It can't grant anything.** It never writes `role_grants` (who holds a role) and never changes the app's state.
 
@@ -107,7 +108,14 @@ Response `200`:
   "version": "0.2.0",
   "state": "installed",
   "permissions": { "added": ["notes.notes.share"], "restored": [], "deprecated": ["notes.notes.write"] },
-  "roles": { "added": [], "deprecated": [] }
+  "roles": { "added": [], "deprecated": [] },
+  "events": {
+    "stream": { "stream": "APP_NOTES", "result": "exists" },
+    "consumers": "none",
+    "removedConsumers": "none",
+    "dependentConsumers": "none",
+    "warnings": []
+  }
 }
 ```
 
@@ -263,6 +271,7 @@ Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"
 | `role_not_found`            | 404       | a grant or revoke names a role that doesn't exist (or is deprecated, for a grant)         |
 | `app_inactive`              | 503       | an access token was asked for an app that isn't `active`                                  |
 | `bus_unavailable`           | 503       | install or registration, and the app's stream or consumers couldn't be set up (P4.1)      |
+| `registry_busy`             | 503       | install or registration waited too long for another one's event plumbing; retry           |
 | `forbidden`                 | 403       | signed in to the admin API, but without the role `core.admin`                             |
 | `not_found` / `bad_request` | 404 / 400 | —                                                                                         |
 

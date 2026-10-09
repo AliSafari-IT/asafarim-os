@@ -50,6 +50,12 @@ export interface RegistryDeps {
   tokenKey?: SigningKey;
   /** How long an access token lives, in seconds (default 60). This is also how long a revoked grant can still work. */
   accessTokenTtlSeconds?: number;
+  /**
+   * How long an install or registration waits for another one's event plumbing (the lock below),
+   * in ms (default 10 000). After that it answers `503 registry_busy` and nothing is written, so
+   * concurrent registrations can't hold the pool's connections indefinitely.
+   */
+  plumbingLockTimeoutMs?: number;
   /** Where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset = https://<primary domain>. */
   appUrlTemplate?: string;
   /** Called after every change that the gateway must see at once (install, activate, deactivate). */
@@ -146,9 +152,25 @@ async function runEventPlumbing(
   return out;
 }
 
-/** Take the plumbing lock and read the other installed apps (their current manifests). */
-async function lockAndReadInstalled(c: pg.PoolClient, appId: string): Promise<InstalledApp[]> {
-  await c.query("SELECT pg_advisory_xact_lock($1)", [EVENT_PLUMBING_LOCK]);
+/** Default wait for the plumbing lock (`plumbingLockTimeoutMs`). */
+export const PLUMBING_LOCK_TIMEOUT_MS = 10_000;
+
+/**
+ * Take the plumbing lock (waiting at most `timeoutMs`, else `registry_busy`) and read the other
+ * installed apps (their current manifests).
+ */
+async function lockAndReadInstalled(c: pg.PoolClient, appId: string, timeoutMs: number): Promise<InstalledApp[]> {
+  // SET LOCAL: only for this transaction. lock_timeout covers waiting on an advisory lock.
+  await c.query(`SET LOCAL lock_timeout = ${Math.max(1, Math.trunc(timeoutMs))}`);
+  try {
+    await c.query("SELECT pg_advisory_xact_lock($1)", [EVENT_PLUMBING_LOCK]);
+  } catch (err) {
+    if ((err as { code?: string }).code === "55P03") {
+      throw new ApiError("registry_busy", "another install or registration is setting up event plumbing; retry");
+    }
+    throw err;
+  }
+  await c.query("SET LOCAL lock_timeout = 0");
   return (
     await c.query<InstalledApp>("SELECT id, manifest FROM apps WHERE state <> 'removed' AND id <> $1 ORDER BY id", [
       appId,
@@ -204,6 +226,7 @@ async function audit(
 export function createRegistry(deps: RegistryDeps) {
   const scheme = deps.scheme ?? ed25519Scheme;
   const now = deps.now ?? (() => new Date());
+  const lockTimeoutMs = deps.plumbingLockTimeoutMs ?? PLUMBING_LOCK_TIMEOUT_MS;
 
   async function inTx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
     const c = await deps.pool.connect();
@@ -248,7 +271,7 @@ export function createRegistry(deps: RegistryDeps) {
       // The app's stream and consumers (and those of subscribers installed before it), before
       // anything is recorded: if the bus can't create them, the transaction rolls back, nothing is
       // installed and the admin can simply retry (the database and role steps are idempotent).
-      const installed = await lockAndReadInstalled(c, appId);
+      const installed = await lockAndReadInstalled(c, appId, lockTimeoutMs);
       const plan = planEventPlumbing({ appId, manifest, installed });
       const events = await runEventPlumbing(deps.bus, appId, plan, waitingForPublisher(appId, manifest, installed));
 
@@ -361,7 +384,7 @@ export function createRegistry(deps: RegistryDeps) {
       // An upgrade can start publishing or subscribing, or drop a subscription: the same idempotent
       // stream and consumer steps as install, plus deleting dropped consumers, before anything is
       // written (a bus failure → 503, the transaction rolls back, the app registers again).
-      const installed = await lockAndReadInstalled(c, appId);
+      const installed = await lockAndReadInstalled(c, appId, lockTimeoutMs);
       const previous = (
         await c.query<{ manifest: AppManifest | null }>("SELECT manifest FROM apps WHERE id = $1 FOR UPDATE", [appId])
       ).rows[0]?.manifest;

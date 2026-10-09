@@ -20,6 +20,7 @@ export const ERRORS = {
   bad_request: 400,
   app_inactive: 503, //           a token is only issued for an active app
   bus_unavailable: 503, //        install or registration of an app that publishes or subscribes, and its stream or consumers couldn't be set up (P4.1)
+  registry_busy: 503, //          install or registration waited longer than plumbingLockTimeoutMs for another one's event plumbing: retry
 } as const;
 
 export type ErrorCode = keyof typeof ERRORS;
