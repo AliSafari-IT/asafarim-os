@@ -1,4 +1,5 @@
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { EventsWarning } from "@/components/EventsWarning";
 import { Flash } from "@/components/Flash";
 import { coreApi, type AdminApp } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
@@ -57,7 +58,10 @@ export default async function AppsPage({
                     {app.state}
                   </span>
                 </td>
-                <td>{installStatus(app)}</td>
+                <td>
+                  {installStatus(app)}
+                  <EventsWarning appId={app.id} types={app.waitingForPublisher ?? []} />
+                </td>
                 <td className="muted">
                   {app.permissions} permission{app.permissions === 1 ? "" : "s"}, {app.roles} role
                   {app.roles === 1 ? "" : "s"}

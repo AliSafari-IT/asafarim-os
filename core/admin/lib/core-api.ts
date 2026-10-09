@@ -26,6 +26,8 @@ export interface AdminApp {
   registered_at: string | null;
   permissions: number;
   roles: number;
+  /** Event types it subscribes to whose publisher isn't installed: shown as a warning (P4.1). */
+  waitingForPublisher?: string[];
 }
 
 export interface AdminRole {
