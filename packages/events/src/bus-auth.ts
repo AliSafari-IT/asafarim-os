@@ -21,6 +21,9 @@ export interface BusAuth {
 /** The connect options a BusAuth adds: the authenticator and, if set, the inbox prefix. */
 export const busConnectOptions = (auth: BusAuth) => ({
   authenticator: busAuthenticator(auth),
+  // The default gives up reconnecting after repeated authorization errors, which a restarting auth
+  // callout produces; the relay and subscriber hold one connection for life, so keep retrying.
+  ignoreAuthErrorAbort: true,
   ...(auth.inboxPrefix ? { inboxPrefix: auth.inboxPrefix } : {}),
 });
 

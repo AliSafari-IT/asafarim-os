@@ -396,7 +396,24 @@ export function startAuthCallout(
     served,
     async stop() {
       stopped = true;
-      await nc?.drain().catch(() => undefined);
+      // A drain flushes through the server, so it never ends while the bus is unreachable: bound it
+      // and close the connection if it overruns.
+      if (nc) {
+        const conn = nc;
+        let timer: NodeJS.Timeout | undefined;
+        const deadline = new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), 5000);
+        });
+        const outcome = await Promise.race([
+          conn.drain().then(
+            () => "done" as const,
+            () => "done" as const,
+          ),
+          deadline,
+        ]);
+        clearTimeout(timer);
+        if (outcome === "timeout") await conn.close().catch(() => undefined);
+      }
       await loop.catch(() => undefined);
     },
   };
