@@ -195,6 +195,13 @@ code,
   background: var(--warn-bg);
   border-color: var(--warn);
 }
+.events-warning {
+  margin-top: 6px;
+}
+.events-warning ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
 .badge.deprecated {
   color: var(--warn);
   border-color: var(--warn);

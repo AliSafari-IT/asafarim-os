@@ -39,7 +39,7 @@ pnpm platform app activate notes                              # deactivate: the 
 
 1. validates it with `@asafarim/app-manifest`, and requires `manifest.id` to match `<id>`;
 2. creates the app's **own database and login role** (`app_<id>`, with `REVOKE CONNECT … FROM PUBLIC`), using the same helper as the dev bootstrap (`src/provision.ts`);
-3. if the manifest declares `events.publishes` (P4.1), creates the app's **JetStream stream** `APP_<ID>` on subjects `<id>.>` (file storage, idempotent). The app and its outbox relay never create streams. For every `events.subscribes` type whose publisher's stream exists, it creates the app's **durable consumer** `<id>.<type>` (`.` → `_`, e.g. `tasks_notes_note_created_v1`) on that stream, and the shared `DEADLETTER` stream (`deadletter.>`) if it is missing; a type without a stream is recorded as `no_stream` and gets nothing. The app's subscriber never creates consumers. If the bus can't do any of this, **nothing is installed** (`503 bus_unavailable`; retrying is safe). Without `CORE_API_NATS_URL` the install goes through and its audit event records `stream: "no_bus"` / `consumers: "no_bus"`;
+3. if the manifest declares `events.publishes` (P4.1), creates the app's **JetStream stream** `APP_<ID>` on subjects `<id>.>` (file storage, idempotent). The app and its outbox relay never create streams. For every `events.subscribes` type whose publisher's stream exists, it creates the app's **durable consumer** `<id>.<type>` (`.` → `_`, e.g. `tasks_notes_note_created_v1`) on that stream, and the shared `DEADLETTER` stream (`deadletter.>`) if it is missing. A type whose publisher isn't installed yet is reported as **`waiting_for_publisher`** (a warning in `events.warnings` and on the Admin console's Apps page; nothing is blocked). **Any install order works:** when a publisher is installed, core-api also creates the durable consumer of every installed app whose current manifest subscribes to a type it declares (`dependentConsumers`). The app's subscriber never creates consumers. All of this runs inside the install transaction, under one lock (so a publisher and its subscriber installed at the same moment can't miss each other), before anything is written: if the bus can't do it, **nothing is installed** (`503 bus_unavailable`; retrying is safe). Without `CORE_API_NATS_URL` the install goes through and records `no_bus`. The outcome per type is in the response's `events` and the audit event: `{ stream, consumers, removedConsumers, dependentConsumers, warnings }` (see `src/event-plumbing.ts`);
 4. issues a **registry credential** and stores only its verifier;
 5. returns, **once**:
 
@@ -49,7 +49,14 @@ pnpm platform app activate notes                              # deactivate: the 
   "state": "installed",
   "credential": "osk1.notes.3f9a1c0b7e2d.MC4CAQAw…",
   "keyId": "notes.3f9a1c0b7e2d",
-  "database": { "name": "app_notes", "role": "app_notes", "url": "postgres://app_notes:…@127.0.0.1:55440/app_notes" }
+  "database": { "name": "app_notes", "role": "app_notes", "url": "postgres://app_notes:…@127.0.0.1:55440/app_notes" },
+  "events": {
+    "stream": { "stream": "APP_NOTES", "result": "created" },
+    "consumers": "none",
+    "removedConsumers": "none",
+    "dependentConsumers": { "tasks": { "notes.note.created.v1": "created" } },
+    "warnings": []
+  }
 }
 ```
 
@@ -87,8 +94,9 @@ POST
 - **Permissions:** new ones are added, re-declared ones restored, and removed ones **deprecated** (`deprecated_at`), never deleted.
 - **Roles:** the same rules. Their permissions come from `grants`: the app's own keys, or `<id>.*` for all of them.
 - **Event subscriptions** are replaced with what the manifest declares.
-- **Events (P4.1), an upgrade:** before anything is written, the same idempotent steps as install: the app's stream if it now declares `events.publishes`, and a durable consumer for every subscribed type whose publisher's stream exists. A bus failure answers `503 bus_unavailable` and nothing changes (the app registers again on its next try); without a bus it's recorded as `no_bus`. A consumer of a type that is no longer subscribed is left in place.
-- Writes an audit event (with `stream` and `consumers`).
+- **Events (P4.1), an upgrade:** before anything is written, the same idempotent steps as install: the app's stream if it now declares `events.publishes`, a durable consumer for every subscribed type whose publisher's stream exists (`waiting_for_publisher` otherwise), and the consumers of installed subscribers of what it now publishes. A subscription the new manifest **drops** has its durable consumer **deleted** (`removedConsumers`; one that is already gone is `absent`, not an error), then `event_subscriptions` is rewritten. A bus failure answers `503 bus_unavailable` and nothing changes (the app registers again on its next try); without a bus it's recorded as `no_bus`. The response carries the same `events` outcome as install.
+- Writes an audit event with the full `events` outcome (`stream`, `consumers`, `removedConsumers`, `dependentConsumers`, `warnings`).
+- The event steps run under one lock shared by every install and registration. If another one holds it for longer than `plumbingLockTimeoutMs` (default 10 s), the request answers `503 registry_busy` and nothing changes; the app registers again on its next try.
 
 **It can't grant anything.** It never writes `role_grants` (who holds a role) and never changes the app's state.
 
@@ -100,7 +108,14 @@ Response `200`:
   "version": "0.2.0",
   "state": "installed",
   "permissions": { "added": ["notes.notes.share"], "restored": [], "deprecated": ["notes.notes.write"] },
-  "roles": { "added": [], "deprecated": [] }
+  "roles": { "added": [], "deprecated": [] },
+  "events": {
+    "stream": { "stream": "APP_NOTES", "result": "exists" },
+    "consumers": "none",
+    "removedConsumers": "none",
+    "dependentConsumers": "none",
+    "warnings": []
+  }
 }
 ```
 
@@ -256,6 +271,7 @@ Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"
 | `role_not_found`            | 404       | a grant or revoke names a role that doesn't exist (or is deprecated, for a grant)         |
 | `app_inactive`              | 503       | an access token was asked for an app that isn't `active`                                  |
 | `bus_unavailable`           | 503       | install or registration, and the app's stream or consumers couldn't be set up (P4.1)      |
+| `registry_busy`             | 503       | install or registration waited too long for another one's event plumbing; retry           |
 | `forbidden`                 | 403       | signed in to the admin API, but without the role `core.admin`                             |
 | `not_found` / `bad_request` | 404 / 400 | —                                                                                         |
 

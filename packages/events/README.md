@@ -80,7 +80,7 @@ The inbox ships like the outbox, three ways, and a test keeps them equal:
 
 ### Consumers and dead letters (core-api)
 
-`createStreamAdmin({ servers }).ensureConsumer(consumerApp, type)` creates or updates the durable consumer (idempotent), new messages only (from its creation on), `ack_wait` 30 s, no delivery cap on the bus side (the subscriber counts attempts and dead-letters, so a dead letter that couldn't be stored isn't silently dropped). It returns `no_stream`, and creates nothing, when the publisher's stream doesn't exist yet. It first ensures the shared **`DEADLETTER`** stream on `deadletter.>` (file storage, kept 30 days), which core-api also ensures at boot; apps never create it.
+`createStreamAdmin({ servers }).ensureConsumer(consumerApp, type)` creates or updates the durable consumer (idempotent), new messages only (from its creation on), `ack_wait` 30 s, no delivery cap on the bus side (the subscriber counts attempts and dead-letters, so a dead letter that couldn't be stored isn't silently dropped). It returns `no_stream`, and creates nothing, when the publisher's stream doesn't exist yet (core-api reports that as `waiting_for_publisher` and creates the consumer when the publisher is installed). It first ensures the shared **`DEADLETTER`** stream on `deadletter.>` (file storage, kept 30 days), which core-api also ensures at boot; apps never create it. `deleteConsumer(consumerApp, type)` removes the durable consumer when an upgrade drops the subscription: `deleted`, or `absent` when it (or the stream) is already gone.
 
 ## Test
 
