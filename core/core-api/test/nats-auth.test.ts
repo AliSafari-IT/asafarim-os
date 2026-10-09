@@ -24,7 +24,7 @@ describe("natsPermissions (manifest → what the credential may do)", () => {
   it("publisher only: its own namespace, replies on the inbox, nothing else", () => {
     expect(natsPermissions("notes", manifestWith(["notes.note.created.v1"], []))).toEqual({
       publish: ["notes.>"],
-      subscribe: ["_INBOX.>"],
+      subscribe: ["_INBOX_notes.>"],
     });
   });
 
@@ -36,7 +36,7 @@ describe("natsPermissions (manifest → what the credential may do)", () => {
         "$JS.API.CONSUMER.MSG.NEXT.APP_NOTES.recorder_notes_note_created_v1",
         "deadletter.recorder.>",
       ],
-      subscribe: ["_INBOX.>"],
+      subscribe: ["_INBOX_recorder.>"],
     });
   });
 
@@ -51,12 +51,12 @@ describe("natsPermissions (manifest → what the credential may do)", () => {
       "$JS.API.CONSUMER.MSG.NEXT.APP_NOTES.hub_notes_note_created_v1",
       "$JS.API.CONSUMER.MSG.NEXT.APP_TASKS.hub_tasks_task_done_v2",
     ]);
-    expect(p.subscribe).toEqual(["_INBOX.>"]);
+    expect(p.subscribe).toEqual(["_INBOX_hub.>"]);
   });
 
   it("no events (or no manifest): publishes nothing, only the inbox", () => {
-    expect(natsPermissions("quiet", {})).toEqual({ publish: [], subscribe: ["_INBOX.>"] });
-    expect(natsPermissions("quiet", null)).toEqual({ publish: [], subscribe: ["_INBOX.>"] });
+    expect(natsPermissions("quiet", {})).toEqual({ publish: [], subscribe: ["_INBOX_quiet.>"] });
+    expect(natsPermissions("quiet", null)).toEqual({ publish: [], subscribe: ["_INBOX_quiet.>"] });
   });
 
   it("namespaces can't leak: notes never gets notesx.>, and no wildcard reaches another app", () => {
@@ -70,6 +70,17 @@ describe("natsPermissions (manifest → what the credential may do)", () => {
       expect(s).not.toMatch(/^\$JS\.API\.(STREAM|CONSUMER\.(CREATE|DELETE|DURABLE))/);
       expect(s).not.toMatch(/\$JS\.API\.CONSUMER\.\w+\.>$/);
     }
+  });
+
+  it("gives each app its own inbox, never the shared _INBOX.> (replies carry other apps' events)", () => {
+    const notes = natsPermissions("notes", manifestWith(["notes.note.created.v1"], []));
+    const notesx = natsPermissions("notesx", manifestWith([], ["notes.note.created.v1"]));
+    expect(notes.subscribe).toEqual(["_INBOX_notes.>"]);
+    expect(notesx.subscribe).toEqual(["_INBOX_notesx.>"]);
+    // "_INBOX_notes.>" needs the token "_INBOX_notes" to be complete: it can't match "_INBOX_notesx.…".
+    const tokens = (s: string) => s.split(".");
+    expect(tokens("_INBOX_notes.>")[0]).not.toBe(tokens("_INBOX_notesx.>")[0]);
+    for (const p of [notes, notesx]) expect(p.subscribe).not.toContain("_INBOX.>");
   });
 
   it("never lets an app touch another app's durable, even one with a prefix of its id", () => {
@@ -272,7 +283,7 @@ describe("answerAuthRequest (the whole callout, minus the socket)", () => {
     }>(response.nats.jwt!);
     expect(user).toMatchObject({ iss: issuer.publicKey, sub: req.userNkey, aud: "OS", name: "notes" });
     expect(user.nats.pub.allow).toEqual(["notes.>"]);
-    expect(user.nats.sub.allow).toEqual(["_INBOX.>"]);
+    expect(user.nats.sub.allow).toEqual(["_INBOX_notes.>"]);
 
     // The JWT is really signed by the issuer key.
     const [h, p, s] = out!.split(".") as [string, string, string];

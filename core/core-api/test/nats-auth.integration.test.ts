@@ -31,7 +31,7 @@ import {
   type StreamAdmin,
   type Subscription,
 } from "@asafarim/events";
-import { signNatsConnect } from "@asafarim/registry-protocol";
+import { natsInboxPrefix, signNatsConnect } from "@asafarim/registry-protocol";
 import { jetstream, jetstreamManager } from "@nats-io/jetstream";
 import type { NatsConnection } from "@nats-io/nats-core";
 import { connect } from "@nats-io/transport-node";
@@ -141,6 +141,7 @@ describe.skipIf(!ready)("per-app NATS identities (integration: Postgres + NATS a
       servers: NATS_URL!,
       user: id,
       pass: signNatsConnect({ appId: id, credential: credentials[id]! }),
+      inboxPrefix: natsInboxPrefix(id),
       timeout: 3000,
       maxReconnectAttempts: 0,
     });
@@ -151,6 +152,7 @@ describe.skipIf(!ready)("per-app NATS identities (integration: Postgres + NATS a
   const authFor = (id: string) => ({
     user: id,
     pass: () => signNatsConnect({ appId: id, credential: credentials[id]! }),
+    inboxPrefix: natsInboxPrefix(id),
   });
 
   const post = (path: string, body: object, headers: Record<string, string>) =>
@@ -304,6 +306,57 @@ describe.skipIf(!ready)("per-app NATS identities (integration: Postgres + NATS a
     await denied(nc, () => jsm.streams.add({ name: "EVIL", subjects: ["evil.>"] }));
     await denied(nc, () => jsm.consumers.add(stream, { durable_name: "evil", filter_subject: typeOf(A) }));
     await denied(nc, () => jsm.streams.delete(stream));
+  });
+
+  it("gives each app its own inbox: B can't subscribe to _INBOX.> or S's inbox, and sees nothing S pulls", async () => {
+    const spy = await asApp(B);
+    const leaked: string[] = [];
+    await denied(spy, async () => {
+      spy.subscribe("_INBOX.>");
+      await spy.flush();
+      throw new Error("subscribed"); // the violation arrives asynchronously, as a status event
+    });
+    await denied(spy, async () => {
+      spy.subscribe(`${natsInboxPrefix(S)}.>`);
+      await spy.flush();
+      throw new Error("subscribed");
+    });
+    // Its own inbox is allowed.
+    spy.subscribe(`${natsInboxPrefix(B)}.>`, {
+      callback: (_err, m) => {
+        leaked.push(m.subject);
+      },
+    });
+    await spy.flush();
+
+    // S pulls and acks an event of A's while B listens.
+    const inboxPool = await newDb(`natsauth_inbox_${run}`);
+    await inboxPool.query(INBOX_SQL);
+    let handled = 0;
+    subs.push(
+      subscribe(
+        typeOf(A),
+        async () => {
+          handled++;
+        },
+        {
+          appId: S,
+          pool: inboxPool,
+          servers: NATS_URL!,
+          auth: authFor(S),
+          backoff: { initialMs: 50, maxMs: 200 },
+          log: { info: () => undefined, warn: () => undefined },
+        },
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 800)); // let the consumer start pulling
+    const event = createEvent({ source: A, type: typeOf(A), data: { for: "S" }, subject: "t-inbox" });
+    await jetstream(await asApp(A)).publish(typeOf(A), enc.encode(JSON.stringify(event)), { msgID: event.id });
+    await until(async () => handled > 0);
+    expect(handled).toBe(1);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(leaked).toEqual([]);
+    await subs.pop()!.stop(); // S's durable is shared with the next test's subscriber
   });
 
   it("delivers outbox → relay → subscriber exactly once, each side on its own identity", async () => {

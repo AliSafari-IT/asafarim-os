@@ -18,6 +18,14 @@ import { NONCE_PATTERN, parseCredential } from "./index.ts";
 
 export const NATS_CONNECT_VERSION = "v1";
 
+/**
+ * The inbox prefix an app must connect with (`inboxPrefix` in the NATS client options). Replies to
+ * its requests (JetStream publish acks, pull replies) arrive on `<prefix>.<…>`, and core-api lets the
+ * app subscribe to `<prefix>.>` only, so no app can read another app's replies. The trailing `.` of
+ * the subscription keeps `_INBOX_notes.>` from matching `_INBOX_notesx.…`.
+ */
+export const natsInboxPrefix = (appId: string) => `_INBOX_${appId}`;
+
 export const natsConnectCanonical = (appId: string, timestamp: string, nonce: string) =>
   `nats-connect\n${appId}\n${timestamp}\n${nonce}`;
 

@@ -70,7 +70,7 @@ startAppRelay({ appId: manifest.id, pool }); // on boot: outbox → JetStream, N
 - `publish` throws **before** writing for a type the manifest doesn't declare or a payload its JSON Schema refuses.
 - The relay reads `ASAFARIM_NATS_URL`. Without it, it logs `events.relay.no_bus` once and the events wait in the outbox.
 - Streams are created by core-api at install (`APP_<ID>` on `<id>.>`), never by the app.
-- **The app's own identity on the bus (P4.1 PR 4).** The relay (and `subscribe`, pass `auth: busAuthFromEnv(appId)`) connects as user = the app id and password = a fresh, signed, single-use assertion made with `ASAFARIM_REGISTRY_CREDENTIAL` on every connect and reconnect. No second secret. The bus (via core-api) grants only what the app's current manifest declares: publish `<id>.>`, pull and ack on its own durables, nothing else. Without a credential the connection is anonymous, which a bus with the callout refuses.
+- **The app's own identity on the bus (P4.1 PR 4).** The relay (and `subscribe`, pass `auth: busAuthFromEnv(appId)`) connects as user = the app id and password = a fresh, signed, single-use assertion made with `ASAFARIM_REGISTRY_CREDENTIAL` on every connect and reconnect. No second secret. The connection also sets `inboxPrefix: "_INBOX_<appId>"`: the app may subscribe to that inbox only. The bus (via core-api) grants only what the app's current manifest declares: publish `<id>.>`, pull and ack on its own durables, nothing else. Without a credential the connection is anonymous, which a bus with the callout refuses.
 
 ## The access token and the gateway (P3.3a)
 

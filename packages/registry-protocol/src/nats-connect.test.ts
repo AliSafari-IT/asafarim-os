@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { parseCredential } from "./index.ts";
-import { natsConnectCanonical, parseNatsConnect, signNatsConnect } from "./nats-connect.ts";
+import { natsConnectCanonical, natsInboxPrefix, parseNatsConnect, signNatsConnect } from "./nats-connect.ts";
 
 function credential(appId: string) {
   const { privateKey } = generateKeyPairSync("ed25519");
@@ -50,5 +50,13 @@ describe("signNatsConnect / parseNatsConnect", () => {
     ["too long", `v1.notes.0123456789ab.1.nnnnnnnnnnnnnnnnnnnnnn.${"s".repeat(600)}`],
   ])("rejects a malformed assertion: %s", (_name, pass) => {
     expect(parseNatsConnect(pass)).toBeUndefined();
+  });
+});
+
+describe("natsInboxPrefix", () => {
+  it("is per app, and the subscription's trailing dot keeps one app's prefix from matching another's", () => {
+    expect(natsInboxPrefix("notes")).toBe("_INBOX_notes");
+    expect(`${natsInboxPrefix("notes")}.>`).not.toBe(`${natsInboxPrefix("notesx")}.>`);
+    expect(`${natsInboxPrefix("notesx")}.abc`.startsWith(`${natsInboxPrefix("notes")}.`)).toBe(false);
   });
 });

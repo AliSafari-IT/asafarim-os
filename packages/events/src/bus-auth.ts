@@ -11,6 +11,17 @@ export interface BusAuth {
   user: string;
   /** Called for every connect and reconnect: returns a fresh password each time. */
   pass: () => string;
+  /**
+   * The client's inbox prefix. A bus that gives each app its own inbox namespace (P4.1 PR 4) lets the
+   * app subscribe to nothing else, so replies must arrive under it. Unset = the NATS default `_INBOX`.
+   */
+  inboxPrefix?: string;
 }
+
+/** The connect options a BusAuth adds: the authenticator and, if set, the inbox prefix. */
+export const busConnectOptions = (auth: BusAuth) => ({
+  authenticator: busAuthenticator(auth),
+  ...(auth.inboxPrefix ? { inboxPrefix: auth.inboxPrefix } : {}),
+});
 
 export const busAuthenticator = (auth: BusAuth): Authenticator => usernamePasswordAuthenticator(auth.user, auth.pass);

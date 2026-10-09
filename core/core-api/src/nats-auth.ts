@@ -16,7 +16,12 @@
  */
 import { createHash } from "node:crypto";
 import { consumerName, publisherOf, streamName } from "@asafarim/events";
-import { SIGNATURE_WINDOW_SECONDS, natsConnectCanonical, parseNatsConnect } from "@asafarim/registry-protocol";
+import {
+  SIGNATURE_WINDOW_SECONDS,
+  natsConnectCanonical,
+  natsInboxPrefix,
+  parseNatsConnect,
+} from "@asafarim/registry-protocol";
 import { connect } from "@nats-io/transport-node";
 import { createAccount, fromSeed, type KeyPair } from "@nats-io/nkeys";
 import type { NatsConnection } from "@nats-io/nats-core";
@@ -33,8 +38,13 @@ export interface NatsPermissions {
   subscribe: string[];
 }
 
-/** Replies to pull requests and to JetStream publish acks arrive on the client's inbox. */
-export const INBOX_SUBJECT = "_INBOX.>";
+/**
+ * Replies to pull requests and to JetStream publish acks arrive on the client's inbox. Every app
+ * shares one NATS account, so a shared `_INBOX.>` would let any app read the events pulled by
+ * another: each app gets its own prefix (`_INBOX_<id>`, which it connects with) and may subscribe to
+ * that one only.
+ */
+export const inboxSubject = (appId: string) => `${natsInboxPrefix(appId)}.>`;
 
 /**
  * What the app's NATS credential may do. Everything not listed is denied, notably
@@ -43,11 +53,11 @@ export const INBOX_SUBJECT = "_INBOX.>";
  *  - publishes events (`events.publishes`): `<id>.>`, its own namespace (`notes` never gets `notesx.>`);
  *  - subscribes (`events.subscribes`): for each type, ONLY its own durable on the publisher's stream:
  *    consumer info, the pull request and the acks; and `deadletter.<id>.>` for the events it gives up on;
- *  - always: subscribe to `_INBOX.>` for replies. No raw subscribe on anyone's subjects.
+ *  - always: subscribe to its OWN inbox `_INBOX_<id>.>` for replies. No raw subscribe on anyone's subjects.
  */
 export function natsPermissions(appId: string, manifest: EventsManifest | null | undefined): NatsPermissions {
   const publish = new Set<string>();
-  const subscribe = new Set<string>([INBOX_SUBJECT]);
+  const subscribe = new Set<string>([inboxSubject(appId)]);
   if (publishedTypes(manifest).length > 0) publish.add(`${appId}.>`);
   const types = subscribedTypes(manifest);
   if (types.length > 0) publish.add(`deadletter.${appId}.>`);
@@ -320,7 +330,15 @@ export interface AuthCallout {
  * outbox relay keeps its events and retries (nothing is lost).
  */
 export function startAuthCallout(
-  deps: CalloutDeps & { servers: string | string[]; user: string; pass: string; name?: string; retryMs?: number },
+  deps: CalloutDeps & {
+    servers: string | string[];
+    user: string;
+    pass: string;
+    name?: string;
+    retryMs?: number;
+    /** Requests answered at once; default 4. */
+    maxConcurrent?: number;
+  },
 ): AuthCallout {
   const log = deps.log ?? (() => undefined);
   let nc: NatsConnection | undefined;
@@ -353,13 +371,23 @@ export function startAuthCallout(
     const sub = nc.subscribe(AUTH_CALLOUT_SUBJECT);
     log({ msg: "bus.auth.serving", subject: AUTH_CALLOUT_SUBJECT });
     markServed();
+    // At most `maxConcurrent` requests are answered at once (each takes up to three pool queries), so a
+    // reconnect storm queues in the subscription instead of using every connection of the shared pool.
+    const limit = deps.maxConcurrent ?? 4;
+    let running = 0;
+    let free: (() => void) | undefined;
     for await (const m of sub) {
+      while (running >= limit) await new Promise<void>((resolve) => (free = resolve));
+      running++;
       void (async () => {
         try {
           const response = await answerAuthRequest(deps, m.string());
           if (response) m.respond(response);
         } catch (err) {
           log({ msg: "bus.auth.failed", error: (err as Error).message });
+        } finally {
+          running--;
+          free?.();
         }
       })();
     }

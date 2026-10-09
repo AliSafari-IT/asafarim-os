@@ -8,7 +8,7 @@
  *   subscribe(type, async (event, tx) => {…}, { appId, pool, servers }); // exactly once per event id (inbox)
  */
 import { startRelay, type BusAuth, type Relay, type RelayOptions } from "@asafarim/events";
-import { signNatsConnect } from "@asafarim/registry-protocol";
+import { natsInboxPrefix, signNatsConnect } from "@asafarim/registry-protocol";
 import { consoleLogger } from "./register.ts";
 
 export * from "@asafarim/events";
@@ -29,7 +29,7 @@ export function busAuthFromEnv(
   }
   const credential = env.ASAFARIM_REGISTRY_CREDENTIAL;
   if (!credential) return undefined;
-  return { user: appId, pass: () => signNatsConnect({ appId, credential }) };
+  return { user: appId, pass: () => signNatsConnect({ appId, credential }), inboxPrefix: natsInboxPrefix(appId) };
 }
 
 export interface StartAppRelayOptions extends Omit<RelayOptions, "servers" | "jetstream"> {

@@ -414,7 +414,12 @@ async function main() {
           log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
         })
       : undefined;
-  void callout;
+  // Stop answering the bus on shutdown (the HTTP server just exits with the process).
+  if (callout) {
+    for (const signal of ["SIGTERM", "SIGINT"] as const) {
+      process.once(signal, () => void callout.stop().finally(() => process.exit(0)));
+    }
+  }
   // The shared DEADLETTER stream: ensured at boot, and again before any consumer is created, so a
   // bus that is down now doesn't stop core-api from starting.
   void bus?.ensureDeadLetterStream().then(

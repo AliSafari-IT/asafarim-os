@@ -19,7 +19,7 @@
 import { jetstream, type JetStreamClient, type JsMsg } from "@nats-io/jetstream";
 import type { NatsConnection } from "@nats-io/nats-core";
 import { connect } from "@nats-io/transport-node";
-import { busAuthenticator, type BusAuth } from "./bus-auth.ts";
+import { busConnectOptions, type BusAuth } from "./bus-auth.ts";
 import { EVENT_TYPE, sourceFor, type CloudEvent } from "./envelope.ts";
 import { INBOX_TABLE } from "./inbox-sql.ts";
 import type { Queryable } from "./publisher.ts";
@@ -336,7 +336,7 @@ export function subscribe<T = unknown>(type: string, handler: EventHandler<T>, o
     if (opts.jetstream) return opts.jetstream();
     nc ??= connect({
       servers: opts.servers!,
-      ...(opts.auth ? { authenticator: busAuthenticator(opts.auth) } : {}),
+      ...(opts.auth ? busConnectOptions(opts.auth) : {}),
       name: `${opts.appId}-subscriber`,
       timeout: 3000,
       maxReconnectAttempts: -1,

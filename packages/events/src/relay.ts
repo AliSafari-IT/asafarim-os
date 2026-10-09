@@ -14,7 +14,7 @@
  */
 import { jetstream, type JetStreamClient } from "@nats-io/jetstream";
 import type { NatsConnection } from "@nats-io/nats-core";
-import { busAuthenticator, type BusAuth } from "./bus-auth.ts";
+import { busConnectOptions, type BusAuth } from "./bus-auth.ts";
 import { connect } from "@nats-io/transport-node";
 import { OUTBOX_TABLE } from "./outbox-sql.ts";
 
@@ -97,7 +97,7 @@ export function startRelay(opts: RelayOptions): Relay {
     if (opts.jetstream) return opts.jetstream();
     nc ??= connect({
       servers: opts.servers!,
-      ...(opts.auth ? { authenticator: busAuthenticator(opts.auth) } : {}),
+      ...(opts.auth ? busConnectOptions(opts.auth) : {}),
       name: `${opts.appId}-outbox-relay`,
       timeout: 3000,
       maxReconnectAttempts: -1, // once connected, keep trying for ever

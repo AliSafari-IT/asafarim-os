@@ -51,6 +51,7 @@ describe("@asafarim/app-sdk/events", () => {
     it("is the app id plus a fresh signed assertion on every call", () => {
       const auth = busAuthFromEnv("notes", { ASAFARIM_REGISTRY_CREDENTIAL: credential });
       expect(auth?.user).toBe("notes");
+      expect(auth?.inboxPrefix).toBe("_INBOX_notes"); // the only inbox core-api lets the app subscribe to
       const a = parseNatsConnect(auth!.pass());
       const b = parseNatsConnect(auth!.pass());
       expect(a?.keyId).toBe("notes.0123456789ab");
@@ -65,6 +66,7 @@ describe("@asafarim/app-sdk/events", () => {
       });
       expect(auth?.user).toBe("core");
       expect(auth?.pass()).toBe("pw");
+      expect(auth?.inboxPrefix).toBeUndefined(); // a plain login keeps the NATS default inbox
     });
 
     it("is undefined without a credential (a bus that checks nobody)", () => {
