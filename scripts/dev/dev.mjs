@@ -4,7 +4,8 @@
  *   1. checks Docker;
  *   2. creates throwaway dev keys if missing (.dev/, git-ignored) and builds the
  *      workspace packages the services import (a fresh clone has no dist/);
- *   3. starts Postgres, Redis and the dev gateway (compose.dev.yml, 127.0.0.1 only);
+ *   3. starts Postgres, Redis, NATS JetStream (the event bus) and the dev gateway
+ *      (compose.dev.yml, 127.0.0.1 only), and waits until each one's healthcheck passes;
  *   4. bootstraps the per-service databases and roles, migrates, seeds;
  *   5. runs core/identity, core-api and the dev login stub in watch mode;
  *   6. installs (and activates) every apps/* into core-api, then runs them in
@@ -34,7 +35,7 @@ requireDocker();
 ensureDevKeys();
 buildWorkspaceDependencies();
 checkGatewayEnv();
-console.log(bold("Starting Postgres, Redis and the gateway…"));
+console.log(bold("Starting Postgres, Redis, NATS and the gateway…"));
 compose("up", "-d", "--wait");
 await bootstrap(dbEnv());
 
@@ -45,6 +46,7 @@ ${green(bold("ASafariM OS dev environment"))}
   core-api          http://localhost:${DEV.coreApiPort}/readyz   ${dim("(pnpm platform app install <id>)")}
   dev login stub    http://localhost:${DEV.devHubPort}   ${dim("(DEV ONLY: stands in for Hub)")}
   Postgres          127.0.0.1:${DEV.postgres.port}   Redis 127.0.0.1:56380
+  event bus         ${DEV.natsUrl}   ${dim("(NATS JetStream; core-api creates APP_<ID> streams at install)")}
   apps              ${
     Object.entries(DEV.apps)
       .map(([id, port]) => `${id} http://localhost:${port}`)

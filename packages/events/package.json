@@ -1,0 +1,42 @@
+{
+  "name": "@asafarim/events",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ASafariM OS events (P4.1, ADR 0001 §5): the CloudEvents 1.0 envelope, payload validation against the manifest's JSON Schemas, the transactional outbox and its relay to NATS JetStream, and the per-app stream bootstrap core-api runs at install. Never imports an app.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./sql/outbox.sql": "./sql/001_outbox.sql",
+    "./drizzle/outbox.sql": "./drizzle/0000_asafarim_outbox.sql"
+  },
+  "files": [
+    "dist",
+    "sql",
+    "drizzle"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/nats-core": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.1",
+    "@types/pg": "^8.23.1",
+    "eslint": "^9.39.5",
+    "pg": "^8.23.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

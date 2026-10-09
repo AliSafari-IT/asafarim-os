@@ -152,6 +152,15 @@ importers:
       '@asafarim/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@nats-io/jetstream':
+        specifier: ^3.4.0
+        version: 3.4.0
+      '@nats-io/nats-core':
+        specifier: ^3.4.0
+        version: 3.4.0
+      '@nats-io/transport-node':
+        specifier: ^3.4.0
+        version: 3.4.0
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
@@ -234,6 +243,9 @@ importers:
       '@asafarim/app-manifest':
         specifier: workspace:*
         version: link:../../packages/app-manifest
+      '@asafarim/events':
+        specifier: workspace:*
+        version: link:../../packages/events
       '@asafarim/registry-protocol':
         specifier: workspace:*
         version: link:../../packages/registry-protocol
@@ -247,6 +259,12 @@ importers:
       '@asafarim/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@nats-io/jetstream':
+        specifier: ^3.4.0
+        version: 3.4.0
+      '@nats-io/transport-node':
+        specifier: ^3.4.0
+        version: 3.4.0
       '@types/node':
         specifier: ^24.19.1
         version: 24.19.1
@@ -336,6 +354,9 @@ importers:
       '@asafarim/app-manifest':
         specifier: workspace:*
         version: link:../app-manifest
+      '@asafarim/events':
+        specifier: workspace:*
+        version: link:../events
       '@asafarim/registry-protocol':
         specifier: workspace:*
         version: link:../registry-protocol
@@ -382,6 +403,46 @@ importers:
       typescript-eslint:
         specifier: ^8.64.0
         version: 8.71.0(eslint@9.39.5(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
+
+  packages/events:
+    dependencies:
+      '@nats-io/jetstream':
+        specifier: ^3.4.0
+        version: 3.4.0
+      '@nats-io/nats-core':
+        specifier: ^3.4.0
+        version: 3.4.0
+      '@nats-io/transport-node':
+        specifier: ^3.4.0
+        version: 3.4.0
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.20.0)
+    devDependencies:
+      '@asafarim/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^24.19.1
+        version: 24.19.1
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
+      eslint:
+        specifier: ^9.39.5
+        version: 9.39.5(supports-color@7.2.0)
+      pg:
+        specifier: ^8.23.1
+        version: 8.23.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^5.0.3
+        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1)(tsx@4.23.15))
 
   packages/registry-protocol:
     devDependencies:
@@ -864,6 +925,24 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
+  '@nats-io/jetstream@3.4.0':
+    resolution: {integrity: sha512-GzHQodNJ942+R5LRb8PuZ5ugVWVWMRiufxUYLLVWkXKfwDXYN+Owo0d7L/b9O7BPyrbYD7jQWAC6+ZVuXa9Gyw==}
+
+  '@nats-io/nats-core@3.4.0':
+    resolution: {integrity: sha512-QMDM86EUNm+wudlKC67HLar/KHHQUvJGLfb4jbahje3pUk3K9afeck9fwsxBZF0eUFox6T/TA6m/t+lQqf+QsQ==}
+
+  '@nats-io/nkeys@2.0.3':
+    resolution: {integrity: sha512-JVt56GuE6Z89KUkI4TXUbSI9fmIfAmk6PMPknijmuL72GcD+UgIomTcRWiNvvJKxA01sBbmIPStqJs5cMRBC3A==}
+    engines: {node: '>=18.0.0'}
+
+  '@nats-io/nuid@3.0.0':
+    resolution: {integrity: sha512-QbXZDrxmYlrn5AD06gYcUTmEHwxn96HBQMIk7XTjDlEcx6FPzVBBPjp4AMRh1lEv6B4iJ6Xb/Uz61JugPXFRQg==}
+    engines: {node: '>= 22.x'}
+
+  '@nats-io/transport-node@3.4.0':
+    resolution: {integrity: sha512-hH7u7ejIBTFEJIZ8rIcMrHJI6wl+HhpO5sVFs1+ppmXa8RuB2+Lh1+UwTzZ5xTNNm1TKcRkYy+2qCV56qp8RxA==}
+    engines: {node: '>= 18.0.0'}
+
   '@next/env@16.3.8':
     resolution: {integrity: sha512-Al9zqHVV7TJv0eFuOU4U7Lvv74PTih4Ch63sk2xCIpSTkE3udFnaOcnzP2lQVymiL7yS9Cj2iClUXlR3EQ5sEw==}
 
@@ -1259,8 +1338,19 @@ packages:
   age-encryption@0.3.1:
     resolution: {integrity: sha512-bYgd7lxM7tEANmb9bXf7xTFB3Qpq+JGKinVSdFh5MV+t2fJJZSTdKhWkvXTFJQGysZd+K9Dt3F+n+4DKazXlnQ==}
 
+  ajv-formats@3.0.1:
+    resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
+    peerDependencies:
+      ajv: ^8.0.0
+    peerDependenciesMeta:
+      ajv:
+        optional: true
+
   ajv@6.15.0:
     resolution: {integrity: sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw==}
+
+  ajv@8.20.0:
+    resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
 
   ansi-styles@4.3.0:
     resolution: {integrity: sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg==}
@@ -1478,6 +1568,9 @@ packages:
   fast-levenshtein@2.0.6:
     resolution: {integrity: sha512-DCXu6Ifhqcks7TZKY3Hxp3y6qphY5SJZmrWMDrKcERSOXWQdMhU9Ig/PYrzyw/ul9jOIyh0N4M0tbC5hodg8dw==}
 
+  fast-uri@3.1.8:
+    resolution: {integrity: sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==}
+
   fdir@6.5.0:
     resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
     engines: {node: '>=12.0.0'}
@@ -1585,6 +1678,9 @@ packages:
 
   json-schema-traverse@0.4.1:
     resolution: {integrity: sha512-xbbCH5dCYU5T8LcEhhuh7HJ88HXuW3qsI3Y0zOZFKfZEHcpWiHU/Jxzk629Brsab/mMiHQti9wMP+845RPe3Vg==}
+
+  json-schema-traverse@1.0.0:
+    resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
 
   json-stable-stringify-without-jsonify@1.0.1:
     resolution: {integrity: sha512-Bdboy+l7tA3OGW6FjyFHWkP5LuByj1Tk33Ljyq0axyzdk9//JSi2u3fP1QSmd1KNwq6VOKYGlAu87CisVir6Pw==}
@@ -1921,6 +2017,10 @@ packages:
     resolution: {integrity: sha512-1qny3OExCf0UvUV/5wpYKf2YwPcOqXzkwKKSmKHiE6ZMQs5heeE/c8eXK+PNllPvmjgAbfnsbpkGZWy8cBpn9w==}
     engines: {node: '>=4'}
 
+  require-from-string@2.0.2:
+    resolution: {integrity: sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==}
+    engines: {node: '>=0.10.0'}
+
   resolve-from@4.0.0:
     resolution: {integrity: sha512-pb/MYmXstAkysRFx8piNI1tGFNQIFA3vkE3Gq4EuA1dF6gHp/+vgZqsCGJapvy8N3Q+4o7FwvquPJcnZ7RYy4g==}
     engines: {node: '>=4'}
@@ -2038,6 +2138,9 @@ packages:
   turbo@2.11.7:
     resolution: {integrity: sha512-RhXHbqfvY6o3xt/zSHCwSNwLrZlXiqHzewi4eAj9PtZ1T1CqgMJ2yIDb7SKPTG9IikTm925mfzL6hldQVdyNWw==}
     hasBin: true
+
+  tweetnacl@1.0.3:
+    resolution: {integrity: sha512-6rt+RN7aOi1nGMyC4Xa5DdYiukl2UWCbcJft7YhxReBGQD7OAM8Pbxw6YMo4r2diNEA8FEmu32YOn9rhaiE5yw==}
 
   type-check@0.4.0:
     resolution: {integrity: sha512-XleUoc9uwGXqjWwXaUTZAmzMcFZ5858QA2vvx1Ur5xIcixXIP+8LnFDgRplU30us6teqdlskFfu+ae4K79Ooew==}
@@ -2462,6 +2565,27 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
 
+  '@nats-io/jetstream@3.4.0':
+    dependencies:
+      '@nats-io/nats-core': 3.4.0
+
+  '@nats-io/nats-core@3.4.0':
+    dependencies:
+      '@nats-io/nkeys': 2.0.3
+      '@nats-io/nuid': 3.0.0
+
+  '@nats-io/nkeys@2.0.3':
+    dependencies:
+      tweetnacl: 1.0.3
+
+  '@nats-io/nuid@3.0.0': {}
+
+  '@nats-io/transport-node@3.4.0':
+    dependencies:
+      '@nats-io/nats-core': 3.4.0
+      '@nats-io/nkeys': 2.0.3
+      '@nats-io/nuid': 3.0.0
+
   '@next/env@16.3.8': {}
 
   '@next/swc-darwin-arm64@16.3.8':
@@ -2813,12 +2937,23 @@ snapshots:
       '@noble/post-quantum': 0.5.4
       '@scure/base': 2.4.0
 
+  ajv-formats@3.0.1(ajv@8.20.0):
+    optionalDependencies:
+      ajv: 8.20.0
+
   ajv@6.15.0:
     dependencies:
       fast-deep-equal: 3.1.3
       fast-json-stable-stringify: 2.1.0
       json-schema-traverse: 0.4.1
       uri-js: 4.4.1
+
+  ajv@8.20.0:
+    dependencies:
+      fast-deep-equal: 3.1.3
+      fast-uri: 3.1.8
+      json-schema-traverse: 1.0.0
+      require-from-string: 2.0.2
 
   ansi-styles@4.3.0:
     dependencies:
@@ -3030,6 +3165,8 @@ snapshots:
 
   fast-levenshtein@2.0.6: {}
 
+  fast-uri@3.1.8: {}
+
   fdir@6.5.0(picomatch@4.0.7):
     optionalDependencies:
       picomatch: 4.0.7
@@ -3127,6 +3264,8 @@ snapshots:
   json-buffer@3.0.1: {}
 
   json-schema-traverse@0.4.1: {}
+
+  json-schema-traverse@1.0.0: {}
 
   json-stable-stringify-without-jsonify@1.0.1: {}
 
@@ -3418,6 +3557,8 @@ snapshots:
 
   redis-errors@1.2.0: {}
 
+  require-from-string@2.0.2: {}
+
   resolve-from@4.0.0: {}
 
   rolldown@1.2.11:
@@ -3543,6 +3684,8 @@ snapshots:
       '@turbo/linux-arm64': 2.11.7
       '@turbo/windows-64': 2.11.7
       '@turbo/windows-arm64': 2.11.7
+
+  tweetnacl@1.0.3: {}
 
   type-check@0.4.0:
     dependencies:

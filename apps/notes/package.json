@@ -23,6 +23,9 @@
   },
   "devDependencies": {
     "@asafarim/config": "workspace:*",
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/nats-core": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.19.1",
     "@types/pg": "^8.23.1",

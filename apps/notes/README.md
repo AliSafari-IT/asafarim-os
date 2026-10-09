@@ -15,6 +15,14 @@
 
 `GET /api/notes` needs `notes.read`; `POST /api/notes` needs `notes.write`. A refusal is `403` and **names the permission**: `{ "error": "forbidden", "permission": "notes.write" }`. An app that isn't `active` answers `503 app_inactive` before any permission check. `limits.maxNotes` (default 100) is a typed config key from the manifest.
 
+## Events (P4.1)
+
+Creating a note publishes **`notes.note.created.v1`** (schema: [`events/notes.note.created.v1.json`](events/notes.note.created.v1.json): `id`, `author`, `title`, `createdAt`; not the body). `lib/db.ts` inserts the note and writes the event to the **outbox** in **one transaction**, so there is never a note without its event or an event without its note. The outbox relay (started in `instrumentation.ts`) sends it to the stream `APP_NOTES`, which core-api created at install. With the bus down, notes are still created; their events go out when it's back.
+
+```bash
+pnpm --filter @asafarim/notes test   # with EVENTS_TEST_* set: the event reaches APP_NOTES once, and the bus-down case
+```
+
 ## Try it
 
 ```bash
@@ -51,7 +59,8 @@ pnpm e2e                             # the whole flow in a real browser (Playwri
 | `lib/platform.ts`           | one SDK instance per server process                                          |
 | `lib/gate.ts`               | signed in? app active? has the permission? one decision for the page and API |
 | `lib/auth.ts`               | Auth.js through `asafarimAuthConfig`                                         |
-| `lib/db.ts`                 | the app's own database (`DATABASE_URL`) and its one table                    |
+| `lib/db.ts`                 | the app's own database (`DATABASE_URL`), its table, the outbox and relay     |
+| `lib/events.ts`             | the publisher, checked against `events/*.json` (the manifest's schemas)      |
 | `app/`                      | the page, the server actions and `api/notes`, `api/health`                   |
 
 The core never imports this app: `pnpm platform:boundaries` proves it.

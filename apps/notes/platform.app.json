@@ -65,6 +65,14 @@
       "expose": false
     }
   ],
+  "events": {
+    "publishes": [
+      {
+        "type": "notes.note.created.v1",
+        "schema": "./events/notes.note.created.v1.json"
+      }
+    ]
+  },
   "config": [
     {
       "key": "limits.maxNotes",

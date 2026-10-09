@@ -105,10 +105,11 @@ jobs:
   # OS-D1 (#26): the local dev environment end to end: compose up, the
   # per-service bootstrap twice (idempotent), identity and core-api /readyz
   # green, a full sign-in through the dev login stub to an ID token; then
-  # core-api's integration tests (P3.1) on the same Postgres; then everything down.
+  # core-api's integration tests (P3.1) on the same Postgres and NATS, and the
+  # event bus tests (P4.1); then everything down.
   dev-env:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -125,12 +126,24 @@ jobs:
       - name: Dev environment smoke test
         run: pnpm dev:smoke
 
-      # core-api (P3.1) against the dev Postgres the smoke test left running.
+      # core-api (P3.1) against the dev Postgres and NATS the smoke test left running.
       - name: core-api integration tests
         env:
           CORE_API_TEST_ADMIN_URL: postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres
+          CORE_API_TEST_NATS_URL: nats://127.0.0.1:54222
           CORE_API_TEST_REQUIRED: "1"
         run: pnpm turbo run test --filter=@asafarim/core-api
+
+      # P4.1: the outbox, the relay and the notes reference flow against the same Postgres and NATS
+      # JetStream. The bus-down test stops and starts that NATS container (its store survives), so
+      # the two suites run one after the other (--concurrency=1), never while the other uses the bus.
+      - name: Event bus integration tests
+        env:
+          EVENTS_TEST_ADMIN_URL: postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres
+          EVENTS_TEST_NATS_URL: nats://127.0.0.1:54222
+          EVENTS_TEST_NATS_CONTROL: compose
+          EVENTS_TEST_REQUIRED: "1"
+        run: pnpm turbo run test --concurrency=1 --filter=@asafarim/events --filter=@asafarim/notes
 
       - name: Tear down
         if: always()

@@ -46,6 +46,12 @@ export interface RegistryDeps {
   appUrlTemplate?: string;
   /** Called after every change that the gateway must see at once (install, activate, deactivate). */
   onLifecycleChange?: () => void;
+  /**
+   * The event bus (P4.1): install creates the JetStream stream of an app that declares
+   * `events.publishes` (APP_<ID> on <id>.>). Unset = no bus configured: the install is recorded
+   * with `stream: "no_bus"`, no stream is created, and the app's events wait in its outbox.
+   */
+  bus?: { ensureAppStream(appId: string): Promise<{ stream: string; result: string }> };
 }
 
 /** Parse and validate a manifest; refuse an id mismatch and anything outside the namespace. */
@@ -135,6 +141,23 @@ export function createRegistry(deps: RegistryDeps) {
       }
     }
 
+    // The app's stream, before anything is recorded: if the bus can't create it, nothing is
+    // installed and the admin can simply retry (the database and role steps are idempotent).
+    let stream: { stream: string; result: string } | "none" | "no_bus" = "none";
+    if ((manifest.events?.publishes?.length ?? 0) > 0) {
+      if (!deps.bus) stream = "no_bus";
+      else {
+        try {
+          stream = await deps.bus.ensureAppStream(appId);
+        } catch (err) {
+          throw new ApiError(
+            "bus_unavailable",
+            `the event stream for ${appId} couldn't be created: ${(err as Error).message}`,
+          );
+        }
+      }
+    }
+
     const credential = scheme.issue(appId);
     await inTx(async (c) => {
       await c.query(
@@ -156,6 +179,7 @@ export function createRegistry(deps: RegistryDeps) {
         role: roleResult,
         db: dbResult,
         keyId: credential.keyId,
+        stream,
       });
     });
 
