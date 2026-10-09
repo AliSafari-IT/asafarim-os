@@ -6,7 +6,14 @@
  * publisher stream and consumers, and removes them; the shared DEADLETTER stream stays (it is
  * core-api's), and only messages this run published are read from it.
  */
-import { jetstream, jetstreamManager, type JetStreamClient, type JetStreamManager } from "@nats-io/jetstream";
+import {
+  AckPolicy,
+  DeliverPolicy,
+  jetstream,
+  jetstreamManager,
+  type JetStreamClient,
+  type JetStreamManager,
+} from "@nats-io/jetstream";
 import type { NatsConnection } from "@nats-io/nats-core";
 import { connect } from "@nats-io/transport-node";
 import pg from "pg";
@@ -145,6 +152,15 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("subscribe: inbox, ack after commit, de
     expect(await ensureConsumer(jsm, app, TYPE)).toBe("updated");
     expect((await jsm.consumers.info(streamName(PUB), consumerName(app, TYPE))).config.max_deliver).toBe(-1);
     expect(await ensureConsumer(jsm, app, TYPE)).toBe("exists");
+    // A consumer with this name that wasn't made here (another ack or deliver policy) is refused, not "exists".
+    const foreign = `foreign${run}`;
+    await jsm.consumers.add(streamName(PUB), {
+      durable_name: consumerName(foreign, TYPE),
+      filter_subject: TYPE,
+      ack_policy: AckPolicy.None,
+      deliver_policy: DeliverPolicy.All,
+    });
+    await expect(ensureConsumer(jsm, foreign, TYPE)).rejects.toThrow(/ack_policy none \/ deliver_policy all/);
   }, 30_000);
 
   it("an event is handled exactly once, with the envelope as published; the inbox has its row", async () => {

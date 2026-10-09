@@ -155,6 +155,13 @@ export async function ensureConsumer(
   try {
     const info = await jsm.consumers.info(stream, name);
     const c = info.config;
+    // JetStream can't change these on an existing consumer. A consumer with this name but another
+    // ack or deliver policy wasn't made here: refuse rather than report it as in line.
+    if (c.ack_policy !== AckPolicy.Explicit || c.deliver_policy !== DeliverPolicy.New) {
+      throw new Error(
+        `events: consumer ${name} on ${stream} has ack_policy ${c.ack_policy} / deliver_policy ${c.deliver_policy}, not explicit / new; delete it and install again`,
+      );
+    }
     const same =
       c.filter_subject === type &&
       c.ack_wait === ackWait &&
