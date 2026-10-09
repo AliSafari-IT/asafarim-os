@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   INBOX_SQL,
   consumerName,
+  createDeliveryMemory,
   createEvent,
   deadLetterSubject,
   parseEnvelope,
@@ -82,13 +83,33 @@ function fakeDb() {
   const inbox = new Set<string>();
   const log: string[] = [];
   let released = 0;
+  /** Failures to inject: how many of the next connects / BEGINs / inbox INSERTs throw, and a COMMIT error. */
+  const faults = { connect: 0, begin: 0, insert: 0, commit: undefined as Error | undefined };
   const pool: RelayPool = {
     async connect() {
+      if (faults.connect > 0) {
+        faults.connect--;
+        throw new Error("connect ECONNREFUSED");
+      }
       let pendingInbox: string | undefined;
       const client: RelayClient = {
         async query<R>(text: string, values?: unknown[]) {
           const sql = text.trim().split(/\s+/).slice(0, 3).join(" ");
           log.push(sql);
+          if (text === "BEGIN" && faults.begin > 0) {
+            faults.begin--;
+            throw new Error("the database system is starting up");
+          }
+          if (text === "COMMIT" && faults.commit) {
+            const err = faults.commit;
+            faults.commit = undefined;
+            pendingInbox = undefined;
+            throw err;
+          }
+          if (text.startsWith("INSERT INTO asafarim_inbox") && faults.insert > 0) {
+            faults.insert--;
+            throw new Error("Connection terminated unexpectedly");
+          }
           if (text.startsWith("INSERT INTO asafarim_inbox")) {
             const id = values![0] as string;
             if (inbox.has(id)) return { rows: [] as R[], rowCount: 0 };
@@ -104,7 +125,7 @@ function fakeDb() {
       return client;
     },
   };
-  return { pool, inbox, log, released: () => released };
+  return { pool, inbox, log, faults, released: () => released };
 }
 
 function fakeDelivery(data: Uint8Array, deliveryCount = 1) {
@@ -128,20 +149,32 @@ describe("processDelivery: the inbox and the handler in one transaction", () => 
   function setup(handler: EventHandler, extra: { maxDeliver?: number; deadLetterFails?: boolean } = {}) {
     const db = fakeDb();
     const letters: { subject: string; letter: DeadLetter; msgId: string }[] = [];
+    const bus = { deadLetterFails: extra.deadLetterFails ?? false };
     const opts = {
       appId: "rec",
       type: TYPE,
       handler,
       pool: db.pool,
+      memory: createDeliveryMemory(),
       maxDeliver: extra.maxDeliver,
       backoff: { initialMs: 100, maxMs: 1000 },
       now,
       deadLetter: async (subject: string, letter: DeadLetter, msgId: string) => {
-        if (extra.deadLetterFails) throw new Error("bus down");
+        if (bus.deadLetterFails) throw new Error("bus down");
         letters.push({ subject, letter, msgId });
       },
     };
-    return { db, letters, opts };
+    return { db, letters, opts, bus };
+  }
+
+  /** Deliver the same stream message `n` times (delivery counts from..from+n-1); return the outcomes. */
+  async function deliver(opts: Parameters<typeof processDelivery>[0], n: number, from = 1) {
+    const out: { outcome: string; calls: string[] }[] = [];
+    for (let i = 0; i < n; i++) {
+      const { d, calls } = fakeDelivery(encode(event), from + i);
+      out.push({ outcome: await processDelivery(opts, d), calls });
+    }
+    return out;
   }
 
   it("runs the handler inside BEGIN … COMMIT after the inbox insert, and acks only after the commit", async () => {
@@ -179,20 +212,20 @@ describe("processDelivery: the inbox and the handler in one transaction", () => 
     expect(await processDelivery(opts, d)).toBe("retry");
     expect(db.log.at(-1)).toBe("ROLLBACK");
     expect(db.inbox.size).toBe(0);
-    expect(calls).toEqual(["nak:200"]); // 100 × 2^(2-1)
+    expect(calls).toEqual(["nak:100"]); // the 1st handler failure: 100 × 2^0, whatever the delivery count
     expect(db.released()).toBe(1);
   });
 
-  it("the maxDeliver-th failure: the envelope and failure metadata go to deadletter.<app>.<type>, then term", async () => {
+  it("the maxDeliver-th handler failure: the envelope and failure metadata go to deadletter.<app>.<type>, then term", async () => {
     const { letters, opts } = setup(
       async () => {
         throw new Error("still broken");
       },
       { maxDeliver: 3 },
     );
-    const { d, calls } = fakeDelivery(encode(event), 3);
-    expect(await processDelivery(opts, d)).toBe("dead_lettered");
-    expect(calls).toEqual(["term:dead-lettered: max_deliver"]);
+    const out = await deliver(opts, 3);
+    expect(out.map((r) => r.outcome)).toEqual(["retry", "retry", "dead_lettered"]);
+    expect(out.map((r) => r.calls)).toEqual([["nak:100"], ["nak:200"], ["term:dead-lettered: max_deliver"]]);
     expect(letters).toEqual([
       {
         subject: `deadletter.rec.${TYPE}`,
@@ -204,6 +237,7 @@ describe("processDelivery: the inbox and the handler in one transaction", () => 
             type: TYPE,
             reason: "max_deliver",
             attempts: 3,
+            deliveries: 3,
             error: "still broken",
             stream: "APP_NOTES",
             streamSeq: 42,
@@ -217,28 +251,130 @@ describe("processDelivery: the inbox and the handler in one transaction", () => 
 
   it("the dead letter can't be stored: nak (redelivered); the next delivery dead-letters without running the handler", async () => {
     let n = 0;
-    const failing = setup(
+    const { opts, letters, bus } = setup(
       async () => {
         n++;
         throw new Error("x");
       },
       { maxDeliver: 2, deadLetterFails: true },
     );
-    const first = fakeDelivery(encode(event), 2);
-    expect(await processDelivery(failing.opts, first.d)).toBe("retry");
-    expect(first.calls).toEqual(["nak:200"]);
-    expect(n).toBe(1);
+    const failed = await deliver(opts, 2);
+    expect(failed.map((r) => r.outcome)).toEqual(["retry", "retry"]); // the 2nd: the dead letter's publish failed
+    expect(failed[1]!.calls).toEqual(["nak:200"]);
+    expect(n).toBe(2);
+    expect(letters).toEqual([]);
 
-    const ok = setup(
+    bus.deadLetterFails = false;
+    const [third] = await deliver(opts, 1, 3);
+    expect(third!.outcome).toBe("dead_lettered");
+    expect(n).toBe(2); // the handler didn't run again
+    expect(letters[0]!.letter.failure).toMatchObject({ attempts: 2, deliveries: 3, error: "x" });
+  });
+
+  it("pool.connect() fails: nak with a backoff, the handler isn't run, nothing counts, never a dead letter", async () => {
+    let n = 0;
+    const { db, opts, letters } = setup(async () => void n++, { maxDeliver: 2 });
+    db.faults.connect = 50;
+    const out = await deliver(opts, 50);
+    expect(new Set(out.map((r) => r.outcome))).toEqual(new Set(["retry"]));
+    expect(out[0]!.calls).toEqual(["nak:100"]);
+    expect(out[49]!.calls).toEqual(["nak:1000"]); // capped
+    expect(n).toBe(0);
+    expect(letters).toEqual([]);
+    expect(opts.memory.handlerFailures.size).toBe(0);
+
+    // The database is back: delivery 51 runs the handler and is processed.
+    const [back] = await deliver(opts, 1, 51);
+    expect(back!.outcome).toBe("processed");
+    expect(back!.calls).toEqual(["ack"]);
+    expect(n).toBe(1);
+  });
+
+  it("BEGIN or the inbox INSERT fails maxDeliver+1 times: no dead letter, and the handler runs once the database is back", async () => {
+    let n = 0;
+    const { db, opts, letters } = setup(async () => void n++, { maxDeliver: 3 });
+    db.faults.begin = 2;
+    db.faults.insert = 2;
+    const out = await deliver(opts, 4);
+    expect(out.map((r) => r.outcome)).toEqual(["retry", "retry", "retry", "retry"]);
+    expect(out.every((r) => r.calls.length === 1 && r.calls[0]!.startsWith("nak:"))).toBe(true);
+    expect(n).toBe(0);
+    expect(letters).toEqual([]);
+    expect(db.released()).toBe(4); // every connection went back to the pool
+    expect(db.inbox.size).toBe(0);
+
+    const [back] = await deliver(opts, 1, 5);
+    expect(back!.outcome).toBe("processed");
+    expect(n).toBe(1);
+    expect([...db.inbox]).toEqual([event.id]);
+  });
+
+  it("delivery maxDeliver+1 after a database outage, with a handler that succeeds: processed", async () => {
+    let n = 0;
+    const { opts, letters } = setup(async () => void n++, { maxDeliver: 5 });
+    const { d, calls } = fakeDelivery(encode(event), 6); // the bus redelivered it during the outage
+    expect(await processDelivery(opts, d)).toBe("processed");
+    expect(calls).toEqual(["ack"]);
+    expect(n).toBe(1);
+    expect(letters).toEqual([]);
+  });
+
+  it("only handler failures count: interleaved database failures don't move the event toward a dead letter", async () => {
+    let n = 0;
+    const { db, opts, letters } = setup(
       async () => {
         n++;
+        throw new Error("handler bug");
       },
       { maxDeliver: 2 },
     );
-    const second = fakeDelivery(encode(event), 3);
-    expect(await processDelivery(ok.opts, second.d)).toBe("dead_lettered");
-    expect(n).toBe(1); // the handler didn't run again
-    expect(ok.letters[0]!.letter.failure.attempts).toBe(3);
+    expect((await deliver(opts, 1, 1))[0]!.outcome).toBe("retry"); // handler failure 1
+    db.faults.connect = 3;
+    expect((await deliver(opts, 3, 2)).map((r) => r.outcome)).toEqual(["retry", "retry", "retry"]);
+    expect(letters).toEqual([]);
+    expect((await deliver(opts, 1, 5))[0]!.outcome).toBe("dead_lettered"); // handler failure 2
+    expect(n).toBe(2);
+    expect(letters[0]!.letter.failure).toMatchObject({ attempts: 2, deliveries: 5 });
+  });
+
+  it("a COMMIT that loses the connection is retried without counting; a deferred constraint violation counts", async () => {
+    let n = 0;
+    const { db, opts, letters } = setup(async () => void n++, { maxDeliver: 1 });
+    db.faults.commit = new Error("Connection terminated unexpectedly");
+    expect((await deliver(opts, 1))[0]!.outcome).toBe("retry");
+    expect(letters).toEqual([]);
+
+    db.faults.commit = Object.assign(new Error("violates foreign key constraint"), { code: "23503" });
+    expect((await deliver(opts, 1, 2))[0]!.outcome).toBe("dead_lettered");
+    expect(letters[0]!.letter.failure).toMatchObject({ attempts: 1, error: "violates foreign key constraint" });
+    expect(n).toBe(2);
+    expect(db.inbox.size).toBe(0);
+  });
+
+  it("after a restart (a new memory) the handler-failure count starts again from zero", async () => {
+    const { opts, letters } = setup(
+      async () => {
+        throw new Error("x");
+      },
+      { maxDeliver: 2 },
+    );
+    await deliver(opts, 1);
+    const restarted = { ...opts, memory: createDeliveryMemory() };
+    expect((await deliver(restarted, 1, 2))[0]!.outcome).toBe("retry");
+    expect(letters).toEqual([]);
+    expect((await deliver(restarted, 1, 3))[0]!.outcome).toBe("dead_lettered");
+  });
+
+  it("a finished message is forgotten", async () => {
+    let fail = true;
+    const { opts } = setup(async () => {
+      if (fail) throw new Error("x");
+    });
+    await deliver(opts, 1);
+    expect(opts.memory.handlerFailures.size).toBe(1);
+    fail = false;
+    expect((await deliver(opts, 1, 2))[0]!.outcome).toBe("processed");
+    expect(opts.memory.handlerFailures.size).toBe(0);
   });
 
   it("an invalid envelope is dead-lettered at once (retrying can't help), with the raw text", async () => {

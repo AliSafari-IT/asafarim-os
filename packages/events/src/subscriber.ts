@@ -7,8 +7,10 @@
  *         → a duplicate id: ROLLBACK, ack, the handler is not called
  *         → handler(event, tx) → COMMIT → ack            (ack only after commit)
  *   a handler error → ROLLBACK (no inbox row) → nak with a backoff delay → redelivered
- *   the `maxDeliver`-th failure → the envelope + failure metadata go to
+ *   the `maxDeliver`-th HANDLER failure → the envelope + failure metadata go to
  *         `deadletter.<consumer-app>.<type>` (DEADLETTER stream) → term: never redelivered
+ *   a database failure (connect, BEGIN, the inbox INSERT, COMMIT) → nak with a backoff; it never
+ *         counts toward `maxDeliver`, so an outage can't dead-letter events
  *
  * A crash between COMMIT and the ack is safe: the redelivery finds the inbox row and is acked.
  * The subscriber never creates streams or consumers (core-api does): a missing consumer is retried
@@ -34,9 +36,11 @@ export interface DeadLetter {
     consumer: string;
     type: string;
     reason: "max_deliver" | "invalid_envelope";
-    /** Deliveries tried, including the last one. */
+    /** Handler failures this subscriber process counted (database or bus outages never count). */
     attempts: number;
-    /** The last error's message (truncated); never a stack trace. */
+    /** The bus's delivery count for the message, outage redeliveries included. */
+    deliveries: number;
+    /** The last handler error's message (truncated); never a stack trace. */
     error: string;
     stream: string;
     streamSeq: number;
@@ -58,12 +62,38 @@ export interface Delivery {
 
 export type DeliveryOutcome = "processed" | "duplicate" | "retry" | "dead_lettered";
 
+/**
+ * What ONE subscriber process remembers between deliveries of the same stream message, keyed
+ * `<stream>:<seq>`. In memory only: after a restart the counts start again from zero (see README).
+ */
+export interface DeliveryMemory {
+  /** Handler failures so far. Only the handler's own failures count toward `maxDeliver`. */
+  handlerFailures: Map<string, number>;
+  /** Messages whose dead letter couldn't be stored, with the handler error it carries. */
+  deadLetterFailed: Map<string, string>;
+}
+
+/** Entries kept per map before the oldest is dropped (a message another replica finished). */
+const MEMORY_LIMIT = 10_000;
+
+export function createDeliveryMemory(): DeliveryMemory {
+  return { handlerFailures: new Map(), deadLetterFailed: new Map() };
+}
+
+function remember<V>(m: Map<string, V>, key: string, value: V) {
+  m.delete(key); // re-insert at the end: the oldest entry is the first one
+  m.set(key, value);
+  if (m.size > MEMORY_LIMIT) m.delete(m.keys().next().value!);
+}
+
 export interface ProcessOptions<T> {
   appId: string;
   type: string;
   handler: EventHandler<T>;
   pool: RelayPool;
-  /** Failed deliveries before the event is dead-lettered (default 5). */
+  /** The subscriber's memory of earlier deliveries (one per subscription). */
+  memory: DeliveryMemory;
+  /** Handler failures before the event is dead-lettered (default 5). */
   maxDeliver?: number;
   /** Delay before a failed event is redelivered: initialMs × 2^(n-1), capped (default 500 ms … 30 s). */
   backoff?: { initialMs?: number; maxMs?: number };
@@ -95,22 +125,45 @@ export function parseEnvelope(data: Uint8Array, type: string): CloudEvent {
   return e as CloudEvent;
 }
 
+/** A COMMIT that fails on a deferred constraint (SQLSTATE class 23) is the handler's writes' fault. */
+const isConstraintError = (err: unknown) =>
+  typeof (err as { code?: unknown }).code === "string" && (err as { code: string }).code.startsWith("23");
+
 /**
  * Handle ONE delivery: the inbox insert and the handler in one transaction, the ack after the
- * commit, a nak (with a delay) or a dead letter on failure. Never throws for a handler error.
+ * commit, a nak (with a delay) or a dead letter on failure. Never throws for a handler or
+ * database error.
+ *
+ * Only the HANDLER's failures count toward `maxDeliver`. A failure that isn't the handler's
+ * (`pool.connect()`, `BEGIN`, the inbox `INSERT`, a COMMIT that isn't a constraint violation) naks
+ * with a backoff and never leads to a dead letter, however long the outage. The bus's
+ * `deliveryCount` is not used for the limit: it also counts those outage redeliveries.
  */
 export async function processDelivery<T>(o: ProcessOptions<T>, d: Delivery): Promise<DeliveryOutcome> {
   const maxDeliver = o.maxDeliver ?? DEFAULT_MAX_DELIVER;
   const consumer = consumerName(o.appId, o.type);
+  const key = `${d.stream}:${d.streamSeq}`;
+  const mem = o.memory;
+  const delayFor = (n: number) => backoffDelay(n, o.backoff?.initialMs ?? 500, o.backoff?.maxMs ?? 30_000);
+  const forget = () => {
+    mem.handlerFailures.delete(key);
+    mem.deadLetterFailed.delete(key);
+  };
 
-  const giveUp = async (reason: DeadLetter["failure"]["reason"], envelope: CloudEvent | string, error: string) => {
+  const giveUp = async (
+    reason: DeadLetter["failure"]["reason"],
+    envelope: CloudEvent | string,
+    error: string,
+    attempts: number,
+  ) => {
     const letter: DeadLetter = {
       envelope,
       failure: {
         consumer: o.appId,
         type: o.type,
         reason,
-        attempts: d.deliveryCount,
+        attempts,
+        deliveries: d.deliveryCount,
         error: error.slice(0, MAX_ERROR_LENGTH),
         stream: d.stream,
         streamSeq: d.streamSeq,
@@ -121,21 +174,23 @@ export async function processDelivery<T>(o: ProcessOptions<T>, d: Delivery): Pro
       // One dead letter per stream message, even if it is published again after a lost PubAck.
       await o.deadLetter(deadLetterSubject(o.appId, o.type), letter, `${consumer}:${d.stream}:${d.streamSeq}`);
     } catch (err) {
-      // Not stored: let the bus redeliver it, and dead-letter it then.
+      // Not stored: remember it, let the bus redeliver it, and dead-letter it then.
+      remember(mem.deadLetterFailed, key, error);
       o.log?.warn("events.subscriber.dead_letter_failed", {
         appId: o.appId,
         type: o.type,
         error: (err as Error).message,
       });
-      d.nak(backoffDelay(d.deliveryCount, o.backoff?.initialMs ?? 500, o.backoff?.maxMs ?? 30_000));
+      d.nak(delayFor(d.deliveryCount));
       return "retry" as const;
     }
+    forget();
     d.term(`dead-lettered: ${reason}`);
     o.log?.warn("events.subscriber.dead_lettered", {
       appId: o.appId,
       type: o.type,
       reason,
-      attempts: d.deliveryCount,
+      attempts,
       eventId: typeof envelope === "string" ? undefined : envelope.id,
     });
     return "dead_lettered" as const;
@@ -146,17 +201,44 @@ export async function processDelivery<T>(o: ProcessOptions<T>, d: Delivery): Pro
     event = parseEnvelope(d.data, o.type) as CloudEvent<T>;
   } catch (err) {
     // It will never parse: retrying is pointless.
-    return giveUp("invalid_envelope", decoder.decode(d.data).slice(0, 64 * 1024), (err as Error).message);
+    return giveUp("invalid_envelope", decoder.decode(d.data).slice(0, 64 * 1024), (err as Error).message, 0);
   }
 
-  // A delivery past the limit is one whose dead letter couldn't be stored before: don't run the handler again.
-  if (d.deliveryCount > maxDeliver) return giveUp("max_deliver", event, "the dead letter is being retried");
+  // This process already ran the handler maxDeliver times and only the dead letter's publish
+  // failed: publish it again, don't run the handler again.
+  const pending = mem.deadLetterFailed.get(key);
+  if (pending !== undefined) return giveUp("max_deliver", event, pending, mem.handlerFailures.get(key) ?? maxDeliver);
 
-  let failure: Error | undefined;
+  /** Not the handler's fault: nak with a backoff, count nothing. */
+  const infraRetry = (step: string, err: unknown) => {
+    const delay = delayFor(d.deliveryCount);
+    o.log?.warn("events.subscriber.unavailable", {
+      appId: o.appId,
+      type: o.type,
+      eventId: event.id,
+      step,
+      delivery: d.deliveryCount,
+      retryInMs: delay,
+      error: String((err as Error)?.message ?? err).slice(0, MAX_ERROR_LENGTH),
+    });
+    d.nak(delay);
+    return "retry" as const;
+  };
+
+  let client: Awaited<ReturnType<RelayPool["connect"]>>;
+  try {
+    client = await o.pool.connect();
+  } catch (err) {
+    return infraRetry("connect", err);
+  }
+
+  let step: "begin" | "inbox" | "handler" | "commit" = "begin";
+  let failure: unknown;
+  let failed = false;
   let duplicate = false;
-  const client = await o.pool.connect();
   try {
     await client.query("BEGIN");
+    step = "inbox";
     const inserted = await client.query(
       `INSERT INTO ${INBOX_TABLE} (event_id, type) VALUES ($1, $2) ON CONFLICT (event_id) DO NOTHING`,
       [event.id, event.type],
@@ -165,29 +247,39 @@ export async function processDelivery<T>(o: ProcessOptions<T>, d: Delivery): Pro
       duplicate = true;
       await client.query("ROLLBACK");
     } else {
+      step = "handler";
       await o.handler(event, client);
+      step = "commit";
       await client.query("COMMIT");
     }
   } catch (err) {
-    failure = err instanceof Error ? err : new Error(String(err));
+    failed = true;
+    failure = err;
     await client.query("ROLLBACK").catch(() => undefined);
   } finally {
     client.release();
   }
 
-  if (!failure) {
+  if (!failed) {
+    forget();
     await d.ack(); // only now: the change and the inbox row are committed
     return duplicate ? "duplicate" : "processed";
   }
-  if (d.deliveryCount >= maxDeliver) return giveUp("max_deliver", event, failure.message);
-  const delay = backoffDelay(d.deliveryCount, o.backoff?.initialMs ?? 500, o.backoff?.maxMs ?? 30_000);
+  const handlersFault = step === "handler" || (step === "commit" && isConstraintError(failure));
+  if (!handlersFault) return infraRetry(step, failure);
+
+  const message = failure instanceof Error ? failure.message : String(failure);
+  const failures = (mem.handlerFailures.get(key) ?? 0) + 1;
+  remember(mem.handlerFailures, key, failures);
+  if (failures >= maxDeliver) return giveUp("max_deliver", event, message, failures);
+  const delay = delayFor(failures);
   o.log?.warn("events.subscriber.failed", {
     appId: o.appId,
     type: o.type,
     eventId: event.id,
-    attempt: d.deliveryCount,
+    attempt: failures,
     retryInMs: delay,
-    error: failure.message.slice(0, MAX_ERROR_LENGTH),
+    error: message.slice(0, MAX_ERROR_LENGTH),
   });
   d.nak(delay);
   return "retry";
@@ -202,7 +294,7 @@ export interface SubscribeOptions {
   servers?: string | string[];
   /** Or hand it a JetStream client (tests); the subscriber then never closes it. */
   jetstream?: () => Promise<JetStreamClient>;
-  /** Failed deliveries before the event is dead-lettered (default 5). */
+  /** Handler failures before the event is dead-lettered (default 5). */
   maxDeliver?: number;
   /** Redelivery delay after a handler error (default 500 ms … 30 s, doubling). */
   backoff?: { initialMs?: number; maxMs?: number };
@@ -267,13 +359,18 @@ export function subscribe<T = unknown>(type: string, handler: EventHandler<T>, o
       wakeUp = done;
     });
 
+  const memory = createDeliveryMemory();
+  // A pool resolver that throws is a failed connect: processDelivery naks it like one.
+  const lazyPool: RelayPool = { connect: async () => (await pool()).connect() };
+
   async function handle(client: JetStreamClient, m: JsMsg) {
     const outcome = await processDelivery<T>(
       {
         appId: opts.appId,
         type,
         handler,
-        pool: await pool(),
+        pool: lazyPool,
+        memory,
         maxDeliver: opts.maxDeliver,
         backoff: opts.backoff,
         log,
@@ -317,7 +414,7 @@ export function subscribe<T = unknown>(type: string, handler: EventHandler<T>, o
           try {
             await handle(client, m);
           } catch (err) {
-            // The database is down, or the ack failed: the bus redelivers after ack_wait.
+            // The ack failed (the bus went away): the bus redelivers after ack_wait; the inbox absorbs it.
             log.warn("events.subscriber.delivery_failed", {
               appId: opts.appId,
               consumer,
