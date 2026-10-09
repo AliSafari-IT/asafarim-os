@@ -25,6 +25,7 @@ node --env-file=../../.dev/core-api.env src/server.ts
 | `CORE_API_APP_URL_TEMPLATE`         | where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset → `https://<its primary domain>` |
 | `PORT`                              | default `4020`                                                                                                  |
 | `CORE_API_APP_DB_HOST` / `_PORT`    | host and port put into an installed app's `DATABASE_URL` (default: the provisioner's)                           |
+| `CORE_API_NATS_URL`                 | the event bus (P4.1): install creates the stream of an app that publishes events. Unset = no streams            |
 
 ## Install (admin)
 
@@ -38,8 +39,9 @@ pnpm platform app activate notes                              # deactivate: the 
 
 1. validates it with `@asafarim/app-manifest`, and requires `manifest.id` to match `<id>`;
 2. creates the app's **own database and login role** (`app_<id>`, with `REVOKE CONNECT … FROM PUBLIC`), using the same helper as the dev bootstrap (`src/provision.ts`);
-3. issues a **registry credential** and stores only its verifier;
-4. returns, **once**:
+3. if the manifest declares `events.publishes` (P4.1), creates the app's **JetStream stream** `APP_<ID>` on subjects `<id>.>` (file storage, idempotent). The app and its outbox relay never create streams. If the bus can't create it, **nothing is installed** (`503 bus_unavailable`; retrying is safe). Without `CORE_API_NATS_URL` the install goes through and its audit event records `stream: "no_bus"`;
+4. issues a **registry credential** and stores only its verifier;
+5. returns, **once**:
 
 ```json
 {
@@ -252,6 +254,7 @@ Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"
 | `invalid_state`             | 409       | a lifecycle change not allowed from the current state                                     |
 | `role_not_found`            | 404       | a grant or revoke names a role that doesn't exist (or is deprecated, for a grant)         |
 | `app_inactive`              | 503       | an access token was asked for an app that isn't `active`                                  |
+| `bus_unavailable`           | 503       | install of an app that publishes events, and its stream couldn't be created (P4.1)        |
 | `forbidden`                 | 403       | signed in to the admin API, but without the role `core.admin`                             |
 | `not_found` / `bad_request` | 404 / 400 | —                                                                                         |
 
@@ -261,4 +264,4 @@ Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"
 pnpm --filter @asafarim/core-api test
 ```
 
-The integration suite runs only with `CORE_API_TEST_ADMIN_URL`, a superuser URL on a **dev** Postgres such as `postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres` from `pnpm dev`. It creates a throwaway core database and uniquely named app databases, and drops them all afterwards. CI's `dev-env` job runs it with `CORE_API_TEST_REQUIRED=1`, so it fails rather than skips.
+The integration suite runs only with `CORE_API_TEST_ADMIN_URL`, a superuser URL on a **dev** Postgres such as `postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres` from `pnpm dev`. It creates a throwaway core database and uniquely named app databases, and drops them all afterwards. The stream test (`test/events.integration.test.ts`) also needs `CORE_API_TEST_NATS_URL` (`nats://127.0.0.1:54222` from `pnpm dev`). CI's `dev-env` job runs them with `CORE_API_TEST_REQUIRED=1`, so they fail rather than skip.

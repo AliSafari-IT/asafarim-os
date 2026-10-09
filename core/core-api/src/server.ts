@@ -27,6 +27,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import pg from "pg";
+import { createStreamAdmin } from "@asafarim/events";
 import { createAdminQueries } from "./admin.ts";
 import {
   CORE_ADMIN_ROLE,
@@ -355,7 +356,11 @@ async function main() {
   const appDbPort = appDatabasePort(process.env.CORE_API_APP_DB_PORT, appDb);
   const tokenKey = parseTokenKey(required("CORE_API_TOKEN_SIGNING_JWK"));
   const snapshot = createAppSnapshot(() => loadGatewayApps(pool));
+  // P4.1: with a bus configured, installing an app that publishes events creates its JetStream stream.
+  const natsUrl = process.env.CORE_API_NATS_URL;
+  const bus = natsUrl ? createStreamAdmin({ servers: natsUrl.split(","), name: "core-api" }) : undefined;
   const registry = createRegistry({
+    bus,
     pool,
     tokenKey,
     accessTokenTtlSeconds: parseTokenTtl(process.env.CORE_API_ACCESS_TOKEN_TTL_SECONDS),
