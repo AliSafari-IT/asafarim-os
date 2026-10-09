@@ -356,9 +356,20 @@ async function main() {
   const appDbPort = appDatabasePort(process.env.CORE_API_APP_DB_PORT, appDb);
   const tokenKey = parseTokenKey(required("CORE_API_TOKEN_SIGNING_JWK"));
   const snapshot = createAppSnapshot(() => loadGatewayApps(pool));
-  // P4.1: with a bus configured, installing an app that publishes events creates its JetStream stream.
+  // P4.1: with a bus configured, installing (or re-registering) an app creates its JetStream stream
+  // when it publishes, and its durable consumers when it subscribes.
   const natsUrl = process.env.CORE_API_NATS_URL;
   const bus = natsUrl ? createStreamAdmin({ servers: natsUrl.split(","), name: "core-api" }) : undefined;
+  // The shared DEADLETTER stream: ensured at boot, and again before any consumer is created, so a
+  // bus that is down now doesn't stop core-api from starting.
+  void bus?.ensureDeadLetterStream().then(
+    ({ stream, result }) =>
+      process.stdout.write(`${JSON.stringify({ service: "core-api", msg: "events.deadletter", stream, result })}\n`),
+    (err: Error) =>
+      process.stderr.write(
+        `${JSON.stringify({ service: "core-api", msg: "events.deadletter_unavailable", error: err.message })}\n`,
+      ),
+  );
   const registry = createRegistry({
     bus,
     pool,
