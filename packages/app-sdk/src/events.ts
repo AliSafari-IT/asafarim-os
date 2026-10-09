@@ -5,6 +5,7 @@
  *   const publisher = createPublisher({ manifest, schemas });          // checks every declared schema
  *   await publisher.publish(tx, "notes.note.created.v1", data, { subject: id }); // inside YOUR transaction
  *   startAppRelay({ appId, pool });                                    // on boot: outbox → JetStream
+ *   subscribe(type, async (event, tx) => {…}, { appId, pool, servers }); // exactly once per event id (inbox)
  */
 import { startRelay, type Relay, type RelayOptions } from "@asafarim/events";
 import { consoleLogger } from "./register.ts";

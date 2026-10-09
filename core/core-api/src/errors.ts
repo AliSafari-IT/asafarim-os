@@ -19,7 +19,7 @@ export const ERRORS = {
   role_not_found: 404, //         grant/revoke names a role that doesn't exist or is deprecated
   bad_request: 400,
   app_inactive: 503, //           a token is only issued for an active app
-  bus_unavailable: 503, //        install of an app that publishes events, and its stream couldn't be created (P4.1)
+  bus_unavailable: 503, //        install or registration of an app that publishes or subscribes, and its stream or consumers couldn't be set up (P4.1)
 } as const;
 
 export type ErrorCode = keyof typeof ERRORS;

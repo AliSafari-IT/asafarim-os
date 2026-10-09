@@ -47,11 +47,51 @@ export interface RegistryDeps {
   /** Called after every change that the gateway must see at once (install, activate, deactivate). */
   onLifecycleChange?: () => void;
   /**
-   * The event bus (P4.1): install creates the JetStream stream of an app that declares
-   * `events.publishes` (APP_<ID> on <id>.>). Unset = no bus configured: the install is recorded
-   * with `stream: "no_bus"`, no stream is created, and the app's events wait in its outbox.
+   * The event bus (P4.1): install and registration (an upgrade) create the JetStream stream of an
+   * app that declares `events.publishes` (APP_<ID> on <id>.>), and a durable consumer
+   * `<id>.<type>` for every `events.subscribes` type whose publisher's stream exists. Unset = no
+   * bus configured: recorded as `no_bus`, nothing is created, and the app's events wait in its outbox.
    */
-  bus?: { ensureAppStream(appId: string): Promise<{ stream: string; result: string }> };
+  bus?: EventBus;
+}
+
+/** What the registry needs from the bus (`createStreamAdmin` from @asafarim/events). Idempotent. */
+export interface EventBus {
+  ensureAppStream(appId: string): Promise<{ stream: string; result: string }>;
+  /** `result` is "no_stream" when the publisher's stream doesn't exist (yet): nothing is created. */
+  ensureConsumer(consumerApp: string, type: string): Promise<{ consumer: string; result: string }>;
+}
+
+type StreamOutcome = { stream: string; result: string } | "none" | "no_bus";
+type ConsumersOutcome = Record<string, string> | "none" | "no_bus";
+
+/**
+ * The app's stream (if it publishes) and its durable consumers (one per subscribed type). Runs
+ * before anything is recorded: if the bus fails, nothing is written and the caller can retry.
+ */
+async function ensureEventPlumbing(
+  bus: EventBus | undefined,
+  m: AppManifest,
+): Promise<{ stream: StreamOutcome; consumers: ConsumersOutcome }> {
+  const publishes = (m.events?.publishes?.length ?? 0) > 0;
+  const subscribes = [...new Set((m.events?.subscribes ?? []).map((s) => s.type))];
+  let stream: StreamOutcome = "none";
+  let consumers: ConsumersOutcome = "none";
+  if (!publishes && subscribes.length === 0) return { stream, consumers };
+  if (!bus) return { stream: publishes ? "no_bus" : "none", consumers: subscribes.length ? "no_bus" : "none" };
+  try {
+    if (publishes) stream = await bus.ensureAppStream(m.id);
+    if (subscribes.length) {
+      consumers = {};
+      for (const type of subscribes) consumers[type] = (await bus.ensureConsumer(m.id, type)).result;
+    }
+  } catch (err) {
+    throw new ApiError(
+      "bus_unavailable",
+      `the event plumbing for ${m.id} couldn't be set up: ${(err as Error).message}`,
+    );
+  }
+  return { stream, consumers };
 }
 
 /** Parse and validate a manifest; refuse an id mismatch and anything outside the namespace. */
@@ -141,22 +181,9 @@ export function createRegistry(deps: RegistryDeps) {
       }
     }
 
-    // The app's stream, before anything is recorded: if the bus can't create it, nothing is
-    // installed and the admin can simply retry (the database and role steps are idempotent).
-    let stream: { stream: string; result: string } | "none" | "no_bus" = "none";
-    if ((manifest.events?.publishes?.length ?? 0) > 0) {
-      if (!deps.bus) stream = "no_bus";
-      else {
-        try {
-          stream = await deps.bus.ensureAppStream(appId);
-        } catch (err) {
-          throw new ApiError(
-            "bus_unavailable",
-            `the event stream for ${appId} couldn't be created: ${(err as Error).message}`,
-          );
-        }
-      }
-    }
+    // The app's stream and consumers, before anything is recorded: if the bus can't create them,
+    // nothing is installed and the admin can simply retry (the database and role steps are idempotent).
+    const { stream, consumers } = await ensureEventPlumbing(deps.bus, manifest);
 
     const credential = scheme.issue(appId);
     await inTx(async (c) => {
@@ -180,6 +207,7 @@ export function createRegistry(deps: RegistryDeps) {
         db: dbResult,
         keyId: credential.keyId,
         stream,
+        consumers,
       });
     });
 
@@ -263,6 +291,10 @@ export function createRegistry(deps: RegistryDeps) {
     }
     const m = checkManifest(appId, input);
 
+    // An upgrade can start publishing or subscribing: the same idempotent stream and consumer
+    // steps as install, before anything is written (a bus failure → 503, the app registers again).
+    const { stream, consumers } = await ensureEventPlumbing(deps.bus, m);
+
     return inTx(async (c) => {
       await c.query(
         "UPDATE apps SET version = $2, manifest = $3, registered_at = now(), updated_at = now() WHERE id = $1",
@@ -336,7 +368,13 @@ export function createRegistry(deps: RegistryDeps) {
         ]);
       }
 
-      await audit(c, `app:${appId}`, "app.registered", appId, { version: m.version, permissions: perms, roles });
+      await audit(c, `app:${appId}`, "app.registered", appId, {
+        version: m.version,
+        permissions: perms,
+        roles,
+        stream,
+        consumers,
+      });
       // Registration never changes the state and never writes role_grants.
       return { appId, version: m.version, state, permissions: perms, roles };
     });

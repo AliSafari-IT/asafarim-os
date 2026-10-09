@@ -2,7 +2,7 @@
 
 ASafariM OS events (P4.1, ADR 0001 §5). Apps integrate through **events**, not direct calls: an app publishes a fact (`notes.note.created.v1`), and an app that declared it subscribes. Neither knows the other.
 
-This package is the publishing half: the envelope, payload validation, the transactional **outbox**, its **relay** to NATS JetStream, and the per-app **stream** bootstrap core-api runs at install. Subscribing (durable consumers, the inbox, dead letters) and bus-enforced permissions come in later slices. Apps use it through `@asafarim/app-sdk/events`, which re-exports it.
+This package has both halves. Publishing: the envelope, payload validation, the transactional **outbox**, its **relay** to NATS JetStream, and the per-app **stream** bootstrap core-api runs at install. Subscribing: **durable consumers** (created by core-api), the **inbox** that makes a handler run once per event, and **dead letters**. Bus-enforced permissions (per-app NATS credentials) come in a later slice. Apps use it through `@asafarim/app-sdk/events`, which re-exports it.
 
 ## Publish
 
@@ -47,10 +47,45 @@ CloudEvents 1.0, structured JSON mode: `specversion`, `id` (a ULID), `source` (`
 
 One per publishing app: `APP_<ID>` on subjects `<id>.>`, file storage. **core-api creates it at install** (`createStreamAdmin({ servers }).ensureAppStream(appId)`, idempotent), never the app.
 
+## Subscribe
+
+```ts
+const sub = subscribe<NoteCreatedV1>(
+  "notes.note.created.v1",
+  async (event, tx) => {
+    await tx.query("INSERT INTO mentions (note_id) VALUES ($1)", [event.data.id]); // YOUR transaction
+  },
+  { appId: "tasks", pool, servers },
+);
+// …
+await sub.stop();
+```
+
+- It consumes the durable consumer **`<consumer-app>.<type>`** (every `.` turned into `_` for NATS, e.g. `tasks_notes_note_created_v1`) on the publisher's stream, filter subject = the type, explicit ack. **core-api creates it** (below); `subscribe` never creates streams or consumers, and retries with a backoff while the consumer or the bus isn't there.
+- Each delivery runs `BEGIN → INSERT INTO asafarim_inbox (event_id …) ON CONFLICT DO NOTHING → handler(event, tx) → COMMIT → ack`. An event id already in the inbox is **acked without calling the handler** (a redelivery, or a re-publish with a new `Nats-Msg-Id`). The ack comes **only after the commit**; a crash between the two is a redelivery the inbox absorbs.
+- A handler error **rolls back** (no inbox row, none of the handler's writes) and **naks with a delay** (500 ms doubling up to 30 s, `backoff`).
+- The **`maxDeliver`-th handler failure** (default 5) publishes a dead letter to **`deadletter.<consumer-app>.<type>`** and terminates the message, so it is never redelivered. The dead letter is `{ envelope, failure: { consumer, type, reason, attempts, deliveries, error, stream, streamSeq, deadLetteredAt } }`: the original envelope, the handler failures counted (`attempts`), the bus's delivery count (`deliveries`), and the last error's message, never a stack trace. If the dead letter can't be stored, the message is nak'ed and dead-lettered on the next delivery (without running the handler again). An envelope that isn't valid JSON, or not the subscribed type from its publisher, is dead-lettered at once (`reason: "invalid_envelope"`).
+- **Only the handler's failures count.** A database failure that isn't the handler's (`pool.connect()`, `BEGIN`, the inbox `INSERT`, a `COMMIT` that isn't a constraint violation) naks with the same backoff and counts nothing, so an outage of any length never dead-letters an event; the handler runs once the database is back. A `COMMIT` that fails on a deferred constraint (SQLSTATE class 23) is the handler's writes' fault and counts.
+- The counts live **in the subscriber process's memory**, per stream message (the bus's own delivery count also counts outage redeliveries, so it isn't used). After a restart they start again from zero: an event that keeps failing gets up to `maxDeliver` more handler attempts, and a dead letter whose publish failed just before the restart is retried by running the handler again. With several replicas on one consumer, each counts its own attempts.
+- The handler budget is the consumer's `ack_wait` (30 s): a delivery still running after that is redelivered while it runs. The inbox makes that safe (the second insert waits on the row lock, then is a duplicate), but keep handlers well under 30 s.
+- Deliveries run one at a time, in stream order. The handler gets the event and the transaction (`tx`): write through it.
+
+The inbox ships like the outbox, three ways, and a test keeps them equal:
+
+| Where                                                  | For                           |
+| ------------------------------------------------------ | ----------------------------- |
+| `INBOX_SQL`                                            | running it from code          |
+| `@asafarim/events/sql/inbox.sql` (`sql/002_inbox.sql`) | a plain-SQL migrations folder |
+| `@asafarim/events/drizzle/inbox.sql`                   | a Drizzle migrations folder   |
+
+### Consumers and dead letters (core-api)
+
+`createStreamAdmin({ servers }).ensureConsumer(consumerApp, type)` creates or updates the durable consumer (idempotent), new messages only (from its creation on), `ack_wait` 30 s, no delivery cap on the bus side (the subscriber counts attempts and dead-letters, so a dead letter that couldn't be stored isn't silently dropped). It returns `no_stream`, and creates nothing, when the publisher's stream doesn't exist yet. It first ensures the shared **`DEADLETTER`** stream on `deadletter.>` (file storage, kept 30 days), which core-api also ensures at boot; apps never create it.
+
 ## Test
 
 ```bash
 pnpm --filter @asafarim/events test
 ```
 
-The integration suite (`test/relay.integration.test.ts`) needs a dev Postgres and the dev NATS: `EVENTS_TEST_ADMIN_URL=postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres` and `EVENTS_TEST_NATS_URL=nats://127.0.0.1:54222` (both from `pnpm dev`). It uses a throwaway database and stream and removes them. CI's `dev-env` job runs it with `EVENTS_TEST_REQUIRED=1`, so it fails rather than skips.
+The integration suites (`test/relay.integration.test.ts`, `test/consumer.integration.test.ts`) needs a dev Postgres and the dev NATS: `EVENTS_TEST_ADMIN_URL=postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres` and `EVENTS_TEST_NATS_URL=nats://127.0.0.1:54222` (both from `pnpm dev`). It uses a throwaway database and stream and removes them. CI's `dev-env` job runs it with `EVENTS_TEST_REQUIRED=1`, so it fails rather than skips.

@@ -3,7 +3,9 @@
  *
  *  1. creating a note puts exactly one `notes.note.created.v1` on APP_NOTES, with the right
  *     envelope and payload (read back with a test-only ordered consumer);
- *  2. bus down: with NATS stopped, three notes are still created (their events wait in the
+ *  2. a subscriber (the note-recorder test fixture, with its own database and the durable consumer
+ *     core-api creates) handles that event exactly once, with the same envelope;
+ *  3. bus down: with NATS stopped, three notes are still created (their events wait in the
  *     outbox); once NATS is back, all three are delivered, once each.
  *
  * `createNote` is the function the API route and the server action call. The stream is created the
@@ -18,7 +20,14 @@
  */
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { createStreamAdmin, streamName, type CloudEvent, type StreamAdmin } from "@asafarim/app-sdk/events";
+import { validateManifest } from "@asafarim/app-manifest";
+import {
+  consumerName,
+  createStreamAdmin,
+  streamName,
+  type CloudEvent,
+  type StreamAdmin,
+} from "@asafarim/app-sdk/events";
 import { jetstream, jetstreamManager, type JetStreamManager } from "@nats-io/jetstream";
 import type { NatsConnection } from "@nats-io/nats-core";
 import { connect } from "@nats-io/transport-node";
@@ -26,6 +35,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // Types only: lib/db is imported dynamically, after DATABASE_URL points at the throwaway database.
 import type * as NotesDb from "../lib/db";
+import { RECORDER_ID, RECORDER_SQL, recorderManifest, startRecorder } from "./fixtures/note-recorder/recorder";
 
 const ADMIN_URL = process.env.EVENTS_TEST_ADMIN_URL;
 const NATS_URL = process.env.EVENTS_TEST_NATS_URL;
@@ -41,6 +51,8 @@ if (process.env.EVENTS_TEST_REQUIRED && (!ADMIN_URL || !NATS_URL || !CONTROL_NAT
 const STREAM = streamName("notes");
 const TYPE = "notes.note.created.v1";
 const dbName = `notes_events_test_${Date.now().toString(36)}`;
+const recorderDbName = `note_recorder_test_${Date.now().toString(36)}`;
+const RECORDER_CONSUMER = consumerName(RECORDER_ID, TYPE);
 
 type Db = typeof NotesDb;
 
@@ -53,6 +65,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)(
     let streams: StreamAdmin;
     let notes: Db;
     let appPool: pg.Pool;
+    let recorderPool: pg.Pool;
 
     const lastSeq = async () => (await jsm.streams.info(STREAM)).state.last_seq;
     const pending = async () =>
@@ -86,6 +99,15 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)(
       nc = await connect({ servers: NATS_URL!, maxReconnectAttempts: -1 });
       jsm = await jetstreamManager(nc);
 
+      // The recorder's own database, and a fresh durable consumer (the dev stream outlives runs).
+      await admin.query(`CREATE DATABASE ${recorderDbName}`);
+      const recorderUrl = new URL(ADMIN_URL!);
+      recorderUrl.pathname = `/${recorderDbName}`;
+      recorderPool = new pg.Pool({ connectionString: recorderUrl.href, max: 3 });
+      recorderPool.on("error", () => undefined);
+      await recorderPool.query(RECORDER_SQL);
+      await jsm.consumers.delete(STREAM, RECORDER_CONSUMER).catch(() => undefined);
+
       notes = await import("../lib/db");
       appPool = await notes.db();
       expect(notes.startEventRelay()).toBeDefined();
@@ -94,10 +116,13 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)(
     afterAll(async () => {
       await notes?.startEventRelay()?.stop();
       await appPool?.end();
+      await recorderPool?.end();
+      await jsm?.consumers.delete(STREAM, RECORDER_CONSUMER).catch(() => undefined);
       await streams?.close();
       await nc?.close();
       if (admin) {
         await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+        await admin.query(`DROP DATABASE IF EXISTS ${recorderDbName} WITH (FORCE)`);
         await admin.end();
       }
     });
@@ -131,6 +156,44 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)(
       const row = (await appPool.query("SELECT id, sent_at FROM asafarim_outbox WHERE id = $1", [event.id])).rows[0];
       expect(row.sent_at).not.toBeNull();
     });
+
+    it("a subscriber (test fixture) handles the created note's event exactly once, with the same envelope", async () => {
+      expect(validateManifest(recorderManifest)).toMatchObject({ ok: true });
+      // What core-api does when it installs the recorder: one durable consumer per subscribed type.
+      for (const { type } of recorderManifest.events.subscribes) {
+        expect(await streams.ensureConsumer(RECORDER_ID, type)).toEqual({
+          consumer: RECORDER_CONSUMER,
+          result: "created",
+        });
+      }
+      const recorder = startRecorder({
+        pool: recorderPool,
+        servers: NATS_URL!,
+        log: { info: () => undefined, warn: () => undefined },
+      });
+      try {
+        const from = (await lastSeq()) + 1;
+        const note = await notes.createNote("dev-member", "Hello subscriber", "");
+        const received = async () =>
+          (await recorderPool.query<{ envelope: CloudEvent }>("SELECT envelope FROM received ORDER BY received_at"))
+            .rows;
+        await expect.poll(async () => (await received()).length, { timeout: 15_000 }).toBe(1);
+
+        const [published] = await messagesSince(from);
+        const [{ envelope }] = (await received()) as [{ envelope: CloudEvent }];
+        expect(envelope).toEqual(published!.event);
+        expect(envelope).toMatchObject({ type: TYPE, subject: String(note.id), data: { title: "Hello subscriber" } });
+        // Exactly once: a moment later the handler still ran once, the inbox has one row, nothing is pending.
+        await new Promise((r) => setTimeout(r, 1000));
+        expect(recorder.calls).toBe(1);
+        const inbox = await recorderPool.query("SELECT event_id FROM asafarim_inbox");
+        expect(inbox.rows).toEqual([{ event_id: envelope.id }]);
+        const info = await jsm.consumers.info(STREAM, RECORDER_CONSUMER);
+        expect({ pending: info.num_pending, ackPending: info.num_ack_pending }).toEqual({ pending: 0, ackPending: 0 });
+      } finally {
+        await recorder.subscription.stop();
+      }
+    }, 30_000);
 
     it.skipIf(!CONTROL_NATS)(
       "bus down: NATS stopped, 3 notes created (rows wait in the outbox), NATS started → all 3 delivered once",

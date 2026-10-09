@@ -2,7 +2,7 @@
   "name": "@asafarim/events",
   "version": "0.1.0",
   "private": true,
-  "description": "ASafariM OS events (P4.1, ADR 0001 §5): the CloudEvents 1.0 envelope, payload validation against the manifest's JSON Schemas, the transactional outbox and its relay to NATS JetStream, and the per-app stream bootstrap core-api runs at install. Never imports an app.",
+  "description": "ASafariM OS events (P4.1, ADR 0001 §5): the CloudEvents 1.0 envelope, payload validation against the manifest's JSON Schemas, the transactional outbox and its relay to NATS JetStream, the per-app stream bootstrap core-api runs at install, and subscribing: durable consumers (created by core-api), the inbox (exactly-once handlers) and dead letters. Never imports an app.",
   "type": "module",
   "exports": {
     ".": {
@@ -10,7 +10,9 @@
       "default": "./dist/index.js"
     },
     "./sql/outbox.sql": "./sql/001_outbox.sql",
-    "./drizzle/outbox.sql": "./drizzle/0000_asafarim_outbox.sql"
+    "./drizzle/outbox.sql": "./drizzle/0000_asafarim_outbox.sql",
+    "./sql/inbox.sql": "./sql/002_inbox.sql",
+    "./drizzle/inbox.sql": "./drizzle/0001_asafarim_inbox.sql"
   },
   "files": [
     "dist",
