@@ -21,6 +21,7 @@ platform.config.getInt("limits.maxNotes"); // typed, from the manifest
 | `CORE_API_URL`                 | where core-api is                                                                    |
 | `ASAFARIM_ACCESS_TTL_MS`       | permission cache lifetime; default 60 000 (`pnpm dev` sets 1 000)                    |
 | `APP_CONFIG_<KEY>`             | overrides a manifest `config` key: `limits.maxNotes` → `APP_CONFIG_LIMITS_MAX_NOTES` |
+| `ASAFARIM_NATS_URL`            | the event bus for the outbox relay (`@asafarim/app-sdk/events`); unset = no relay    |
 
 Without a credential (not installed yet) `startApp` logs `app.not_installed` once and denies everything; it never throws at startup.
 
@@ -46,6 +47,28 @@ The app asks core-api, with a signed `GET /registry/v1/apps/<id>/subjects/<sub>`
 - Use `isForbiddenError(err)` / `isAccessUnavailableError(err)` instead of `instanceof`: a framework can load this package twice (Next builds its instrumentation hook and each route separately).
 
 `state` is the app's lifecycle state (`installed`, `active`, `inactive`). An app should answer 503 unless it's `active`.
+
+## Events (P4.1): `@asafarim/app-sdk/events`
+
+A separate entry point (it re-exports `@asafarim/events`), so pages that import the SDK never load the NATS client.
+
+```ts
+import { createPublisher, startAppRelay, OUTBOX_SQL } from "@asafarim/app-sdk/events";
+
+const publisher = createPublisher({ manifest, schemas }); // schemas keyed by the manifest's events.publishes[].schema path
+await client.query(OUTBOX_SQL); // the app's own migration (or @asafarim/events/sql/outbox.sql, or the Drizzle file)
+
+await client.query("BEGIN");
+const { rows } = await client.query("INSERT INTO notes … RETURNING *", […]);
+await publisher.publish(client, "notes.note.created.v1", { … }, { subject: rows[0].id }); // same transaction
+await client.query("COMMIT");
+
+startAppRelay({ appId: manifest.id, pool }); // on boot: outbox → JetStream, Nats-Msg-Id = event id
+```
+
+- `publish` throws **before** writing for a type the manifest doesn't declare or a payload its JSON Schema refuses.
+- The relay reads `ASAFARIM_NATS_URL`. Without it, it logs `events.relay.no_bus` once and the events wait in the outbox.
+- Streams are created by core-api at install (`APP_<ID>` on `<id>.>`), never by the app.
 
 ## The access token and the gateway (P3.3a)
 
