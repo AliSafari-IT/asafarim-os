@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "asafarim://notes/events/notes.note.created.v1.json",
+  "title": "notes.note.created.v1",
+  "description": "A note was created. The body isn't carried: a subscriber that needs it reads it through the notes API.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "author", "title", "createdAt"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[1-9][0-9]*$", "description": "The note id" },
+    "author": { "type": "string", "minLength": 1, "description": "The subject (person) who created it" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,7 +1,8 @@
 /**
  * notes: the first ASafariM OS reference app (P3.2). Tiny on purpose: it
  * exists to prove the plug-and-play contract end to end: install → register →
- * sign in through core/identity → permissions granted by an admin.
+ * sign in through core/identity → permissions granted by an admin, and (P4.1)
+ * publishing an event other apps can subscribe to.
  * Schema: @asafarim/app-manifest.
  */
 import { defineApp } from "@asafarim/app-manifest";
@@ -49,6 +50,10 @@ export default defineApp({
     // Exists in the app (an internal probe), but the gateway answers 404 for it on every host.
     { path: "/internal/**", expose: false },
   ],
+  // P4.1: published through the outbox in the same transaction as the insert (lib/db.ts).
+  events: {
+    publishes: [{ type: "notes.note.created.v1", schema: "./events/notes.note.created.v1.json" }],
+  },
   config: [
     {
       key: "limits.maxNotes",

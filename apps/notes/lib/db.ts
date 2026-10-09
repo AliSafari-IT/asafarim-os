@@ -1,7 +1,17 @@
-/** The app's own database (created by `platform app install`): notes live here and only here. */
+/**
+ * The app's own database (created by `platform app install`): notes live here and only here, next to
+ * the event outbox (P4.1) whose rows the relay sends to the bus.
+ */
+import { OUTBOX_SQL, startAppRelay, type Relay } from "@asafarim/app-sdk/events";
 import pg from "pg";
+import manifest from "../platform.app";
+import { NOTE_CREATED, publisher, type NoteCreatedV1 } from "./events";
 
-const globalForDb = globalThis as unknown as { notesPool?: pg.Pool; notesSchema?: Promise<void> };
+const globalForDb = globalThis as unknown as {
+  notesPool?: pg.Pool;
+  notesSchema?: Promise<void>;
+  notesRelay?: Relay | null;
+};
 
 function pool(): pg.Pool {
   const url = process.env.DATABASE_URL;
@@ -17,14 +27,32 @@ CREATE TABLE IF NOT EXISTS notes (
   title      text NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
   body       text NOT NULL DEFAULT '' CHECK (length(body) <= 10000),
   created_at timestamptz NOT NULL DEFAULT now()
-)`;
+);
+${OUTBOX_SQL}`;
 
-/** The app's own migration, run once per process (idempotent). */
+/** The app's own migrations, run once per process (idempotent). A failed run is retried on the next call. */
 export async function db(): Promise<pg.Pool> {
   const p = pool();
-  globalForDb.notesSchema ??= p.query(SCHEMA).then(() => undefined);
+  globalForDb.notesSchema ??= p.query(SCHEMA).then(
+    () => undefined,
+    (err: unknown) => {
+      globalForDb.notesSchema = undefined;
+      throw err;
+    },
+  );
   await globalForDb.notesSchema;
   return p;
+}
+
+/**
+ * Start the outbox relay once per process (on boot: instrumentation.ts), so events left in the
+ * outbox by an earlier run go out too. Without ASAFARIM_NATS_URL there is no relay (logged once).
+ */
+export function startEventRelay(): Relay | undefined {
+  if (globalForDb.notesRelay === undefined) {
+    globalForDb.notesRelay = startAppRelay({ appId: manifest.id, pool: () => db() }) ?? null;
+  }
+  return globalForDb.notesRelay ?? undefined;
 }
 
 export interface Note {
@@ -45,9 +73,29 @@ export async function countNotes(): Promise<number> {
   return Number(rows[0]!.n);
 }
 
+/** Insert the note and publish notes.note.created.v1 in ONE transaction: both happen, or neither. */
 export async function createNote(author: string, title: string, body: string): Promise<Note> {
-  const { rows } = await (
-    await db()
-  ).query<Note>("INSERT INTO notes (author, title, body) VALUES ($1, $2, $3) RETURNING *", [author, title, body]);
-  return rows[0]!;
+  const client = await (await db()).connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<Note>(
+      "INSERT INTO notes (author, title, body) VALUES ($1, $2, $3) RETURNING *",
+      [author, title, body],
+    );
+    const note = rows[0]!;
+    await publisher.publish<NoteCreatedV1>(
+      client,
+      NOTE_CREATED,
+      { id: String(note.id), author: note.author, title: note.title, createdAt: note.created_at.toISOString() },
+      { subject: String(note.id) },
+    );
+    await client.query("COMMIT");
+    globalForDb.notesRelay?.wake();
+    return note;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
