@@ -135,7 +135,8 @@ jobs:
         run: pnpm turbo run test --filter=@asafarim/core-api
 
       # P4.1: the outbox, the relay and the notes reference flow against the same Postgres and NATS
-      # JetStream. The bus-down test stops and starts that NATS container (its store survives).
+      # JetStream. The bus-down test stops and starts that NATS container (its store survives), so
+      # the two suites run one after the other (--concurrency=1), never while the other uses the bus.
       - name: Event bus integration tests
         env:
           EVENTS_TEST_ADMIN_URL: postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres
@@ -143,7 +144,7 @@ jobs:
           EVENTS_TEST_NATS_STOP: docker compose -f ${{ github.workspace }}/compose.dev.yml stop nats
           EVENTS_TEST_NATS_START: docker compose -f ${{ github.workspace }}/compose.dev.yml start nats
           EVENTS_TEST_REQUIRED: "1"
-        run: pnpm turbo run test --filter=@asafarim/events --filter=@asafarim/notes
+        run: pnpm turbo run test --concurrency=1 --filter=@asafarim/events --filter=@asafarim/notes
 
       - name: Tear down
         if: always()

@@ -91,6 +91,9 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("outbox + relay (integration: Postgres 
     const url = new URL(ADMIN_URL!);
     url.pathname = `/${dbName}`;
     pool = new pg.Pool({ connectionString: url.href, max: 4 });
+    // The teardown's DROP DATABASE … WITH (FORCE) can reach a connection that is still closing;
+    // pg reports that on the pool, and an unhandled pool error would fail the run.
+    pool.on("error", () => undefined);
     await pool.query(OUTBOX_SQL);
     await pool.query(OUTBOX_SQL); // idempotent
     nc = await connect({ servers: NATS_URL! });

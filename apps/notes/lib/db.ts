@@ -16,7 +16,14 @@ const globalForDb = globalThis as unknown as {
 function pool(): pg.Pool {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not set (run `pnpm platform app install notes --env-out .dev/notes.env`)");
-  globalForDb.notesPool ??= new pg.Pool({ connectionString: url, max: 5 });
+  if (!globalForDb.notesPool) {
+    globalForDb.notesPool = new pg.Pool({ connectionString: url, max: 5 });
+    // An idle connection dropped by the server (a restart, an admin terminating it) is reported on
+    // the pool; unhandled, it would crash the process. The pool replaces it on the next query.
+    globalForDb.notesPool.on("error", (err) =>
+      console.warn(JSON.stringify({ app: "notes", level: "warn", msg: "db.idle_connection_lost", error: err.message })),
+    );
+  }
   return globalForDb.notesPool;
 }
 
