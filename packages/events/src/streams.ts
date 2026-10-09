@@ -190,11 +190,35 @@ export async function ensureConsumer(
   return "created";
 }
 
+export type DeleteConsumerResult = "deleted" | "absent";
+
+/**
+ * Delete the durable consumer `<consumer-app>.<type>` (a subscription the app's manifest dropped).
+ * Idempotent: a consumer, or a publisher stream, that is already gone is `absent`, not an error.
+ */
+export async function deleteConsumer(
+  jsm: JetStreamManager,
+  consumerApp: string,
+  type: string,
+): Promise<DeleteConsumerResult> {
+  const stream = streamName(publisherOf(type));
+  const name = consumerName(consumerApp, type);
+  try {
+    await jsm.consumers.delete(stream, name);
+    return "deleted";
+  } catch (err) {
+    if (isConsumerNotFound(err) || isStreamNotFound(err)) return "absent";
+    throw err;
+  }
+}
+
 /** What core-api holds: a lazily opened connection that ensures app streams. */
 export interface StreamAdmin {
   ensureAppStream(appId: string): Promise<{ stream: string; result: EnsureResult }>;
   /** The durable consumer of `type` for `consumerApp` (and the DEADLETTER stream, once). */
   ensureConsumer(consumerApp: string, type: string): Promise<{ consumer: string; result: EnsureConsumerResult }>;
+  /** Remove that durable consumer (a dropped subscription). Already gone = `absent`. */
+  deleteConsumer(consumerApp: string, type: string): Promise<{ consumer: string; result: DeleteConsumerResult }>;
   ensureDeadLetterStream(): Promise<{ stream: string; result: EnsureResult }>;
   close(): Promise<void>;
 }
@@ -241,6 +265,12 @@ export function createStreamAdmin(opts: {
       return {
         consumer: consumerName(consumerApp, type),
         result: await ensureConsumer(await manager(), consumerApp, type, opts.consumer),
+      };
+    },
+    async deleteConsumer(consumerApp, type) {
+      return {
+        consumer: consumerName(consumerApp, type),
+        result: await deleteConsumer(await manager(), consumerApp, type),
       };
     },
     async close() {

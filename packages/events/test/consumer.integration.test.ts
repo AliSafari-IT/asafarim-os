@@ -25,6 +25,7 @@ import {
   createEvent,
   createStreamAdmin,
   deadLetterSubject,
+  deleteConsumer,
   ensureAppStream,
   ensureConsumer,
   streamName,
@@ -137,6 +138,16 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("subscribe: inbox, ack after commit, de
     // The admin also ensures the shared DEADLETTER stream on deadletter.>.
     await busAdmin.ensureDeadLetterStream();
     expect((await jsm.streams.info(DEADLETTER_STREAM)).config.subjects).toEqual(["deadletter.>"]);
+  }, 30_000);
+
+  it("core-api's deleteConsumer (a dropped subscription): deleted, then absent; absent when the stream is gone too", async () => {
+    const app = `gone${run}`;
+    expect(await deleteConsumer(jsm, app, `nostream${run}.thing.created.v1`)).toBe("absent"); // no such stream
+    expect(await deleteConsumer(jsm, app, TYPE)).toBe("absent"); // stream, no consumer
+    expect(await ensureConsumer(jsm, app, TYPE)).toBe("created");
+    expect(await busAdmin.deleteConsumer(app, TYPE)).toEqual({ consumer: consumerName(app, TYPE), result: "deleted" });
+    await expect(jsm.consumers.info(streamName(PUB), consumerName(app, TYPE))).rejects.toThrow(/consumer not found/i);
+    expect(await deleteConsumer(jsm, app, TYPE)).toBe("absent"); // idempotent
   }, 30_000);
 
   it("ensureConsumer brings a drifted consumer back in line: a removed backoff is cleared, a finite max_deliver goes back to -1", async () => {
