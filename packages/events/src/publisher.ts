@@ -76,10 +76,25 @@ export interface CreatePublisherOptions {
   now?: () => Date;
 }
 
-export function createPublisher(opts: CreatePublisherOptions): Publisher {
-  const appId = opts.manifest.id;
+/**
+ * The ajv setup payloads are validated with (JSON Schema 2020-12, strict, ajv-formats). core-api
+ * uses the same one to check the schemas an app uploads for the event catalog (P4.2), so a schema
+ * the catalog accepts is one the publisher can compile.
+ */
+export function createSchemaAjv(): Ajv2020 {
   const ajv = new Ajv2020({ allErrors: true, strict: true });
   addFormats(ajv);
+  return ajv;
+}
+
+/** Compile one schema on a fresh ajv (so two schemas with the same `$id` never collide). Throws if it doesn't compile. */
+export function compileEventSchema(schema: object): ValidateFunction {
+  return createSchemaAjv().compile(schema);
+}
+
+export function createPublisher(opts: CreatePublisherOptions): Publisher {
+  const appId = opts.manifest.id;
+  const ajv = createSchemaAjv();
   const validators = new Map<string, ValidateFunction>();
   for (const { type, schema } of opts.manifest.events?.publishes ?? []) {
     const json = opts.schemas[schema];
