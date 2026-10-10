@@ -34,6 +34,12 @@ describe("the console's core-api client", () => {
     });
     await coreApi("t").deactivate("notes");
     expect(lastCall(fn).url).toBe("http://core.test/admin/v1/apps/notes/deactivate");
+    fn = stub(200, { state: "removed", removedGrants: [], warnings: [] });
+    await coreApi("t").remove("notes");
+    expect(lastCall(fn)).toMatchObject({
+      url: "http://core.test/admin/v1/apps/notes/remove",
+      init: { method: "POST" },
+    });
 
     fn = stub(200, { granted: true });
     await coreApi("t").grant("notes.editor", "user@example.test:1");

@@ -92,10 +92,13 @@ export function createAdminQueries(pool: pg.Pool) {
       `SELECT a.id, a.manifest->>'name' AS name, a.manifest->'events' AS events, a.version, a.state, a.installed_at, a.registered_at,
               (SELECT count(*) FROM permissions p WHERE p.app_id = a.id AND p.deprecated_at IS NULL) AS permissions,
               (SELECT count(*) FROM roles r WHERE r.app_id = a.id AND r.deprecated_at IS NULL) AS roles
-         FROM apps a WHERE a.state <> 'removed' ORDER BY (a.id = 'core') DESC, a.id`,
+         FROM apps a ORDER BY (a.id = 'core') DESC, (a.state = 'removed'), a.id`,
     );
-    const installed = r.rows.map((x) => ({ id: x.id as string, manifest: { events: x.events } as EventsManifest }));
-    return r.rows.map((x, i) => ({
+    // Removed apps are listed (so they can be told apart and reinstalled) but publish nothing to anyone.
+    const installed = r.rows
+      .filter((x) => x.state !== "removed")
+      .map((x) => ({ id: x.id as string, manifest: { events: x.events } as EventsManifest }));
+    return r.rows.map((x) => ({
       id: x.id,
       name: x.name ?? x.id,
       version: x.version,
@@ -105,7 +108,8 @@ export function createAdminQueries(pool: pg.Pool) {
       registered_at: x.registered_at ? new Date(x.registered_at).toISOString() : null,
       permissions: Number(x.permissions),
       roles: Number(x.roles),
-      waitingForPublisher: waitingForPublisher(x.id, installed[i]!.manifest, installed),
+      waitingForPublisher:
+        x.state === "removed" ? [] : waitingForPublisher(x.id, { events: x.events } as EventsManifest, installed),
     }));
   }
 

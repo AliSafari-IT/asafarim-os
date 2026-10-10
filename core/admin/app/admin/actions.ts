@@ -8,7 +8,7 @@
 import { redirect } from "next/navigation";
 import { CoreApiError, coreApi } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
-import { isAppId, isRoleKey, isSubject, safeAdminPath, withMessage } from "@/lib/util";
+import { confirmsRemoval, isAppId, isRoleKey, isSubject, safeAdminPath, withMessage } from "@/lib/util";
 
 /** Run `work`, then go back to `next` with the outcome. redirect() throws, so it stays outside the try. */
 async function perform(formData: FormData, work: (api: ReturnType<typeof coreApi>) => Promise<string>) {
@@ -41,6 +41,23 @@ export async function deactivateApp(formData: FormData) {
     if (!isAppId(app)) throw new CoreApiError(400, "bad_request", "That isn't an app id.");
     await api.deactivate(app);
     return `${app} is inactive: its address shows the unavailable page and it's gone from launchers. Its data is kept.`;
+  });
+}
+
+export async function removeApp(formData: FormData) {
+  const app = formData.get("app");
+  await perform(formData, async (api) => {
+    if (!isAppId(app)) throw new CoreApiError(400, "bad_request", "That isn't an app id.");
+    if (!confirmsRemoval(app, formData.get("confirm")))
+      throw new CoreApiError(400, "bad_request", `Type ${app} to confirm the removal. Nothing was changed.`);
+    const out = await api.remove(app);
+    const grants = out.removedGrants.length;
+    const waiting = new Set(out.warnings.map((w) => w.app)).size;
+    return (
+      `${app} is removed: its credentials are revoked and ${grants} grant${grants === 1 ? "" : "s"} deleted.` +
+      (waiting ? ` ${waiting} app${waiting === 1 ? "" : "s"} now wait for a publisher of its events.` : "") +
+      " Install it again with the CLI to bring it back."
+    );
   });
 }
 

@@ -27,10 +27,12 @@ import {
   WAITING_FOR_PUBLISHER,
   consumerOutcome,
   planEventPlumbing,
+  planRemoval,
   publishedTypes,
   waitingForPublisher,
   type EventPlumbingPlan,
   type InstalledApp,
+  type RemovalPlan,
 } from "./event-plumbing.ts";
 import { launcherFor, type LauncherApp } from "./launcher.ts";
 import { appDatabaseNames, ensureDatabase, ensureRole } from "./provision.ts";
@@ -60,7 +62,7 @@ export interface RegistryDeps {
   plumbingLockTimeoutMs?: number;
   /** Where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset = https://<primary domain>. */
   appUrlTemplate?: string;
-  /** Called after every change that the gateway must see at once (install, activate, deactivate). */
+  /** Called after every change that the gateway must see at once (install, activate, deactivate, remove). */
   onLifecycleChange?: () => void;
   /**
    * The event bus (P4.1): install and registration (an upgrade) create the JetStream stream of an
@@ -81,6 +83,8 @@ export interface EventBus {
   ensureConsumer(consumerApp: string, type: string): Promise<{ consumer: string; result: string }>;
   /** `result` is "absent" when the consumer (or its stream) is already gone: not an error. */
   deleteConsumer(consumerApp: string, type: string): Promise<{ consumer: string; result: string }>;
+  /** Delete the app's stream with its messages and consumers (remove). "absent" when it has none: not an error. */
+  deleteAppStream(appId: string): Promise<{ stream: string; result: string }>;
 }
 
 type StreamOutcome = { stream: string; result: string } | "none" | "no_bus";
@@ -169,6 +173,53 @@ async function runEventPlumbing(
     // The subscription waits whether or not a bus is configured: its type has no publisher any more.
     ...plan.orphaned.map(({ app, type }) => ({ app, type, code: WAITING_FOR_PUBLISHER }) as const),
   ];
+  return out;
+}
+
+/** What a removal did on the bus. In the response and the `app.removed` audit entry. */
+export interface RemovalOutcome {
+  /** The app's own consumers: deleted / absent. */
+  consumers: PerType;
+  /** Other installed apps' consumers on its stream, by app, then type: deleted / absent. */
+  dependentConsumers: PerApp;
+  /** Its stream APP_<ID>: deleted / absent. */
+  stream: StreamOutcome;
+  /** The other apps' subscriptions that now wait for a publisher. */
+  warnings: { app: string; type: string; code: typeof WAITING_FOR_PUBLISHER }[];
+}
+
+/**
+ * Run a removal plan on the bus, like runEventPlumbing: inside the transaction, under the plumbing
+ * lock, before anything is written. Consumers first, then the stream (which would take its consumers
+ * with it, but deleting them by name keeps the outcome explicit). A failure → `bus_unavailable`.
+ */
+async function runRemoval(bus: EventBus | undefined, appId: string, plan: RemovalPlan): Promise<RemovalOutcome> {
+  const out: RemovalOutcome = {
+    consumers: plan.own.length ? "no_bus" : "none",
+    dependentConsumers: plan.dependents.length ? "no_bus" : "none",
+    stream: "no_bus",
+    warnings: plan.dependents.map(({ app, type }) => ({ app, type, code: WAITING_FOR_PUBLISHER })),
+  };
+  if (!bus) return out;
+  try {
+    if (plan.own.length) {
+      const own: Record<string, string> = {};
+      for (const type of plan.own) own[type] = (await bus.deleteConsumer(appId, type)).result;
+      out.consumers = own;
+    }
+    if (plan.dependents.length) {
+      const deps: Record<string, Record<string, string>> = {};
+      for (const { app, type } of plan.dependents)
+        (deps[app] ??= {})[type] = (await bus.deleteConsumer(app, type)).result;
+      out.dependentConsumers = deps;
+    }
+    out.stream = await bus.deleteAppStream(appId);
+  } catch (err) {
+    throw new ApiError(
+      "bus_unavailable",
+      `the event plumbing of ${appId} couldn't be removed: ${(err as Error).message}`,
+    );
+  }
   return out;
 }
 
@@ -307,10 +358,11 @@ export function createRegistry(deps: RegistryDeps) {
       const plan = planEventPlumbing({ appId, manifest, installed });
       const events = await runEventPlumbing(deps.bus, appId, plan, waitingForPublisher(appId, manifest, installed));
 
+      // A reinstall (after removal) waits for the app to register again, like a first install.
       await c.query(
         `INSERT INTO apps (id, version, manifest, state, database_name) VALUES ($1, $2, $3, 'installed', $4)
          ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, manifest = EXCLUDED.manifest, state = 'installed',
-           database_name = EXCLUDED.database_name, installed_at = now(), updated_at = now()`,
+           database_name = EXCLUDED.database_name, installed_at = now(), registered_at = NULL, updated_at = now()`,
         [appId, manifest.version, manifest, wantsDatabase ? database : null],
       );
       await c.query("UPDATE app_credentials SET revoked_at = now() WHERE app_id = $1 AND revoked_at IS NULL", [appId]);
@@ -576,6 +628,78 @@ export function createRegistry(deps: RegistryDeps) {
   }
 
   /**
+   * Admin: remove an app (ADR 0001 §3 step 6). Only from `installed` or `inactive` (deactivate an
+   * active one first); never the built-in app. Like install: the plumbing lock, the plan, the bus
+   * FIRST (its own consumers, the other apps' consumers on its stream, its stream), then the writes,
+   * all in one transaction, so a bus failure (`bus_unavailable`) leaves everything as it was.
+   *
+   * The writes: state `removed`; every credential revoked (it can't register, upload schemas, get a
+   * token or connect to the bus); its event subscriptions and schemas deleted; the grants of its
+   * roles deleted, its roles and permissions deprecated (the rows stay for their foreign keys; a
+   * reinstall + registration restores them, as an upgrade does, with no grant carried over).
+   * Its database and OIDC client are not touched here.
+   */
+  async function remove(appId: string, actor: string) {
+    if (appId === BUILT_IN_APP) throw new ApiError("invalid_state", `"${appId}" is built in and can't be removed`);
+    const out = await inTx(async (c) => {
+      const installed = await lockAndReadInstalled(c, appId, lockTimeoutMs);
+      const row = (
+        await c.query<{ state: AppState; manifest: AppManifest | null }>(
+          "SELECT state, manifest FROM apps WHERE id = $1 FOR UPDATE",
+          [appId],
+        )
+      ).rows[0];
+      if (!row) throw new ApiError("not_found", `no app "${appId}"`);
+      if (row.state !== "installed" && row.state !== "inactive") {
+        throw new ApiError(
+          "invalid_state",
+          row.state === "active"
+            ? "can't remove an active app: deactivate it first"
+            : `can't remove an app that is ${row.state}`,
+        );
+      }
+      const events = await runRemoval(deps.bus, appId, planRemoval({ appId, manifest: row.manifest, installed }));
+
+      await c.query("UPDATE apps SET state = 'removed', updated_at = now() WHERE id = $1", [appId]);
+      const credentials = await c.query(
+        "UPDATE app_credentials SET revoked_at = now() WHERE app_id = $1 AND revoked_at IS NULL",
+        [appId],
+      );
+      await c.query("DELETE FROM event_subscriptions WHERE app_id = $1", [appId]);
+      const schemas = await c.query<{ event_type: string }>(
+        "DELETE FROM event_schemas WHERE app_id = $1 RETURNING event_type",
+        [appId],
+      );
+      const grants = await c.query<{ role_key: string; subject: string }>(
+        `DELETE FROM role_grants g USING roles r WHERE r.key = g.role_key AND r.app_id = $1
+         RETURNING g.role_key, g.subject`,
+        [appId],
+      );
+      await c.query(
+        "UPDATE roles SET deprecated_at = now(), updated_at = now() WHERE app_id = $1 AND deprecated_at IS NULL",
+        [appId],
+      );
+      await c.query(
+        "UPDATE permissions SET deprecated_at = now(), updated_at = now() WHERE app_id = $1 AND deprecated_at IS NULL",
+        [appId],
+      );
+      const detail = {
+        from: row.state,
+        revokedCredentials: credentials.rowCount ?? 0,
+        removedGrants: grants.rows
+          .map((g) => ({ role: g.role_key, subject: g.subject }))
+          .sort((a, b) => a.role.localeCompare(b.role) || a.subject.localeCompare(b.subject)),
+        removedEventSchemas: schemas.rows.map((x) => x.event_type).sort(),
+        ...events,
+      };
+      await audit(c, actor, "app.removed", appId, detail);
+      return { appId, state: "removed" as AppState, previous: row.state, ...detail };
+    });
+    deps.onLifecycleChange?.(); // the gateway stops serving it from this moment
+    return out;
+  }
+
+  /**
    * The app asks (signed GET) what a subject may do in THIS app: the roles an
    * admin granted them and the permissions those roles carry. Deprecated roles
    * and permissions grant nothing. The app's state is returned too, so an
@@ -715,6 +839,7 @@ export function createRegistry(deps: RegistryDeps) {
     register,
     uploadEventSchemas,
     transition,
+    remove,
     get,
     pruneNonces,
     subjectAccess,

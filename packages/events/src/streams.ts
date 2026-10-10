@@ -212,6 +212,21 @@ export async function deleteConsumer(
   }
 }
 
+/**
+ * Delete the app's stream `APP_<ID>` (the app is removed, ADR 0001 §3 step 6), with every message in
+ * it and every consumer on it, so a reinstall starts from an empty stream and never re-delivers
+ * events from before the removal. Idempotent: a stream that is already gone is `absent`.
+ */
+export async function deleteAppStream(jsm: JetStreamManager, appId: string): Promise<DeleteConsumerResult> {
+  try {
+    await jsm.streams.delete(streamName(appId));
+    return "deleted";
+  } catch (err) {
+    if (isStreamNotFound(err)) return "absent";
+    throw err;
+  }
+}
+
 /** What core-api holds: a lazily opened connection that ensures app streams. */
 export interface StreamAdmin {
   ensureAppStream(appId: string): Promise<{ stream: string; result: EnsureResult }>;
@@ -219,6 +234,8 @@ export interface StreamAdmin {
   ensureConsumer(consumerApp: string, type: string): Promise<{ consumer: string; result: EnsureConsumerResult }>;
   /** Remove that durable consumer (a dropped subscription). Already gone = `absent`. */
   deleteConsumer(consumerApp: string, type: string): Promise<{ consumer: string; result: DeleteConsumerResult }>;
+  /** Delete the app's stream, its messages and the consumers on it (the app is removed). Already gone = `absent`. */
+  deleteAppStream(appId: string): Promise<{ stream: string; result: DeleteConsumerResult }>;
   ensureDeadLetterStream(): Promise<{ stream: string; result: EnsureResult }>;
   close(): Promise<void>;
 }
@@ -276,6 +293,9 @@ export function createStreamAdmin(opts: {
         consumer: consumerName(consumerApp, type),
         result: await deleteConsumer(await manager(), consumerApp, type),
       };
+    },
+    async deleteAppStream(appId) {
+      return { stream: streamName(appId), result: await deleteAppStream(await manager(), appId) };
     },
     async close() {
       const c = conn;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  confirmsRemoval,
   formatTime,
   idTokenExpired,
   isAppId,
@@ -89,5 +90,13 @@ describe("formatting and id checks", () => {
     expect(isSubject("dev-member")).toBe(true);
     expect(isSubject("user@example.test:1")).toBe(true);
     for (const bad of ["", "a/b", "a b", "x".repeat(129), null]) expect(isSubject(bad), String(bad)).toBe(false);
+  });
+});
+
+describe("confirming a removal (#68)", () => {
+  it("only the exact app id confirms", () => {
+    expect(confirmsRemoval("notes", "notes")).toBe(true);
+    for (const typed of ["", "Notes", " notes", "notes ", "note", null, undefined, 1])
+      expect(confirmsRemoval("notes", typed), String(typed)).toBe(false);
   });
 });

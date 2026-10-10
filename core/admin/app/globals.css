@@ -190,6 +190,10 @@ code,
 .badge.installed {
   color: var(--muted);
 }
+.badge.removed {
+  color: var(--muted);
+  border-style: dashed;
+}
 .badge.warn {
   color: var(--warn);
   background: var(--warn-bg);
@@ -316,6 +320,19 @@ dialog.confirm::backdrop {
 }
 dialog.confirm h2 {
   font-size: 1.1rem;
+}
+dialog.confirm .type-to-confirm input {
+  margin-top: 6px;
+  width: 100%;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.actions-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 dialog.confirm .actions {
   display: flex;
