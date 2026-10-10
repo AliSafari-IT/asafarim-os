@@ -8,6 +8,8 @@
  *   Playwright: notes.spec.ts (direct) and gateway.spec.ts (through http://notes.localhost:8080) in
  *   apps/notes, then admin.spec.ts (the console at http://core.localhost:8080, P3.3b) in core/admin →
  *   stop everything. `--down` also removes the dev volumes (CI).
+ *   `--screenshots` (`pnpm screenshots`): the same stack, then only core/site's screenshot spec, which
+ *   writes the asafarim.site screenshots to core/site/public/screenshots/ (#70).
  *
  * First time on a machine: `pnpm --filter @asafarim/notes exec playwright install chromium`.
  */
@@ -37,6 +39,8 @@ const NOTES_URL = `http://localhost:${DEV.apps.notes}`;
 const GATEWAY_URL = `http://notes.localhost:${DEV.gatewayPort}`;
 // Access tokens live this long in the e2e (production: 60 s); the gateway spec asserts against it.
 const TOKEN_TTL = Number(process.env.E2E_TOKEN_TTL ?? 6);
+// `pnpm screenshots` (#70): the same stack, then core/site's screenshot spec instead of the e2e suites.
+const SCREENSHOTS = process.argv.includes("--screenshots");
 const children = [];
 
 function start(name, args, cwd = ROOT, env = process.env) {
@@ -111,8 +115,15 @@ try {
     E2E_HUB_ASSERTION_PRIVATE_JWK: readEnvFile(path.join(DEV_DIR, "dev-hub.env")).DEV_HUB_ASSERTION_PRIVATE_JWK,
   };
   // Both suites always run (they share the stack, one after the other); the exit code is the first failure.
-  const results = ["@asafarim/notes", "@asafarim/admin"].map((pkg) => {
-    const run = spawnSync("pnpm", ["--filter", pkg, "e2e"], {
+  // `--screenshots` (`pnpm screenshots`, #70) runs the site's screenshot spec on the same stack instead.
+  const runs = SCREENSHOTS
+    ? [["@asafarim/site", "screenshots"]]
+    : [
+        ["@asafarim/notes", "e2e"],
+        ["@asafarim/admin", "e2e"],
+      ];
+  const results = runs.map(([pkg, script]) => {
+    const run = spawnSync("pnpm", ["--filter", pkg, script], {
       cwd: ROOT,
       stdio: "inherit",
       shell: process.platform === "win32",
@@ -121,7 +132,8 @@ try {
     return run.status ?? 1;
   });
   exitCode = results.find((code) => code !== 0) ?? 0;
-  console.log(exitCode === 0 ? green(bold("\ne2e: OK")) : red(bold("\ne2e: FAILED")));
+  const label = SCREENSHOTS ? "screenshots" : "e2e";
+  console.log(exitCode === 0 ? green(bold(`\n${label}: OK`)) : red(bold(`\n${label}: FAILED`)));
 } catch (err) {
   console.error(red(`\ne2e setup FAILED: ${err.message}`));
 } finally {

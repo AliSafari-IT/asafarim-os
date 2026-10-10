@@ -1,0 +1,102 @@
+{
+  "updated": "2026-10-10",
+  "repo": "https://github.com/AliSafari-IT/asafarim-os",
+  "shipped": [
+    {
+      "id": "P0",
+      "title": "Foundations",
+      "date": "2026-10-03",
+      "summary": "The workspace, CI and the self-describing app contract: an app's manifest, its validator and JSON Schema, and the platform CLI that compiles manifests and checks that the core never imports an app.",
+      "prs": [1, 12, 13]
+    },
+    {
+      "id": "OS-D1",
+      "title": "Local dev environment",
+      "date": "2026-10-04",
+      "summary": "One command starts the whole OS locally: Postgres, Redis, identity, core-api, a dev login stub with seeded users, and a dev gateway in front of every app.",
+      "prs": [29, 38]
+    },
+    {
+      "id": "P2",
+      "title": "Identity",
+      "date": "2026-10-05",
+      "summary": "The OpenID Connect provider for id.asafarim.site, with sign-in delegated to Hub, plus its published container image and production deploy files.",
+      "prs": [23, 41, 46, 47]
+    },
+    {
+      "id": "P3",
+      "title": "Control plane",
+      "date": "2026-10-04",
+      "summary": "core-api's registry, permission catalog and lifecycle; the app SDK and Notes, the first built-in app; the Admin console for apps, roles, grants and the audit log.",
+      "prs": [33, 39]
+    },
+    {
+      "id": "P4.1",
+      "title": "Event bus and bus auth",
+      "date": "2026-10-10",
+      "summary": "NATS JetStream with CloudEvents, an outbox and relay, durable consumers with dedupe and dead letters, and per-app bus permissions checked by core-api when an app connects.",
+      "prs": [50, 52, 54, 56]
+    },
+    {
+      "id": "P4.2",
+      "title": "Event catalog",
+      "date": "2026-10-10",
+      "summary": "Apps upload signed schemas for the events they publish, and the Admin console lists every event type with its publisher, subscribers and schema.",
+      "prs": [65, 67]
+    },
+    {
+      "id": "Remove",
+      "title": "Remove an app",
+      "date": "2026-10-10",
+      "summary": "The last lifecycle step: an admin removes an app, its grants and bus resources are cleaned up, and it can be installed again from scratch.",
+      "prs": [69]
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "admin-apps.png",
+      "title": "Apps",
+      "alt": "The Admin console's Apps page, listing the built-in core and the Notes app with its lifecycle state and actions.",
+      "caption": "Every installed app with its lifecycle state: activate, deactivate or remove it."
+    },
+    {
+      "file": "admin-app-roles.png",
+      "title": "An app's roles and grants",
+      "alt": "The Admin console's Roles and grants page for the Notes app, showing the roles Notes declares, their permissions and who holds them.",
+      "caption": "The roles and permissions an app declares, and who holds them. Registering an app grants nothing."
+    },
+    {
+      "file": "admin-events.png",
+      "title": "Events",
+      "alt": "The Admin console's Events page, listing the event types apps publish with their publisher, subscribers and schema.",
+      "caption": "The event catalog: each event type with its publisher, subscribers and schema."
+    },
+    {
+      "file": "notes.png",
+      "title": "Notes",
+      "alt": "The Notes app, signed in through the OS, with its app launcher and a list of notes.",
+      "caption": "Notes, the first built-in app: sign-in, permissions and the launcher come from the OS."
+    }
+  ],
+  "roadmap": [
+    {
+      "id": "P4",
+      "title": "Events, finished",
+      "summary": "A read-only live demo of core-api, Admin and Notes, and the production event bus (TLS, operator mode)."
+    },
+    {
+      "id": "P6",
+      "title": "Observability",
+      "summary": "Shared telemetry for every app, metrics and logs in one place, and a public status board."
+    },
+    {
+      "id": "P7",
+      "title": "AI assist",
+      "summary": "A scaffolder for new apps, automated manifest review and a copilot in the Admin console."
+    }
+  ],
+  "links": [
+    { "label": "GitHub repository", "href": "https://github.com/AliSafari-IT/asafarim-os" },
+    { "label": "asafarim.com", "href": "https://asafarim.com/" }
+  ]
+}

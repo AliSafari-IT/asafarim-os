@@ -6,4 +6,5 @@ Rule: nothing in `core/` imports from `apps/` or names a specific app. Apps talk
 
 - [`identity/`](identity/): the OIDC provider for `id.asafarim.site`, with login delegated to Hub (ADR 0002, Addendum A).
 - [`core-api/`](core-api/): the registry, permission catalog, lifecycle, the gateway's authorisation hook and the admin API.
+- [`site/`](site/): the `asafarim.site` landing page, rendered to static HTML from one progress file (`src/progress.json`).
 - [`admin/`](admin/): the Admin console (apps, roles and grants, audit): an OIDC client of identity, built with the SDK.

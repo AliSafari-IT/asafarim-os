@@ -1,0 +1,12 @@
+{
+  "extends": "@asafarim/config/tsconfig/base.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": false,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["./**/*.ts", "../playwright.config.ts", "../playwright.screenshots.config.ts"]
+}
