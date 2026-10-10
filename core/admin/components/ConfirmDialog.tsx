@@ -27,12 +27,15 @@ export interface ConfirmDialogProps {
 /**
  * The styled confirmation (never window.confirm): a native modal <dialog>, so the browser traps focus
  * inside it, Escape cancels, and focus returns to the opening button. It names itself and its
- * description for screen readers. Cancel comes first, so it has focus when the dialog opens: a
- * stray Enter can't confirm a destructive action. With `typeToConfirm`, a labelled text field must
- * match before the confirm button is enabled; it is cleared whenever the dialog closes.
+ * description for screen readers. Cancel always has focus when the dialog opens, so a stray Enter
+ * can't confirm a destructive action. That focus is set explicitly right after showModal(): the
+ * browser's default would land on the first focusable element, which with `typeToConfirm` is the text
+ * field, not Cancel. With `typeToConfirm`, a labelled text field must match before the confirm button
+ * is enabled; it is cleared whenever the dialog closes.
  */
 export function ConfirmDialog(p: ConfirmDialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const id = useId();
   const [typed, setTyped] = useState("");
   const confirmed = p.typeToConfirm === undefined || typed === p.typeToConfirm;
@@ -43,7 +46,10 @@ export function ConfirmDialog(p: ConfirmDialogProps) {
         className={`secondary${p.danger ? " danger" : ""}`}
         aria-label={p.triggerAriaLabel}
         aria-haspopup="dialog"
-        onClick={() => ref.current?.showModal()}
+        onClick={() => {
+          ref.current?.showModal();
+          cancelRef.current?.focus();
+        }}
       >
         {p.triggerLabel}
       </button>
@@ -76,7 +82,7 @@ export function ConfirmDialog(p: ConfirmDialogProps) {
             </div>
           )}
           <div className="actions">
-            <button type="button" className="secondary" onClick={() => ref.current?.close()}>
+            <button ref={cancelRef} type="button" className="secondary" onClick={() => ref.current?.close()}>
               Cancel
             </button>
             <button type="submit" className={p.danger ? "danger" : undefined} disabled={!confirmed}>
