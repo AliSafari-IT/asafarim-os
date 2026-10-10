@@ -7,6 +7,7 @@
  *   PUT  /registry/v1/apps/:id/event-schemas   the JSON Schemas of what it publishes (the app, signed; P4.2)
  *   POST /admin/v1/apps/:id/install            body: the manifest JSON (admin)
  *   POST /admin/v1/apps/:id/activate|deactivate                         (admin)
+ *   POST /admin/v1/apps/:id/remove     from installed/inactive: bus teardown, credentials, grants (admin)
  *   GET  /admin/v1/apps/:id                                             (admin)
  *   POST /registry/v1/apps/:id/subjects/:sub/token   a short-lived access token (the app, signed)
  *   GET  /.well-known/jwks.json                      the keys that verify those tokens
@@ -287,6 +288,12 @@ export function createHandler(opts: {
         if (m && req.method === "POST") {
           const out = await opts.registry.transition(m[1]!, m[2] as "activate" | "deactivate", actor);
           log({ msg: `app.${m[2]}d`, appId: m[1], actor });
+          return json(res, 200, out);
+        }
+        m = new RegExp(`^/admin/v1/apps/${APP_ID}/remove$`).exec(p);
+        if (m && req.method === "POST") {
+          const out = await opts.registry.remove(m[1]!, actor);
+          log({ msg: "app.removed", appId: m[1], actor });
           return json(res, 200, out);
         }
         m = new RegExp(`^/admin/v1/apps/${APP_ID}$`).exec(p);

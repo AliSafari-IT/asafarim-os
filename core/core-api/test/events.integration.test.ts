@@ -187,6 +187,10 @@ describe.skipIf(!ADMIN_URL)(
         calls.push(`delete:${app}:${type}`);
         return { consumer: consumerName(app, type), result: "deleted" };
       },
+      deleteAppStream: async (id: string) => {
+        calls.push(`deleteStream:${id}`);
+        return { stream: streamName(id), result: "deleted" };
+      },
     });
 
     const auditStream = async (id: string) =>
@@ -272,6 +276,9 @@ describe.skipIf(!ADMIN_URL)(
           throw new Error("connection refused");
         },
         deleteConsumer: async () => {
+          throw new Error("connection refused");
+        },
+        deleteAppStream: async () => {
           throw new Error("connection refused");
         },
       });
@@ -389,6 +396,9 @@ describe.skipIf(!ADMIN_URL)(
           throw new Error("connection refused");
         },
         deleteConsumer: async () => {
+          throw new Error("connection refused");
+        },
+        deleteAppStream: async () => {
           throw new Error("connection refused");
         },
       });
@@ -620,6 +630,9 @@ describe.skipIf(!ADMIN_URL)(
         deleteConsumer: async () => {
           throw new Error("connection refused");
         },
+        deleteAppStream: async () => {
+          throw new Error("connection refused");
+        },
       });
       const up = await register(down, FAILDROP, credential, manifest(FAILDROP, false, [PUB_TYPE]));
       expect(up.status).toBe(503);
@@ -760,6 +773,9 @@ describe.skipIf(!ADMIN_URL)(
       const down = await coreApi({
         ...recordingBus([]),
         deleteConsumer: async () => {
+          throw new Error("connection refused");
+        },
+        deleteAppStream: async () => {
           throw new Error("connection refused");
         },
       });

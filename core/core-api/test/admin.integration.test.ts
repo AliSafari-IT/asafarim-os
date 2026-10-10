@@ -194,12 +194,12 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
     ]);
   });
 
-  it("core is built in: it can't be installed, activated or deactivated, and it has no credential", async () => {
+  it("core is built in: it can't be installed, activated, deactivated or removed, and it has no credential", async () => {
     // Installing under the reserved id is refused (and nothing is created).
     const install = await cli("POST", "/admin/v1/apps/core/install", { ...manifest(NOTES), id: "core" });
     expect(install.status).toBe(422);
     expect((await pool.query("SELECT count(*) AS n FROM app_credentials WHERE app_id = 'core'")).rows[0].n).toBe("0");
-    for (const action of ["activate", "deactivate"]) {
+    for (const action of ["activate", "deactivate", "remove"]) {
       const r = await cli("POST", `/admin/v1/apps/core/${action}`);
       expect(r.status).toBe(409);
       expect((await json(r)).error).toBe("invalid_state");
@@ -247,6 +247,7 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
       ["GET", "/admin/v1/apps"],
       ["GET", "/admin/v1/audit"],
       ["POST", `/admin/v1/apps/${NOTES}/activate`],
+      ["POST", `/admin/v1/apps/${NOTES}/remove`],
       ["PUT", `/admin/v1/roles/${NOTES}.editor/grants/dev-member`],
     ] as const) {
       expect((await as("dev-member", m, p)).status, `${m} ${p}`).toBe(403);
@@ -433,6 +434,51 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
       const other = signRequest({ credential: credentials.get(DOCS)!, method: "GET", path: path("a") });
       expect((await fetch(`${base}${path("a")}`, { headers: other })).status).toBe(401);
     });
+  });
+
+  it("remove (#68): not while active, not by a non-admin; then the app is listed as removed, the gateway drops it, its grants are gone", async () => {
+    // LOCAL is active (the launcher tests) and dev-member holds LOCAL.editor.
+    const active = await as("dev-admin", "POST", `/admin/v1/apps/${LOCAL}/remove`);
+    expect(active.status).toBe(409);
+    expect(await json(active)).toMatchObject({ error: "invalid_state", message: expect.stringMatching(/deactivate/) });
+    expect((await as("dev-admin", "POST", `/admin/v1/apps/${LOCAL}/deactivate`)).status).toBe(200);
+    expect((await as("dev-member", "POST", `/admin/v1/apps/${LOCAL}/remove`)).status).toBe(403);
+    expect((await json(await cli("GET", `/admin/v1/apps/${LOCAL}`))).state).toBe("inactive");
+
+    const res = await as("dev-admin", "POST", `/admin/v1/apps/${LOCAL}/remove`);
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({
+      appId: LOCAL,
+      state: "removed",
+      previous: "inactive",
+      revokedCredentials: 1,
+      removedGrants: [{ role: `${LOCAL}.editor`, subject: "dev-member" }],
+      stream: "no_bus",
+    });
+    const apps = (
+      await json<{ apps: (AppRow & { waitingForPublisher: string[] })[] }>(await cli("GET", "/admin/v1/apps"))
+    ).apps;
+    expect(apps.at(-1)).toMatchObject({
+      id: LOCAL,
+      state: "removed",
+      permissions: 0,
+      roles: 0,
+      waitingForPublisher: [],
+    });
+    const served = (await json<{ apps: { id: string }[] }>(await cli("GET", "/admin/v1/gateway/apps"))).apps;
+    expect(served.map((a) => a.id)).not.toContain(LOCAL);
+    expect(
+      (await json<{ grants: unknown[] }>(await cli("GET", `/admin/v1/roles/${LOCAL}.editor/grants`))).grants,
+    ).toEqual([]);
+    expect(await auditOf("action = 'app.removed' AND app_id = $1", [LOCAL])).toEqual([
+      expect.objectContaining({ actor: "user:dev-admin", detail: expect.objectContaining({ from: "inactive" }) }),
+    ]);
+
+    // Already removed, unknown: refused.
+    const again = await cli("POST", `/admin/v1/apps/${LOCAL}/remove`);
+    expect([again.status, (await json(again)).error]).toEqual([409, "invalid_state"]);
+    const unknown = await cli("POST", `/admin/v1/apps/nope-${run}/remove`);
+    expect([unknown.status, (await json(unknown)).error]).toEqual([404, "not_found"]);
   });
 
   it("with the CLI token switched off, only people with core.admin can call the admin API", async () => {

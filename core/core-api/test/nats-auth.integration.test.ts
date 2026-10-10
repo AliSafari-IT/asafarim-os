@@ -3,7 +3,7 @@
  * `auth_callout` config, scripts/dev/nats/nats.conf) and a real Postgres. core-api's responder
  * answers every connect; the test apps sign in with their own registry credential.
  *
- *  - anonymous and forged connects are refused;
+ *  - anonymous and forged connects are refused, and so are those of a removed app (#68);
  *  - app A publishes `A.x`, not `B.x`; can't pull from or ack on B's durable; can't create streams
  *    or consumers;
  *  - the notes-style flow (outbox → relay → JetStream → subscriber) still delivers exactly once,
@@ -66,6 +66,7 @@ const B = `bob${run}`; // publishes; the isolation target
 const S = `sue${run}`; // subscribes to A's type
 const U = `upg${run}`; // installed quiet; an upgrade subscribes it to B's type
 const R = `rec${run}`; // subscribes to B's type; its connection is cut while core-api is down
+const X = `rmx${run}`; // removed (#68): its next connect is refused
 const typeOf = (id: string) => `${id}.thing.created.v1`;
 const ADMIN_TOKEN = "t".repeat(40);
 const enc = new TextEncoder();
@@ -323,6 +324,23 @@ describe.skipIf(!ready)("per-app NATS identities (integration: Postgres + NATS a
     await first.close();
     await expect(
       connect({ servers: NATS_URL!, user: A, pass, timeout: 3000, maxReconnectAttempts: 0 }),
+    ).rejects.toThrow();
+  });
+
+  it("refuses a removed app's connect (#68): its credential is revoked and the app is gone", async () => {
+    await install(X, true);
+    const before = await asApp(X);
+    await before.close();
+    const res = await post(`/admin/v1/apps/${X}/remove`, {}, { authorization: `Bearer ${ADMIN_TOKEN}` });
+    expect(res.status).toBe(200);
+    await expect(
+      connect({
+        servers: NATS_URL!,
+        user: X,
+        pass: signNatsConnect({ appId: X, credential: credentials[X]! }),
+        timeout: 3000,
+        maxReconnectAttempts: 0,
+      }),
     ).rejects.toThrow();
   });
 

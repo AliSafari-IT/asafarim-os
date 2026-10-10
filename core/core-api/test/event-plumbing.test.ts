@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   consumerOutcome,
   planEventPlumbing,
+  planRemoval,
   publishedTypes,
   subscribedTypes,
   waitingForPublisher,
@@ -241,5 +242,98 @@ describe("helpers", () => {
   it("the bus's no_stream is reported as waiting_for_publisher; other results pass through", () => {
     expect(consumerOutcome("no_stream")).toBe("waiting_for_publisher");
     for (const r of ["created", "updated", "exists"]) expect(consumerOutcome(r)).toBe(r);
+  });
+});
+
+describe("planEventPlumbing: a self-subscribing publisher that stops publishing its type (#63 follow-up)", () => {
+  it("the type goes to remove, not own, and waits for a publisher", () => {
+    const plan = planEventPlumbing({
+      appId: "notes",
+      manifest: m([NOTE_DELETED], [NOTE, NOTE_DELETED]),
+      previous: m([NOTE, NOTE_DELETED], [NOTE, NOTE_DELETED]),
+      installed: [],
+    });
+    expect(plan).toMatchObject({ stream: true, own: [NOTE_DELETED], remove: [NOTE] });
+    expect(waitingForPublisher("notes", m([NOTE_DELETED], [NOTE, NOTE_DELETED]), [])).toEqual([NOTE]);
+  });
+
+  it("stable across repeated registrations: remove again (an idempotent delete), never back in own", () => {
+    const now = m([], [NOTE, TASK]);
+    for (let i = 0; i < 3; i++) {
+      expect(planEventPlumbing({ appId: "notes", manifest: now, previous: now, installed: [] })).toMatchObject({
+        own: [TASK],
+        remove: [NOTE],
+      });
+    }
+  });
+
+  it("at install too: an own-namespace type it doesn't publish gets no consumer", () => {
+    expect(planEventPlumbing({ appId: "notes", manifest: m([], [NOTE]), installed: [] })).toMatchObject({
+      stream: false,
+      own: [],
+      remove: [NOTE],
+    });
+  });
+
+  it("another app's type with the same prefix but another namespace is not affected", () => {
+    const type = "notesx.thing.created.v1";
+    expect(planEventPlumbing({ appId: "notes", manifest: m([], [type]), installed: [] })).toMatchObject({
+      own: [type],
+      remove: [],
+    });
+  });
+});
+
+describe("planRemoval: what removing an app does on the bus (pure)", () => {
+  const installed = [
+    { id: "tasks", manifest: m([TASK], [NOTE, NOTE_DELETED]) },
+    { id: "audit", manifest: m([], [NOTE, TASK]) },
+    { id: "empty", manifest: null },
+  ];
+
+  it("a publisher: the other apps' consumers of anything in its namespace, and its stream", () => {
+    expect(planRemoval({ appId: "notes", manifest: m([NOTE]), installed })).toEqual({
+      own: [],
+      dependents: [
+        { app: "audit", type: NOTE },
+        { app: "tasks", type: NOTE },
+        { app: "tasks", type: NOTE_DELETED }, // not declared any more, but on its stream
+      ],
+      stream: true,
+    });
+  });
+
+  it("a subscriber: its own consumers; nobody else's", () => {
+    expect(planRemoval({ appId: "audit", manifest: m([], [TASK, NOTE, NOTE]), installed })).toEqual({
+      own: [NOTE, TASK],
+      dependents: [],
+      stream: true,
+    });
+  });
+
+  it("both: its own consumers and its subscribers'", () => {
+    expect(planRemoval({ appId: "tasks", manifest: m([TASK], [NOTE]), installed })).toEqual({
+      own: [NOTE],
+      dependents: [{ app: "audit", type: TASK }],
+      stream: true,
+    });
+  });
+
+  it("a self-subscriber: its own consumer once, never a dependent of itself", () => {
+    expect(
+      planRemoval({
+        appId: "notes",
+        manifest: m([NOTE], [NOTE]),
+        installed: [{ id: "notes", manifest: m([NOTE], [NOTE]) }],
+      }),
+    ).toEqual({ own: [NOTE], dependents: [], stream: true });
+  });
+
+  it("an app without events or manifest: only the (idempotent) stream delete", () => {
+    expect(planRemoval({ appId: "quiet", manifest: null, installed })).toEqual({
+      own: [],
+      dependents: [],
+      stream: true,
+    });
   });
 });
