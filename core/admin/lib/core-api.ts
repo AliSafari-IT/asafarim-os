@@ -50,6 +50,28 @@ export interface AuditEvent {
   detail: Record<string, unknown>;
 }
 
+/** A subscriber in the event catalog (mirrors core-api's `CatalogSubscriber`, src/admin.ts). */
+export interface CatalogSubscriber {
+  appId: string;
+  state: string;
+  handler: string;
+  /** `waiting_for_publisher`: no installed app publishes the type yet (the Apps page's warning). */
+  consumer: "bound" | "waiting_for_publisher";
+}
+
+/** One event type in the catalog (P4.2; mirrors core-api's `CatalogEntry`, src/admin.ts). */
+export interface CatalogEntry {
+  type: string;
+  /** null: a dangling subscription, nobody installed publishes this type. */
+  publisher: { appId: string; version: string; state: string } | null;
+  schema: object | null;
+  schemaStatus: "provided" | "not_provided" | "no_publisher";
+  schemaUpdatedAt: string | null;
+  /** The publisher's version when it uploaded the schema. */
+  schemaAppVersion: string | null;
+  subscribers: CatalogSubscriber[];
+}
+
 export interface RoleGrant {
   subject: string;
   granted_by: string;
@@ -82,6 +104,7 @@ export function coreApi(idToken: string) {
   return {
     session: () => call<{ actor: string; subject: string }>(idToken, "GET", "/admin/v1/session"),
     apps: async () => (await call<{ apps: AdminApp[] }>(idToken, "GET", "/admin/v1/apps")).apps,
+    events: async () => (await call<{ events: CatalogEntry[] }>(idToken, "GET", "/admin/v1/events")).events,
     roles: async (app?: string) =>
       (await call<{ roles: AdminRole[] }>(idToken, "GET", `/admin/v1/roles${app ? `?app=${enc(app)}` : ""}`)).roles,
     roleGrants: async (role: string) =>
