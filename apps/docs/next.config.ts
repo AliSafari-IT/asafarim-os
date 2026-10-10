@@ -9,6 +9,9 @@ for (const file of ["app.env", "docs.env"]) {
   if (existsSync(p)) process.loadEnvFile(p);
 }
 
+/** Every response of this app, pages, API answers, images and error pages alike: never indexed (#79). */
+export const ROBOTS_HEADER = { key: "X-Robots-Tag", value: "noindex, nofollow" };
+
 const nextConfig: NextConfig = {
   output: process.env.BUILD_STANDALONE === "true" ? "standalone" : undefined,
   devIndicators: false,
@@ -16,6 +19,11 @@ const nextConfig: NextConfig = {
   // today; this keeps it that way if that ever changes (scripts/check-no-content.mjs checks the build).
   outputFileTracingExcludes: { "*": ["./fixtures/**"] },
   transpilePackages: ["@asafarim/app-sdk"],
+  // unauthorized() and forbidden() answer 401 and 403 with app/unauthorized.tsx and app/forbidden.tsx (#79).
+  experimental: { authInterrupts: true },
+  async headers() {
+    return [{ source: "/:path*", headers: [ROBOTS_HEADER] }];
+  },
 };
 
 export default nextConfig;

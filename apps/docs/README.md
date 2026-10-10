@@ -36,3 +36,13 @@ Secrets (names only): `DOCS_GITHUB_TOKEN`, `DOCS_ISSUES_TOKEN`, `DOCS_AI_API_KEY
 pnpm dev                                         # installs and activates docs: http://docs.localhost:8080 (or localhost:4110)
 pnpm platform role grant docs.owner dev-admin    # the owner role; nobody holds it by default
 ```
+
+## Who gets in
+
+Every page, route handler and server action goes through `lib/gate.ts`:
+
+- **Not signed in:** the page answers `401` with the sign-in page; API routes answer `401` JSON; `/api/asafarim/session` redirects to sign-in.
+- **Signed in without `docs.read`** (e.g. `dev-member`): a plain `403` "You don't have access" page naming `docs.read`, with no tree, titles or counts; API routes answer `403` naming it.
+- **With `docs.owner`:** the documents.
+
+`test/routes.test.ts` finds every route on disk, so a new one is checked without anyone remembering to. Every response sends `X-Robots-Tag: noindex, nofollow`, and `robots.txt` disallows everything. The session cookie is host-only (`__Host-`, `HttpOnly`, `Secure`, `SameSite=Lax`).

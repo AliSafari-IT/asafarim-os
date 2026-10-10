@@ -178,7 +178,11 @@ export function createSource(backend: SourceBackend, opts: { ttlMs?: number; now
   let filesSha: string | undefined;
 
   async function load(): Promise<Listing> {
-    const { sha, paths } = await backend.tree();
+    // The tree or docs-app.json answering 404 means the repo, branch or token is wrong (GitHub answers
+    // 404 for a repo the token can't see): the documents are unavailable, it isn't a server error.
+    const { sha, paths } = await backend.tree().catch((err: unknown) => {
+      throw err instanceof DocNotFoundError ? new SourceUnavailableError("the source repository can't be found") : err;
+    });
     const entries: DocEntry[] = [];
     for (const p of paths) {
       const kind = kindOf(p);
@@ -191,6 +195,7 @@ export function createSource(backend: SourceBackend, opts: { ttlMs?: number; now
         owners = parseOwnersConfig(new TextDecoder().decode(await backend.read(OWNERS_FILE)));
       } catch (err) {
         if (err instanceof SourceUnavailableError) throw err;
+        if (err instanceof DocNotFoundError) throw new SourceUnavailableError(`${OWNERS_FILE} can't be found`);
         owners = { ok: false, error: `${OWNERS_FILE} can't be read` };
       }
     }
