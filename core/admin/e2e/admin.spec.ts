@@ -4,8 +4,9 @@
  *
  *   a non-admin opening /admin → 403 →
  *   the admin signs in → activates notes (a styled dialog, never window.confirm) →
+ *   the Status page shows core-api and notes up (P6.1) →
  *   grants notes.editor to the member → the member's launcher shows Notes and they can write →
- *   the admin deactivates notes → it disappears from the launcher →
+ *   the admin deactivates notes → it disappears from the launcher and isn't polled any more →
  *   every admin action is in the audit log under the admin's own name →
  *   removing a throwaway app needs its id typed into the dialog, then it shows as removed (#68) →
  *   keyboard, labels and light/dark checks on the console.
@@ -121,7 +122,7 @@ test("signed out, /admin sends you to sign in; a signed-in non-admin gets a 403"
   await expect(page.getByRole("navigation", { name: "Admin" })).toHaveCount(0);
   await page.screenshot({ path: `${SHOTS}/a1-non-admin-403.png` });
   // The admin pages answer 403 for every section, not just the first.
-  for (const path of ["/admin", "/admin/roles", "/admin/events", "/admin/audit"]) {
+  for (const path of ["/admin", "/admin/roles", "/admin/events", "/admin/status", "/admin/audit"]) {
     expect((await page.goto(`${ADMIN}${path}`))?.status(), path).toBe(403);
   }
   await page.close();
@@ -189,6 +190,39 @@ test("the Events page lists notes' published type with its schema", async () => 
   await expect(row).toHaveCount(0);
   await page.goto(`${ADMIN}/admin/events?app=${encodeURIComponent("<bad id>")}`);
   await expect(row).toBeVisible();
+  await page.close();
+});
+
+test("the Status page shows core-api and notes as up and ready (P6.1)", async () => {
+  const page = await adminCtx.newPage();
+  // Activating notes made core-api check it at once; wait for that round rather than racing it.
+  await expect
+    .poll(
+      async () => (
+        await page.goto(`${ADMIN}/admin/status`),
+        await page
+          .getByTestId("status-notes")
+          .getAttribute("data-overall")
+          .catch(() => null)
+      ),
+      { timeout: 20_000 },
+    )
+    .toBe("up");
+  await expect(page.getByRole("heading", { level: 2, name: "Status" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Admin" }).getByRole("link", { name: "Status" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  // Text, not just color: each badge says what it means.
+  for (const id of ["core-api", "notes"]) {
+    await expect(page.getByTestId(`live-${id}`)).toHaveText("Up");
+    await expect(page.getByTestId(`ready-${id}`)).toHaveText("Up");
+    await expect(page.getByTestId(`problem-${id}`)).toHaveText("None");
+  }
+  await expect(page.getByTestId("status-summary")).toContainText("up");
+  await page.screenshot({ path: `${SHOTS}/a4c-status.png` });
+  await page.getByTestId("status-refresh").click();
+  await expect(page).toHaveURL(/\/admin\/status$/);
   await page.close();
 });
 
@@ -292,6 +326,21 @@ test("the admin deactivates notes: it disappears from the launcher", async () =>
   await expect(member.getByRole("heading", { name: /temporarily unavailable/i })).toBeVisible();
   await member.screenshot({ path: `${SHOTS}/a8-deactivated-unavailable.png` });
   await member.close();
+
+  // core-api stops polling it at once: the Status page says "Not polled".
+  await expect
+    .poll(
+      async () => (
+        await page.goto(`${ADMIN}/admin/status`),
+        await page
+          .getByTestId("not-polled-notes")
+          .count()
+          .catch(() => 0)
+      ),
+      { timeout: 15_000 },
+    )
+    .toBe(1);
+  await expect(page.getByTestId("status-notes")).toContainText("inactive");
   await page.close();
 });
 
@@ -434,7 +483,7 @@ test("the console works from the keyboard and has labels, landmarks and captions
   await expect(trigger).toBeFocused();
 
   // Every form control has an accessible name, on every page that has any.
-  for (const path of ["/admin/apps", "/admin/roles?app=notes", "/admin/events", "/admin/audit"]) {
+  for (const path of ["/admin/apps", "/admin/roles?app=notes", "/admin/events", "/admin/status", "/admin/audit"]) {
     await page.goto(`${ADMIN}${path}`);
     const unnamed = await page.evaluate(() =>
       Array.from(document.querySelectorAll("input:not([type=hidden]), select, textarea, button"))
@@ -461,7 +510,7 @@ for (const scheme of ["light", "dark"] as const) {
     const page = await adminCtx.newPage();
     await page.emulateMedia({ colorScheme: scheme });
     const checked: Record<string, number> = {};
-    for (const path of ["/admin/apps", "/admin/roles?app=notes", "/admin/events", "/admin/audit"]) {
+    for (const path of ["/admin/apps", "/admin/roles?app=notes", "/admin/events", "/admin/status", "/admin/audit"]) {
       await page.goto(`${ADMIN}${path}`);
       const ratios = await page.evaluate(() => {
         const parse = (c: string) => (/rgba?\(([^)]+)\)/.exec(c)?.[1] ?? "0,0,0").split(",").map((n) => parseFloat(n));
@@ -492,6 +541,9 @@ for (const scheme of ["light", "dark"] as const) {
           nav: 'nav[aria-label="Admin"] a[aria-current="page"]',
           th: "th[scope=col]",
           badge: ".badge",
+          up: ".badge.up",
+          down: ".badge.down",
+          unknown: ".badge.unknown",
           link: "main a",
         };
         for (const [name, selector] of Object.entries(sample)) {

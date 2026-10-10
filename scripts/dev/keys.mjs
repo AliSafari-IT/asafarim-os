@@ -219,6 +219,13 @@ export function writeGatewayEnv(host = process.env.OS_GATEWAY_HOST || "host.dock
   writeFileSync(path.join(DEV_DIR, "gateway.env"), lines.join("\n"));
 }
 
+/**
+ * P6.1: core-api polls each active app's health at the same upstream the gateway uses. core-api runs on
+ * the host in development, so it reaches the apps at localhost. Rewritten every run: it's only ports.
+ */
+export const coreApiUpstreamLines = (host = "localhost") =>
+  Object.entries(DEV.apps).map(([id, port]) => line(upstreamVar(id), `${host}:${port}`));
+
 /** The Admin console's own env (.dev/admin.env): the seeded synthetic users it can search when granting roles. */
 function writeAdminEnv() {
   writeFileSync(
@@ -273,6 +280,7 @@ function ensureAppEnv(force) {
 function ensureDevKeysInner({ force, log, coreApi }) {
   writeClients();
   writeGatewayEnv();
+  upsertLines(path.join(DEV_DIR, "core-api.env"), coreApiUpstreamLines());
   writeAdminEnv();
   ensureAppEnv(force);
   const files = ["identity.env", "dev-hub.env", "db.env", "clients.json"].map((f) => path.join(DEV_DIR, f));

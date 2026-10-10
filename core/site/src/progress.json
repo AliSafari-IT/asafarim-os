@@ -72,6 +72,12 @@
       "caption": "The event catalog: each event type with its publisher, subscribers and schema."
     },
     {
+      "file": "admin-status.png",
+      "title": "Status",
+      "alt": "The Admin console's Status page, showing core-api and the Notes app with their live and ready checks marked Up, latency and when each was last checked.",
+      "caption": "The status board: core-api checks each active app's live and ready endpoints from its manifest."
+    },
+    {
       "file": "notes.png",
       "title": "Notes",
       "alt": "The Notes app, signed in through the OS, with its app launcher and a list of notes.",

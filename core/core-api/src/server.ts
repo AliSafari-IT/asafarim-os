@@ -25,6 +25,7 @@
  *   GET  /admin/v1/roles/<role>/grants           who holds a role
  *   GET  /admin/v1/subjects/<sub>/grants         what a person holds
  *   GET  /admin/v1/audit[?app=&actor=&limit=&before=]   the audit log, newest first
+ *   GET  /admin/v1/status                        each app's live/ready, as last polled (P6.1, health.ts)
  *   GET  /registry/v1/apps/:id/launcher/:sub     the apps a person can open (the app, signed)
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -43,6 +44,7 @@ import { ApiError } from "./errors.ts";
 import { MAX_SCHEMAS_REQUEST_BYTES } from "./event-schemas.ts";
 import { migrate } from "./migrate.ts";
 import { createAppSnapshot, createGateway, type GatewayApp } from "./gateway.ts";
+import { createHealthPoller, parseHealthConfig, upstreamVar, type HealthPoller } from "./health.ts";
 import { startAuthCallout } from "./nats-auth.ts";
 import { createRegistry, type Registry } from "./registry.ts";
 import { SIGNATURE_HEADERS, jwksOf, verificationKeyOf, type SigningKey } from "@asafarim/registry-protocol";
@@ -112,6 +114,8 @@ export function createHandler(opts: {
   snapshot?: ReturnType<typeof createAppSnapshot>;
   /** The clock tokens are checked against (tests move it; production uses the real one). */
   now?: () => Date;
+  /** The app health poller (P6.1). Without it GET /admin/v1/status answers an empty board. */
+  health?: Pick<HealthPoller, "status">;
 }) {
   const log = opts.log ?? ((l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`));
   const snapshot = opts.snapshot ?? createAppSnapshot(() => loadGatewayApps(opts.pool));
@@ -246,6 +250,9 @@ export function createHandler(opts: {
           const who = url.searchParams.get("actor") || undefined;
           if (who !== undefined && who.length > 128) throw new ApiError("bad_request", "actor is too long");
           return json(res, 200, await queries.audit({ app, actor: who, limit: num("limit"), before: num("before") }));
+        }
+        if (req.method === "GET" && p === "/admin/v1/status") {
+          return json(res, 200, opts.health?.status() ?? { checkedAt: null, intervalMs: null, apps: [] });
         }
         if (req.method === "GET" && p === "/admin/v1/gateway/apps") {
           return json(res, 200, {
@@ -420,6 +427,7 @@ async function main() {
   const appDbPort = appDatabasePort(process.env.CORE_API_APP_DB_PORT, appDb);
   const tokenKey = parseTokenKey(required("CORE_API_TOKEN_SIGNING_JWK"));
   const snapshot = createAppSnapshot(() => loadGatewayApps(pool));
+  const healthConfig = parseHealthConfig(process.env);
   // P4.1: with a bus configured, installing (or re-registering) an app creates its JetStream stream
   // when it publishes, and its durable consumers when it subscribes.
   const busConfig = parseBusConfig(process.env);
@@ -462,7 +470,10 @@ async function main() {
     tokenKey,
     accessTokenTtlSeconds: parseTokenTtl(process.env.CORE_API_ACCESS_TOKEN_TTL_SECONDS),
     appUrlTemplate: process.env.CORE_API_APP_URL_TEMPLATE || undefined,
-    onLifecycleChange: () => snapshot.invalidate(),
+    onLifecycleChange: () => {
+      snapshot.invalidate();
+      void health.refresh();
+    },
     provisioner: async () => {
       const c = new pg.Client({ connectionString: provisionerUrl });
       await c.connect();
@@ -473,10 +484,22 @@ async function main() {
       port: appDbPort,
     },
   });
+  // P6.1: each active app's live/ready, polled at the upstream the gateway uses for it (OS_APP_<ID>_UPSTREAM).
+  const health = createHealthPoller({
+    ...healthConfig,
+    apps: () => loadGatewayApps(pool),
+    upstream: (id) => process.env[upstreamVar(id)] || undefined,
+    selfChecks: {
+      database: () => pool.query("SELECT 1"),
+      ...(callout ? { bus: () => callout.ping() } : {}),
+    },
+    log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
+  });
+  health.start();
   // Forget expired registration nonces even when nobody registers.
   setInterval(() => void registry.pruneNonces().catch(() => undefined), 60_000).unref();
   const port = Number(process.env.PORT ?? 4020);
-  createServer(createHandler({ registry, pool, adminToken, identity, tokenKey, snapshot })).listen(port, () =>
+  createServer(createHandler({ registry, pool, adminToken, identity, tokenKey, snapshot, health })).listen(port, () =>
     process.stdout.write(
       `${JSON.stringify({ service: "core-api", msg: "core-api.started", port, migrations: applied })}\n`,
     ),

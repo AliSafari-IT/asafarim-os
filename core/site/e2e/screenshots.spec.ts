@@ -46,7 +46,7 @@ test.beforeAll(async () => {
   await cli("PUT", "/admin/v1/roles/notes.editor/grants/dev-member");
 });
 
-test("Admin: Apps, an app's roles and grants, Events", async ({ browser }) => {
+test("Admin: Apps, an app's roles and grants, Events, Status", async ({ browser }) => {
   const page = await newPage(browser);
   await signIn(page, `${ADMIN}/admin`, "Dev Admin");
 
@@ -74,6 +74,21 @@ test("Admin: Apps, an app's roles and grants, Events", async ({ browser }) => {
     )
     .toBe("Schema provided");
   await shot(page, "admin-events.png");
+
+  // P6.1: activating notes made core-api check it at once; wait for that round rather than racing it.
+  await expect
+    .poll(
+      async () => (
+        await page.goto(`${ADMIN}/admin/status`),
+        await page
+          .getByTestId("status-notes")
+          .getAttribute("data-overall")
+          .catch(() => null)
+      ),
+      { timeout: 30_000 },
+    )
+    .toBe("up");
+  await shot(page, "admin-status.png");
 });
 
 test("Notes, signed in through the OS", async ({ browser }) => {

@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createIdentityVerifier } from "../src/admin-auth.ts";
 import { signRegistration, signRequest } from "../src/credentials.ts";
 import { createAppSnapshot } from "../src/gateway.ts";
+import { createHealthPoller, type HealthPoller, type StatusReport } from "../src/health.ts";
 import { migrate } from "../src/migrate.ts";
 import { appDatabaseNames } from "../src/provision.ts";
 import { createRegistry } from "../src/registry.ts";
@@ -96,6 +97,13 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
   let base: string;
   let idKey: Awaited<ReturnType<typeof generateKeyPair>>;
   const credentials = new Map<string, string>();
+  // P6.1: the apps' health endpoints (manifest: /h) all answer from this stub; `healthy` flips it.
+  let healthy = true;
+  const appStub = createServer((req, res) => {
+    res.writeHead(req.url === "/h" && healthy ? 200 : 503).end();
+  });
+  let appStubHost = "";
+  let health: HealthPoller;
 
   const startServer = async (opts: { adminToken?: string }) => {
     const snapshot = createAppSnapshot(() => loadGatewayApps(pool));
@@ -109,7 +117,16 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
       },
       appDatabaseHost: { host: url.hostname, port: Number(url.port) },
       appUrlTemplate: "http://{id}.localhost:8080",
-      onLifecycleChange: () => snapshot.invalidate(),
+      onLifecycleChange: () => {
+        snapshot.invalidate();
+        void poller.refresh();
+      },
+    });
+    const poller = createHealthPoller({
+      apps: () => loadGatewayApps(pool),
+      upstream: () => appStubHost,
+      selfChecks: { database: () => pool.query("SELECT 1") },
+      timeoutMs: 1000,
     });
     const jwk = { ...(await exportJWK(idKey.publicKey)), kid: "idk", alg: "ES256", use: "sig" };
     const identity = createIdentityVerifier({
@@ -118,10 +135,10 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
       keys: createLocalJWKSet({ keys: [jwk] }),
     });
     const s = createServer(
-      createHandler({ registry, pool, adminToken: opts.adminToken, identity, snapshot, log: () => {} }),
+      createHandler({ registry, pool, adminToken: opts.adminToken, identity, snapshot, health: poller, log: () => {} }),
     );
     await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
-    return { s, base: `http://127.0.0.1:${(s.address() as AddressInfo).port}` };
+    return { s, base: `http://127.0.0.1:${(s.address() as AddressInfo).port}`, health: poller };
   };
 
   beforeAll(async () => {
@@ -133,7 +150,9 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
     pool = new pg.Pool({ connectionString: url.href, max: 4 });
     await migrate(pool);
     idKey = await generateKeyPair("ES256");
-    ({ s: server, base } = await startServer({ adminToken: STATIC }));
+    await new Promise<void>((r) => appStub.listen(0, "127.0.0.1", r));
+    appStubHost = `127.0.0.1:${(appStub.address() as AddressInfo).port}`;
+    ({ s: server, base, health } = await startServer({ adminToken: STATIC }));
 
     // Three apps: a private one, a public one, one without a database.
     for (const [id, over] of [
@@ -151,6 +170,7 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
 
   afterAll(async () => {
     server?.close();
+    appStub.close();
     await pool?.end();
     if (admin) {
       await admin.query(`DROP DATABASE IF EXISTS "${coreDb}"`);
@@ -479,6 +499,57 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
     expect([again.status, (await json(again)).error]).toEqual([409, "invalid_state"]);
     const unknown = await cli("POST", `/admin/v1/apps/nope-${run}/remove`);
     expect([unknown.status, (await json(unknown)).error]).toEqual([404, "not_found"]);
+  });
+
+  it("GET /admin/v1/status (P6.1): admins only; core-api first, active apps polled, others not, removed ones gone", async () => {
+    expect((await call("GET", "/admin/v1/status", undefined)).status).toBe(401);
+    expect((await call("GET", "/admin/v1/status", "Bearer nonsense")).status).toBe(401);
+    expect((await as("dev-member", "GET", "/admin/v1/status")).status).toBe(403);
+
+    await health.refresh();
+    const states = new Map(
+      (await json<{ apps: AppRow[] }>(await cli("GET", "/admin/v1/apps"))).apps.map((a) => [a.id, a.state]),
+    );
+    const res = await as("dev-admin", "GET", "/admin/v1/status");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const report = await json<StatusReport>(res);
+    expect(report.checkedAt).toEqual(expect.any(String));
+    expect(report.apps[0]).toMatchObject({ id: "core-api", state: "active", live: "up", ready: "up" });
+    const ids = report.apps.map((a) => a.id);
+    expect(ids).not.toContain("core"); // the catalog row isn't an app to poll
+    expect(ids).not.toContain(LOCAL); // removed above
+    expect(report.apps.find((a) => a.id === NOTES)).toMatchObject({
+      name: NOTES.toUpperCase(),
+      state: "active",
+      polled: true,
+      live: "up",
+      ready: "up",
+      latencyMs: expect.any(Number),
+      checkedAt: expect.any(String),
+      since: expect.any(String),
+    });
+    const docs = report.apps.find((a) => a.id === DOCS)!;
+    expect(docs.state).toBe(states.get(DOCS));
+    expect(docs.polled).toBe(states.get(DOCS) === "active");
+
+    // A failing endpoint is down with its status; deactivating stops the polling at once.
+    healthy = false;
+    await health.refresh();
+    expect(
+      (await json<StatusReport>(await cli("GET", "/admin/v1/status"))).apps.find((a) => a.id === NOTES),
+    ).toMatchObject({ live: "down", ready: "down", error: "bad_status", detail: "503" });
+    healthy = true;
+    expect((await as("dev-admin", "POST", `/admin/v1/apps/${NOTES}/deactivate`)).status).toBe(200);
+    await health.settled();
+    expect(
+      (await json<StatusReport>(await cli("GET", "/admin/v1/status"))).apps.find((a) => a.id === NOTES),
+    ).toMatchObject({ state: "inactive", polled: false, live: "unknown", ready: "unknown" });
+    expect((await as("dev-admin", "POST", `/admin/v1/apps/${NOTES}/activate`)).status).toBe(200);
+    await health.settled();
+    expect(
+      (await json<StatusReport>(await cli("GET", "/admin/v1/status"))).apps.find((a) => a.id === NOTES),
+    ).toMatchObject({ state: "active", polled: true, live: "up", ready: "up" });
   });
 
   it("with the CLI token switched off, only people with core.admin can call the admin API", async () => {
