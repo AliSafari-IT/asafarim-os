@@ -27,6 +27,7 @@
     "dev:reset": "node scripts/dev/reset.mjs",
     "dev:smoke": "node scripts/dev/smoke.mjs",
     "e2e": "node scripts/dev/e2e.mjs",
+    "screenshots": "node scripts/dev/e2e.mjs --screenshots",
     "env:status": "envage status",
     "env:check": "node scripts/check-env-safety.mjs",
     "env:key:init": "envage init-key",
