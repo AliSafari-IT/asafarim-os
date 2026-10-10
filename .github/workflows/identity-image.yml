@@ -64,7 +64,7 @@ jobs:
           # The Dockerfile does `COPY . .` and there is no .dockerignore: keep the token out of .git.
           persist-credentials: false
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         if: env.PUBLISH == 'true'
