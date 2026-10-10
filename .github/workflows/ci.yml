@@ -64,6 +64,11 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      # #78: the docs app reads documents at runtime only. Build it (standalone, as its image will be)
+      # and fail if any fixture's marker text is in .next/. The image-level check comes with #83.
+      - name: No document content in the docs app build
+        run: pnpm --filter @asafarim/docs check:no-content
+
       - name: The core never imports an app
         run: pnpm platform:boundaries
 

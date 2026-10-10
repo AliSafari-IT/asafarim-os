@@ -12,6 +12,9 @@ for (const file of ["app.env", "docs.env"]) {
 const nextConfig: NextConfig = {
   output: process.env.BUILD_STANDALONE === "true" ? "standalone" : undefined,
   devIndicators: false,
+  // The fixtures are read at runtime in development only. Their path is dynamic, so nothing traces them
+  // today; this keeps it that way if that ever changes (scripts/check-no-content.mjs checks the build).
+  outputFileTracingExcludes: { "*": ["./fixtures/**"] },
   transpilePackages: ["@asafarim/app-sdk"],
 };
 

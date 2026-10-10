@@ -1,6 +1,13 @@
+import path from "node:path";
 import { defineConfig } from "vitest/config";
 
-// Unit tests only: e2e/ belongs to Playwright (`pnpm e2e`).
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@": path.resolve(import.meta.dirname),
+      // `server-only` throws outside a React server bundle; in unit tests the code is plainly on the server.
+      "server-only": path.resolve(import.meta.dirname, "test/server-only.ts"),
+    },
+  },
   test: { include: ["test/**/*.test.ts"] },
 });

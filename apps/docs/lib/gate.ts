@@ -5,14 +5,14 @@
  * gateway issued the person's short-lived access token (P3.3a), the check uses
  * that token, so the app and the gateway agree and share its staleness bound.
  */
-async function accessToken(): Promise<string | undefined> {
-  return (await cookies()).get(ACCESS_COOKIE_NAME)?.value;
-}
-
 import { ACCESS_COOKIE_NAME, isAccessUnavailableError, isForbiddenError } from "@asafarim/app-sdk";
 import { cookies } from "next/headers";
 import { auth } from "./auth";
 import { getPlatform } from "./platform";
+
+async function accessToken(): Promise<string | undefined> {
+  return (await cookies()).get(ACCESS_COOKIE_NAME)?.value;
+}
 
 export type GateResult =
   | { ok: true; subject: string; roles: string[] }

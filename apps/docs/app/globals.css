@@ -201,3 +201,66 @@ button.secondary {
     padding: 32px 16px 64px;
   }
 }
+
+/* The tree, the owner badge and the raw document (#78; rendering comes with #80) */
+.tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.tree ul ul {
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+  margin: 2px 0 6px 4px;
+}
+.tree li {
+  margin: 2px 0;
+}
+.tree .folder > span {
+  font-weight: 600;
+  color: var(--muted);
+}
+.tree a {
+  color: var(--ink);
+  text-decoration: none;
+  display: block;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.tree a:hover {
+  background: var(--line);
+}
+.tree a[aria-current="page"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.tree a.file {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.badge.owner {
+  color: var(--accent);
+  border-color: var(--accent);
+  font-family: var(--mono);
+}
+.meta {
+  margin: -0.5rem 0 1.5rem;
+}
+.raw {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 0.92rem/1.6 var(--mono);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
