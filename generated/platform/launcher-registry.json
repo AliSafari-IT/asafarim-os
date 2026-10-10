@@ -10,6 +10,16 @@
       "status": "active",
       "access": "authenticated",
       "order": 10
+    },
+    {
+      "key": "docs",
+      "name": "Docs",
+      "description": "Read the documentation, keep study notes and turn them into GitHub issues.",
+      "glyph": "DC",
+      "meta": "docs.asafarim.site",
+      "status": "active",
+      "access": "authenticated",
+      "order": 20
     }
   ]
 }

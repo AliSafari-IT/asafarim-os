@@ -36,7 +36,7 @@ export const DEV = {
   // The smoke test's OIDC client: its callback is never served (it only reads the redirect).
   devClientCallback: "http://localhost:4199/callback",
   // Dev ports of the apps under apps/*; each gets an OIDC client in .dev/clients.json.
-  apps: { notes: 4100 },
+  apps: { notes: 4100, docs: 4110 },
   postgres: { host: "127.0.0.1", port: 55440, adminUser: "postgres", adminPassword: "postgres-dev-only" },
   redisUrl: "redis://127.0.0.1:56380/3",
   // P4.1: the event bus (NATS JetStream, compose.dev.yml).
