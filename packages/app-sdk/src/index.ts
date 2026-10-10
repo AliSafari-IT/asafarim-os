@@ -25,6 +25,11 @@ export interface StartAppOptions {
   fetch?: typeof fetch;
   /** Throw if registration fails (default: log and carry on, for local development). */
   strict?: boolean;
+  /**
+   * The JSON Schemas of the events the app publishes, keyed by the manifest's `events.publishes[].schema`
+   * path (the map `createPublisher` takes): uploaded for the Admin event catalog after registering (P4.2).
+   */
+  schemas?: Record<string, object>;
 }
 
 export interface Platform {
@@ -78,6 +83,7 @@ export function startApp(opts: StartAppOptions): Platform {
     credential,
     coreApiUrl,
     manifest: opts.manifest,
+    schemas: opts.schemas,
     strict: opts.strict,
     fetch: opts.fetch,
     log,

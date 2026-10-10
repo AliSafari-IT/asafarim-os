@@ -22,10 +22,12 @@ import {
   ed25519Scheme,
   type CredentialScheme,
 } from "./credentials.ts";
+import { checkEventSchemas } from "./event-schemas.ts";
 import {
   WAITING_FOR_PUBLISHER,
   consumerOutcome,
   planEventPlumbing,
+  publishedTypes,
   waitingForPublisher,
   type EventPlumbingPlan,
   type InstalledApp,
@@ -241,6 +243,18 @@ async function audit(
   ]);
 }
 
+/**
+ * Drop the catalog schemas (P4.2) of the types `manifest` no longer publishes, so the catalog never
+ * lists a type nobody publishes. Runs in the install/registration transaction. Returns the types dropped.
+ */
+async function pruneEventSchemas(c: pg.PoolClient, appId: string, manifest: AppManifest): Promise<string[]> {
+  const r = await c.query<{ event_type: string }>(
+    "DELETE FROM event_schemas WHERE app_id = $1 AND NOT (event_type = ANY($2::text[])) RETURNING event_type",
+    [appId, publishedTypes(manifest)],
+  );
+  return r.rows.map((x) => x.event_type).sort();
+}
+
 export function createRegistry(deps: RegistryDeps) {
   const scheme = deps.scheme ?? ed25519Scheme;
   const now = deps.now ?? (() => new Date());
@@ -306,8 +320,11 @@ export function createRegistry(deps: RegistryDeps) {
         credential.scheme,
         credential.verifier,
       ]);
+      // A re-install (after removal) keeps no schema of a type the new manifest doesn't publish.
+      const removedSchemas = await pruneEventSchemas(c, appId, manifest);
       await audit(c, actor, "app.installed", appId, {
         version: manifest.version,
+        ...(removedSchemas.length ? { removedEventSchemas: removedSchemas } : {}),
         database,
         role: roleResult,
         db: dbResult,
@@ -482,14 +499,56 @@ export function createRegistry(deps: RegistryDeps) {
         ]);
       }
 
+      // A type this upgrade stops publishing leaves the event catalog with its schema.
+      const removedSchemas = await pruneEventSchemas(c, appId, m);
+
       await audit(c, `app:${appId}`, "app.registered", appId, {
         version: m.version,
+        ...(removedSchemas.length ? { removedEventSchemas: removedSchemas } : {}),
         permissions: perms,
         roles,
         ...events,
       });
       // Registration never changes the state and never writes role_grants.
       return { appId, version: m.version, state, permissions: perms, roles, events };
+    });
+  }
+
+  /**
+   * The app's signed upload of its event schemas (P4.2): `PUT /registry/v1/apps/<id>/event-schemas`,
+   * body `{ "schemas": { "<type>": <JSON Schema> } }`, signed exactly like registration. The keys
+   * must be exactly the types the app's CURRENT manifest publishes (see event-schemas.ts). Replaces
+   * the app's whole set in one transaction; audited without the schema bodies.
+   */
+  async function uploadEventSchemas(appId: string, headers: Record<string, string | undefined>, body: string) {
+    const path = `/registry/v1/apps/${appId}/event-schemas`;
+    await authenticate(appId, "PUT", path, headers, body);
+    let input: unknown;
+    try {
+      input = JSON.parse(body);
+    } catch {
+      throw new ApiError("bad_request", "the body must be JSON");
+    }
+    return inTx(async (c) => {
+      // Locked, so a registration that changes what the app publishes can't interleave with this upload.
+      const row = (
+        await c.query<{ state: AppState; version: string; manifest: AppManifest | null }>(
+          "SELECT state, version, manifest FROM apps WHERE id = $1 FOR UPDATE",
+          [appId],
+        )
+      ).rows[0];
+      if (!row || row.state === "removed") throw new ApiError("unknown_app");
+      const schemas = checkEventSchemas(row.manifest, input);
+      const types = Object.keys(schemas);
+      await c.query("DELETE FROM event_schemas WHERE app_id = $1", [appId]);
+      for (const type of types) {
+        await c.query(
+          "INSERT INTO event_schemas (app_id, event_type, schema, app_version, updated_at) VALUES ($1, $2, $3, $4, now())",
+          [appId, type, JSON.stringify(schemas[type]), row.version],
+        );
+      }
+      await audit(c, `app:${appId}`, "event_schemas.updated", appId, { version: row.version, types });
+      return { appId, version: row.version, types };
     });
   }
 
@@ -654,6 +713,7 @@ export function createRegistry(deps: RegistryDeps) {
   return {
     install,
     register,
+    uploadEventSchemas,
     transition,
     get,
     pruneNonces,

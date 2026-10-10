@@ -132,6 +132,56 @@ Response `200`:
 - An **unknown app** (no install record, or removed) can't register.
 - A **bad**, **expired** or **replayed** signature is refused. Signature checks run first, so a forged request can't burn a real nonce.
 
+## The event catalog (P4.2)
+
+ADR 0001 §5: the Admin event catalog is built from the JSON Schemas apps publish. The manifest only names a schema's path, so an app sends their content separately, after it registers.
+
+### `PUT /registry/v1/apps/<id>/event-schemas` (signed by the app)
+
+Signed exactly like registration (same headers, nonce store and ±60 s window), bound to `PUT` and that path. The registration body doesn't change: it stays the bare manifest. Body:
+
+```json
+{
+  "schemas": {
+    "notes.note.created.v1": { "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object" }
+  }
+}
+```
+
+- Only an installed app that isn't removed (`403 unknown_app` otherwise).
+- The keys must be **exactly** the types the app's **current** manifest declares in `events.publishes`. A missing or extra type → `400 invalid_event_schemas`, naming the type (`details`: `{ type, message }` per problem).
+- Each schema must be a JSON object that compiles with the publisher's own ajv setup (`compileEventSchema` from `@asafarim/events`: JSON Schema 2020-12, strict, ajv-formats). One that doesn't → `400 invalid_event_schemas`, naming the type.
+- At most **64 KiB per schema** and **512 KiB per request**, otherwise `413 payload_too_large`.
+- Each upload **replaces the app's whole set** in one transaction (table `event_schemas`, migration `003`), recording the app's version at upload. It is audited as `event_schemas.updated` with the app's version and the type list, never the schema bodies. Response: `{ appId, version, types }`.
+- A registration (an upgrade) or a re-install that **stops publishing** a type deletes that type's schema in the same transaction (`removedEventSchemas` in the audit entry), so the catalog never lists a type nobody publishes.
+- core-api stores the schemas for the catalog only. It doesn't validate published events against them (the SDK's publisher does, locally) and doesn't check compatibility across versions.
+
+The SDK does the upload after a successful registration when the app passes `schemas` to `startApp` (see `packages/app-sdk`).
+
+### `GET /admin/v1/events` (admin)
+
+The catalog, sorted by type: one entry per type that an app that isn't removed publishes, then every subscribed type nobody publishes.
+
+```json
+{
+  "events": [
+    {
+      "type": "notes.note.created.v1",
+      "publisher": { "appId": "notes", "version": "0.1.0", "state": "active" },
+      "schema": { "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object" },
+      "schemaStatus": "provided",
+      "schemaUpdatedAt": "2026-10-10T13:00:00.000Z",
+      "schemaAppVersion": "0.1.0",
+      "subscribers": [{ "appId": "tasks", "state": "active", "handler": "/events/note-created", "consumer": "bound" }]
+    }
+  ]
+}
+```
+
+- `schemaStatus`: `provided`; `not_provided` (the app publishes the type but hasn't uploaded a schema, `schema: null`); or `no_publisher`, a **dangling subscription** (`publisher: null`).
+- A subscriber's `consumer` is `waiting_for_publisher` when no installed app publishes the type (the same logic as the Apps page's warning), and `bound` otherwise (core-api created its durable consumer on the publisher's stream).
+- `schemaAppVersion` is the publisher's version when it uploaded the schema, so a schema older than the running version shows.
+
 ## What an app may do (P3.2)
 
 ### `GET /registry/v1/apps/<id>/subjects/<sub>` (signed by the app)
@@ -233,6 +283,7 @@ More endpoints, for the console (all read-only except where noted; every write i
 | `GET /admin/v1/roles/<role>/grants`                | who holds a role                                                                                                                                   |
 | `GET /admin/v1/subjects/<sub>/grants`              | what a person holds, across apps                                                                                                                   |
 | `GET /admin/v1/audit[?app=&actor=&limit=&before=]` | the audit log, newest first (`actor` is a case-insensitive part; `next` pages)                                                                     |
+| `GET /admin/v1/events`                             | the event catalog (P4.2): publisher, schema, subscribers, dangling subscriptions (see above)                                                       |
 
 ### The CLI token: bootstrap, rotation, switching off
 
@@ -261,25 +312,27 @@ The tiles come from `launcherEntries` in `@asafarim/app-manifest`, **the same pr
 
 Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"?: … }`:
 
-| Code                        | Status    | When                                                                                      |
-| --------------------------- | --------- | ----------------------------------------------------------------------------------------- |
-| `unauthorized`              | 401       | admin endpoint without a valid bearer token (the CLI token, or a person's identity token) |
-| `missing_signature`         | 401       | registration without the four `x-asafarim-*` headers, or malformed ones                   |
-| `bad_signature`             | 401       | the signature doesn't verify (wrong key, tampered body, wrong key id)                     |
-| `expired_signature`         | 401       | timestamp outside ±60 s                                                                   |
-| `replayed_signature`        | 401       | the nonce was already used                                                                |
-| `unknown_app`               | 403       | no install record (or removed)                                                            |
-| `app_id_mismatch`           | 422       | `manifest.id` ≠ the id in the URL                                                         |
-| `invalid_manifest`          | 422       | fails manifest validation (`details`: path + message per problem)                         |
-| `namespace_violation`       | 422       | declares something outside `<id>.*`                                                       |
-| `already_installed`         | 409       | install of an installed app                                                               |
-| `invalid_state`             | 409       | a lifecycle change not allowed from the current state                                     |
-| `role_not_found`            | 404       | a grant or revoke names a role that doesn't exist (or is deprecated, for a grant)         |
-| `app_inactive`              | 503       | an access token was asked for an app that isn't `active`                                  |
-| `bus_unavailable`           | 503       | install or registration, and the app's stream or consumers couldn't be set up (P4.1)      |
-| `registry_busy`             | 503       | install or registration waited too long for another one's event plumbing; retry           |
-| `forbidden`                 | 403       | signed in to the admin API, but without the role `core.admin`                             |
-| `not_found` / `bad_request` | 404 / 400 | —                                                                                         |
+| Code                        | Status    | When                                                                                                       |
+| --------------------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `unauthorized`              | 401       | admin endpoint without a valid bearer token (the CLI token, or a person's identity token)                  |
+| `missing_signature`         | 401       | registration without the four `x-asafarim-*` headers, or malformed ones                                    |
+| `bad_signature`             | 401       | the signature doesn't verify (wrong key, tampered body, wrong key id)                                      |
+| `expired_signature`         | 401       | timestamp outside ±60 s                                                                                    |
+| `replayed_signature`        | 401       | the nonce was already used                                                                                 |
+| `unknown_app`               | 403       | no install record (or removed)                                                                             |
+| `app_id_mismatch`           | 422       | `manifest.id` ≠ the id in the URL                                                                          |
+| `invalid_manifest`          | 422       | fails manifest validation (`details`: path + message per problem)                                          |
+| `namespace_violation`       | 422       | declares something outside `<id>.*`                                                                        |
+| `already_installed`         | 409       | install of an installed app                                                                                |
+| `invalid_state`             | 409       | a lifecycle change not allowed from the current state                                                      |
+| `role_not_found`            | 404       | a grant or revoke names a role that doesn't exist (or is deprecated, for a grant)                          |
+| `app_inactive`              | 503       | an access token was asked for an app that isn't `active`                                                   |
+| `bus_unavailable`           | 503       | install or registration, and the app's stream or consumers couldn't be set up (P4.1)                       |
+| `invalid_event_schemas`     | 400       | an event-schema upload whose types don't match `events.publishes`, or a schema that doesn't compile (P4.2) |
+| `payload_too_large`         | 413       | an event-schema upload over 512 KiB, or one schema over 64 KiB (P4.2)                                      |
+| `registry_busy`             | 503       | install or registration waited too long for another one's event plumbing; retry                            |
+| `forbidden`                 | 403       | signed in to the admin API, but without the role `core.admin`                                              |
+| `not_found` / `bad_request` | 404 / 400 | —                                                                                                          |
 
 ## Test
 

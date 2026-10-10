@@ -153,6 +153,150 @@ describe("registerApp", () => {
   });
 });
 
+describe("registerApp: the event-schema upload (P4.2)", () => {
+  const manifest = {
+    id: "notes",
+    version: "0.1.0",
+    events: { publishes: [{ type: "notes.note.created.v1", schema: "./events/notes.note.created.v1.json" }] },
+  };
+  const schema = { type: "object", title: "created" };
+  const schemas = { "./events/notes.note.created.v1.json": schema };
+
+  it("after a successful registration, PUTs { schemas: { <type>: <schema> } }, signed over PUT and its path", async () => {
+    const c = credential();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(reply(200, { state: "active", version: "0.1.0" }))
+      .mockResolvedValueOnce(reply(200, { appId: "notes", version: "0.1.0", types: ["notes.note.created.v1"] }));
+    const r = await registerApp({
+      appId: "notes",
+      credential: c.secret,
+      coreApiUrl: "http://core",
+      manifest,
+      schemas,
+      fetch: fetchMock,
+      log: silent,
+    });
+    expect(r).toEqual({
+      ok: true,
+      attempts: 1,
+      state: "active",
+      version: "0.1.0",
+      schemas: { ok: true, attempts: 1, types: ["notes.note.created.v1"] },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(url).toBe("http://core/registry/v1/apps/notes/event-schemas");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(String(init.body))).toEqual({ schemas: { "notes.note.created.v1": schema } });
+    expect(
+      verifySigned(c.publicKey, "PUT", "/registry/v1/apps/notes/event-schemas", init.headers!, String(init.body)),
+    ).toBe(true);
+  });
+
+  it("retries the upload on network errors and 5xx, with backoff", async () => {
+    const c = credential();
+    const sleeps: number[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(reply(200, { state: "active", version: "0.1.0" }))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(reply(503, { error: "internal" }))
+      .mockResolvedValueOnce(reply(200, { types: ["notes.note.created.v1"] }));
+    const r = await registerApp({
+      appId: "notes",
+      credential: c.secret,
+      coreApiUrl: "http://core",
+      manifest,
+      schemas,
+      fetch: fetchMock,
+      log: silent,
+      baseDelayMs: 100,
+      sleep: async (ms) => void sleeps.push(ms),
+    });
+    expect(r.schemas).toEqual({ ok: true, attempts: 3, types: ["notes.note.created.v1"] });
+    expect(sleeps).toHaveLength(2);
+    expect(sleeps[1]!).toBeGreaterThan(sleeps[0]!);
+  });
+
+  it("a failed upload is logged and never throws, even with strict; a 4xx isn't retried", async () => {
+    const c = credential();
+    const warn = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(reply(200, { state: "active", version: "0.1.0" }))
+      .mockResolvedValueOnce(reply(400, { error: "invalid_event_schemas" }));
+    const r = await registerApp({
+      appId: "notes",
+      credential: c.secret,
+      coreApiUrl: "http://core",
+      manifest,
+      schemas,
+      strict: true,
+      fetch: fetchMock,
+      log: { info: () => undefined, warn },
+      sleep: async () => undefined,
+    });
+    expect(r).toMatchObject({ ok: true, schemas: { ok: false, attempts: 1, error: "invalid_event_schemas" } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      "app.event_schemas_failed",
+      expect.objectContaining({ error: "invalid_event_schemas" }),
+    );
+
+    const down = vi
+      .fn()
+      .mockResolvedValueOnce(reply(200, { state: "active", version: "0.1.0" }))
+      .mockRejectedValue(new TypeError("fetch failed"));
+    const r2 = await registerApp({
+      appId: "notes",
+      credential: c.secret,
+      coreApiUrl: "http://core",
+      manifest,
+      schemas,
+      strict: true,
+      maxAttempts: 3,
+      fetch: down,
+      log: silent,
+      sleep: async () => undefined,
+    });
+    expect(r2.schemas).toEqual({ ok: false, attempts: 3, error: "unreachable" });
+  });
+
+  it("nothing is uploaded when registration fails, without schemas, or when the app publishes nothing", async () => {
+    const c = credential();
+    const base = { appId: "notes", credential: c.secret, coreApiUrl: "http://core", log: silent };
+    const refused = vi.fn(async () => reply(401, { error: "bad_signature" }));
+    expect(await registerApp({ ...base, manifest, schemas, fetch: refused })).toEqual({
+      ok: false,
+      attempts: 1,
+      error: "bad_signature",
+    });
+    expect(refused).toHaveBeenCalledTimes(1);
+
+    const ok = vi.fn(async () => reply(200, { state: "active", version: "0.1.0" }));
+    expect((await registerApp({ ...base, manifest, fetch: ok })).schemas).toBeUndefined();
+    expect((await registerApp({ ...base, manifest: { id: "notes" }, schemas, fetch: ok })).schemas).toBeUndefined();
+    expect(ok).toHaveBeenCalledTimes(2); // registrations only
+  });
+
+  it("a published type with no schema given isn't uploaded (missing_schema), and registration still succeeds", async () => {
+    const c = credential();
+    const fetchMock = vi.fn(async () => reply(200, { state: "active", version: "0.1.0" }));
+    const r = await registerApp({
+      appId: "notes",
+      credential: c.secret,
+      coreApiUrl: "http://core",
+      manifest,
+      schemas: { "./events/other.json": schema },
+      fetch: fetchMock,
+      log: silent,
+    });
+    expect(r).toMatchObject({ ok: true, schemas: { ok: false, attempts: 0, error: "missing_schema" } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("createAccess (permission checks resolved from core-api)", () => {
   const body = {
     appId: "notes",

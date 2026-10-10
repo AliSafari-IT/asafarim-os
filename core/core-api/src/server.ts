@@ -4,6 +4,7 @@
  *   GET  /healthz                              live
  *   GET  /readyz                               the core database answers
  *   POST /registry/v1/apps/:id                 signed self-registration (the app)
+ *   PUT  /registry/v1/apps/:id/event-schemas   the JSON Schemas of what it publishes (the app, signed; P4.2)
  *   POST /admin/v1/apps/:id/install            body: the manifest JSON (admin)
  *   POST /admin/v1/apps/:id/activate|deactivate                         (admin)
  *   GET  /admin/v1/apps/:id                                             (admin)
@@ -18,6 +19,7 @@
  * (see admin-auth.ts). More admin endpoints (P3.3b):
  *   GET  /admin/v1/session                       who the caller is
  *   GET  /admin/v1/apps                          every app with its state
+ *   GET  /admin/v1/events                        the event catalog: publisher, schema, subscribers (P4.2)
  *   GET  /admin/v1/roles[?app=<id>]              roles, permissions, holders, what needs migrating
  *   GET  /admin/v1/roles/<role>/grants           who holds a role
  *   GET  /admin/v1/subjects/<sub>/grants         what a person holds
@@ -37,21 +39,27 @@ import {
   type IdentityVerifier,
 } from "./admin-auth.ts";
 import { ApiError } from "./errors.ts";
+import { MAX_SCHEMAS_REQUEST_BYTES } from "./event-schemas.ts";
 import { migrate } from "./migrate.ts";
 import { createAppSnapshot, createGateway, type GatewayApp } from "./gateway.ts";
 import { startAuthCallout } from "./nats-auth.ts";
 import { createRegistry, type Registry } from "./registry.ts";
-import { jwksOf, verificationKeyOf, type SigningKey } from "@asafarim/registry-protocol";
+import { SIGNATURE_HEADERS, jwksOf, verificationKeyOf, type SigningKey } from "@asafarim/registry-protocol";
 
 const MAX_BODY = 256 * 1024;
 const APP_ID = "([a-z][a-z0-9-]{1,31})";
 
-async function readBody(req: IncomingMessage): Promise<string> {
+/** Read the body; over `limit` bytes → `bad_request` (or `tooLarge`, e.g. 413 for an event-schema upload). */
+async function readBody(
+  req: IncomingMessage,
+  limit = MAX_BODY,
+  tooLarge: "bad_request" | "payload_too_large" = "bad_request",
+): Promise<string> {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY) throw new ApiError("bad_request", "body too large");
+    if (size > limit) throw new ApiError(tooLarge, `body too large (at most ${limit} bytes)`);
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
@@ -159,6 +167,15 @@ export function createHandler(opts: {
         return json(res, 200, out);
       }
 
+      m = new RegExp(`^/registry/v1/apps/${APP_ID}/event-schemas$`).exec(p);
+      if (m && req.method === "PUT") {
+        const body = await readBody(req, MAX_SCHEMAS_REQUEST_BYTES, "payload_too_large");
+        const headers = Object.fromEntries(SIGNATURE_HEADERS.map((h) => [h, header(req, h)]));
+        const out = await opts.registry.uploadEventSchemas(m[1]!, headers, body);
+        log({ msg: "event_schemas.updated", appId: m[1], version: out.version, types: out.types });
+        return json(res, 200, out);
+      }
+
       m = new RegExp(`^/registry/v1/apps/${APP_ID}/subjects/([^/]{1,400})$`).exec(p);
       if (m && req.method === "GET") {
         const subject = decodeSubject(m[2]!);
@@ -201,6 +218,8 @@ export function createHandler(opts: {
         const actor = caller.actor;
         if (req.method === "GET" && p === "/admin/v1/session") return json(res, 200, caller);
         if (req.method === "GET" && p === "/admin/v1/apps") return json(res, 200, { apps: await queries.listApps() });
+        if (req.method === "GET" && p === "/admin/v1/events")
+          return json(res, 200, { events: await queries.listEvents() });
         if (req.method === "GET" && p === "/admin/v1/roles") {
           const app = url.searchParams.get("app") ?? undefined;
           if (app !== undefined && !new RegExp(`^${APP_ID}$`).test(app) && app !== "core") {

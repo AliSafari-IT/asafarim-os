@@ -33,7 +33,17 @@ POSTs the manifest to `core-api /registry/v1/apps/<id>`, signed with the credent
 - **Retries** network errors and 5xx with exponential backoff (500 ms · 2ⁿ, capped at 15 s, up to 25% jitter), a **fresh signature and nonce each attempt**.
 - **Stops at once on a 4xx** (a bad signature, an unknown app or a namespace violation won't fix itself).
 - **Non-fatal** by default: it logs `app.registration_failed` and resolves `{ ok: false, error }`. With `strict: true` it throws `RegistrationError`.
-- `platform.registered` resolves with `{ ok, attempts, state, version }`.
+- `platform.registered` resolves with `{ ok, attempts, state, version }` (plus `schemas`, below).
+
+### Event schemas for the catalog (P4.2)
+
+Pass the JSON Schemas of what the app publishes, keyed by the manifest's `events.publishes[].schema` path (the same map `createPublisher` takes):
+
+```ts
+startApp({ manifest, schemas: { "./events/notes.note.created.v1.json": noteCreated } });
+```
+
+After a successful registration the SDK resolves each published type's path and uploads `{ schemas: { <type>: <schema> } }` with a signed `PUT /registry/v1/apps/<id>/event-schemas`, with the same retry and backoff. The Admin event catalog shows them. A failed upload is logged (`app.event_schemas_failed`) and is **never fatal**, not even with `strict`; `platform.registered` then carries `schemas: { ok: false, attempts, error }`. Nothing is uploaded without `schemas`, when the app publishes nothing, or when registration failed. A published type whose path isn't in `schemas` stops the upload with `error: "missing_schema"`.
 
 ## Permission checks (`createAccess`)
 

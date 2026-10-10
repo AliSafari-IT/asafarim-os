@@ -4,7 +4,7 @@
  */
 import { createPublisher } from "@asafarim/app-sdk/events";
 import manifest from "../platform.app";
-import noteCreated from "../events/notes.note.created.v1.json";
+import { EVENT_SCHEMAS } from "./schemas";
 
 export const NOTE_CREATED = "notes.note.created.v1";
 
@@ -18,5 +18,5 @@ export interface NoteCreatedV1 {
 
 export const publisher = createPublisher({
   manifest,
-  schemas: { "./events/notes.note.created.v1.json": noteCreated },
+  schemas: EVENT_SCHEMAS,
 });

@@ -7,6 +7,7 @@ import {
   UndeclaredEventError,
   EventValidationError,
   backoffDelay,
+  compileEventSchema,
   createEvent,
   createPublisher,
   loadSchemas,
@@ -192,5 +193,18 @@ describe("the outbox migrations", () => {
         .trim();
     expect(strip(readFileSync(path.join(ROOT, "sql/001_outbox.sql"), "utf8"))).toBe(OUTBOX_SQL.trim());
     expect(strip(readFileSync(path.join(ROOT, "drizzle/0000_asafarim_outbox.sql"), "utf8"))).toBe(OUTBOX_SQL.trim());
+  });
+});
+
+describe("compileEventSchema (the setup core-api checks uploaded schemas with)", () => {
+  it("compiles a schema with formats, and the same $id twice (a fresh ajv each time)", () => {
+    const withId = { ...schema, $id: "https://example.test/notes.v1.json" };
+    expect(compileEventSchema(withId)({ id: "1", title: "t", createdAt: "2026-10-10T12:00:00Z" })).toBe(true);
+    expect(() => compileEventSchema(withId)).not.toThrow();
+  });
+
+  it("refuses what the publisher would refuse (strict mode: unknown keywords, bad types)", () => {
+    expect(() => compileEventSchema({ type: "object", madeUp: true })).toThrow();
+    expect(() => compileEventSchema({ type: "nope" })).toThrow();
   });
 });

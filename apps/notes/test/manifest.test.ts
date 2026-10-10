@@ -3,6 +3,7 @@ import { validateManifest } from "@asafarim/app-manifest";
 import { EventValidationError, loadSchemas } from "@asafarim/app-sdk/events";
 import { describe, expect, it } from "vitest";
 import { publisher } from "../lib/events";
+import { EVENT_SCHEMAS } from "../lib/schemas";
 import manifest from "../platform.app";
 
 describe("notes manifest", () => {
@@ -41,5 +42,10 @@ describe("notes manifest", () => {
     expect(() => publisher.validate("notes.note.created.v1", ok)).not.toThrow();
     expect(() => publisher.validate("notes.note.created.v1", { ...ok, id: 1 })).toThrow(EventValidationError);
     expect(() => publisher.validate("notes.note.created.v1", { ...ok, body: "x" })).toThrow(EventValidationError);
+  });
+
+  it("hands the SDK the schema files the manifest names, for the event catalog upload (P4.2)", () => {
+    const onDisk = loadSchemas(manifest, path.resolve(import.meta.dirname, ".."));
+    expect(EVENT_SCHEMAS).toEqual(onDisk);
   });
 });
