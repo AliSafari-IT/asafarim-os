@@ -2,7 +2,12 @@
 
 import { ACCESS_COOKIE_NAME } from "@asafarim/app-sdk";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { signIn, signOut } from "@/lib/auth";
+import { gate } from "@/lib/gate";
+import { getPlatform } from "@/lib/platform";
+import { docParam } from "@/lib/reader";
+import { getSource } from "@/lib/source";
 
 export async function signInAction() {
   await signIn("asafarim", { redirectTo: "/" });
@@ -18,4 +23,15 @@ export async function signOutAction() {
     sameSite: "lax",
   });
   await signOut({ redirectTo: "/" });
+}
+
+/** The Refresh button: forget the cached tree and files, then show the same document again. */
+export async function refreshAction(formData: FormData) {
+  const doc = docParam(formData.get("doc"));
+  const g = await gate("docs.read");
+  if (g.ok) {
+    const config = getPlatform().config;
+    getSource({ repo: config.getString("source.repo"), branch: config.getString("source.branch") }).refresh();
+  }
+  redirect(doc ? `/?doc=${encodeURIComponent(doc)}` : "/");
 }

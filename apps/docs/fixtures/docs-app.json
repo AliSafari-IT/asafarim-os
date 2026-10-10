@@ -1,0 +1,6 @@
+{
+  "owners": [
+    { "path": "ventures/demo-app/**", "repo": "example-org/demo-app" },
+    { "path": "**", "repo": "example-org/handbook" }
+  ]
+}

@@ -9,7 +9,8 @@
     "start": "next start --port 4110",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:no-content": "node scripts/check-no-content.mjs"
   },
   "dependencies": {
     "@asafarim/app-manifest": "workspace:*",
@@ -17,7 +18,9 @@
     "next": "^16.4.0",
     "next-auth": "5.0.0-beta.32",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "server-only": "^0.0.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@asafarim/config": "workspace:*",
