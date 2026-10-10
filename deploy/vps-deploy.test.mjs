@@ -139,6 +139,21 @@ test("the steps run in order: reset, decrypt, env check, networks, pull, up, rea
   );
 });
 
+test("the site is published only after os-site is ready too (#70)", () => {
+  const ready = code.indexOf('if [[ "$site_ready" != true ]]');
+  const publish = code.indexOf('edge-deploy-site.sh" asafarim-os');
+  assert.ok(ready > 0 && publish > ready);
+  assert.match(code.slice(ready, publish), /fatal /, "a not-ready os-site must stop the script before publishing");
+  assert.match(code, /exec -T os-site wget -qO- http:\/\/127\.0\.0\.1:8080\/healthz/);
+});
+
+test("the site image tag is a third, optional sha, checked like the others and exported for compose (#70)", () => {
+  assert.match(code, /local site_image_commit="\$\{3:-\$commit\}"/);
+  assert.match(script, /\[\[ "\$site_image_commit" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
+  assert.match(code, /export SITE_IMAGE_TAG="\$site_image_commit"/);
+  assert.ok(code.indexOf("export SITE_IMAGE_TAG") < code.indexOf('"${compose[@]}" config -q'));
+});
+
 test("the site is published only after identity is ready", () => {
   const ready = code.indexOf('if [[ "$ready" != true ]]');
   const publish = code.indexOf('edge-deploy-site.sh" asafarim-os');

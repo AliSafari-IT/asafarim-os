@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 #
-# Deploy the ASafariM OS identity stack (id.asafarim.site) on the VPS: asafarim-os#45, part of #22.
+# Deploy the ASafariM OS stack on the VPS: identity (id.asafarim.site, asafarim-os#45, part of #22) and the
+# asafarim.site landing page (os-site, #70).
 # Run by the OWNER, from the repository folder (normally /var/repos/asafarim-os). Nothing else runs it.
 #
-#   deploy/vps-deploy.sh <commit> [<image-commit>]
+#   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>]
 #
 #   <commit>        the repository state to deploy, as a full 40-character sha: this script, the
 #                   compose file, the site file, the encrypted env. It must be on origin/main.
 #   <image-commit>  the commit whose identity image to run (default: <commit>). The image workflow
 #                   (#44) builds only when identity's inputs change, so the newest commit may have no
 #                   image of its own: pass the sha shown by the latest "Identity image" run.
+#   <site-image-commit>  the commit whose site image to run (default: <commit>). Same rule, with the
+#                   "Site image" workflow (#70): pass the sha of its latest run.
 #
 # What it does, in this order (it stops at the first failure and says why):
 #   1. fetch and `git reset --hard` to <commit>;
@@ -17,9 +20,11 @@
 #   3. check every variable listed in core/identity/.env.production.example is set: by NAME, never by value;
 #   4. check the networks and the client config it needs exist;
 #   5. `docker compose pull`, then `up -d`;
-#   6. wait for identity's /readyz;
+#   6. wait for identity's /readyz and os-site's /healthz;
 #   7. publish sites/asafarim-os.caddy on the shared edge (validate -> swap -> reload -> verify).
-# Only step 7 makes id.asafarim.site reachable, and only if every step before it passed.
+# Only step 7 makes id.asafarim.site and asafarim.site reachable, and only if every step before it passed.
+# asafarim.site cutover: remove the asafarim.site and www.asafarim.site blocks from asafarim-com.caddy first
+# (deploy/README.md); until then step 7's validation refuses the duplicate host and keeps the old config.
 #
 # It holds no secret and prints none. Rollback: deploy/README.md.
 set -euo pipefail
@@ -27,8 +32,9 @@ set -euo pipefail
 # Everything lives in main(), called on ONE line at the very end. Step 1 resets this checkout, which can
 # replace this very file while bash is still reading it; bash has parsed all of main() by then.
 main() {
-  local commit="${1:?usage: deploy/vps-deploy.sh <commit> [<image-commit>]}"
+  local commit="${1:?usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>]}"
   local image_commit="${2:-$commit}"
+  local site_image_commit="${3:-$commit}"
 
   local repo_dir
   repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,6 +47,7 @@ main() {
 
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<commit> must be a full 40-character sha, got '${commit}'."
   [[ "$image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<image-commit> must be a full 40-character sha, got '${image_commit}'."
+  [[ "$site_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<site-image-commit> must be a full 40-character sha, got '${site_image_commit}'."
   for tool in git age docker flock; do
     command -v "$tool" >/dev/null 2>&1 || fatal "'${tool}' is not installed on this host."
   done
@@ -85,11 +92,12 @@ main() {
 
   # 5. Pull and start.
   export IMAGE_TAG="$image_commit"
+  export SITE_IMAGE_TAG="$site_image_commit"
   log "Checking the compose file..."
   "${compose[@]}" config -q
-  log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}..."
+  log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG} and :site-${SITE_IMAGE_TAG}..."
   if ! "${compose[@]}" pull; then
-    fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if it does not exist, ${IMAGE_TAG} has no identity image (see the 'Identity image' workflow runs)."
+    fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image or ${SITE_IMAGE_TAG} no site image (see the 'Identity image' and 'Site image' workflow runs)."
   fi
   log "Starting the stack..."
   "${compose[@]}" up -d --remove-orphans
@@ -109,11 +117,26 @@ main() {
   fi
   log "identity is ready."
 
+  # os-site (asafarim.site) is static files: ready as soon as nginx answers /healthz.
+  log "Waiting for os-site's /healthz..."
+  local site_ready=false
+  for _ in $(seq 1 15); do
+    if "${compose[@]}" exec -T os-site wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+      site_ready=true
+      break
+    fi
+    sleep 2
+  done
+  if [[ "$site_ready" != true ]]; then
+    fatal "os-site did not become ready within 30s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 os-site"
+  fi
+  log "os-site is ready."
+
   # 7. Publish the site file. The edge validates the WHOLE config first and restores the old file on failure.
   log "Publishing sites/asafarim-os.caddy on the shared edge..."
   EDGE_DIR="$edge_dir" bash "${edge_dir}/scripts/edge-deploy-site.sh" asafarim-os "${repo_dir}/sites/asafarim-os.caddy"
 
-  log "Done. Check: curl -fsS https://id.asafarim.site/.well-known/openid-configuration"
+  log "Done. Check: curl -fsS https://id.asafarim.site/.well-known/openid-configuration && curl -fsSI https://asafarim.site/"
 }
 
 main "$@"; exit $?

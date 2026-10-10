@@ -1,0 +1,5 @@
+# Build context filter for core/site/Dockerfile: the image needs core/site's sources only.
+*
+!core/site/src
+!core/site/public
+!core/site/nginx.conf

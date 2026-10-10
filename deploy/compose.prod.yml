@@ -1,8 +1,8 @@
-# ASafariM OS production stack: the identity service (id.asafarim.site) and its own Redis.
-# asafarim-os#45, part of #22 (P2.3). The owner deploys it with deploy/vps-deploy.sh; nothing else
+# ASafariM OS production stack: the identity service (id.asafarim.site) and its own Redis
+# (asafarim-os#45, part of #22, P2.3), and the asafarim.site landing page, os-site (#70). The owner deploys it with deploy/vps-deploy.sh; nothing else
 # runs this file. See deploy/README.md for the deploy, the rollback and the network rules.
 #
-#   IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config
+#   IMAGE_TAG=<sha> SITE_IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config
 #
 # Paths here are relative to THIS file (deploy/), not to the repository root.
 name: asafarim-os
@@ -68,6 +68,31 @@ services:
     # os_net ONLY. Redis never joins edge_net, and publishes no port.
     networks:
       - os_net
+
+  os-site:
+    # asafarim.site: static files behind unprivileged nginx (core/site/Dockerfile), published by
+    # .github/workflows/site-image.yml. SITE_IMAGE_TAG is the full commit sha of that build; like
+    # IMAGE_TAG it has no default.
+    image: ghcr.io/alisafari-it/asafarim-os:site-${SITE_IMAGE_TAG:?set SITE_IMAGE_TAG to the site image's commit sha}
+    restart: unless-stopped
+    read_only: true
+    # nginx's pid file and temp paths live in /tmp in the unprivileged image.
+    tmpfs:
+      - /tmp:size=4m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 32m
+    cpus: 0.25
+    environment:
+      # The entrypoint's helper scripts try to edit /etc/nginx on start; on a read-only root they only
+      # log that they can't, and nginx starts with the config baked into the image.
+      NGINX_ENTRYPOINT_QUIET_LOGS: "1"
+    networks:
+      edge_net:
+        # Unique on the shared edge_net; sites/asafarim-os.caddy proxies asafarim.site to it.
+        aliases:
+          - os-site
 
 networks:
   # The shared edge's network, created with the edge. identity joins it to be reachable by the edge's Caddy.

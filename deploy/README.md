@@ -1,22 +1,24 @@
-# Deploying the identity service (id.asafarim.site)
+# Deploying the identity service (id.asafarim.site) and the landing page (asafarim.site)
 
-The production stack of ASafariM OS: the identity service and its own Redis. It is part of P2.3
+The production stack of ASafariM OS: the identity service and its own Redis, and since
+[#70](https://github.com/AliSafari-IT/asafarim-os/issues/70) `os-site`, the static `asafarim.site` landing page
+(`core/site`). It is part of P2.3
 ([#22](https://github.com/AliSafari-IT/asafarim-os/issues/22)), and **the owner deploys it by hand**: nothing in CI
 runs it, and nothing here holds a secret.
 
-| File                           | What it is                                                                           |
-| ------------------------------ | ------------------------------------------------------------------------------------ |
-| `deploy/compose.prod.yml`      | `identity` and `os-redis`, compose project `asafarim-os`.                            |
-| `deploy/vps-deploy.sh`         | The deploy. Run it from the repository folder on the VPS.                            |
-| `deploy/lib/env-check.sh`      | The check that every variable is filled, by name, never by value.                    |
-| `deploy/rollback.caddy`        | An empty site file: publishing it takes `id.asafarim.site` off the edge.             |
-| `sites/asafarim-os.caddy`      | This stack's site file on the shared edge: `id.asafarim.site` to `os-identity:3000`. |
-| `deploy/identity/clients.json` | **Not in git.** The client config you put there (below).                             |
+| File                           | What it is                                                                                         |
+| ------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `deploy/compose.prod.yml`      | `identity`, `os-redis` and `os-site`, compose project `asafarim-os`.                               |
+| `deploy/vps-deploy.sh`         | The deploy. Run it from the repository folder on the VPS.                                          |
+| `deploy/lib/env-check.sh`      | The check that every variable is filled, by name, never by value.                                  |
+| `deploy/rollback.caddy`        | An empty site file: publishing it takes `id.asafarim.site` off the edge.                           |
+| `sites/asafarim-os.caddy`      | This stack's site file: `id.asafarim.site` → `os-identity:3000`, `asafarim.site` → `os-site:8080`. |
+| `deploy/identity/clients.json` | **Not in git.** The client config you put there (below).                                           |
 
 ## Networks: who can reach what
 
-- **`edge_net`** (shared by every stack): `identity` only, under the unique alias **`os-identity`**. The edge's Caddy
-  reaches it there. Redis is never on it.
+- **`edge_net`** (shared by every stack): `identity` under the unique alias **`os-identity`**, and `os-site` (alias
+  **`os-site`**, on no other network). The edge's Caddy reaches them there. Redis is never on it.
 - **`identity_db`**: `identity` and the platform's Postgres (alias `platform-postgres`), nothing else. Identity reads
   the platform database as the read-only `identity_ro` role. asafarim-platform's deploy creates this network.
 - **`os_net`**: this stack's own private network, for `identity` and `os-redis`.
@@ -33,8 +35,8 @@ On the VPS, in `/var/repos/asafarim-os`:
 2. The shared edge is installed (`/var/repos/edge/scripts/edge-deploy-site.sh` exists) and `edge_net` exists.
 3. The asafarim-com stack has been deployed **with the `identity_db` change**: its `vps-deploy.sh` creates the network and
    puts `postgres` on it. (That deploy recreates the Postgres container once, because its network list changed.)
-4. The identity image is published (the "Identity image" workflow, [#44](https://github.com/AliSafari-IT/asafarim-os/issues/44))
-   and the server can pull it: make the package public, or run `docker login ghcr.io` on the server first.
+4. The identity and site images are published (the "Identity image" and "Site image" workflows, [#44](https://github.com/AliSafari-IT/asafarim-os/issues/44))
+   and the server can pull them: make the packages public, or run `docker login ghcr.io` on the server first.
 5. `core/identity/.env.production.age` holds every variable in `core/identity/.env.production.example`.
 6. `deploy/identity/clients.json` exists. For the **dark launch** it holds only the test client, never a real app:
    copy `core/identity/clients.example.json`, edit it, and set the client's secret in the env file under the name its
@@ -47,13 +49,26 @@ On the VPS, in `/var/repos/asafarim-os`:
 
 ```bash
 cd /var/repos/asafarim-os
-deploy/vps-deploy.sh <commit> [<image-commit>]
+deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>]
 ```
 
 - `<commit>`: the repository state to deploy, a **full 40-character sha** that is on `origin/main`.
 - `<image-commit>`: the commit whose image to run. It defaults to `<commit>`. The image is built only when identity's
   inputs change, so the newest commit can have no image: take the sha from the latest "Identity image" run (its summary
   prints the exact `docker pull` line).
+- `<site-image-commit>`: the same for the `os-site` image (the "Site image" workflow), default `<commit>`.
+
+### asafarim.site cutover (#70)
+
+`asafarim.site` and `www.asafarim.site` are still served by asafarim-platform's `asafarim-com.caddy` until this stack
+takes them over. In this order:
+
+1. Remove the `asafarim.site` and `www.asafarim.site` blocks from `asafarim-com.caddy` and publish that file (the
+   asafarim-com stack's own site deploy). The landing page is briefly unreachable from here.
+2. Deploy this stack (`deploy/vps-deploy.sh`), with a `<site-image-commit>` that has a site image.
+
+The edge validates the whole configuration before swapping a file in, so publishing this file while the other one
+still defines `asafarim.site` fails safely and keeps the old config.
 
 The script stops at the first failure and says why. In order:
 
@@ -62,7 +77,8 @@ The script stops at the first failure and says why. In order:
 3. check every variable the example lists is filled: it prints **names, never values**;
 4. check `identity_db`, `edge_net`, `deploy/identity/clients.json` and the edge script exist;
 5. `docker compose pull`, then `up -d`;
-6. wait up to 90 seconds for identity's `/readyz` (it checks Redis and the accounts database);
+6. wait up to 90 seconds for identity's `/readyz` (it checks Redis and the accounts database), then up to 30 seconds for
+   `os-site`'s `/healthz`;
 7. publish `sites/asafarim-os.caddy` with the edge's `edge-deploy-site.sh` (validate the whole edge config, swap, reload, verify).
 
 Only step 7 makes the site reachable, and only if everything before it passed. If step 6 times out, the site is **not**
@@ -77,13 +93,13 @@ Afterwards: `curl -fsS https://id.asafarim.site/.well-known/openid-configuration
 
 ## Rollback
 
-1. Take the site off the edge, with the edge's own script (it validates, swaps, reloads and verifies):
+1. Take the site off the edge (this takes `asafarim.site` off too, once the cutover is done), with the edge's own script (it validates, swaps, reloads and verifies):
    ```bash
    /var/repos/edge/scripts/edge-deploy-site.sh asafarim-os deploy/rollback.caddy
    ```
 2. Stop the stack. The tag only has to be non-empty here; `down` does not pull anything:
    ```bash
-   IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml down
+   IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml down
    ```
 3. **The volumes stay** (do not add `-v`): Redis's data in `os_redis_data` is kept, and `.env.identity` stays on disk
    (mode 600; delete it yourself if you want it gone).
