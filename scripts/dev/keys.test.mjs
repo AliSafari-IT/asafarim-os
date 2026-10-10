@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { addMissingLines, upsertLines } from "./keys.mjs";
+import { DEV, addMissingLines, coreApiUpstreamLines, upsertLines } from "./keys.mjs";
 
 function withFile(text, fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "keys-"));
@@ -38,4 +38,10 @@ test("addMissingLines keeps what is there", () => {
     assert.equal(readFileSync(f, "utf8"), "A=1\nB=3\n");
     assert.equal(addMissingLines(f, ["A=9"]), false);
   });
+});
+
+test("core-api reaches each dev app's health at localhost, under the gateway's upstream variable (P6.1)", () => {
+  const lines = coreApiUpstreamLines();
+  assert.equal(lines.length, Object.keys(DEV.apps).length);
+  assert.ok(lines.includes(`OS_APP_NOTES_UPSTREAM=localhost:${DEV.apps.notes}`));
 });

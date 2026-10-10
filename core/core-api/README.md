@@ -12,23 +12,26 @@ Node 24 (runs the TypeScript directly), Postgres (its own `core` database), no f
 node --env-file=../../.dev/core-api.env src/server.ts
 ```
 
-| Env                                 | What                                                                                                                |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `CORE_API_DATABASE_URL`             | the `core` database as its owner role `core_api`; migrations in `migrations/` run at start                          |
-| `CORE_API_PROVISIONER_URL`          | a role that may `CREATE ROLE` / `CREATE DATABASE`; used only to install apps                                        |
-| `CORE_API_ADMIN_TOKEN`              | ≥ 32 characters: the **CLI's** bearer token (bootstrap, CI). Optional once switched off (below)                     |
-| `CORE_API_ADMIN_TOKEN_DISABLED`     | `true` switches that token off; people with `core.admin` can still use the admin API                                |
-| `CORE_API_IDENTITY_ISSUER`          | e.g. `https://id.asafarim.site`: how core-api verifies the Admin console's people. Required if the token is off     |
-| `CORE_API_ADMIN_CLIENT_ID`          | the console's OIDC client id; ID tokens for any other client are refused (default `core-admin`)                     |
-| `CORE_API_TOKEN_SIGNING_JWK`        | an Ed25519 private JWK with a `kid`: signs the access tokens (P3.3a)                                                |
-| `CORE_API_ACCESS_TOKEN_TTL_SECONDS` | 5 to 300, default 60: the access token's lifetime                                                                   |
-| `CORE_API_APP_URL_TEMPLATE`         | where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset → `https://<its primary domain>`     |
-| `PORT`                              | default `4020`                                                                                                      |
-| `CORE_API_APP_DB_HOST` / `_PORT`    | host and port put into an installed app's `DATABASE_URL` (default: the provisioner's)                               |
-| `CORE_API_NATS_URL`                 | the event bus (P4.1): streams for publishers, durable consumers for subscribers, `DEADLETTER`. Unset = none         |
-| `CORE_API_NATS_USER` / `_PASSWORD`  | core-api's own (privileged) login on the bus: stream and consumer admin, and the callout responder. Both or neither |
-| `CORE_API_NATS_ISSUER_SEED`         | the auth callout's issuer key (an account nkey seed, `SA…`). Set = core-api answers the bus's auth callout (below)  |
-| `CORE_API_NATS_ACCOUNT`             | the NATS account apps are put in; default `OS`                                                                      |
+| Env                                 | What                                                                                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `CORE_API_DATABASE_URL`             | the `core` database as its owner role `core_api`; migrations in `migrations/` run at start                                |
+| `CORE_API_PROVISIONER_URL`          | a role that may `CREATE ROLE` / `CREATE DATABASE`; used only to install apps                                              |
+| `CORE_API_ADMIN_TOKEN`              | ≥ 32 characters: the **CLI's** bearer token (bootstrap, CI). Optional once switched off (below)                           |
+| `CORE_API_ADMIN_TOKEN_DISABLED`     | `true` switches that token off; people with `core.admin` can still use the admin API                                      |
+| `CORE_API_IDENTITY_ISSUER`          | e.g. `https://id.asafarim.site`: how core-api verifies the Admin console's people. Required if the token is off           |
+| `CORE_API_ADMIN_CLIENT_ID`          | the console's OIDC client id; ID tokens for any other client are refused (default `core-admin`)                           |
+| `CORE_API_TOKEN_SIGNING_JWK`        | an Ed25519 private JWK with a `kid`: signs the access tokens (P3.3a)                                                      |
+| `CORE_API_ACCESS_TOKEN_TTL_SECONDS` | 5 to 300, default 60: the access token's lifetime                                                                         |
+| `CORE_API_APP_URL_TEMPLATE`         | where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset → `https://<its primary domain>`           |
+| `PORT`                              | default `4020`                                                                                                            |
+| `CORE_API_APP_DB_HOST` / `_PORT`    | host and port put into an installed app's `DATABASE_URL` (default: the provisioner's)                                     |
+| `CORE_API_NATS_URL`                 | the event bus (P4.1): streams for publishers, durable consumers for subscribers, `DEADLETTER`. Unset = none               |
+| `CORE_API_NATS_USER` / `_PASSWORD`  | core-api's own (privileged) login on the bus: stream and consumer admin, and the callout responder. Both or neither       |
+| `CORE_API_NATS_ISSUER_SEED`         | the auth callout's issuer key (an account nkey seed, `SA…`). Set = core-api answers the bus's auth callout (below)        |
+| `CORE_API_NATS_ACCOUNT`             | the NATS account apps are put in; default `OS`                                                                            |
+| `CORE_API_HEALTH_INTERVAL_SECONDS`  | P6.1: how often each active app's manifest `live`/`ready` are polled; 5 to 3600, default 30 (`GET /admin/v1/status`)      |
+| `CORE_API_HEALTH_TIMEOUT_MS`        | per health request; 100 to 10000, default 2000                                                                            |
+| `OS_APP_<ID>_UPSTREAM`              | where an app runs (`host:port`), the same variable the gateway uses; health is polled only at this plus the manifest path |
 
 ## Install (admin)
 

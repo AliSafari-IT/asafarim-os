@@ -194,6 +194,19 @@ code,
   color: var(--muted);
   border-style: dashed;
 }
+.badge.up {
+  color: var(--good);
+  border-color: var(--good);
+}
+.badge.down {
+  color: var(--bad);
+  border-color: var(--bad);
+  font-weight: 600;
+}
+.badge.unknown {
+  color: var(--muted);
+  border-style: dashed;
+}
 .badge.warn {
   color: var(--warn);
   background: var(--warn-bg);
@@ -344,4 +357,8 @@ dialog.confirm .actions {
   max-width: 28rem;
   margin: 12vh auto;
   padding: 0 16px;
+}
+.link {
+  color: var(--accent);
+  font-weight: 600;
 }

@@ -6,7 +6,7 @@ The ASafariM OS **Admin console** (P3.3b, ADR 0001 §3–4): the apps, who may d
 | ------- | ------------------------------------------------------------------------------------------------- |
 | Locally | <http://core.localhost:8080/admin> (through the dev gateway) or <http://localhost:4030/admin>     |
 | Sign in | as **Dev Admin** (the dev login stub lists the seeded users). **Dev Member** gets a real **403**. |
-| Pages   | **Apps**, **Events**, **Roles & grants**, **Audit**                                               |
+| Pages   | **Apps**, **Status**, **Events**, **Roles & grants**, **Audit**                                   |
 
 ## How it authenticates (and what it can't do)
 
@@ -20,6 +20,7 @@ The ASafariM OS **Admin console** (P3.3b, ADR 0001 §3–4): the apps, who may d
 ## What each page does
 
 - **Apps**: every app with its state and install status (waiting for the app to register, or registered at a time). **Activate** serves it at its address and puts it in launchers; **Deactivate** shows the "temporarily unavailable" page and takes it off launchers; data is kept. Both ask first, in a styled dialog. **Remove** (an installed or inactive app; deactivate an active one first) asks you to type the app id before its button is enabled: core-api deletes the app's event consumers, its subscribers' consumers and its stream (with any events not yet delivered), revokes its credentials, deletes every grant of its roles and deprecates them. Apps subscribed to its events show **Waiting for publisher**. Its database is kept. A removed app stays in the list as **removed**, with no action; installing it again (CLI) starts clean. `core` is built in and always active.
+- **Status** (P6.1): core-api's `GET /admin/v1/status`: core-api itself and every installed app, with **Up** / **Down** / **Unknown** badges (text, not color only) for its manifest's `live` and `ready` endpoints, the latency, when it was last checked, since when it's been in that state, and the problem (timeout, refused, an error status…). Installed and inactive apps show **Not polled**. Read-only; **Refresh** reloads the page.
 - **Events** (P4.2): the event catalog from core-api's `GET /admin/v1/events`, sorted by type: the publisher (app and version), the schema status (provided, or "no schema uploaded") with the schema itself as collapsed, pretty-printed JSON, and each subscriber with its handler and consumer state. A type nobody publishes is flagged **No publisher** and its subscribers **Waiting for publisher** (the Apps page's warning). `?app=<id>` keeps the types that app publishes or subscribes to; an invalid value is ignored. Read-only.
 - **Roles & grants**: per app, its roles, the permissions each grants, who holds each, and **Revoke** (with a dialog). **Grant** by searching the seeded users (locally; there is no production directory yet, so you can also type a subject id). A role that still grants a permission the app no longer declares is flagged **Migration needed** (ADR 0001 §3.4).
 - **Audit**: core-api's audit events, newest first, filterable by app and by (part of) the actor; "Older events" pages.

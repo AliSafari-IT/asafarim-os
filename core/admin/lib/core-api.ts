@@ -83,6 +83,29 @@ export interface RemoveResult {
   warnings: { app: string; type: string; code: string }[];
 }
 
+/** One row of the status board (P6.1; mirrors core-api's `AppStatus`, src/health.ts). */
+export interface AppStatus {
+  id: string;
+  name: string;
+  state: string;
+  /** False for an app that isn't active: live/ready are `unknown`. */
+  polled: boolean;
+  live: "up" | "down" | "unknown";
+  ready: "up" | "down" | "unknown";
+  latencyMs: number | null;
+  error?: string;
+  /** The HTTP status behind `bad_status`, the env var behind `no_upstream`, or core-api's failed checks. */
+  detail?: string;
+  checkedAt: string | null;
+  since: string;
+}
+
+export interface StatusReport {
+  checkedAt: string | null;
+  intervalMs: number | null;
+  apps: AppStatus[];
+}
+
 export interface RoleGrant {
   subject: string;
   granted_by: string;
@@ -116,6 +139,7 @@ export function coreApi(idToken: string) {
     session: () => call<{ actor: string; subject: string }>(idToken, "GET", "/admin/v1/session"),
     apps: async () => (await call<{ apps: AdminApp[] }>(idToken, "GET", "/admin/v1/apps")).apps,
     events: async () => (await call<{ events: CatalogEntry[] }>(idToken, "GET", "/admin/v1/events")).events,
+    status: () => call<StatusReport>(idToken, "GET", "/admin/v1/status"),
     roles: async (app?: string) =>
       (await call<{ roles: AdminRole[] }>(idToken, "GET", `/admin/v1/roles${app ? `?app=${enc(app)}` : ""}`)).roles,
     roleGrants: async (role: string) =>

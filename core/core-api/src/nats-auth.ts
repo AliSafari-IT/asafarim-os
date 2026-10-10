@@ -319,6 +319,8 @@ export const AUTH_CALLOUT_SUBJECT = "$SYS.REQ.USER.AUTH";
 export interface AuthCallout {
   /** Resolves once the responder is subscribed and answering. */
   served: Promise<void>;
+  /** A round trip to the bus on the responder's connection (P6.1 health); rejects while it isn't connected. */
+  ping(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -394,6 +396,10 @@ export function startAuthCallout(
   })();
   return {
     served,
+    async ping() {
+      if (!nc || nc.isClosed()) throw new Error("not connected to the bus");
+      await nc.flush();
+    },
     async stop() {
       stopped = true;
       // A drain flushes through the server, so it never ends while the bus is unreachable: bound it
