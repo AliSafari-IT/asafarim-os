@@ -63,15 +63,3 @@ export async function gate(permission: string): Promise<GateResult> {
     throw err;
   }
 }
-
-/** The app's state and the subject's permissions, for the page (no permission required). */
-export async function describeAccess(subject: string) {
-  try {
-    return {
-      available: true as const,
-      ...(await getPlatform().access.access(subject, { token: await accessToken() })),
-    };
-  } catch {
-    return { available: false as const, state: "unknown", roles: [] as string[], permissions: [] as string[] };
-  }
-}

@@ -1,8 +1,9 @@
 import { Launcher } from "@asafarim/app-sdk/react";
 import Link from "next/link";
-import { refreshAction, signInAction, signOutAction } from "./actions";
+import { forbidden, unauthorized } from "next/navigation";
+import { refreshAction, signOutAction } from "./actions";
 import { auth } from "@/lib/auth";
-import { describeAccess } from "@/lib/gate";
+import { gate } from "@/lib/gate";
 import { getPlatform } from "@/lib/platform";
 import { docParam, loadReader, type TreeNode } from "@/lib/reader";
 import { getSource } from "@/lib/source";
@@ -45,37 +46,46 @@ function Tree({ nodes, selected }: { nodes: TreeNode[]; selected?: string }) {
  * on the right (#80). Documents come from the source repository at runtime (lib/source.ts).
  */
 export default async function Home({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
-  const session = await auth();
-  const subject = session?.user?.id;
-
-  if (!subject) {
+  // The gate comes first (#79): signed out is a 401 sign-in page, no docs.read a plain 403 page.
+  const g = await gate("docs.read");
+  if (!g.ok && g.status === 401) unauthorized();
+  if (!g.ok && g.status === 403) forbidden();
+  if (!g.ok) {
     return (
       <div className="signin">
         <h1>Docs</h1>
-        <p className="muted">A private reader for documentation. Sign in with your ASafariM account.</p>
-        <form action={signInAction}>
-          <button type="submit">Sign in</button>
+        <p className="notice" role="status" data-testid="state">
+          {g.body.error === "app_inactive" ? (
+            <>
+              This app is <strong>{g.body.state}</strong>. An admin has to activate it.
+            </>
+          ) : (
+            "Permissions can't be checked right now (core-api is unreachable)."
+          )}
+        </p>
+        <form action={signOutAction}>
+          <button type="submit" className="secondary">
+            Sign out
+          </button>
         </form>
       </div>
     );
   }
 
+  const session = await auth();
+  const subject = g.subject;
   const selected = docParam((await searchParams).doc);
-  const access = await describeAccess(subject);
   // A launcher that can't be loaded is left out: it must never break the page.
   const apps = await getPlatform()
     .access.launcher(subject)
     .catch(() => []);
   const config = getPlatform().config;
   const repo = config.getString("source.repo");
-  const canRead = access.state === "active" && access.permissions.includes("docs.read");
-  const view = canRead
-    ? await loadReader(getSource({ repo, branch: config.getString("source.branch") }), {
-        doc: selected,
-        sourceRepo: repo,
-      })
-    : undefined;
-  const doc = view?.status === "ok" ? view.doc : undefined;
+  const view = await loadReader(getSource({ repo, branch: config.getString("source.branch") }), {
+    doc: selected,
+    sourceRepo: repo,
+  });
+  const doc = view.status === "ok" ? view.doc : undefined;
 
   return (
     <>
@@ -91,21 +101,19 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           <span className="muted mono" data-testid="source">
             {repo}
           </span>
-          {view?.status === "ok" && view.mode === "fixtures" ? (
+          {view.status === "ok" && view.mode === "fixtures" ? (
             <span className="badge" data-testid="fixtures">
               local fixtures
             </span>
           ) : null}
         </div>
         <div className="who">
-          {canRead ? (
-            <form action={refreshAction}>
-              {selected ? <input type="hidden" name="doc" value={selected} /> : null}
-              <button type="submit" className="secondary" data-testid="refresh">
-                Refresh
-              </button>
-            </form>
-          ) : null}
+          <form action={refreshAction}>
+            {selected ? <input type="hidden" name="doc" value={selected} /> : null}
+            <button type="submit" className="secondary" data-testid="refresh">
+              Refresh
+            </button>
+          </form>
           <span className="muted" data-testid="who">
             {session?.user?.name ?? subject}
           </span>
@@ -120,24 +128,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
         <Launcher apps={apps} current="docs" label="Your apps" />
       </div>
 
-      {!access.available ? (
-        <p className="notice" role="status" data-testid="state">
-          Permissions can&apos;t be checked right now (core-api is unreachable).
-        </p>
-      ) : access.state !== "active" ? (
-        <p className="notice" role="status" data-testid="state">
-          This app is <strong>{access.state}</strong>. An admin has to activate it.
-        </p>
-      ) : !canRead ? (
-        <p className="notice" role="status" data-testid="no-read">
-          Reading needs the permission <span className="mono">docs.read</span>. Ask an admin for the{" "}
-          <span className="mono">docs.owner</span> role.
-        </p>
-      ) : view?.status === "unavailable" ? (
+      {view.status === "unavailable" ? (
         <p className="notice" role="status" data-testid="unavailable">
           Documents temporarily unavailable. Try Refresh in a minute.
         </p>
-      ) : view?.ownersError ? (
+      ) : view.status === "ok" && view.ownersError ? (
         <p className="notice" role="status" data-testid="owners-error">
           {view.ownersError}. Every document is shown as owned by <span className="mono">{repo}</span> until it&apos;s
           fixed.
@@ -147,7 +142,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
       <div className="reader" data-testid="reader">
         <nav className="tree" aria-label="Documents">
           <h2>Documents</h2>
-          {view?.status === "ok" && view.tree.length ? (
+          {view.status === "ok" && view.tree.length ? (
             <Tree nodes={view.tree} selected={selected} />
           ) : (
             <p className="muted" data-testid="tree-empty">

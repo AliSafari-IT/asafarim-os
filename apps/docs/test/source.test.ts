@@ -137,6 +137,25 @@ describe("the GitHub source (#78)", () => {
     await expect(createSource(backend).listDocs()).rejects.toThrow(/GitHub answered 403/);
   });
 
+  it("a 404 on the tree or on docs-app.json is unavailable, not a server error (#79)", async () => {
+    const missing = vi.fn(async () => new Response("{}", { status: 404 }));
+    const backend = createGitHubBackend({
+      repo: "a/b",
+      branch: "main",
+      token: TOKEN,
+      fetch: missing as unknown as typeof fetch,
+    });
+    const tree = createSource(backend).listDocs();
+    await expect(tree).rejects.toBeInstanceOf(SourceUnavailableError);
+    await expect(tree).rejects.toThrow("the source repository can't be found");
+
+    const gh = stubGitHub();
+    delete gh.state.files["docs-app.json"]; // listed in the tree, but GitHub answers 404
+    const owners = createSource(gh.backend).listDocs();
+    await expect(owners).rejects.toBeInstanceOf(SourceUnavailableError);
+    await expect(owners).rejects.toThrow("docs-app.json can't be found");
+  });
+
   it("a broken docs-app.json is reported in the listing, not thrown", async () => {
     const gh = stubGitHub();
     gh.state.files["docs-app.json"] = "{ broken";
