@@ -28,8 +28,9 @@ export interface ConfirmDialogProps {
  * The styled confirmation (never window.confirm): a native modal <dialog>, so the browser traps focus
  * inside it, Escape cancels, and focus returns to the opening button. It names itself and its
  * description for screen readers. Cancel comes first, so it has focus when the dialog opens: a
- * stray Enter can't confirm a destructive action. With `typeToConfirm`, a labelled text field must
- * match before the confirm button is enabled; it is cleared whenever the dialog closes.
+ * stray Enter can't confirm a destructive action. With `typeToConfirm`, a labelled text field comes
+ * first (so it has focus) and must match before the confirm button is enabled: Enter in it does
+ * nothing until then. It is cleared whenever the dialog closes.
  */
 export function ConfirmDialog(p: ConfirmDialogProps) {
   const ref = useRef<HTMLDialogElement>(null);

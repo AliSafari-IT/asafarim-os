@@ -377,9 +377,12 @@ test("removing an app asks for its id, then the app shows as removed (a throwawa
   await page.getByRole("button", { name: `Remove ${name}` }).click();
   const dialog = page.getByRole("dialog", { name: `Remove ${name}?` });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   const confirm = dialog.getByRole("button", { name: "Remove", exact: true });
   const typed = dialog.getByLabel(`Type ${id} to confirm`);
+  // The field comes first, so it has focus; Enter there can't confirm while the button is disabled.
+  await expect(typed).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeVisible();
   await expect(confirm).toBeDisabled();
   await typed.fill(id.slice(0, -1)); // almost: still disabled
   await expect(confirm).toBeDisabled();
