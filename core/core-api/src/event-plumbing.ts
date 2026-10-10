@@ -8,7 +8,11 @@
  *    consumer, so a dropped subscription stops receiving);
  *  - `dependents`: when the app publishes, every OTHER installed app whose current manifest
  *    subscribes to a type this app declares. Those subscribers may have been installed before their
- *    publisher (their consumer was `waiting_for_publisher`), so they get their consumer now.
+ *    publisher (their consumer was `waiting_for_publisher`), so they get their consumer now;
+ *  - `orphaned`: when an upgrade drops a type from `events.publishes`, every OTHER installed app
+ *    whose current manifest subscribes to it. Their consumer on this app's stream filters on a
+ *    subject that gets no new messages: it is deleted, and the subscription waits for a publisher
+ *    again. If the publisher re-adds the type later, `dependents` creates the consumer again.
  */
 
 /** The part of a manifest this module reads. */
@@ -36,6 +40,8 @@ export interface EventPlumbingPlan {
   own: string[];
   remove: string[];
   dependents: ConsumerRef[];
+  /** Other installed apps' consumers of the types this upgrade stops publishing: delete them. */
+  orphaned: ConsumerRef[];
 }
 
 const uniqueSorted = (xs: string[]) => [...new Set(xs)].sort();
@@ -59,14 +65,19 @@ export function planEventPlumbing(input: {
   const keep = new Set(own);
   const remove = subscribedTypes(input.previous).filter((t) => !keep.has(t));
   const declared = new Set(published);
+  const dropped = new Set(publishedTypes(input.previous).filter((t) => !declared.has(t)));
   const dependents: ConsumerRef[] = [];
-  if (declared.size) {
+  const orphaned: ConsumerRef[] = [];
+  if (declared.size || dropped.size) {
     for (const app of [...input.installed].sort((a, b) => a.id.localeCompare(b.id))) {
       if (app.id === input.appId) continue;
-      for (const type of subscribedTypes(app.manifest)) if (declared.has(type)) dependents.push({ app: app.id, type });
+      for (const type of subscribedTypes(app.manifest)) {
+        if (declared.has(type)) dependents.push({ app: app.id, type });
+        else if (dropped.has(type)) orphaned.push({ app: app.id, type });
+      }
     }
   }
-  return { stream: published.length > 0, own, remove, dependents };
+  return { stream: published.length > 0, own, remove, dependents, orphaned };
 }
 
 /**

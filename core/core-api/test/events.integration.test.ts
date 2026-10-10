@@ -63,9 +63,17 @@ const FAKEPUB = `fpub${run}`;
 const FAILPUB = `xpub${run}`; // publisher whose waiting subscriber's consumer can't be created
 const FAILSUB = `xsub${run}`;
 const FAILDROP = `xdrop${run}`;
+const DPUB = `dpub${run}`; // publishes two types; an upgrade drops one, a later one re-adds it (real bus)
+const DS1 = `dsa${run}`; // subscribes to both of DPUB's types
+const DS2 = `dsb${run}`; // subscribes to the dropped type only
+const FPUB2 = `fpubb${run}`; // fake bus: publisher of two types for the keep / not-installed / bus-down cases
+const FSUB2 = `fsubb${run}`;
+const XPUB2 = `xpubb${run}`; // the bus fails while an upgrade deletes the consumers of a type it stops publishing
+const XSUB2 = `xsubb${run}`;
 const BUSY = `busy${run}`; // waits for the plumbing lock another install holds // an upgrade drops a subscription and the delete fails
 const PUB_TYPE = `${PUB}.thing.created.v1`;
 const typeOf = (id: string) => `${id}.thing.created.v1`;
+const deletedOf = (id: string) => `${id}.thing.deleted.v1`;
 const subDb = `core_events_sub_${run}`;
 const ADMIN_TOKEN = "t".repeat(40);
 
@@ -100,6 +108,17 @@ function manifest(id: string, publishes = true, subscribes: string[] = []) {
   };
 }
 
+/** A manifest that publishes and subscribes to exactly the given types. */
+function manifestWith(id: string, publishes: string[], subscribes: string[] = []) {
+  return {
+    ...manifest(id, false),
+    events: {
+      publishes: publishes.map((type) => ({ type, schema: "./events/thing.json" })),
+      subscribes: subscribes.map((type) => ({ type, handler: "/internal/events" })),
+    },
+  };
+}
+
 describe.skipIf(!ADMIN_URL)(
   "core-api sets up the event stream and durable consumers at install and registration (P4.1)",
   () => {
@@ -127,12 +146,14 @@ describe.skipIf(!ADMIN_URL)(
       return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     }
 
-    const install = (base: string, id: string, publishes = true, subscribes: string[] = []) =>
+    const installManifest = (base: string, id: string, m: object) =>
       fetch(`${base}/admin/v1/apps/${id}/install`, {
         method: "POST",
         headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
-        body: JSON.stringify(manifest(id, publishes, subscribes)),
+        body: JSON.stringify(m),
       });
+    const install = (base: string, id: string, publishes = true, subscribes: string[] = []) =>
+      installManifest(base, id, manifest(id, publishes, subscribes));
 
     /** The app's signed self-registration with a (new) manifest: what an upgraded app does on boot. */
     const register = (base: string, id: string, credential: string, m: object) => {
@@ -193,7 +214,7 @@ describe.skipIf(!ADMIN_URL)(
       if (NATS_URL) {
         const nc = await connect({ servers: NATS_URL, ...NATS_AUTH });
         const jsm = await jetstreamManager(nc);
-        for (const id of [PUB, UPPUB, EARLYPUB]) await jsm.streams.delete(streamName(id)).catch(() => undefined); // consumers go with them
+        for (const id of [PUB, UPPUB, EARLYPUB, DPUB]) await jsm.streams.delete(streamName(id)).catch(() => undefined); // consumers go with them
         await nc.close();
       }
       await busAdmin?.close();
@@ -390,7 +411,8 @@ describe.skipIf(!ADMIN_URL)(
       consumers: unknown;
       removedConsumers: unknown;
       dependentConsumers: unknown;
-      warnings: { type: string; code: string }[];
+      orphanedConsumers: unknown;
+      warnings: { app?: string; type: string; code: string }[];
     };
 
     /** What the Admin console shows for the app: the types still waiting for their publisher. */
@@ -620,6 +642,141 @@ describe.skipIf(!ADMIN_URL)(
         holder.release();
       }
       expect((await install(base, BUSY)).status).toBe(201);
+    });
+    it.skipIf(!NATS_URL)(
+      "upgrade that stops publishing a type: the other apps' consumers of it are deleted and they wait again; re-adding it re-creates them",
+      async () => {
+        busAdmin ??= createStreamAdmin({ servers: NATS_URL!, ...NATS_AUTH });
+        const base = await coreApi(busAdmin);
+        const KEEP = typeOf(DPUB);
+        const DROP = deletedOf(DPUB);
+        const both = manifestWith(DPUB, [KEEP, DROP]);
+        const pubRes = await installManifest(base, DPUB, both);
+        expect(pubRes.status).toBe(201);
+        const { credential } = await json<{ credential: string }>(pubRes);
+        expect((await installManifest(base, DS1, manifestWith(DS1, [], [KEEP, DROP]))).status).toBe(201);
+        expect((await installManifest(base, DS2, manifestWith(DS2, [], [DROP]))).status).toBe(201);
+        expect((await register(base, DPUB, credential, both)).status).toBe(200);
+
+        const nc = await connect({ servers: NATS_URL!, ...NATS_AUTH });
+        try {
+          const jsm = await jetstreamManager(nc);
+          const consumerOf = (app: string, type: string) =>
+            jsm.consumers.info(streamName(DPUB), consumerName(app, type));
+          await consumerOf(DS1, DROP);
+          // Someone (or an earlier, rolled-back attempt) already deleted DS2's: reported as absent, not an error.
+          await jsm.consumers.delete(streamName(DPUB), consumerName(DS2, DROP));
+
+          const up = await register(base, DPUB, credential, manifestWith(DPUB, [KEEP]));
+          expect(up.status).toBe(200);
+          const events = (await json<{ events: Events }>(up)).events;
+          expect(events.orphanedConsumers).toEqual({ [DS1]: { [DROP]: "deleted" }, [DS2]: { [DROP]: "absent" } });
+          expect(events.dependentConsumers).toEqual({ [DS1]: { [KEEP]: "exists" } });
+          expect(events.warnings).toEqual([
+            { app: DS1, type: DROP, code: "waiting_for_publisher" },
+            { app: DS2, type: DROP, code: "waiting_for_publisher" },
+          ]);
+          await expect(consumerOf(DS1, DROP)).rejects.toThrow(/consumer not found/i);
+          await expect(consumerOf(DS2, DROP)).rejects.toThrow(/consumer not found/i);
+          await consumerOf(DS1, KEEP); // the kept type's consumer stays
+          expect(await waitingInAdmin(base, DS1)).toEqual([DROP]);
+          expect(await waitingInAdmin(base, DS2)).toEqual([DROP]);
+          const audit = await pool.query(
+            "SELECT detail->'orphanedConsumers' AS o FROM audit_events WHERE app_id = $1 AND action = 'app.registered' ORDER BY id",
+            [DPUB],
+          );
+          expect(audit.rows.map((r) => r.o)).toEqual([
+            "none",
+            { [DS1]: { [DROP]: "deleted" }, [DS2]: { [DROP]: "absent" } },
+          ]);
+
+          // The next boot registers the same manifest: nothing left to clean up.
+          const again = await register(base, DPUB, credential, manifestWith(DPUB, [KEEP]));
+          const againEvents = (await json<{ events: Events }>(again)).events;
+          expect(againEvents.orphanedConsumers).toBe("none");
+          expect(againEvents.warnings).toEqual([]);
+
+          // A later upgrade publishes the type again: the existing dependents path re-creates both consumers.
+          const back = await register(base, DPUB, credential, both);
+          expect(back.status).toBe(200);
+          const backEvents = (await json<{ events: Events }>(back)).events;
+          expect(backEvents.dependentConsumers).toEqual({
+            [DS1]: { [KEEP]: "exists", [DROP]: "created" },
+            [DS2]: { [DROP]: "created" },
+          });
+          expect(backEvents.orphanedConsumers).toBe("none");
+          await consumerOf(DS1, DROP);
+          await consumerOf(DS2, DROP);
+          expect(await waitingInAdmin(base, DS1)).toEqual([]);
+          expect(await waitingInAdmin(base, DS2)).toEqual([]);
+        } finally {
+          await nc.close();
+        }
+
+        const seen = await startSubscriber(DS2, DROP);
+        const id = await publishOne(DPUB, DROP);
+        await expect.poll(() => seen.length, { timeout: 15_000 }).toBe(1);
+        expect(seen).toEqual([id]);
+      },
+      30_000,
+    );
+
+    it("an upgrade that keeps every type, or drops a type nobody installed subscribes to, deletes nothing (fake bus)", async () => {
+      const calls: string[] = [];
+      const base = await coreApi(recordingBus(calls));
+      const A = typeOf(FPUB2);
+      const B = deletedOf(FPUB2);
+      const res = await installManifest(base, FPUB2, manifestWith(FPUB2, [A, B]));
+      const { credential } = await json<{ credential: string }>(res);
+      // FSUB2 subscribes to A only; nobody installed subscribes to B (an app that isn't installed can't).
+      expect((await installManifest(base, FSUB2, manifestWith(FSUB2, [], [A]))).status).toBe(201);
+
+      calls.length = 0;
+      const keep = await register(base, FPUB2, credential, manifestWith(FPUB2, [A, B]));
+      expect((await json<{ events: Events }>(keep)).events.orphanedConsumers).toBe("none");
+      expect(calls.filter((c) => c.startsWith("delete:"))).toEqual([]);
+
+      calls.length = 0;
+      const dropB = await register(base, FPUB2, credential, manifestWith(FPUB2, [A]));
+      const events = (await json<{ events: Events }>(dropB)).events;
+      expect(events.orphanedConsumers).toBe("none");
+      expect(events.warnings).toEqual([]);
+      expect(calls.filter((c) => c.startsWith("delete:"))).toEqual([]);
+      expect(calls).toEqual([`stream:${FPUB2}`, `consumer:${FSUB2}:${A}`]);
+    });
+
+    it("bus down while an upgrade deletes the consumers of a type it stops publishing: 503 bus_unavailable, nothing written", async () => {
+      const ok = await coreApi(recordingBus([]));
+      const T = typeOf(XPUB2);
+      const res = await installManifest(ok, XPUB2, manifestWith(XPUB2, [T]));
+      const { credential } = await json<{ credential: string }>(res);
+      expect((await installManifest(ok, XSUB2, manifestWith(XSUB2, [], [T]))).status).toBe(201);
+      expect((await register(ok, XPUB2, credential, manifestWith(XPUB2, [T]))).status).toBe(200);
+      const snapshot = async () => ({
+        manifest: (await pool.query("SELECT manifest->'events' AS e FROM apps WHERE id = $1", [XPUB2])).rows,
+        audit: (await pool.query("SELECT count(*)::int AS n FROM audit_events WHERE app_id = $1", [XPUB2])).rows,
+      });
+      const before = await snapshot();
+      const down = await coreApi({
+        ...recordingBus([]),
+        deleteConsumer: async () => {
+          throw new Error("connection refused");
+        },
+      });
+      const up = await register(down, XPUB2, credential, manifestWith(XPUB2, []));
+      expect(up.status).toBe(503);
+      expect((await json<{ error: string }>(up)).error).toBe("bus_unavailable");
+      expect(await snapshot()).toEqual(before);
+
+      // Once the bus is back, the same registration goes through.
+      const calls: string[] = [];
+      const retry = await coreApi(recordingBus(calls));
+      const again = await register(retry, XPUB2, credential, manifestWith(XPUB2, []));
+      expect(again.status).toBe(200);
+      expect((await json<{ events: Events }>(again)).events.orphanedConsumers).toEqual({
+        [XSUB2]: { [T]: "deleted" },
+      });
+      expect(calls).toEqual([`delete:${XSUB2}:${T}`]);
     });
   },
 );

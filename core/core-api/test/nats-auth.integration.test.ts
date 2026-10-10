@@ -10,14 +10,17 @@
  *    with both sides on their own identity;
  *  - an upgrade that adds a subscription: after a reconnect the app can pull from the new durable;
  *  - core-api down: connects fail, the relay keeps the event in the outbox, and it goes out once
- *    core-api is back.
+ *    core-api is back;
+ *  - core-api down while a subscriber's connection drops: its reconnects are refused, and once
+ *    core-api is back it reconnects by itself (a fresh assertion each time) and pulls a new event,
+ *    without a restart (#62).
  *
  * Needs CORE_API_TEST_ADMIN_URL, CORE_API_TEST_NATS_URL, NATS_CORE_PASSWORD and
  * CORE_API_NATS_ISSUER_SEED (the dev values, `.dev/nats.env` and `.dev/core-api.env`). Skipped
  * without them, except when CORE_API_TEST_REQUIRED is set (CI), where it fails instead.
  */
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createTcpServer, connect as tcpConnect, type AddressInfo, type Socket } from "node:net";
 import {
   INBOX_SQL,
   OUTBOX_SQL,
@@ -62,6 +65,7 @@ const A = `ana${run}`; // publishes
 const B = `bob${run}`; // publishes; the isolation target
 const S = `sue${run}`; // subscribes to A's type
 const U = `upg${run}`; // installed quiet; an upgrade subscribes it to B's type
+const R = `rec${run}`; // subscribes to B's type; its connection is cut while core-api is down
 const typeOf = (id: string) => `${id}.thing.created.v1`;
 const ADMIN_TOKEN = "t".repeat(40);
 const enc = new TextEncoder();
@@ -94,6 +98,48 @@ function manifest(id: string, publishes: boolean, subscribes: string[] = []) {
         }
       : {}),
     ui: { glyph: "BA", color: "#0f766e", nav: [], status: "active" },
+  };
+}
+
+/**
+ * A TCP proxy in front of NATS, so a test can cut a client's connection the way a network blip or a
+ * bus restart would (the test can't restart the NATS server itself). `accepted` counts connects.
+ */
+async function natsProxy(target: string) {
+  const { hostname, port } = new URL(target);
+  const sockets = new Set<Socket>();
+  let accepted = 0;
+  const server = createTcpServer((client) => {
+    accepted++;
+    const upstream = tcpConnect(Number(port), hostname);
+    const close = () => {
+      client.destroy();
+      upstream.destroy();
+      sockets.delete(client);
+      sockets.delete(upstream);
+    };
+    for (const s of [client, upstream]) {
+      sockets.add(s);
+      s.on("error", close);
+      s.on("close", close);
+    }
+    client.pipe(upstream);
+    upstream.pipe(client);
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  return {
+    url: `nats://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    get accepted() {
+      return accepted;
+    },
+    /** Drop every open connection (the clients see the server go away). */
+    dropAll() {
+      for (const s of sockets) s.destroy();
+    },
+    async close() {
+      this.dropAll();
+      await new Promise<void>((r) => server.close(() => r()));
+    },
   };
 }
 
@@ -232,6 +278,7 @@ describe.skipIf(!ready)("per-app NATS identities (integration: Postgres + NATS a
     await install(B, true);
     await install(S, false, [typeOf(A)]);
     await install(U, false);
+    await install(R, false, [typeOf(B)]);
   });
 
   afterAll(async () => {
@@ -469,4 +516,60 @@ describe.skipIf(!ready)("per-app NATS identities (integration: Postgres + NATS a
       20_000,
     );
   });
+  it("core-api down while a subscriber's connection drops: reconnects are refused, then it reconnects by itself and pulls a new event, without a restart", async () => {
+    const proxy = await natsProxy(NATS_URL!);
+    try {
+      const inboxPool = await newDb(`natsauth_reconnect_${run}`);
+      await inboxPool.query(INBOX_SQL);
+      const seen: string[] = [];
+      subs.push(
+        subscribe(
+          typeOf(B),
+          async (event) => {
+            seen.push(event.id);
+          },
+          {
+            appId: R,
+            pool: inboxPool,
+            servers: proxy.url,
+            auth: authFor(R),
+            backoff: { initialMs: 50, maxMs: 200 },
+            reconnectBackoff: { initialMs: 100, maxMs: 500 },
+            log: { info: () => undefined, warn: () => undefined },
+          },
+        ),
+      );
+      const publishAsB = async (n: number) => {
+        const event = createEvent({ source: B, type: typeOf(B), data: { n }, subject: `t-rec-${n}` });
+        await jetstream(await asApp(B)).publish(typeOf(B), enc.encode(JSON.stringify(event)), { msgID: event.id });
+        return event.id;
+      };
+
+      // Connected and subscribed: an event arrives.
+      await until(async () => proxy.accepted > 0);
+      await new Promise((r) => setTimeout(r, 800)); // let the consumer start pulling
+      const first = await publishAsB(1);
+      await until(async () => seen.length === 1);
+      expect(seen).toEqual([first]);
+
+      // core-api goes away, then the app's connection drops.
+      await stopCallout();
+      const before = proxy.accepted;
+      proxy.dropAll();
+      // It tries again by itself, and the bus refuses it while nobody answers the auth callout: a
+      // refused attempt is followed by another one (an accepted one would have stayed connected).
+      await until(async () => proxy.accepted >= before + 2, 15_000);
+      expect(seen).toEqual([first]);
+
+      // core-api is back: the same subscription reconnects (a fresh single-use assertion) and pulls
+      // an event published after it.
+      await startCallout();
+      const second = await publishAsB(2);
+      await until(async () => seen.length === 2, 30_000);
+      expect(seen).toEqual([first, second]);
+    } finally {
+      await subs.pop()?.stop();
+      await proxy.close();
+    }
+  }, 60_000);
 });

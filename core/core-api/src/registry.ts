@@ -65,7 +65,8 @@ export interface RegistryDeps {
    * app that declares `events.publishes` (APP_<ID> on <id>.>), a durable consumer `<id>.<type>` for
    * every `events.subscribes` type whose publisher's stream exists (`waiting_for_publisher`
    * otherwise), the consumers of already installed subscribers of what a new publisher declares,
-   * and delete the consumers of subscriptions an upgrade dropped (see event-plumbing.ts). Unset =
+   * delete the consumers of subscriptions an upgrade dropped, and the other apps' consumers of types
+   * an upgrade stops publishing (see event-plumbing.ts). Unset =
    * no bus configured: recorded as `no_bus`, nothing is created, and the app's events wait in its outbox.
    */
   bus?: EventBus;
@@ -93,8 +94,14 @@ export interface EventsOutcome {
   removedConsumers: PerType;
   /** Installed subscribers of what this app publishes, by app, then type. */
   dependentConsumers: PerApp;
-  /** Subscriptions whose publisher isn't installed: nothing is blocked, the consumer comes with the publisher. */
-  warnings: { type: string; code: typeof WAITING_FOR_PUBLISHER }[];
+  /** Other apps' consumers of the types an upgrade stopped publishing, by app, then type: deleted / absent. */
+  orphanedConsumers: PerApp;
+  /**
+   * Subscriptions whose publisher isn't installed: nothing is blocked, the consumer comes with the
+   * publisher. Without `app`: this app's own subscriptions. With `app`: another app's subscription
+   * that waits again because this upgrade stopped publishing its type.
+   */
+  warnings: { app?: string; type: string; code: typeof WAITING_FOR_PUBLISHER }[];
 }
 
 /** Serialises event plumbing across concurrent installs/registrations (a publisher and its subscriber at once). */
@@ -116,6 +123,7 @@ async function runEventPlumbing(
     consumers: plan.own.length ? "no_bus" : "none",
     removedConsumers: plan.remove.length ? "no_bus" : "none",
     dependentConsumers: plan.dependents.length ? "no_bus" : "none",
+    orphanedConsumers: plan.orphaned.length ? "no_bus" : "none",
     warnings: [],
   };
   const warn = new Set(waiting);
@@ -136,6 +144,12 @@ async function runEventPlumbing(
           (deps[app] ??= {})[type] = consumerOutcome((await bus.ensureConsumer(app, type)).result);
         out.dependentConsumers = deps;
       }
+      if (plan.orphaned.length) {
+        const orphaned: Record<string, Record<string, string>> = {};
+        for (const { app, type } of plan.orphaned)
+          (orphaned[app] ??= {})[type] = (await bus.deleteConsumer(app, type)).result;
+        out.orphanedConsumers = orphaned;
+      }
       if (plan.remove.length) {
         const removed: Record<string, string> = {};
         for (const type of plan.remove) removed[type] = (await bus.deleteConsumer(appId, type)).result;
@@ -148,7 +162,11 @@ async function runEventPlumbing(
       );
     }
   }
-  out.warnings = [...warn].sort().map((type) => ({ type, code: WAITING_FOR_PUBLISHER }));
+  out.warnings = [
+    ...[...warn].sort().map((type) => ({ type, code: WAITING_FOR_PUBLISHER }) as const),
+    // The subscription waits whether or not a bus is configured: its type has no publisher any more.
+    ...plan.orphaned.map(({ app, type }) => ({ app, type, code: WAITING_FOR_PUBLISHER }) as const),
+  ];
   return out;
 }
 
@@ -381,8 +399,9 @@ export function createRegistry(deps: RegistryDeps) {
     const m = checkManifest(appId, input);
 
     return inTx(async (c) => {
-      // An upgrade can start publishing or subscribing, or drop a subscription: the same idempotent
-      // stream and consumer steps as install, plus deleting dropped consumers, before anything is
+      // An upgrade can start publishing or subscribing, or drop a subscription or a published type:
+      // the same idempotent stream and consumer steps as install, plus deleting the consumers of
+      // dropped subscriptions and other apps' consumers of dropped published types, before anything is
       // written (a bus failure → 503, the transaction rolls back, the app registers again).
       const installed = await lockAndReadInstalled(c, appId, lockTimeoutMs);
       const previous = (
