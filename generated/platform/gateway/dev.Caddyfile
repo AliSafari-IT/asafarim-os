@@ -23,6 +23,16 @@ http://core.localhost:8080 {
 	reverse_proxy {$OS_ADMIN_UPSTREAM}
 }
 
+http://docs.localhost:8080 {
+	handle {
+		forward_auth {$OS_CORE_API_UPSTREAM} {
+			uri /authz/check
+			header_up X-Asafarim-App docs
+		}
+		reverse_proxy {$OS_APP_DOCS_UPSTREAM}
+	}
+}
+
 http://notes.localhost:8080 {
 	@hidden1 {
 		path /internal /internal/*
