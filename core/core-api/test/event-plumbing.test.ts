@@ -26,12 +26,13 @@ describe("planEventPlumbing: which consumers an install or an upgrade adds and r
       own: [],
       remove: [],
       dependents: [],
+      orphaned: [],
     });
   });
 
   it("a subscriber: one consumer per subscribed type, deduplicated and sorted; no stream", () => {
     const plan = planEventPlumbing({ appId: "tasks", manifest: m([], [NOTE_DELETED, NOTE, NOTE]), installed: [] });
-    expect(plan).toEqual({ stream: false, own: [NOTE, NOTE_DELETED], remove: [], dependents: [] });
+    expect(plan).toEqual({ stream: false, own: [NOTE, NOTE_DELETED], remove: [], dependents: [], orphaned: [] });
   });
 
   it("a publisher installed after its subscribers: their consumers, only for the types it declares", () => {
@@ -53,6 +54,7 @@ describe("planEventPlumbing: which consumers an install or an upgrade adds and r
         { app: "audit", type: NOTE },
         { app: "tasks", type: NOTE },
       ],
+      orphaned: [],
     });
   });
 
@@ -62,7 +64,7 @@ describe("planEventPlumbing: which consumers an install or an upgrade adds and r
       manifest: m([NOTE], [NOTE]),
       installed: [{ id: "notes", manifest: m([NOTE], [NOTE]) }],
     });
-    expect(plan).toEqual({ stream: true, own: [NOTE], remove: [], dependents: [] });
+    expect(plan).toEqual({ stream: true, own: [NOTE], remove: [], dependents: [], orphaned: [] });
   });
 
   it("an upgrade that drops a subscription removes only that consumer; one that keeps all removes none", () => {
@@ -82,6 +84,7 @@ describe("planEventPlumbing: which consumers an install or an upgrade adds and r
       own: [],
       remove: [NOTE],
       dependents: [],
+      orphaned: [],
     });
   });
 
@@ -89,6 +92,110 @@ describe("planEventPlumbing: which consumers an install or an upgrade adds and r
     expect(
       planEventPlumbing({ appId: "tasks", manifest: m([], [NOTE]), previous: null, installed: [] }).remove,
     ).toEqual([]);
+  });
+});
+
+describe("planEventPlumbing: an upgrade that stops publishing a type (orphaned consumers)", () => {
+  const notesBefore = m([NOTE, NOTE_DELETED]);
+
+  it("drops nothing: no orphaned consumers, whoever subscribes", () => {
+    const plan = planEventPlumbing({
+      appId: "notes",
+      manifest: m([NOTE, NOTE_DELETED]),
+      previous: notesBefore,
+      installed: [{ id: "tasks", manifest: m([], [NOTE, NOTE_DELETED]) }],
+    });
+    expect(plan.orphaned).toEqual([]);
+    expect(plan.dependents).toEqual([
+      { app: "tasks", type: NOTE },
+      { app: "tasks", type: NOTE_DELETED },
+    ]);
+  });
+
+  it("drops one type: the subscribers of that type only; the kept type stays a dependent", () => {
+    const plan = planEventPlumbing({
+      appId: "notes",
+      manifest: m([NOTE]),
+      previous: notesBefore,
+      installed: [
+        { id: "tasks", manifest: m([], [NOTE, NOTE_DELETED]) },
+        { id: "other", manifest: m([], [TASK]) },
+      ],
+    });
+    expect(plan.orphaned).toEqual([{ app: "tasks", type: NOTE_DELETED }]);
+    expect(plan.dependents).toEqual([{ app: "tasks", type: NOTE }]);
+  });
+
+  it("several subscribers and several dropped types: sorted by app, then type; apps without events skipped", () => {
+    const plan = planEventPlumbing({
+      appId: "notes",
+      manifest: {},
+      previous: notesBefore,
+      installed: [
+        { id: "tasks", manifest: m([TASK], [NOTE_DELETED, NOTE]) },
+        { id: "audit", manifest: m([], [NOTE]) },
+        { id: "empty", manifest: null },
+      ],
+    });
+    expect(plan).toEqual({
+      stream: false,
+      own: [],
+      remove: [],
+      dependents: [],
+      orphaned: [
+        { app: "audit", type: NOTE },
+        { app: "tasks", type: NOTE },
+        { app: "tasks", type: NOTE_DELETED },
+      ],
+    });
+  });
+
+  it("the publisher subscribing to its own dropped type is not an orphan of itself", () => {
+    const plan = planEventPlumbing({
+      appId: "notes",
+      manifest: m([NOTE], [NOTE_DELETED]),
+      previous: m([NOTE, NOTE_DELETED], [NOTE_DELETED]),
+      installed: [{ id: "notes", manifest: m([NOTE, NOTE_DELETED], [NOTE_DELETED]) }],
+    });
+    expect(plan.orphaned).toEqual([]);
+  });
+
+  it("only the installed apps it is given count: removed apps (filtered out by the registry) get nothing", () => {
+    // The registry passes only apps whose state isn't `removed` (lockAndReadInstalled).
+    expect(planEventPlumbing({ appId: "notes", manifest: {}, previous: notesBefore, installed: [] }).orphaned).toEqual(
+      [],
+    );
+  });
+
+  it("install (no previous manifest) orphans nothing", () => {
+    expect(
+      planEventPlumbing({
+        appId: "notes",
+        manifest: m([NOTE]),
+        previous: null,
+        installed: [{ id: "tasks", manifest: m([], [NOTE_DELETED]) }],
+      }).orphaned,
+    ).toEqual([]);
+  });
+
+  it("a later upgrade that re-adds the type makes its subscribers dependents again (their consumer is re-created)", () => {
+    const plan = planEventPlumbing({
+      appId: "notes",
+      manifest: notesBefore,
+      previous: m([NOTE]),
+      installed: [{ id: "tasks", manifest: m([], [NOTE_DELETED]) }],
+    });
+    expect(plan.orphaned).toEqual([]);
+    expect(plan.dependents).toEqual([{ app: "tasks", type: NOTE_DELETED }]);
+  });
+
+  it("once the publisher stops declaring the type, its subscribers wait for a publisher again", () => {
+    const sub = m([], [NOTE_DELETED]);
+    const installed = [
+      { id: "tasks", manifest: sub },
+      { id: "notes", manifest: m([NOTE]) },
+    ];
+    expect(waitingForPublisher("tasks", sub, installed)).toEqual([NOTE_DELETED]);
   });
 });
 
