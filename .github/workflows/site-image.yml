@@ -1,0 +1,138 @@
+# Build and publish the os-site image: asafarim.site, the OS's landing page (asafarim-os#70).
+#
+# deploy/compose.prod.yml runs ghcr.io/alisafari-it/asafarim-os:site-<tag> as os-site. This workflow is what
+# puts that image there, the same way identity-image.yml publishes identity's. It builds core/site/Dockerfile
+# from the repository root (`docker build -f core/site/Dockerfile .`).
+#
+# - push to main: build and push two tags. `site-<full commit sha>` is immutable, and deploys use it.
+#   `site-main` moves with every build and is for convenience only.
+# - pull request: build only, to catch Dockerfile errors. Nothing is pushed and nothing logs in to the registry.
+# - workflow_dispatch: pushes only when run on main. On any other branch it builds without pushing.
+#
+# The registry login uses the built-in GITHUB_TOKEN. No secrets are added to the repository.
+name: Site image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # The image is core/site alone: its build uses Node built-ins only, no workspace dependencies.
+      - "core/site/**"
+      - ".github/workflows/site-image.yml"
+  pull_request:
+    paths:
+      - "core/site/**"
+      - ".github/workflows/site-image.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to a PR replaces that PR's stale build. On main every commit gets its OWN group: a group keeps
+  # only one pending run and cancels the others, so a shared group would drop a commit's publish and that commit
+  # would never get its site-<sha> tag.
+  group: site-image-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/alisafari-it/asafarim-os
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # packages: write is for this job only (publishing to GHCR). Nothing else gets it.
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # Publish only from main, and never for a pull request.
+      PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Not needed to build, and the token stays out of the runner's .git (core/site/Dockerfile.dockerignore
+          # also keeps everything but core/site out of the build context).
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Decide what to publish. (a) The commit tag is immutable: a re-run must never replace it, because the
+      # floating base image may have moved and the same sha would then name a different image. (b) site-main
+      # only moves FORWARD: it is published only when this commit is still the head of main, so a re-run of an
+      # older commit cannot point it back. If the head lookup fails we publish the new commit tag and leave
+      # site-main alone; if the tag lookup fails for any reason other than "not found", the step fails.
+      - name: Plan the tags
+        id: plan
+        if: env.PUBLISH == 'true'
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha_tag="${IMAGE}:site-${SHA}"
+          # Only "the registry says it is not there" means publish. Any other failure (auth, network, GHCR
+          # outage) fails the step: guessing "missing" could replace a tag that exists.
+          if inspect_out="$(docker buildx imagetools inspect "$sha_tag" 2>&1)"; then
+            echo "::notice::${sha_tag} is already published: leaving it unchanged."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif ! grep -Eiq 'not found|manifest unknown|name unknown' <<<"$inspect_out"; then
+            echo "::error::Could not tell whether ${sha_tag} exists; not publishing. Output:"
+            echo "$inspect_out"
+            exit 1
+          fi
+          tags="$sha_tag"
+          head="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | cut -f1 || true)"
+          if [[ "$head" == "$SHA" ]]; then
+            tags+=$'\n'"${IMAGE}:site-main"
+          else
+            echo "::notice::${SHA} is not the head of main (head: ${head:-unknown}): not moving site-main."
+          fi
+          {
+            echo "publish=true"
+            echo "tags<<TAGS"
+            echo "$tags"
+            echo "TAGS"
+          } >> "$GITHUB_OUTPUT"
+
+      # On a pull request the plan step is skipped: the image is built (to catch Dockerfile errors) and not pushed.
+      - name: Build (and push, on main)
+        id: build
+        if: steps.plan.outputs.publish != 'false'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: core/site/Dockerfile
+          push: ${{ steps.plan.outputs.publish == 'true' }}
+          provenance: ${{ steps.plan.outputs.publish == 'true' }}
+          tags: ${{ steps.plan.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Summary
+        if: env.PUBLISH == 'true'
+        env:
+          PLANNED: ${{ steps.plan.outputs.publish }}
+          TAGS: ${{ steps.plan.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if [[ "$PLANNED" == "false" ]]; then
+            echo "\`${IMAGE}:site-${GITHUB_SHA}\` was already published: left unchanged." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "Published:"
+            while IFS= read -r tag; do echo "- \`${tag}\`"; done <<< "$TAGS"
+            echo "Digest: \`${DIGEST}\`"
+            echo "On the VPS: \`docker pull ${IMAGE}:site-${GITHUB_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
