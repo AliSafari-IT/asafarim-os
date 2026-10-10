@@ -18,7 +18,8 @@ export default async function RolesPage({
   const admin = await requireAdmin();
   const params = await searchParams;
   const api = coreApi(admin.idToken);
-  const apps = await api.apps();
+  // A removed app has nothing to grant (its roles are deprecated): not offered here.
+  const apps = (await api.apps()).filter((a) => a.state !== "removed");
   // The first app with something to grant, unless one is asked for.
   const appId =
     isAppId(params.app) && apps.some((a) => a.id === params.app)

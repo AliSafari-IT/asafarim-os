@@ -23,7 +23,9 @@ export default async function EventsPage({
   const app = eventsAppFilter(params.app);
 
   const api = coreApi(admin.idToken);
-  const [apps, all] = await Promise.all([api.apps(), api.events()]);
+  const [listed, all] = await Promise.all([api.apps(), api.events()]);
+  // A removed app publishes and subscribes to nothing: not a filter choice.
+  const apps = listed.filter((a) => a.state !== "removed");
   const entries = catalogFor(all, app);
 
   return (
