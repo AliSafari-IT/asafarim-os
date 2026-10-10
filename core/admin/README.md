@@ -19,7 +19,7 @@ The ASafariM OS **Admin console** (P3.3b, ADR 0001 §3–4): the apps, who may d
 
 ## What each page does
 
-- **Apps**: every app with its state and install status (waiting for the app to register, or registered at a time). **Activate** serves it at its address and puts it in launchers; **Deactivate** shows the "temporarily unavailable" page and takes it off launchers; data is kept. Both ask first, in a styled dialog. `core` is built in and always active.
+- **Apps**: every app with its state and install status (waiting for the app to register, or registered at a time). **Activate** serves it at its address and puts it in launchers; **Deactivate** shows the "temporarily unavailable" page and takes it off launchers; data is kept. Both ask first, in a styled dialog. **Remove** (an installed or inactive app; deactivate an active one first) asks you to type the app id before its button is enabled: core-api deletes the app's event consumers, its subscribers' consumers and its stream (with any events not yet delivered), revokes its credentials, deletes every grant of its roles and deprecates them. Apps subscribed to its events show **Waiting for publisher**. Its database is kept. A removed app stays in the list as **removed**, with no action; installing it again (CLI) starts clean. `core` is built in and always active.
 - **Events** (P4.2): the event catalog from core-api's `GET /admin/v1/events`, sorted by type: the publisher (app and version), the schema status (provided, or "no schema uploaded") with the schema itself as collapsed, pretty-printed JSON, and each subscriber with its handler and consumer state. A type nobody publishes is flagged **No publisher** and its subscribers **Waiting for publisher** (the Apps page's warning). `?app=<id>` keeps the types that app publishes or subscribes to; an invalid value is ignored. Read-only.
 - **Roles & grants**: per app, its roles, the permissions each grants, who holds each, and **Revoke** (with a dialog). **Grant** by searching the seeded users (locally; there is no production directory yet, so you can also type a subject id). A role that still grants a permission the app no longer declares is flagged **Migration needed** (ADR 0001 §3.4).
 - **Audit**: core-api's audit events, newest first, filterable by app and by (part of) the actor; "Older events" pages.
@@ -44,5 +44,6 @@ Settings come from `.dev/app.env` and `.dev/admin.env`: `OIDC_ISSUER`, `AUTH_SEC
 ## What it does not cover
 
 - **No production directory of people.** Locally it searches the seeded users; elsewhere, grant by typing the subject id.
-- **No install, remove or manifest editing.** Install is the CLI (`platform app install`); the console activates and deactivates.
+- **No install or manifest editing.** Install (and reinstall after a removal) is the CLI (`platform app install`); the console activates, deactivates and removes.
+- **Remove keeps the app's database and OIDC client**, and doesn't cut the removed app's open bus connections (new ones are refused). Backup, drop and retention are a later, deploy-level step.
 - **No Dockerfile or deploy yet:** this is local and CI; deployment arrives with the rest of ADR 0001 §8.

@@ -72,6 +72,17 @@ export interface CatalogEntry {
   subscribers: CatalogSubscriber[];
 }
 
+/** What core-api did when it removed an app (the parts the console shows). */
+export interface RemoveResult {
+  appId: string;
+  state: "removed";
+  previous: string;
+  revokedCredentials: number;
+  removedGrants: { role: string; subject: string }[];
+  /** Other apps' subscriptions that now wait for a publisher. */
+  warnings: { app: string; type: string; code: string }[];
+}
+
 export interface RoleGrant {
   subject: string;
   granted_by: string;
@@ -119,6 +130,8 @@ export function coreApi(idToken: string) {
     },
     activate: (app: string) => call<{ state: string }>(idToken, "POST", `/admin/v1/apps/${enc(app)}/activate`),
     deactivate: (app: string) => call<{ state: string }>(idToken, "POST", `/admin/v1/apps/${enc(app)}/deactivate`),
+    /** Remove (#68): from installed or inactive. core-api tears down its event plumbing, credentials and grants. */
+    remove: (app: string) => call<RemoveResult>(idToken, "POST", `/admin/v1/apps/${enc(app)}/remove`),
     grant: (role: string, subject: string) =>
       call<{ granted: boolean }>(idToken, "PUT", `/admin/v1/roles/${enc(role)}/grants/${enc(subject)}`),
     revoke: (role: string, subject: string) =>

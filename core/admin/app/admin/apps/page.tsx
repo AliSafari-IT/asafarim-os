@@ -4,13 +4,14 @@ import { Flash } from "@/components/Flash";
 import { coreApi, type AdminApp } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
 import { formatTime } from "@/lib/util";
-import { activateApp, deactivateApp } from "../actions";
+import { activateApp, deactivateApp, removeApp } from "../actions";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Apps · Admin · ASafariM OS" };
 
 function installStatus(app: AdminApp): string {
   if (app.system) return "Built in";
+  if (app.state === "removed") return "Removed · install it again with the CLI";
   if (app.registered_at) return `Installed · registered ${formatTime(app.registered_at)}`;
   return "Installed · waiting for the app to register";
 }
@@ -29,7 +30,8 @@ export default async function AppsPage({
       <h2>Apps</h2>
       <p className="muted">
         Activating an app serves it at its address and puts it in launchers; deactivating shows the &quot;temporarily
-        unavailable&quot; page instead. Data is kept either way.
+        unavailable&quot; page instead. Data is kept either way. Removing an installed or inactive app revokes its
+        credentials and grants and deletes its event stream and consumers; its database is kept.
       </p>
       <Flash notice={notice} error={error} />
       <div className="table-wrap">
@@ -69,6 +71,8 @@ export default async function AppsPage({
                 <td>
                   {app.system ? (
                     <span className="muted">Always active</span>
+                  ) : app.state === "removed" ? (
+                    <span className="muted">None</span>
                   ) : app.state === "active" ? (
                     <ConfirmDialog
                       triggerLabel="Deactivate"
@@ -81,15 +85,28 @@ export default async function AppsPage({
                       fields={{ app: app.id, next: "/admin/apps" }}
                     />
                   ) : (
-                    <ConfirmDialog
-                      triggerLabel="Activate"
-                      triggerAriaLabel={`Activate ${app.name}`}
-                      title={`Activate ${app.name}?`}
-                      description={`${app.name} will be served at its address and appear in the launchers of people who hold one of its roles. Registering it didn't grant anyone anything: that's still done under Roles & grants.`}
-                      confirmLabel="Activate"
-                      action={activateApp}
-                      fields={{ app: app.id, next: "/admin/apps" }}
-                    />
+                    <div className="actions-cell">
+                      <ConfirmDialog
+                        triggerLabel="Activate"
+                        triggerAriaLabel={`Activate ${app.name}`}
+                        title={`Activate ${app.name}?`}
+                        description={`${app.name} will be served at its address and appear in the launchers of people who hold one of its roles. Registering it didn't grant anyone anything: that's still done under Roles & grants.`}
+                        confirmLabel="Activate"
+                        action={activateApp}
+                        fields={{ app: app.id, next: "/admin/apps" }}
+                      />
+                      <ConfirmDialog
+                        triggerLabel="Remove"
+                        triggerAriaLabel={`Remove ${app.name}`}
+                        title={`Remove ${app.name}?`}
+                        description={`${app.name} can no longer register, get tokens or use the event bus: its credentials are revoked, every grant of its roles is deleted, and its event stream (with any events not yet delivered) and its consumers are deleted. Apps subscribed to its events wait for a publisher again. Its database is kept. This can't be undone; installing it again starts clean.`}
+                        confirmLabel="Remove"
+                        danger
+                        typeToConfirm={app.id}
+                        action={removeApp}
+                        fields={{ app: app.id, next: "/admin/apps" }}
+                      />
+                    </div>
                   )}
                 </td>
               </tr>

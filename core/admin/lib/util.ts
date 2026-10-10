@@ -46,3 +46,6 @@ export const isAppId = (v: unknown): v is string => typeof v === "string" && /^[
 export const isRoleKey = (v: unknown): v is string =>
   typeof v === "string" && /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/.test(v);
 export const isSubject = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9._:@-]{1,128}$/.test(v);
+
+/** A removal is confirmed only by typing the app id exactly (the dialog checks it, and so does the action). */
+export const confirmsRemoval = (app: string, typed: unknown): boolean => typeof typed === "string" && typed === app;

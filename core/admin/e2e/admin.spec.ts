@@ -7,6 +7,7 @@
  *   grants notes.editor to the member → the member's launcher shows Notes and they can write →
  *   the admin deactivates notes → it disappears from the launcher →
  *   every admin action is in the audit log under the admin's own name →
+ *   removing a throwaway app needs its id typed into the dialog, then it shows as removed (#68) →
  *   keyboard, labels and light/dark checks on the console.
  *
  * The console is reached at http://core.localhost:8080 (the gateway), notes at http://notes.localhost:8080.
@@ -336,6 +337,66 @@ test("every admin action is in the audit log under the admin's own name", async 
     "app.deactivated:notes",
     "role.revoked:notes",
   ]);
+  await page.close();
+});
+
+test("removing an app asks for its id, then the app shows as removed (a throwaway app; notes stays)", async () => {
+  // A throwaway app, installed by the CLI (the console doesn't install), with nothing to run.
+  const id = `e2erm${RUN}`;
+  const name = `Throwaway ${RUN}`;
+  const res = await fetch(`${CORE_API}/admin/v1/apps/${id}/install`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      id,
+      name,
+      version: "0.1.0",
+      platform: ">=0.1 <1",
+      owner: "ASafariM Digital",
+      runtime: {
+        image: id,
+        port: 3000,
+        health: { live: "/healthz", ready: "/readyz" },
+        resources: { memory: "64m", cpus: 0.1 },
+      },
+      database: { engine: "none" },
+      auth: { client: "oidc", publicPaths: [] },
+      permissions: [{ key: `${id}.read`, description: "read" }],
+      roles: [{ key: `${id}.viewer`, grants: [`${id}.read`] }],
+      ui: { glyph: "TA", color: "#b91c1c", nav: [], status: "active" },
+    }),
+  });
+  expect(res.status).toBe(201);
+
+  const page = await adminCtx.newPage();
+  await openApps(page);
+  await expect(page.getByTestId(`state-${id}`)).toHaveText("installed");
+  // An active app offers no Remove: it has to be deactivated first.
+  await expect(page.getByTestId("app-core").getByRole("button", { name: /Remove/ })).toHaveCount(0);
+
+  await page.getByRole("button", { name: `Remove ${name}` }).click();
+  const dialog = page.getByRole("dialog", { name: `Remove ${name}?` });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  const confirm = dialog.getByRole("button", { name: "Remove", exact: true });
+  const typed = dialog.getByLabel(`Type ${id} to confirm`);
+  await expect(confirm).toBeDisabled();
+  await typed.fill(id.slice(0, -1)); // almost: still disabled
+  await expect(confirm).toBeDisabled();
+  await typed.fill(id);
+  await expect(confirm).toBeEnabled();
+  await page.screenshot({ path: `${SHOTS}/a10-remove-dialog.png` });
+  await confirm.click();
+
+  await expect(page.getByTestId("flash-notice")).toContainText(`${id} is removed`);
+  await expect(page.getByTestId(`state-${id}`)).toHaveText("removed");
+  await expect(page.getByTestId(`app-${id}`)).toContainText("Removed");
+  await expect(page.getByTestId(`app-${id}`).getByRole("button")).toHaveCount(0);
+  // notes is untouched.
+  await expect(page.getByTestId("state-notes")).toHaveText(/installed|inactive/);
+  const removed = await cli("GET", `/admin/v1/apps/${id}`);
+  expect(removed.body.state).toBe("removed");
+  await page.screenshot({ path: `${SHOTS}/a11-apps-after-remove.png` });
   await page.close();
 });
 
