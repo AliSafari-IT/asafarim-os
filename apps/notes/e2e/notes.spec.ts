@@ -2,7 +2,7 @@
  * The P3.2 acceptance flow, end to end in a real browser against the real
  * stack (identity, the dev login stub, core-api, Postgres):
  *
- *   install → the app self-registered → sign in as a seeded member →
+ *   install → the app self-registered (and uploaded its event schema) → sign in as a seeded member →
  *   can read but can't write (403 naming the permission) →
  *   an admin grants notes.editor → writing works →
  *   deactivate → the app reports inactive.
@@ -77,6 +77,26 @@ test("the app registered itself with core-api on boot", async () => {
   const permissions = (app.body.permissions as { key: string }[]).map((p) => p.key);
   expect(permissions).toEqual(["notes.read", "notes.write"]);
   expect((app.body.roles as { key: string }[]).map((r) => r.key)).toEqual(["notes.editor", "notes.viewer"]);
+});
+
+test("after registering, the app uploaded its event schema: notes.note.created.v1 is in the catalog (P4.2)", async () => {
+  // The upload follows the registration, so give it a moment on a fresh boot.
+  await expect
+    .poll(
+      async () => {
+        const { body } = await admin("GET", "/admin/v1/events");
+        const events = (body.events ?? []) as { type: string; schemaStatus: string }[];
+        return events.find((e) => e.type === "notes.note.created.v1")?.schemaStatus;
+      },
+      { timeout: 20_000, intervals: [500, 1000] },
+    )
+    .toBe("provided");
+  const { body } = await admin("GET", "/admin/v1/events");
+  const entry = (body.events as Record<string, unknown>[]).find((e) => e.type === "notes.note.created.v1");
+  expect(entry).toMatchObject({
+    publisher: { appId: "notes" },
+    schema: { type: "object", required: expect.arrayContaining(["id", "title"]) },
+  });
 });
 
 test("nobody is signed in: the page offers sign-in and the API says 401", async ({ page, request }) => {
