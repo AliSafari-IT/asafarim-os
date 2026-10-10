@@ -116,7 +116,7 @@ jobs:
       - name: Build (and push, on main)
         id: build
         if: steps.plan.outputs.publish != 'false'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: core/identity/Dockerfile
