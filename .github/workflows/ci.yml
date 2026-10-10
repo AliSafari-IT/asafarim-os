@@ -183,7 +183,7 @@ jobs:
 
       - name: Upload screenshots and report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: notes-e2e
           path: |
