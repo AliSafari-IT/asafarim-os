@@ -37,9 +37,10 @@ function stubGitHub() {
         tree: [...state.tree.map((p) => ({ path: p, type: "blob" })), { path: "dir", type: "tree" }],
       });
     }
-    const m = new RegExp(`^${API}/contents/(.+)\\?ref=main$`).exec(url);
-    if (m) {
-      const p = m[1]!.split("/").map(decodeURIComponent).join("/");
+    const prefix = `${API}/contents/`;
+    const suffix = "?ref=main";
+    if (url.startsWith(prefix) && url.endsWith(suffix) && url.length > prefix.length + suffix.length) {
+      const p = url.slice(prefix.length, -suffix.length).split("/").map(decodeURIComponent).join("/");
       return p in state.files ? new Response(state.files[p]) : new Response("{}", { status: 404 });
     }
     return new Response("{}", { status: 500 });
