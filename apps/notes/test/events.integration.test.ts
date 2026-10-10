@@ -37,6 +37,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type * as NotesDb from "../lib/db";
 import { RECORDER_ID, RECORDER_SQL, recorderManifest, startRecorder } from "./fixtures/note-recorder/recorder";
 
+/** The bus checks every client (P4.1 PR 4): the tests sign in as core-api's own `core` user (NATS_CORE_PASSWORD, from .dev/nats.env). */
+const NATS_AUTH = process.env.NATS_CORE_PASSWORD ? { user: "core", pass: process.env.NATS_CORE_PASSWORD } : {};
+const BUS_AUTH = process.env.NATS_CORE_PASSWORD
+  ? { auth: { user: "core", pass: () => process.env.NATS_CORE_PASSWORD! } }
+  : {};
+
 const ADMIN_URL = process.env.EVENTS_TEST_ADMIN_URL;
 const NATS_URL = process.env.EVENTS_TEST_NATS_URL;
 /** The bus-down test controls the dev stack's NATS container; nothing else is accepted. */
@@ -92,11 +98,16 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)(
       url.pathname = `/${dbName}`;
       process.env.DATABASE_URL = url.href;
       process.env.ASAFARIM_NATS_URL = NATS_URL;
+      if (process.env.NATS_CORE_PASSWORD) {
+        // The relay signs in with the dev `core` login: this test runs without core-api (no registry credential).
+        process.env.ASAFARIM_NATS_USER = "core";
+        process.env.ASAFARIM_NATS_PASSWORD = process.env.NATS_CORE_PASSWORD;
+      }
 
       // What core-api does when it installs notes.
-      streams = createStreamAdmin({ servers: NATS_URL! });
+      streams = createStreamAdmin({ servers: NATS_URL!, ...NATS_AUTH });
       await streams.ensureAppStream("notes");
-      nc = await connect({ servers: NATS_URL!, maxReconnectAttempts: -1 });
+      nc = await connect({ servers: NATS_URL!, ...NATS_AUTH, maxReconnectAttempts: -1 });
       jsm = await jetstreamManager(nc);
 
       // The recorder's own database, and a fresh durable consumer (the dev stream outlives runs).
@@ -169,6 +180,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)(
       const recorder = startRecorder({
         pool: recorderPool,
         servers: NATS_URL!,
+        ...BUS_AUTH,
         log: { info: () => undefined, warn: () => undefined },
       });
       try {

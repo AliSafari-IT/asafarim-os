@@ -62,3 +62,4 @@ export function signRequest(opts: SignOptions): Record<string, string> {
 }
 
 export * from "./access-token.ts";
+export * from "./nats-connect.ts";

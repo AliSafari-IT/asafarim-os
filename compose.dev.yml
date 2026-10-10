@@ -61,14 +61,21 @@ services:
 
   # P4.1: the event bus. NATS with JetStream, its file store on a dev volume. Apps publish through
   # their outbox relay; core-api creates each publishing app's stream (APP_<ID>) at install.
+  # P4.1 PR 4: it checks every client. nats.conf sends all connects but core-api's own to core-api's
+  # auth callout (an app signs in with its registry credential and gets only what its manifest
+  # allows); the two values it needs are in .dev/nats.env (`pnpm dev:keys`). The config DIRECTORY is
+  # mounted, not one file (the asafarim-platform #733 lesson).
   # 8222 is NATS's monitoring port, used only by the healthcheck inside the container.
   nats:
     image: nats:2-alpine
-    command: ["-js", "-sd", "/data", "-m", "8222"]
+    command: ["-c", "/etc/nats/nats.conf", "-js", "-sd", "/data", "-m", "8222"]
+    env_file:
+      - .dev/nats.env
     ports:
       - "127.0.0.1:54222:4222"
     volumes:
       - nats_data:/data
+      - ./scripts/dev/nats:/etc/nats:ro
     mem_limit: 256m
     cpus: 0.5
     healthcheck:

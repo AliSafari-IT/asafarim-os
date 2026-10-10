@@ -11,8 +11,11 @@
  *   .dev/gateway.env    where the dev gateway (Caddy, compose.dev.yml) finds each service
  *   .dev/admin.env      the Admin console's own settings (the seeded users it can search)
  *   .dev/app.env        shared by the apps under apps/* (core-api, identity, the bus)
+ *   .dev/nats.env       the bus's own settings (P4.1 PR 4): the auth callout issuer's PUBLIC key and core-api's
+ *                       bus password; the issuer's seed and the same login are in .dev/core-api.env
  */
 import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { createAccount } from "@nats-io/nkeys";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -102,6 +105,47 @@ function ensureCoreApiSettings(file) {
   return addMissingLines(file, [tokenKeyLine(), ...coreApiAdminLines()]);
 }
 
+/** Replace each `KEY=…` line the file has and append the ones it lacks. */
+export function upsertLines(file, wanted) {
+  let text = readFileSync(file, "utf8");
+  if (text && !text.endsWith("\n")) text += "\n";
+  for (const l of wanted) {
+    const key = l.split("=")[0];
+    const re = new RegExp(`^${key}=.*\\n`, "m");
+    text = re.test(text) ? text.replace(re, `${l}\n`) : `${text}${l}\n`;
+  }
+  writeFileSync(file, text);
+}
+
+/**
+ * P4.1 PR 4: the event bus checks every client. `.dev/nats.env` (read by the NATS container) holds the
+ * auth callout issuer's public key and core-api's bus password; core-api.env holds the same login and
+ * the issuer's SEED. Written together, so they always match; an older dev setup gains them on the next run.
+ */
+function ensureNatsKeys(force) {
+  const natsFile = path.join(DEV_DIR, "nats.env");
+  const apiFile = path.join(DEV_DIR, "core-api.env");
+  const apiHasSeed = existsSync(apiFile) && /^CORE_API_NATS_ISSUER_SEED=/m.test(readFileSync(apiFile, "utf8"));
+  if (!force && existsSync(natsFile) && apiHasSeed) return false;
+  const issuer = createAccount();
+  const password = secret();
+  writeFileSync(
+    natsFile,
+    [
+      "# The dev event bus (compose.dev.yml, scripts/dev/nats/nats.conf). Throwaway values, local only.",
+      line("NATS_AUTH_ISSUER", issuer.getPublicKey()),
+      line("NATS_CORE_PASSWORD", password),
+      "",
+    ].join("\n"),
+  );
+  upsertLines(apiFile, [
+    line("CORE_API_NATS_USER", "core"),
+    line("CORE_API_NATS_PASSWORD", password),
+    line("CORE_API_NATS_ISSUER_SEED", new TextDecoder().decode(issuer.getSeed())),
+  ]);
+  return true;
+}
+
 /** mkdir/writeFile modes don't change an EXISTING path: tighten .dev/ and every file in it. */
 export function lockDownDevDir() {
   chmodSync(DEV_DIR, 0o700);
@@ -111,6 +155,7 @@ export function lockDownDevDir() {
 export function ensureDevKeys({ force = false, log = console.log } = {}) {
   mkdirSync(DEV_DIR, { recursive: true, mode: 0o700 });
   const coreApi = ensureCoreApiEnv(force) || ensureCoreApiSettings(path.join(DEV_DIR, "core-api.env"));
+  ensureNatsKeys(force);
   try {
     return ensureDevKeysInner({ force, log, coreApi });
   } finally {

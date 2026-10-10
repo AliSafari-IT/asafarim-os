@@ -2,7 +2,7 @@
 
 ASafariM OS events (P4.1, ADR 0001 §5). Apps integrate through **events**, not direct calls: an app publishes a fact (`notes.note.created.v1`), and an app that declared it subscribes. Neither knows the other.
 
-This package has both halves. Publishing: the envelope, payload validation, the transactional **outbox**, its **relay** to NATS JetStream, and the per-app **stream** bootstrap core-api runs at install. Subscribing: **durable consumers** (created by core-api), the **inbox** that makes a handler run once per event, and **dead letters**. Bus-enforced permissions (per-app NATS credentials) come in a later slice. Apps use it through `@asafarim/app-sdk/events`, which re-exports it.
+This package has both halves. Publishing: the envelope, payload validation, the transactional **outbox**, its **relay** to NATS JetStream, and the per-app **stream** bootstrap core-api runs at install. Subscribing: **durable consumers** (created by core-api), the **inbox** that makes a handler run once per event, and **dead letters**. Bus-enforced permissions: every client signs in to the bus with an `auth` option (`{ user, pass: () => string }`, a fresh password per connect); core-api checks it and grants only what the app's manifest declares (see core-api's README). Apps use it through `@asafarim/app-sdk/events`, which re-exports it.
 
 ## Publish
 
@@ -35,7 +35,7 @@ CloudEvents 1.0, structured JSON mode: `specversion`, `id` (a ULID), `source` (`
 
 ## The relay
 
-`startRelay({ appId, pool, servers })` (or `startAppRelay` in the SDK, which reads `ASAFARIM_NATS_URL`) runs in the app's process:
+`startRelay({ appId, pool, servers, auth })` (`auth`: how it signs in to a bus that checks identities; or `startAppRelay` in the SDK, which reads `ASAFARIM_NATS_URL`) runs in the app's process:
 
 - publishes pending rows **oldest first** to the subject = the event type, with **`Nats-Msg-Id` = the event id**, so JetStream drops a re-send inside its duplicate window (10 minutes);
 - marks a row sent only after the PubAck (a duplicate ack counts), keeps `attempts` and `last_error`, and **never deletes an unsent row**;
@@ -88,4 +88,4 @@ The inbox ships like the outbox, three ways, and a test keeps them equal:
 pnpm --filter @asafarim/events test
 ```
 
-The integration suites (`test/relay.integration.test.ts`, `test/consumer.integration.test.ts`) needs a dev Postgres and the dev NATS: `EVENTS_TEST_ADMIN_URL=postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres` and `EVENTS_TEST_NATS_URL=nats://127.0.0.1:54222` (both from `pnpm dev`). It uses a throwaway database and stream and removes them. CI's `dev-env` job runs it with `EVENTS_TEST_REQUIRED=1`, so it fails rather than skips.
+The integration suites (`test/relay.integration.test.ts`, `test/consumer.integration.test.ts`) needs a dev Postgres and the dev NATS: `EVENTS_TEST_ADMIN_URL=postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres` and `EVENTS_TEST_NATS_URL=nats://127.0.0.1:54222` (both from `pnpm dev`), plus `NATS_CORE_PASSWORD` from `.dev/nats.env` (the dev bus refuses anonymous clients; the tests sign in as `core`). It uses a throwaway database and stream and removes them. CI's `dev-env` job runs it with `EVENTS_TEST_REQUIRED=1`, so it fails rather than skips.

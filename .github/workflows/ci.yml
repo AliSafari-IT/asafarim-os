@@ -126,6 +126,19 @@ jobs:
       - name: Dev environment smoke test
         run: pnpm dev:smoke
 
+      # P4.1 PR 4: the dev bus checks every client. The integration tests sign in as core-api's own
+      # `core` user and, for the identity tests, sign JWTs with the callout issuer key: both are the
+      # throwaway values `pnpm dev:keys` just generated in .dev/ (masked in the log anyway).
+      - name: Dev bus credentials for the tests
+        run: |
+          for pair in "NATS_CORE_PASSWORD:.dev/nats.env" "CORE_API_NATS_ISSUER_SEED:.dev/core-api.env"; do
+            key="${pair%%:*}"; file="${pair#*:}"
+            value="$(grep "^${key}=" "$file" | cut -d= -f2-)"
+            test -n "$value"
+            echo "::add-mask::$value"
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+          done
+
       # core-api (P3.1) against the dev Postgres and NATS the smoke test left running.
       - name: core-api integration tests
         env:

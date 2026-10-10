@@ -14,6 +14,7 @@
  */
 import { jetstream, type JetStreamClient } from "@nats-io/jetstream";
 import type { NatsConnection } from "@nats-io/nats-core";
+import { busConnectOptions, type BusAuth } from "./bus-auth.ts";
 import { connect } from "@nats-io/transport-node";
 import { OUTBOX_TABLE } from "./outbox-sql.ts";
 
@@ -42,6 +43,11 @@ export interface RelayOptions {
   pool: RelayPool | (() => Promise<RelayPool>);
   /** NATS server URL(s); the relay connects (and reconnects) itself. */
   servers?: string | string[];
+  /**
+   * How the relay signs in to a bus that checks identities (P4.1 PR 4): the user and a function that
+   * returns a fresh password for EVERY connect and reconnect (a signed, single-use assertion).
+   */
+  auth?: BusAuth;
   /** Or hand it a JetStream client (tests); the relay then never closes it. */
   jetstream?: () => Promise<JetStreamClient>;
   /** Rows per batch (default 100). */
@@ -91,6 +97,7 @@ export function startRelay(opts: RelayOptions): Relay {
     if (opts.jetstream) return opts.jetstream();
     nc ??= connect({
       servers: opts.servers!,
+      ...(opts.auth ? busConnectOptions(opts.auth) : {}),
       name: `${opts.appId}-outbox-relay`,
       timeout: 3000,
       maxReconnectAttempts: -1, // once connected, keep trying for ever

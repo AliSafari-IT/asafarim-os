@@ -225,6 +225,9 @@ export interface StreamAdmin {
 
 export function createStreamAdmin(opts: {
   servers: string | string[];
+  /** core-api's own bus credentials (the bus checks every client; this one is the privileged one). */
+  user?: string;
+  pass?: string;
   name?: string;
   timeoutMs?: number;
   /** Options for the durable consumers it creates. */
@@ -234,6 +237,7 @@ export function createStreamAdmin(opts: {
   const open = () => {
     conn ??= connect({
       servers: opts.servers,
+      ...(opts.user ? { user: opts.user, pass: opts.pass } : {}),
       name: opts.name ?? "core-api",
       timeout: opts.timeoutMs ?? 3000,
       maxReconnectAttempts: -1,

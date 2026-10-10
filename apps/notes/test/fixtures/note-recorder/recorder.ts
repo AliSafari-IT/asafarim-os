@@ -6,7 +6,7 @@
  * Like a real consuming app it has its own database (the inbox and its `received` table), and its
  * durable consumer is created by core-api (here: by the test, the way core-api does it).
  */
-import { INBOX_SQL, subscribe, type RelayLogger, type Subscription } from "@asafarim/app-sdk/events";
+import { INBOX_SQL, subscribe, type BusAuth, type RelayLogger, type Subscription } from "@asafarim/app-sdk/events";
 import type pg from "pg";
 
 export const RECORDER_ID = "note-recorder";
@@ -47,7 +47,13 @@ export interface Recorder {
 }
 
 /** Start consuming; the handler writes the envelope to `received` in the inbox's transaction. */
-export function startRecorder(opts: { pool: pg.Pool; servers: string; log?: RelayLogger }): Recorder {
+export function startRecorder(opts: {
+  pool: pg.Pool;
+  servers: string;
+  /** The recorder's identity on a bus that checks identities (P4.1 PR 4). */
+  auth?: BusAuth;
+  log?: RelayLogger;
+}): Recorder {
   let calls = 0;
   const subscription = subscribe(
     NOTE_CREATED,
@@ -55,7 +61,7 @@ export function startRecorder(opts: { pool: pg.Pool; servers: string; log?: Rela
       calls++;
       await tx.query("INSERT INTO received (event_id, envelope) VALUES ($1, $2)", [event.id, JSON.stringify(event)]);
     },
-    { appId: RECORDER_ID, pool: opts.pool, servers: opts.servers, log: opts.log },
+    { appId: RECORDER_ID, pool: opts.pool, servers: opts.servers, auth: opts.auth, log: opts.log },
   );
   return {
     subscription,

@@ -33,6 +33,12 @@ import { appDatabaseNames } from "../src/provision.ts";
 import { createRegistry, type RegistryDeps } from "../src/registry.ts";
 import { createHandler } from "../src/server.ts";
 
+/** The bus checks every client (P4.1 PR 4): the tests sign in as core-api's own `core` user (NATS_CORE_PASSWORD, from .dev/nats.env). */
+const NATS_AUTH = process.env.NATS_CORE_PASSWORD ? { user: "core", pass: process.env.NATS_CORE_PASSWORD } : {};
+const BUS_AUTH = process.env.NATS_CORE_PASSWORD
+  ? { auth: { user: "core", pass: () => process.env.NATS_CORE_PASSWORD! } }
+  : {};
+
 const ADMIN_URL = process.env.CORE_API_TEST_ADMIN_URL;
 const NATS_URL = process.env.CORE_API_TEST_NATS_URL;
 if (process.env.CORE_API_TEST_REQUIRED && (!ADMIN_URL || !NATS_URL)) {
@@ -185,7 +191,7 @@ describe.skipIf(!ADMIN_URL)(
       await subPool?.end();
       for (const s of servers) s.close();
       if (NATS_URL) {
-        const nc = await connect({ servers: NATS_URL });
+        const nc = await connect({ servers: NATS_URL, ...NATS_AUTH });
         const jsm = await jetstreamManager(nc);
         for (const id of [PUB, UPPUB, EARLYPUB]) await jsm.streams.delete(streamName(id)).catch(() => undefined); // consumers go with them
         await nc.close();
@@ -218,12 +224,12 @@ describe.skipIf(!ADMIN_URL)(
     it.skipIf(!NATS_URL)(
       "creates APP_<ID> on <id>.> in JetStream and records it in the install's audit event",
       async () => {
-        busAdmin = createStreamAdmin({ servers: NATS_URL! });
+        busAdmin = createStreamAdmin({ servers: NATS_URL!, ...NATS_AUTH });
         const base = await coreApi(busAdmin);
         const res = await install(base, PUB);
         expect(res.status).toBe(201);
 
-        const nc = await connect({ servers: NATS_URL! });
+        const nc = await connect({ servers: NATS_URL!, ...NATS_AUTH });
         try {
           const info = await (await jetstreamManager(nc)).streams.info(streamName(PUB));
           expect(info.config.name).toBe(`APP_${PUB.toUpperCase()}`);
@@ -276,12 +282,12 @@ describe.skipIf(!ADMIN_URL)(
     it.skipIf(!NATS_URL)(
       "install of a subscriber: a durable consumer <app>.<type> on the publisher's stream; none for a type without a stream",
       async () => {
-        busAdmin ??= createStreamAdmin({ servers: NATS_URL! });
+        busAdmin ??= createStreamAdmin({ servers: NATS_URL!, ...NATS_AUTH });
         const base = await coreApi(busAdmin);
         expect((await install(base, SUB, false, [PUB_TYPE])).status).toBe(201); // PUB's stream exists (test 1)
         expect((await install(base, ORPHAN, false, [`nobody${run}.thing.created.v1`])).status).toBe(201);
 
-        const nc = await connect({ servers: NATS_URL! });
+        const nc = await connect({ servers: NATS_URL!, ...NATS_AUTH });
         try {
           const jsm = await jetstreamManager(nc);
           const info = await jsm.consumers.info(streamName(PUB), consumerName(SUB, PUB_TYPE));
@@ -300,12 +306,12 @@ describe.skipIf(!ADMIN_URL)(
     it.skipIf(!NATS_URL)(
       "upgrade: an installed app whose re-registered manifest gains events.publishes gets its stream (idempotent on the next boot)",
       async () => {
-        busAdmin ??= createStreamAdmin({ servers: NATS_URL! });
+        busAdmin ??= createStreamAdmin({ servers: NATS_URL!, ...NATS_AUTH });
         const base = await coreApi(busAdmin);
         const res = await install(base, UPPUB, false);
         expect(res.status).toBe(201);
         const { credential } = (await res.json()) as { credential: string };
-        const nc = await connect({ servers: NATS_URL! });
+        const nc = await connect({ servers: NATS_URL!, ...NATS_AUTH });
         try {
           const jsm = await jetstreamManager(nc);
           await expect(jsm.streams.info(streamName(UPPUB))).rejects.toThrow(/stream not found/i);
@@ -328,11 +334,11 @@ describe.skipIf(!ADMIN_URL)(
     it.skipIf(!NATS_URL)(
       "upgrade: an installed app whose re-registered manifest gains events.subscribes gets its durable consumer",
       async () => {
-        busAdmin ??= createStreamAdmin({ servers: NATS_URL! });
+        busAdmin ??= createStreamAdmin({ servers: NATS_URL!, ...NATS_AUTH });
         const base = await coreApi(busAdmin);
         const res = await install(base, UPSUB, false);
         const { credential } = (await res.json()) as { credential: string };
-        const nc = await connect({ servers: NATS_URL! });
+        const nc = await connect({ servers: NATS_URL!, ...NATS_AUTH });
         try {
           const jsm = await jetstreamManager(nc);
           await expect(jsm.consumers.info(streamName(PUB), consumerName(UPSUB, PUB_TYPE))).rejects.toThrow(
@@ -414,6 +420,7 @@ describe.skipIf(!ADMIN_URL)(
           appId: app,
           pool: subPool,
           servers: NATS_URL!,
+          ...BUS_AUTH,
           backoff: { initialMs: 50, maxMs: 200 },
           log: { info: () => undefined, warn: () => undefined },
         },
@@ -424,7 +431,7 @@ describe.skipIf(!ADMIN_URL)(
 
     /** Publish one event of `type` the way the publisher's relay does. */
     async function publishOne(publisher: string, type: string) {
-      const nc = await connect({ servers: NATS_URL! });
+      const nc = await connect({ servers: NATS_URL!, ...NATS_AUTH });
       try {
         const event = createEvent({ source: publisher, type, data: { n: 1 }, subject: "thing-1" });
         await jetstream(nc).publish(type, new TextEncoder().encode(JSON.stringify(event)), { msgID: event.id });
@@ -437,7 +444,7 @@ describe.skipIf(!ADMIN_URL)(
     it.skipIf(!NATS_URL)(
       "any install order: subscriber first → waiting_for_publisher (and an Admin warning); publisher installed → the subscriber's consumer exists; one event → its handler runs exactly once",
       async () => {
-        busAdmin ??= createStreamAdmin({ servers: NATS_URL! });
+        busAdmin ??= createStreamAdmin({ servers: NATS_URL!, ...NATS_AUTH });
         const base = await coreApi(busAdmin);
         const TYPE = typeOf(EARLYPUB);
 
@@ -464,7 +471,7 @@ describe.skipIf(!ADMIN_URL)(
         expect(audit.rows).toEqual([{ d: { [EARLYSUB]: { [TYPE]: "created" } } }]);
         expect(await waitingInAdmin(base, EARLYSUB)).toEqual([]);
 
-        const nc = await connect({ servers: NATS_URL! });
+        const nc = await connect({ servers: NATS_URL!, ...NATS_AUTH });
         try {
           const info = await (
             await jetstreamManager(nc)
@@ -486,7 +493,7 @@ describe.skipIf(!ADMIN_URL)(
     it.skipIf(!NATS_URL)(
       "upgrade that drops a subscription: its consumer is deleted, the remaining one still delivers",
       async () => {
-        busAdmin ??= createStreamAdmin({ servers: NATS_URL! });
+        busAdmin ??= createStreamAdmin({ servers: NATS_URL!, ...NATS_AUTH });
         const base = await coreApi(busAdmin);
         const KEEP = PUB_TYPE; // PUB's stream: test 1
         const DROP = typeOf(EARLYPUB); // EARLYPUB's stream: the install-order test
@@ -495,7 +502,7 @@ describe.skipIf(!ADMIN_URL)(
         const { credential } = await json<{ credential: string }>(res);
         expect((await register(base, DROPSUB, credential, manifest(DROPSUB, false, [KEEP, DROP]))).status).toBe(200);
 
-        const nc = await connect({ servers: NATS_URL! });
+        const nc = await connect({ servers: NATS_URL!, ...NATS_AUTH });
         try {
           const jsm = await jetstreamManager(nc);
           await jsm.consumers.info(streamName(EARLYPUB), consumerName(DROPSUB, DROP)); // exists

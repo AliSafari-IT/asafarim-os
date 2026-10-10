@@ -22,6 +22,12 @@ import {
   type RelayLogger,
 } from "../src/index.ts";
 
+/** The bus checks every client (P4.1 PR 4): the tests sign in as core-api's own `core` user (NATS_CORE_PASSWORD, from .dev/nats.env). */
+const NATS_AUTH = process.env.NATS_CORE_PASSWORD ? { user: "core", pass: process.env.NATS_CORE_PASSWORD } : {};
+const BUS_AUTH = process.env.NATS_CORE_PASSWORD
+  ? { auth: { user: "core", pass: () => process.env.NATS_CORE_PASSWORD! } }
+  : {};
+
 const ADMIN_URL = process.env.EVENTS_TEST_ADMIN_URL;
 const NATS_URL = process.env.EVENTS_TEST_NATS_URL;
 if (process.env.EVENTS_TEST_REQUIRED && (!ADMIN_URL || !NATS_URL)) {
@@ -96,7 +102,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("outbox + relay (integration: Postgres 
     pool.on("error", () => undefined);
     await pool.query(OUTBOX_SQL);
     await pool.query(OUTBOX_SQL); // idempotent
-    nc = await connect({ servers: NATS_URL! });
+    nc = await connect({ servers: NATS_URL!, ...NATS_AUTH });
     jsm = await jetstreamManager(nc);
   });
 
@@ -114,6 +120,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("outbox + relay (integration: Postgres 
       appId: APP,
       pool,
       servers: NATS_URL,
+      ...BUS_AUTH,
       autoStart: false,
       publishTimeoutMs: 500,
       log: quiet,
@@ -132,7 +139,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("outbox + relay (integration: Postgres 
     expect(info.config.subjects).toEqual([`${APP}.>`]);
     expect(info.config.storage).toBe("file");
 
-    const relay = startRelay({ appId: APP, pool, servers: NATS_URL, autoStart: false, log: quiet });
+    const relay = startRelay({ appId: APP, pool, servers: NATS_URL, ...BUS_AUTH, autoStart: false, log: quiet });
     expect(await relay.drain()).toBe(1);
     await relay.stop();
     expect(await pending()).toBe(0);
@@ -142,7 +149,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("outbox + relay (integration: Postgres 
   it("a committed publish reaches the stream exactly once, with the envelope as written and Nats-Msg-Id = event id", async () => {
     const from = (await lastSeq()) + 1;
     const [e] = await publishInTx([1]);
-    const relay = startRelay({ appId: APP, pool, servers: NATS_URL, pollMs: 50, log: quiet });
+    const relay = startRelay({ appId: APP, pool, servers: NATS_URL, ...BUS_AUTH, pollMs: 50, log: quiet });
     await expect.poll(pending, { timeout: 10_000 }).toBe(0);
     await relay.stop();
     const msgs = await streamMessages(from);
@@ -161,7 +168,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("outbox + relay (integration: Postgres 
   it("a rolled-back transaction leaves no outbox row and publishes nothing", async () => {
     const from = (await lastSeq()) + 1;
     await publishInTx([99], { rollback: true });
-    const relay = startRelay({ appId: APP, pool, servers: NATS_URL, autoStart: false, log: quiet });
+    const relay = startRelay({ appId: APP, pool, servers: NATS_URL, ...BUS_AUTH, autoStart: false, log: quiet });
     expect(await relay.drain()).toBe(0);
     await relay.stop();
     expect(await streamMessages(from)).toEqual([]);
@@ -170,7 +177,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("outbox + relay (integration: Postgres 
   it("re-running the relay over rows already published adds nothing: JetStream drops them by Nats-Msg-Id", async () => {
     const from = (await lastSeq()) + 1;
     const events = await publishInTx([2, 3, 4]);
-    const relay = startRelay({ appId: APP, pool, servers: NATS_URL, autoStart: false, log: quiet });
+    const relay = startRelay({ appId: APP, pool, servers: NATS_URL, ...BUS_AUTH, autoStart: false, log: quiet });
     expect(await relay.drain()).toBe(3);
     // A crash after the PubAcks but before the rows were marked: they are pending again.
     await pool.query("UPDATE asafarim_outbox SET sent_at = NULL WHERE id = ANY($1)", [events.map((e) => e.id)]);
@@ -186,7 +193,15 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("outbox + relay (integration: Postgres 
     const from = (await lastSeq()) + 1;
     const before = Number((await pool.query("SELECT count(*) AS n FROM asafarim_outbox")).rows[0].n);
     const events = await publishInTx([10, 11, 12, 13, 14]);
-    const relay = startRelay({ appId: APP, pool, servers: NATS_URL, autoStart: false, batchSize: 2, log: quiet });
+    const relay = startRelay({
+      appId: APP,
+      pool,
+      servers: NATS_URL,
+      ...BUS_AUTH,
+      autoStart: false,
+      batchSize: 2,
+      log: quiet,
+    });
     expect(await relay.drain()).toBe(5);
     await relay.stop();
     expect((await streamMessages(from)).map((m) => m.event.id)).toEqual(events.map((e) => e.id));

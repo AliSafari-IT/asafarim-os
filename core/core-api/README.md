@@ -12,20 +12,23 @@ Node 24 (runs the TypeScript directly), Postgres (its own `core` database), no f
 node --env-file=../../.dev/core-api.env src/server.ts
 ```
 
-| Env                                 | What                                                                                                            |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `CORE_API_DATABASE_URL`             | the `core` database as its owner role `core_api`; migrations in `migrations/` run at start                      |
-| `CORE_API_PROVISIONER_URL`          | a role that may `CREATE ROLE` / `CREATE DATABASE`; used only to install apps                                    |
-| `CORE_API_ADMIN_TOKEN`              | ≥ 32 characters: the **CLI's** bearer token (bootstrap, CI). Optional once switched off (below)                 |
-| `CORE_API_ADMIN_TOKEN_DISABLED`     | `true` switches that token off; people with `core.admin` can still use the admin API                            |
-| `CORE_API_IDENTITY_ISSUER`          | e.g. `https://id.asafarim.site`: how core-api verifies the Admin console's people. Required if the token is off |
-| `CORE_API_ADMIN_CLIENT_ID`          | the console's OIDC client id; ID tokens for any other client are refused (default `core-admin`)                 |
-| `CORE_API_TOKEN_SIGNING_JWK`        | an Ed25519 private JWK with a `kid`: signs the access tokens (P3.3a)                                            |
-| `CORE_API_ACCESS_TOKEN_TTL_SECONDS` | 5 to 300, default 60: the access token's lifetime                                                               |
-| `CORE_API_APP_URL_TEMPLATE`         | where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset → `https://<its primary domain>` |
-| `PORT`                              | default `4020`                                                                                                  |
-| `CORE_API_APP_DB_HOST` / `_PORT`    | host and port put into an installed app's `DATABASE_URL` (default: the provisioner's)                           |
-| `CORE_API_NATS_URL`                 | the event bus (P4.1): streams for publishers, durable consumers for subscribers, `DEADLETTER`. Unset = none     |
+| Env                                 | What                                                                                                                |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `CORE_API_DATABASE_URL`             | the `core` database as its owner role `core_api`; migrations in `migrations/` run at start                          |
+| `CORE_API_PROVISIONER_URL`          | a role that may `CREATE ROLE` / `CREATE DATABASE`; used only to install apps                                        |
+| `CORE_API_ADMIN_TOKEN`              | ≥ 32 characters: the **CLI's** bearer token (bootstrap, CI). Optional once switched off (below)                     |
+| `CORE_API_ADMIN_TOKEN_DISABLED`     | `true` switches that token off; people with `core.admin` can still use the admin API                                |
+| `CORE_API_IDENTITY_ISSUER`          | e.g. `https://id.asafarim.site`: how core-api verifies the Admin console's people. Required if the token is off     |
+| `CORE_API_ADMIN_CLIENT_ID`          | the console's OIDC client id; ID tokens for any other client are refused (default `core-admin`)                     |
+| `CORE_API_TOKEN_SIGNING_JWK`        | an Ed25519 private JWK with a `kid`: signs the access tokens (P3.3a)                                                |
+| `CORE_API_ACCESS_TOKEN_TTL_SECONDS` | 5 to 300, default 60: the access token's lifetime                                                                   |
+| `CORE_API_APP_URL_TEMPLATE`         | where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset → `https://<its primary domain>`     |
+| `PORT`                              | default `4020`                                                                                                      |
+| `CORE_API_APP_DB_HOST` / `_PORT`    | host and port put into an installed app's `DATABASE_URL` (default: the provisioner's)                               |
+| `CORE_API_NATS_URL`                 | the event bus (P4.1): streams for publishers, durable consumers for subscribers, `DEADLETTER`. Unset = none         |
+| `CORE_API_NATS_USER` / `_PASSWORD`  | core-api's own (privileged) login on the bus: stream and consumer admin, and the callout responder. Both or neither |
+| `CORE_API_NATS_ISSUER_SEED`         | the auth callout's issuer key (an account nkey seed, `SA…`). Set = core-api answers the bus's auth callout (below)  |
+| `CORE_API_NATS_ACCOUNT`             | the NATS account apps are put in; default `OS`                                                                      |
 
 ## Install (admin)
 
@@ -96,6 +99,7 @@ POST
 - **Event subscriptions** are replaced with what the manifest declares.
 - **Events (P4.1), an upgrade:** before anything is written, the same idempotent steps as install: the app's stream if it now declares `events.publishes`, a durable consumer for every subscribed type whose publisher's stream exists (`waiting_for_publisher` otherwise), and the consumers of installed subscribers of what it now publishes. A subscription the new manifest **drops** has its durable consumer **deleted** (`removedConsumers`; one that is already gone is `absent`, not an error), then `event_subscriptions` is rewritten. A bus failure answers `503 bus_unavailable` and nothing changes (the app registers again on its next try); without a bus it's recorded as `no_bus`. The response carries the same `events` outcome as install.
 - Writes an audit event with the full `events` outcome (`stream`, `consumers`, `removedConsumers`, `dependentConsumers`, `warnings`).
+- **Per-app bus identities (P4.1 PR 4, ADR 0001 §5).** With `CORE_API_NATS_ISSUER_SEED`, core-api serves the NATS **auth callout**: the dev/CI NATS (`scripts/dev/nats/nats.conf`) sends every connect except core-api's own to `$SYS.REQ.USER.AUTH`, and core-api answers from the registry. An app connects with `user = <appId>` and `pass = v1.<keyId>.<unix-ts>.<nonce>.<sig>`, an Ed25519 signature (the app's registry credential, `@asafarim/registry-protocol`) over `nats-connect\n<appId>\n<ts>\n<nonce>`. core-api checks that the app isn't removed, the key belongs to it and isn't revoked, the signature verifies, the timestamp is within ±60 s and the nonce is new (the same single-use store as registration). The user JWT it returns is built from the app's **current manifest** (`natsPermissions`, `src/nats-auth.ts`): publish `<id>.>` only if it declares `events.publishes`; for each subscribed type only its own durable on the publisher's stream (`$JS.API.CONSUMER.INFO` / `MSG.NEXT` and `$JS.ACK.….>`) plus `deadletter.<id>.>`; subscribe only to its **own inbox** `_INBOX_<id>.>` (the app connects with `inboxPrefix: "_INBOX_<id>"`, so pull replies and publish acks arrive there; a shared `_INBOX.>` would let one app read what another pulls); everything else (stream and consumer create/delete, other apps' subjects) is denied. An app with no events gets deny-all publishing (an empty NATS allow list would mean "everything"). Anonymous connects are refused. **Known limitation:** revoking or rotating a credential, and an upgrade that changes the manifest, affect **new connects only**; a live connection keeps its permissions until it reconnects. If core-api is down, app connects fail with an authorization error and the app's relay keeps its events in the outbox and retries. Local and CI only: no production NATS, TLS or operator mode yet.
 - The event steps run under one lock shared by every install and registration. If another one holds it for longer than `plumbingLockTimeoutMs` (default 10 s), the request answers `503 registry_busy` and nothing changes; the app registers again on its next try.
 
 **It can't grant anything.** It never writes `role_grants` (who holds a role) and never changes the app's state.
@@ -281,4 +285,4 @@ Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"
 pnpm --filter @asafarim/core-api test
 ```
 
-The integration suite runs only with `CORE_API_TEST_ADMIN_URL`, a superuser URL on a **dev** Postgres such as `postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres` from `pnpm dev`. It creates a throwaway core database and uniquely named app databases, and drops them all afterwards. The stream and consumer tests (`test/events.integration.test.ts`) also need `CORE_API_TEST_NATS_URL` (`nats://127.0.0.1:54222` from `pnpm dev`). CI's `dev-env` job runs them with `CORE_API_TEST_REQUIRED=1`, so they fail rather than skip.
+The integration suite runs only with `CORE_API_TEST_ADMIN_URL`, a superuser URL on a **dev** Postgres such as `postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres` from `pnpm dev`. It creates a throwaway core database and uniquely named app databases, and drops them all afterwards. The stream and consumer tests (`test/events.integration.test.ts`) also need `CORE_API_TEST_NATS_URL` (`nats://127.0.0.1:54222` from `pnpm dev`) and `NATS_CORE_PASSWORD` (from `.dev/nats.env`; the bus refuses anonymous clients). The bus identity tests (`test/nats-auth.integration.test.ts`) additionally need `CORE_API_NATS_ISSUER_SEED` (from `.dev/core-api.env`). CI's `dev-env` job runs them with `CORE_API_TEST_REQUIRED=1`, so they fail rather than skip.
