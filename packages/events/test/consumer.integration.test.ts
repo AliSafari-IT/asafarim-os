@@ -25,6 +25,7 @@ import {
   createEvent,
   createStreamAdmin,
   deadLetterSubject,
+  deleteAppStream,
   deleteConsumer,
   ensureAppStream,
   ensureConsumer,
@@ -155,6 +156,22 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("subscribe: inbox, ack after commit, de
     expect(await busAdmin.deleteConsumer(app, TYPE)).toEqual({ consumer: consumerName(app, TYPE), result: "deleted" });
     await expect(jsm.consumers.info(streamName(PUB), consumerName(app, TYPE))).rejects.toThrow(/consumer not found/i);
     expect(await deleteConsumer(jsm, app, TYPE)).toBe("absent"); // idempotent
+  }, 30_000);
+
+  it("core-api's deleteAppStream (a removed app): the stream, its messages and its consumers go; then absent", async () => {
+    const app = `rm${run}`;
+    const type = `${app}.thing.created.v1`;
+    expect(await deleteAppStream(jsm, app)).toBe("absent"); // never created
+    expect(await ensureAppStream(jsm, app)).toBe("created");
+    expect(await ensureConsumer(jsm, `rmsub${run}`, type)).toBe("created");
+    await js.publish(type, encoder.encode("{}"));
+    expect(await busAdmin.deleteAppStream(app)).toEqual({ stream: streamName(app), result: "deleted" });
+    await expect(jsm.streams.info(streamName(app))).rejects.toThrow(/stream not found/i);
+    expect(await deleteAppStream(jsm, app)).toBe("absent"); // idempotent
+    // A reinstall starts from an empty stream.
+    expect(await ensureAppStream(jsm, app)).toBe("created");
+    expect((await jsm.streams.info(streamName(app))).state.messages).toBe(0);
+    await jsm.streams.delete(streamName(app));
   }, 30_000);
 
   it("ensureConsumer brings a drifted consumer back in line: a removed backoff is cleared, a finite max_deliver goes back to -1", async () => {
