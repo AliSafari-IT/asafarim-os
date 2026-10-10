@@ -58,6 +58,31 @@ describe("the console's core-api client", () => {
     expect(lastCall(fn).url).toBe("http://core.test/admin/v1/roles");
   });
 
+  it("reads the event catalog from GET /admin/v1/events", async () => {
+    process.env.CORE_API_URL = "http://core.test";
+    const entry = {
+      type: "notes.note.created.v1",
+      publisher: { appId: "notes", version: "0.1.0", state: "active" },
+      schema: { type: "object" },
+      schemaStatus: "provided",
+      schemaUpdatedAt: "2026-10-10T10:00:00.000Z",
+      schemaAppVersion: "0.1.0",
+      subscribers: [],
+    };
+    const fn = stub(200, { events: [entry] });
+    expect(await coreApi("t").events()).toEqual([entry]);
+    expect(lastCall(fn)).toMatchObject({ url: "http://core.test/admin/v1/events", init: { method: "GET" } });
+  });
+
+  it("maps an events refusal like the other calls", async () => {
+    stub(401, { error: "unauthorized", message: "the identity token has expired" });
+    const err = await coreApi("t")
+      .events()
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(CoreApiError);
+    expect(err).toMatchObject({ status: 401, code: "unauthorized", message: "the identity token has expired" });
+  });
+
   it("turns a refusal into a CoreApiError that carries core-api's status, code and message", async () => {
     stub(403, { error: "forbidden", message: "needs the role core.admin" });
     const err = await coreApi("t")

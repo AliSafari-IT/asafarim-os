@@ -202,6 +202,23 @@ code,
   margin: 4px 0 0;
   padding-left: 18px;
 }
+.subscribers {
+  margin: 0;
+  padding-left: 18px;
+}
+.schema summary {
+  cursor: pointer;
+}
+.schema pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 24rem;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
 .badge.deprecated {
   color: var(--warn);
   border-color: var(--warn);
