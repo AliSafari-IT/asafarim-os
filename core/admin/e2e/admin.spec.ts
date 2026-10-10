@@ -120,7 +120,7 @@ test("signed out, /admin sends you to sign in; a signed-in non-admin gets a 403"
   await expect(page.getByRole("navigation", { name: "Admin" })).toHaveCount(0);
   await page.screenshot({ path: `${SHOTS}/a1-non-admin-403.png` });
   // The admin pages answer 403 for every section, not just the first.
-  for (const path of ["/admin", "/admin/roles", "/admin/audit"]) {
+  for (const path of ["/admin", "/admin/roles", "/admin/events", "/admin/audit"]) {
     expect((await page.goto(`${ADMIN}${path}`))?.status(), path).toBe(403);
   }
   await page.close();
@@ -144,6 +144,50 @@ test("the admin signs in and activates notes through a styled dialog", async () 
   await expect(page.getByTestId("flash-notice")).toContainText("notes is active");
   await expect(page.getByTestId("state-notes")).toHaveText("active");
   await page.screenshot({ path: `${SHOTS}/a4-apps-after-activate.png` });
+  await page.close();
+});
+
+test("the Events page lists notes' published type with its schema", async () => {
+  const page = await adminCtx.newPage();
+  const row = page.getByTestId("event-notes.note.created.v1");
+  // notes uploads its schema when it registers; wait for it rather than racing it.
+  await expect
+    .poll(
+      async () => (
+        await page.goto(`${ADMIN}/admin/events`),
+        await page
+          .getByTestId("schema-status-notes.note.created.v1")
+          .textContent()
+          .catch(() => "")
+      ),
+      { timeout: 20_000 },
+    )
+    .toBe("Schema provided");
+  await expect(page.getByRole("heading", { level: 2, name: "Events" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Admin" }).getByRole("link", { name: "Events" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByTestId("publisher-notes.note.created.v1")).toContainText("notes · v");
+
+  // The schema is collapsed, opens on click, and is plain pretty-printed JSON text.
+  const schema = page.getByTestId("schema-notes.note.created.v1");
+  await expect(schema.locator("pre")).toBeHidden();
+  await schema.locator("summary").click();
+  await expect(schema.locator("pre")).toBeVisible();
+  expect(JSON.parse((await schema.locator("pre").textContent()) ?? "")).toMatchObject({
+    type: "object",
+    required: expect.arrayContaining(["id", "title"]),
+  });
+  await page.screenshot({ path: `${SHOTS}/a4b-events.png` });
+
+  // ?app= keeps the types an app publishes or subscribes to; an invalid value is ignored.
+  await page.goto(`${ADMIN}/admin/events?app=notes`);
+  await expect(row).toBeVisible();
+  await page.goto(`${ADMIN}/admin/events?app=core`);
+  await expect(row).toHaveCount(0);
+  await page.goto(`${ADMIN}/admin/events?app=${encodeURIComponent("<bad id>")}`);
+  await expect(row).toBeVisible();
   await page.close();
 });
 
@@ -329,7 +373,7 @@ test("the console works from the keyboard and has labels, landmarks and captions
   await expect(trigger).toBeFocused();
 
   // Every form control has an accessible name, on every page that has any.
-  for (const path of ["/admin/apps", "/admin/roles?app=notes", "/admin/audit"]) {
+  for (const path of ["/admin/apps", "/admin/roles?app=notes", "/admin/events", "/admin/audit"]) {
     await page.goto(`${ADMIN}${path}`);
     const unnamed = await page.evaluate(() =>
       Array.from(document.querySelectorAll("input:not([type=hidden]), select, textarea, button"))
@@ -356,7 +400,7 @@ for (const scheme of ["light", "dark"] as const) {
     const page = await adminCtx.newPage();
     await page.emulateMedia({ colorScheme: scheme });
     const checked: Record<string, number> = {};
-    for (const path of ["/admin/apps", "/admin/roles?app=notes", "/admin/audit"]) {
+    for (const path of ["/admin/apps", "/admin/roles?app=notes", "/admin/events", "/admin/audit"]) {
       await page.goto(`${ADMIN}${path}`);
       const ratios = await page.evaluate(() => {
         const parse = (c: string) => (/rgba?\(([^)]+)\)/.exec(c)?.[1] ?? "0,0,0").split(",").map((n) => parseFloat(n));
