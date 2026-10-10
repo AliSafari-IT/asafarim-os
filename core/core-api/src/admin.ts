@@ -5,7 +5,7 @@
  */
 import type pg from "pg";
 import { CORE_ADMIN_ROLE } from "./admin-auth.ts";
-import { waitingForPublisher, type EventsManifest } from "./event-plumbing.ts";
+import { WAITING_FOR_PUBLISHER, publishedTypes, waitingForPublisher, type EventsManifest } from "./event-plumbing.ts";
 
 export interface AdminApp {
   id: string;
@@ -33,6 +33,39 @@ export interface AdminRole {
   /** True when something has to be migrated: the role still grants a deprecated permission. */
   migrationNeeded: boolean;
   holders: number;
+}
+
+/** A subscriber in the event catalog. */
+export interface CatalogSubscriber {
+  appId: string;
+  state: string;
+  handler: string;
+  /**
+   * `waiting_for_publisher` when no installed app publishes the type (the Apps page's warning, same
+   * logic); `bound` otherwise: core-api created its durable consumer on the publisher's stream.
+   */
+  consumer: "bound" | typeof WAITING_FOR_PUBLISHER;
+}
+
+/** One event type in the catalog (P4.2): who publishes it, its schema, who subscribes. */
+export interface CatalogEntry {
+  type: string;
+  /** null: a dangling subscription, nobody installed publishes this type. */
+  publisher: { appId: string; version: string; state: string } | null;
+  schema: object | null;
+  /**
+   * `provided`: the publisher uploaded it. `not_provided`: it publishes the type but hasn't uploaded
+   * a schema (yet). `no_publisher`: a dangling subscription.
+   */
+  schemaStatus: "provided" | "not_provided" | "no_publisher";
+  schemaUpdatedAt: string | null;
+  /** The publisher's version when it uploaded the schema. */
+  schemaAppVersion: string | null;
+  subscribers: CatalogSubscriber[];
+}
+
+interface CatalogManifest {
+  events?: { publishes?: { type: string }[]; subscribes?: { type: string; handler: string }[] };
 }
 
 export interface AuditFilter {
@@ -74,6 +107,74 @@ export function createAdminQueries(pool: pg.Pool) {
       roles: Number(x.roles),
       waitingForPublisher: waitingForPublisher(x.id, installed[i]!.manifest, installed),
     }));
+  }
+
+  /**
+   * The event catalog (P4.2, ADR 0001 §5): one entry per type an app that isn't removed publishes,
+   * with its schema (or `not_provided`) and its subscribers, then every subscribed type nobody
+   * publishes (`publisher: null`). Sorted by type.
+   */
+  async function listEvents(): Promise<CatalogEntry[]> {
+    const apps = (
+      await pool.query<{ id: string; version: string; state: string; manifest: CatalogManifest | null }>(
+        "SELECT id, version, state, manifest FROM apps WHERE state <> 'removed' ORDER BY id",
+      )
+    ).rows;
+    const schemas = new Map(
+      (
+        await pool.query<{ event_type: string; schema: object; app_version: string; updated_at: Date }>(
+          `SELECT s.event_type, s.schema, s.app_version, s.updated_at FROM event_schemas s
+             JOIN apps a ON a.id = s.app_id AND a.state <> 'removed'`,
+        )
+      ).rows.map((r) => [r.event_type, r]),
+    );
+    const subscribersOf = new Map<string, CatalogSubscriber[]>();
+    for (const app of apps) {
+      const waiting = new Set(waitingForPublisher(app.id, app.manifest, apps));
+      const seen = new Set<string>();
+      for (const s of app.manifest?.events?.subscribes ?? []) {
+        if (seen.has(s.type)) continue;
+        seen.add(s.type);
+        const list = subscribersOf.get(s.type) ?? [];
+        list.push({
+          appId: app.id,
+          state: app.state,
+          handler: s.handler,
+          consumer: waiting.has(s.type) ? WAITING_FOR_PUBLISHER : "bound",
+        });
+        subscribersOf.set(s.type, list);
+      }
+    }
+    const entries: CatalogEntry[] = [];
+    const published = new Set<string>();
+    for (const app of apps) {
+      for (const type of publishedTypes(app.manifest as EventsManifest | null)) {
+        published.add(type);
+        const schema = schemas.get(type);
+        entries.push({
+          type,
+          publisher: { appId: app.id, version: app.version, state: app.state },
+          schema: schema?.schema ?? null,
+          schemaStatus: schema ? "provided" : "not_provided",
+          schemaUpdatedAt: schema ? new Date(schema.updated_at).toISOString() : null,
+          schemaAppVersion: schema?.app_version ?? null,
+          subscribers: subscribersOf.get(type) ?? [],
+        });
+      }
+    }
+    for (const [type, subscribers] of subscribersOf) {
+      if (published.has(type)) continue;
+      entries.push({
+        type,
+        publisher: null,
+        schema: null,
+        schemaStatus: "no_publisher",
+        schemaUpdatedAt: null,
+        schemaAppVersion: null,
+        subscribers,
+      });
+    }
+    return entries.sort((a, b) => a.type.localeCompare(b.type));
   }
 
   /** Roles (optionally one app's) with their permissions, holders, and what needs migrating. */
@@ -156,7 +257,7 @@ export function createAdminQueries(pool: pg.Pool) {
     return { events: rows, next: r.rows.length > limit ? rows[rows.length - 1]!.id : null };
   }
 
-  return { holdsRole, listApps, listRoles, roleGrants, subjectGrants, audit, CORE_ADMIN_ROLE };
+  return { holdsRole, listApps, listEvents, listRoles, roleGrants, subjectGrants, audit, CORE_ADMIN_ROLE };
 }
 
 export type AdminQueries = ReturnType<typeof createAdminQueries>;

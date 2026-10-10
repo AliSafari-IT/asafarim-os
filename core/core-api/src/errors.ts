@@ -20,6 +20,8 @@ export const ERRORS = {
   bad_request: 400,
   app_inactive: 503, //           a token is only issued for an active app
   bus_unavailable: 503, //        install or registration of an app that publishes or subscribes, and its stream or consumers couldn't be set up (P4.1)
+  invalid_event_schemas: 400, //  an event-schema upload whose types don't match the manifest's events.publishes, or a schema that doesn't compile (P4.2)
+  payload_too_large: 413, //      an event-schema upload over 512 KiB, or one schema over 64 KiB (P4.2)
   registry_busy: 503, //          install or registration waited longer than plumbingLockTimeoutMs for another one's event plumbing: retry
 } as const;
 
