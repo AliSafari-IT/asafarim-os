@@ -10,6 +10,10 @@
   --line: #e4dfd3;
   --warn: #92400e;
   --warn-bg: #fef3c7;
+  --danger: #b91c1c;
+  --danger-ink: #ffffff;
+  --note-hl: #fde68a;
+  --note-hl-active: #fbbf24;
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   --serif: "Iowan Old Style", "Charter", "Georgia", serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", monospace;
@@ -25,6 +29,10 @@
     --line: #37322a;
     --warn: #fcd34d;
     --warn-bg: #3a2e0c;
+    --danger: #fca5a5;
+    --danger-ink: #15130f;
+    --note-hl: #4a3b0a;
+    --note-hl-active: #7a5c0d;
   }
 }
 * {
@@ -62,6 +70,16 @@ button.secondary {
   background: transparent;
   color: var(--ink);
   border-color: var(--line);
+}
+/* A link that looks like a secondary button. */
+a.button {
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  text-decoration: none;
 }
 .skip {
   position: absolute;
@@ -343,6 +361,10 @@ button.secondary {
   text-decoration: none;
   opacity: 0;
 }
+.prose .anchor {
+  /* Not part of a selection, so a note's quote is the document's text only (#81). */
+  user-select: none;
+}
 .prose :is(h1, h2, h3, h4, h5, h6):hover .anchor {
   opacity: 1;
 }
@@ -546,4 +568,196 @@ dialog.search::backdrop {
   .tree {
     transition: none;
   }
+}
+
+/* Study notes (#81) */
+::highlight(doc-notes) {
+  background-color: var(--note-hl);
+  color: var(--ink);
+}
+::highlight(doc-note-active) {
+  background-color: var(--note-hl-active);
+  color: var(--ink);
+}
+.prose-wrap {
+  position: relative;
+}
+.heading-tools,
+.selection-tools {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.12);
+  font-family: var(--sans);
+}
+/* Over the right end of the heading's line, so the pointer can move onto it. */
+.heading-tools {
+  right: 0;
+}
+button.small {
+  padding: 3px 10px;
+  font-size: 0.8rem;
+}
+button[aria-disabled="true"] {
+  cursor: not-allowed;
+  border-style: dashed;
+}
+button.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-size: inherit;
+}
+button.link.danger {
+  color: var(--danger);
+}
+button.danger:not(.link) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--danger-ink);
+}
+.badge.warn {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-bg);
+}
+.notes {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+.notes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.notes h2 {
+  font-size: 1.2rem;
+  margin: 0.5rem 0 1rem;
+}
+.notes h2 a {
+  color: var(--accent);
+}
+.notes h2 .mono {
+  font-size: 0.7em;
+  font-weight: 400;
+}
+.note-list {
+  display: grid;
+  gap: 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.note {
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+.note:focus {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.note-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 0.5rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.note-where a {
+  color: var(--accent);
+}
+.note-quote {
+  margin: 0 0 0.5rem;
+  padding-left: 12px;
+  border-left: 3px solid var(--note-hl-active);
+  color: var(--muted);
+  font-family: var(--serif);
+  font-style: italic;
+}
+.note-quote button.link {
+  font-family: var(--sans);
+  font-style: normal;
+  font-size: 0.8rem;
+}
+.note-body {
+  font-family: var(--serif);
+}
+.note-body > :first-child {
+  margin-top: 0;
+}
+.note-body > :last-child {
+  margin-bottom: 0;
+}
+.note-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+}
+dialog.note-editor {
+  width: min(560px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+}
+dialog.note-editor::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+dialog.note-editor h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.15rem;
+}
+.note-editor label,
+.notes-filter label {
+  display: block;
+  margin: 12px 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.note-editor textarea,
+.note-editor select,
+.notes-filter select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+}
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.error {
+  color: var(--danger);
+}
+.notes-filter {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.notes-filter label {
+  margin-bottom: 0;
 }

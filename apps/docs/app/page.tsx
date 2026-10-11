@@ -3,11 +3,14 @@ import { forbidden, unauthorized } from "next/navigation";
 import { refreshAction, signOutAction } from "./actions";
 import { Markdown } from "@/components/Markdown";
 import type { NavNode } from "@/components/nav";
+import { Notes, type NoteView } from "@/components/Notes";
 import { ReaderShell } from "@/components/ReaderShell";
 import { Search } from "@/components/Search";
 import { Toc } from "@/components/Toc";
 import { auth } from "@/lib/auth";
+import { anchorNote, sectionsOf } from "@/lib/anchor";
 import { gate } from "@/lib/gate";
+import { getNotes } from "@/lib/notes";
 import { readableName, tocOf } from "@/lib/outline";
 import { getPlatform } from "@/lib/platform";
 import { docParam, loadReader, type TreeNode } from "@/lib/reader";
@@ -75,6 +78,45 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
   });
   const doc = view.status === "ok" ? view.doc : undefined;
 
+  // Study notes (#81): the caller's own, each placed where its quote is in this version of the document.
+  const store = getNotes();
+  const canWrite = (await gate("docs.notes.write")).ok;
+  let notesAvailable = Boolean(store);
+  let notes: NoteView[] = [];
+  const sections = doc && !doc.missing ? sectionsOf(doc.markdown) : [];
+  if (store && doc && !doc.missing && view.status === "ok") {
+    try {
+      const own = await store.list(subject, doc.path);
+      const order = new Map(sections.map((s, i) => [s.id, i]));
+      notes = own
+        .map((n) => {
+          const at = anchorNote(n, sections);
+          return {
+            id: n.id,
+            headingId: at.headingId,
+            headingTitle: sections.find((s) => s.id === at.headingId)?.title ?? "",
+            quote: n.quote,
+            body: n.body,
+            status: at.status,
+            updatedAt: n.updatedAt,
+            rendered: (
+              <Markdown
+                markdown={n.body}
+                fromDoc={doc.path}
+                docs={view.paths.docs}
+                images={view.paths.images}
+                variant="note"
+              />
+            ),
+          };
+        })
+        .sort((a, b) => (order.get(a.headingId) ?? 0) - (order.get(b.headingId) ?? 0) || Number(a.id) - Number(b.id));
+    } catch (err) {
+      console.warn(JSON.stringify({ app: "docs", level: "warn", msg: "notes.unavailable", error: String(err) }));
+      notesAvailable = false;
+    }
+  }
+
   return (
     <>
       <a className="skip" href="#document">
@@ -103,6 +145,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
               Refresh
             </button>
           </form>
+          <a className="button secondary" href="/notes" data-testid="all-notes">
+            All notes
+          </a>
           <span className="muted" data-testid="who">
             {session?.user?.name ?? subject}
           </span>
@@ -162,14 +207,20 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
                     {doc.stats.minutes} min read · {doc.stats.words.toLocaleString("en")} words
                   </span>
                 </p>
-                <div className="prose" data-testid="doc-body">
+                <Notes
+                  docPath={doc.path}
+                  headings={sections.filter((s) => s.id).map((s) => ({ id: s.id, title: s.title }))}
+                  notes={notes}
+                  canWrite={canWrite}
+                  available={notesAvailable}
+                >
                   <Markdown
                     markdown={doc.markdown}
                     fromDoc={doc.path}
                     docs={view.paths.docs}
                     images={view.paths.images}
                   />
-                </div>
+                </Notes>
               </>
             ) : (
               <>

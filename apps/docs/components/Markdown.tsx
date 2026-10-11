@@ -6,6 +6,7 @@ import "server-only";
  * the browser.
  */
 import { MarkdownAsync, type Components } from "react-markdown";
+import type { PluggableList } from "unified";
 import rehypeShikiFromHighlighter from "@shikijs/rehype/core";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeSanitize from "rehype-sanitize";
@@ -40,18 +41,38 @@ const components: Components = {
   },
 };
 
+/**
+ * `variant: "note"` renders a study note's body (#81) through the same pipeline, untrusted alike, but
+ * whole (no title to drop) and without heading ids, so a note can't take an id the document uses.
+ */
 export async function Markdown({
   markdown,
   fromDoc,
   docs,
   images,
+  variant = "document",
 }: {
   markdown: string;
   fromDoc: string;
   docs: string[];
   images: string[];
+  variant?: "document" | "note";
 }) {
   const shiki = await highlighter();
+  const headings: PluggableList =
+    variant === "document"
+      ? [
+          rehypeSlug,
+          [
+            rehypeAutolinkHeadings,
+            {
+              behavior: "append",
+              properties: { className: ["anchor"], ariaHidden: true, tabIndex: -1 },
+              content: { type: "text", value: "#" },
+            },
+          ],
+        ]
+      : [];
   return (
     <MarkdownAsync
       remarkPlugins={[remarkGfm]}
@@ -61,15 +82,7 @@ export async function Markdown({
         [rehypeDocLinks, { fromDoc, docs: new Set(docs), images: new Set(images) }],
         rehypeMermaid,
         rehypeTaskLabels,
-        rehypeSlug,
-        [
-          rehypeAutolinkHeadings,
-          {
-            behavior: "append",
-            properties: { className: ["anchor"], ariaHidden: true, tabIndex: -1 },
-            content: { type: "text", value: "#" },
-          },
-        ],
+        ...headings,
         [
           rehypeShikiFromHighlighter,
           shiki,
@@ -78,7 +91,7 @@ export async function Markdown({
       ]}
       components={components}
     >
-      {bodyOf(markdown)}
+      {variant === "document" ? bodyOf(markdown) : markdown}
     </MarkdownAsync>
   );
 }
