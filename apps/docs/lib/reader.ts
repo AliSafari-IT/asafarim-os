@@ -2,6 +2,15 @@
  * What the reading page shows (#78): the tree, and the selected document with the repository that
  * owns it. Kept apart from the page so it can be tested without Next.js.
  */
+import {
+  breadcrumbOf,
+  headingsOf,
+  issueLinksBySection,
+  statsOf,
+  titleOf,
+  type DocStats,
+  type Heading,
+} from "./outline";
 import { ownerOf, type Owner } from "./owners";
 import { DocNotFoundError, SourceUnavailableError, type DocEntry, type DocSource } from "./source";
 
@@ -35,12 +44,7 @@ export function buildTree(entries: DocEntry[]): TreeNode[] {
   return sort(root.children);
 }
 
-/** The document's title: its first `# ` heading after any front matter, else the file name. */
-export function titleOf(docPath: string, markdown: string): string {
-  const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
-  const h1 = /^#\s+(.+?)\s*#*\s*$/m.exec(body);
-  return h1 ? h1[1]! : docPath.split("/").at(-1)!.replace(/\.md$/i, "");
-}
+export { titleOf };
 
 /** A `?doc=` value worth looking up: a relative .md path without `..`, or nothing. */
 export function docParam(raw: unknown): string | undefined {
@@ -56,10 +60,22 @@ export type ReaderView =
       mode: DocSource["mode"];
       tree: TreeNode[];
       docCount: number;
+      /** What links inside a document may open: the listing's documents and images. */
+      paths: { docs: string[]; images: string[] };
       /** docs-app.json couldn't be used: shown, and every document falls back to the source repo. */
       ownersError?: string;
       doc?:
-        | { missing: false; path: string; title: string; markdown: string; owner: Owner }
+        | {
+            missing: false;
+            path: string;
+            title: string;
+            markdown: string;
+            owner: Owner;
+            headings: Heading[];
+            breadcrumb: string[];
+            stats: DocStats;
+            issueLinks: Record<string, string[]>;
+          }
         | { missing: true; path: string };
     };
 
@@ -72,6 +88,10 @@ export async function loadReader(source: DocSource, opts: { doc?: string; source
       mode: source.mode,
       tree: buildTree(listing.entries),
       docCount: listing.entries.filter((e) => e.kind === "doc").length,
+      paths: {
+        docs: listing.entries.filter((e) => e.kind === "doc").map((e) => e.path),
+        images: listing.entries.filter((e) => e.kind === "image").map((e) => e.path),
+      },
       ...(listing.owners && !listing.owners.ok ? { ownersError: listing.owners.error } : {}),
     };
     if (opts.doc) {
@@ -83,6 +103,10 @@ export async function loadReader(source: DocSource, opts: { doc?: string; source
           title: titleOf(opts.doc, markdown),
           markdown,
           owner: ownerOf(opts.doc, { config, markdown, fallbackRepo: opts.sourceRepo }),
+          headings: headingsOf(markdown),
+          breadcrumb: breadcrumbOf(opts.doc),
+          stats: statsOf(markdown),
+          issueLinks: issueLinksBySection(markdown),
         };
       } catch (err) {
         if (!(err instanceof DocNotFoundError)) throw err;

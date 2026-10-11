@@ -253,11 +253,13 @@ jobs:
   # grant taking effect within the access token's lifetime; and the Admin console
   # (P3.3b, core.localhost:8080): a non-admin gets 403, an admin activates notes and
   # grants a role, the member's launcher shows it and then loses it, every action
-  # audited, keyboard and light/dark checks.
+  # audited, keyboard and light/dark checks; and the Docs reader (#80) on its
+  # made-up fixtures: rendering, contents, search, the phone drawer and Lighthouse
+  # accessibility (at least 95, light and dark, in test-results/lighthouse.json).
   # Screenshots and the Playwright report are uploaded either way.
   notes-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -287,4 +289,6 @@ jobs:
             apps/notes/playwright-report/
             core/admin/test-results/
             core/admin/playwright-report/
+            apps/docs/test-results/
+            apps/docs/playwright-report/
           if-no-files-found: ignore

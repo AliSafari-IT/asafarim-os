@@ -12,7 +12,7 @@ describe("the reading page's data (#78)", () => {
     expect(view.status).toBe("ok");
     if (view.status !== "ok") return;
     expect(view.mode).toBe("fixtures");
-    expect(view.docCount).toBe(5);
+    expect(view.docCount).toBe(6);
     expect(view.tree.map((n) => n.name)).toEqual(["guides", "images", "ventures", "index.md", "README.md"]);
     expect(view.doc).toMatchObject({
       title: "Demo app overview",
@@ -47,7 +47,10 @@ describe("the reading page's data (#78)", () => {
 
   it("titles, tree order and the ?doc= parameter", () => {
     expect(titleOf("a/b.md", "---\nrepo: a/b\n---\n# Real title\n")).toBe("Real title");
-    expect(titleOf("a/some-file.md", "no heading")).toBe("some-file");
+    expect(titleOf("a/some-file.md", "no heading")).toBe("Some File");
+    expect(titleOf("a/README.md", "no heading")).toBe("README");
+    // A `# comment` inside a code block is not a title.
+    expect(titleOf("a/x-y.md", "```bash\n# install\n```\n")).toBe("X Y");
     expect(
       buildTree([
         { path: "z.md", kind: "doc" },

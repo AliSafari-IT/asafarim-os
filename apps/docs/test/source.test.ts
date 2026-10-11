@@ -191,6 +191,7 @@ describe("the fixture source (local development)", () => {
       "index.md",
       "ventures/demo-app/decisions/0001-use-postgres.md",
       "ventures/demo-app/overview.md",
+      "ventures/demo-app/roadmap/roadmap.md",
     ]);
     expect(listing.owners?.ok).toBe(true);
     expect(listing.sha).toMatch(/^[0-9a-f]{40}$/);

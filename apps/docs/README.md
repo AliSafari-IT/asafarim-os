@@ -18,17 +18,26 @@ Secrets (names only): `DOCS_GITHUB_TOKEN`, `DOCS_ISSUES_TOKEN`, `DOCS_AI_API_KEY
 
 `lib/source.ts` (server-only) reads the `.md` files and images of `source.repo` at `source.branch` **at runtime**: one Git Trees call lists every path, the Contents API reads one file. The tree is cached for 5 minutes and files are keyed by the tree's sha; **Refresh** drops the cache. Only paths in the listing can be read.
 
-| `DOCS_GITHUB_TOKEN` | Where documents come from                                                                  |
-| ------------------- | ------------------------------------------------------------------------------------------ |
-| set                 | GitHub (a fine-grained token: Contents read on the source repo only)                       |
-| unset, development  | [`fixtures/`](fixtures/): made-up Markdown, so nobody needs access to a private repo       |
-| unset, production   | nothing: the page says "Documents temporarily unavailable" (so does an unreachable GitHub) |
+| `DOCS_GITHUB_TOKEN`      | Where documents come from                                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| set                      | GitHub (a fine-grained token: Contents read on the source repo only)                       |
+| unset, `DOCS_SOURCE_DIR` | that folder (the e2e run points a production build at `fixtures/`)                         |
+| unset, development       | [`fixtures/`](fixtures/): made-up Markdown, so nobody needs access to a private repo       |
+| unset, production        | nothing: the page says "Documents temporarily unavailable" (so does an unreachable GitHub) |
 
 **Who owns a document** (for issues, #82): `docs-app.json` at the source repo's root lists `{ path, repo }` rules; the first matching glob wins, a document's front matter (`repo: owner/name`) overrides it, and with no match the source repo owns it. A broken file is shown as an error, and every document falls back to the source repo.
 
 **Images** are served by `GET /api/files/<path>`, which checks `docs.read` first (never from `public/`); an SVG gets a CSP with `sandbox`, so it can't run script.
 
 **Nothing is baked in:** `pnpm --filter @asafarim/docs check:no-content` builds the app (standalone) and fails if any fixture's marker text is under `.next/`. CI runs it.
+
+## Reading (#80)
+
+A document is rendered **on the server** (`components/Markdown.tsx`): GitHub-flavoured Markdown (tables, task lists), raw HTML never rendered and everything through `rehype-sanitize`'s default schema first. Then, in `lib/rehype.ts`: relative links resolve against the document and must stay inside the listing (a document opens in the app, an image goes through `/api/files`, anything else, or a path past the root, stays as plain text), external links get `rel="noopener noreferrer"`, and task-list checkboxes are named. Code is highlighted by shiki (GitHub's light and dark palettes, both in the HTML, the colour scheme picks one). A ` ```mermaid ` block is drawn in the browser by `components/Mermaid.tsx`, which imports mermaid only when a page has one, with `securityLevel: "strict"`; its source shows until then.
+
+Around it: the documents with readable names and a filter (a drawer on a phone), a breadcrumb, the owner badge, reading time and word count, "On this page" (h2 and h3, the current section marked) and ⌘K / Ctrl+K search over every title and heading (`GET /api/search`, gated; never the body). Titles, headings, reading time and issue links come from `@asafarim/markdown-utils` (`lib/outline.ts`), with heading ids that match the rendered ones.
+
+The browser check is `e2e/docs.spec.ts`, run by `pnpm e2e` after notes and admin: the roadmap fixture renders, every navigation lands in the right place, the drawer works, and Lighthouse accessibility is at least 95 in light and dark (`test-results/lighthouse.json`, with screenshots in `test-results/screens/`).
 
 ## Try it
 

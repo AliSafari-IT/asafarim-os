@@ -251,17 +251,21 @@ export type DocSource = ReturnType<typeof createSource>;
 
 /**
  * The app's source, one per server process: GitHub when DOCS_GITHUB_TOKEN is set (the secret the
- * manifest names), else the fixtures in development, else nothing.
+ * manifest names), else a local folder named by DOCS_SOURCE_DIR (the e2e run points it at the
+ * fixtures of a production build), else the fixtures in development, else nothing.
  */
 export function getSource(config: { repo: string; branch: string }): DocSource {
   const g = globalThis as unknown as { docsSource?: DocSource };
   if (!g.docsSource) {
     const token = process.env.DOCS_GITHUB_TOKEN;
+    const dir = process.env.DOCS_SOURCE_DIR;
     const backend = token
       ? createGitHubBackend({ ...config, token })
-      : process.env.NODE_ENV !== "production"
-        ? createFixtureBackend(path.join(process.cwd(), "fixtures"))
-        : createUnavailableBackend("no source token is configured");
+      : dir
+        ? createFixtureBackend(path.resolve(dir))
+        : process.env.NODE_ENV !== "production"
+          ? createFixtureBackend(path.join(process.cwd(), "fixtures"))
+          : createUnavailableBackend("no source token is configured");
     g.docsSource = createSource(backend);
   }
   return g.docsSource;
