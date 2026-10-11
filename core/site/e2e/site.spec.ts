@@ -65,9 +65,24 @@ test("works at phone width: no horizontal scroll, images fit", async ({ page }) 
   }
 });
 
+test("the app manifest JSON Schema is served at its $id and at the versioned path (#87)", async ({ request }) => {
+  const bodies: string[] = [];
+  for (const path of ["/schemas/app-manifest.schema.json", "/schemas/app-manifest/v1.json"]) {
+    const res = await request.get(path);
+    expect(res.status(), path).toBe(200);
+    expect(res.headers()["content-type"], path).toMatch(/^application\/schema\+json/);
+    if (process.env.SITE_EXPECT_HEADERS === "1") expect(res.headers()["cache-control"], path).toMatch(/max-age=\d+/);
+    bodies.push(await res.text());
+  }
+  expect(bodies[1]).toBe(bodies[0]);
+  const schema = JSON.parse(bodies[0]!) as { $id: string; title: string };
+  expect(schema.$id).toBe("https://asafarim.site/schemas/app-manifest.schema.json");
+  expect(schema.title).toBe("ASafariM OS app manifest");
+});
+
 test("the container sends the security headers", async ({ request }) => {
   test.skip(process.env.SITE_EXPECT_HEADERS !== "1", "only against the os-site container");
-  for (const path of ["/", "/styles.css", "/does-not-exist"]) {
+  for (const path of ["/", "/styles.css", "/does-not-exist", "/schemas/app-manifest.schema.json"]) {
     const res = await request.get(path);
     const headers = res.headers();
     expect(headers["strict-transport-security"], path).toMatch(/max-age=\d+/);

@@ -70,7 +70,7 @@ function readIfExists(file) {
  * unreachable core-api) throws, so a transient error can't make the caller
  * delete a credential that is still valid.
  */
-async function appState(id) {
+export async function appState(id) {
   const { baseUrl, token } = coreApiAdmin();
   const res = await fetch(`${baseUrl}/admin/v1/apps/${id}`, {
     headers: { authorization: `Bearer ${token}` },

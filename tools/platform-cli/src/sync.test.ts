@@ -80,6 +80,28 @@ describe("platform sync", () => {
     ]);
   });
 
+  it("also discovers external-apps/<id>/platform.app.json, wired like an in-repo app (#87)", () => {
+    app("web");
+    write("external-apps/ext-demo/platform.app.json", JSON.stringify(manifest("ext-demo")));
+    write("external-apps/ext-demo/source.json", JSON.stringify({ image: "ghcr.io/example/ext-demo:1" }));
+    expect(discoverManifests(root).map((f) => path.relative(root, f).split(path.sep).join("/"))).toEqual([
+      "apps/web/platform.app.json",
+      "external-apps/ext-demo/platform.app.json",
+    ]);
+    expect(sync(root, { check: false }).ok).toBe(true);
+    const caddy = readFileSync(path.join(root, GATEWAY_CADDYFILE), "utf8");
+    expect(caddy).toContain("http://ext-demo.localhost:8080 {");
+    expect(caddy).toContain(`reverse_proxy {$${gatewayUpstreamVar("ext-demo")}}`);
+  });
+
+  it("refuses an external app that reuses an in-repo app's id", () => {
+    app("web");
+    write("external-apps/web/platform.app.json", JSON.stringify(manifest("web")));
+    const result = sync(root, { check: false });
+    expect(result.ok).toBe(false);
+    expect(result.lines.join("\n")).toContain('2 manifests declare the id "web"');
+  });
+
   it("generates the launcher registry from ui.launcher, ordered by `order` then id", () => {
     app("web", { description: "Studio site", meta: "asafarim.com", access: "public", order: 10 });
     app("hub", { description: "Workbench", meta: "hub", access: "authenticated", order: 20 });

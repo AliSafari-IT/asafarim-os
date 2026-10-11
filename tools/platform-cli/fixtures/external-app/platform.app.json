@@ -1,0 +1,26 @@
+{
+  "id": "ext-demo",
+  "name": "External demo",
+  "version": "0.1.0",
+  "platform": ">=0.1 <1",
+  "owner": "ASafariM Digital",
+  "runtime": {
+    "image": "ext-demo",
+    "port": 8080,
+    "health": { "live": "/health/live", "ready": "/health/ready" },
+    "resources": { "memory": "32m", "cpus": 0.25 },
+    "workers": [
+      {
+        "name": "jobs",
+        "image": "ext-demo-worker",
+        "network": "internal",
+        "resources": { "memory": "32m", "cpus": 0.25 }
+      }
+    ]
+  },
+  "database": { "engine": "postgres", "migrations": "sql", "dedicated": true },
+  "auth": { "client": "none", "publicPaths": ["/"] },
+  "permissions": [],
+  "roles": [],
+  "ui": { "glyph": "EX", "color": "#64748b", "nav": [], "status": "coming-soon" }
+}

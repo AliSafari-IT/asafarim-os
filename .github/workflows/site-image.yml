@@ -16,12 +16,14 @@ on:
   push:
     branches: [main]
     paths:
-      # The image is core/site alone: its build uses Node built-ins only, no workspace dependencies.
+      # The image is core/site plus the manifest JSON Schema it serves (#87): Node built-ins only, no install.
       - "core/site/**"
+      - "packages/app-manifest/schema/**"
       - ".github/workflows/site-image.yml"
   pull_request:
     paths:
       - "core/site/**"
+      - "packages/app-manifest/schema/**"
       - ".github/workflows/site-image.yml"
   workflow_dispatch: {}
 

@@ -4,6 +4,8 @@
  *   compose up (Postgres, Redis, the dev gateway) → bootstrap → identity + core-api (with a short
  *   access-token lifetime, so the revocation bound is tested for real) + dev login stub →
  *   install notes (NOT activated: the tests do that) → build and start notes →
+ *   the external-app fixture: its image built with the manifest label, run, installed with
+ *   `platform app install --image` and activated (#87; the Status spec checks it's up) →
  *   the Admin console (build and start) →
  *   Playwright: notes.spec.ts (direct) and gateway.spec.ts (through http://notes.localhost:8080) in
  *   apps/notes, then admin.spec.ts (the console at http://core.localhost:8080, P3.3b) in core/admin →
@@ -17,6 +19,7 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { bootstrap, readEnvFile } from "./bootstrap.mjs";
 import { installDevApps } from "./apps.mjs";
+import { externalUpstreamEnv, installExternalApp, startExternalApp, stopExternalApp } from "./external-app.mjs";
 import {
   bold,
   buildWorkspaceDependencies,
@@ -62,11 +65,13 @@ try {
   checkGatewayEnv();
   compose("up", "-d", "--wait");
   await bootstrap(dbEnv());
+  startExternalApp();
 
   service("identity", "identity.env", "core/identity/src/server.ts");
   service("core-api", "core-api.env", "core/core-api/src/server.ts", {
     ...process.env,
     CORE_API_ACCESS_TOKEN_TTL_SECONDS: String(TOKEN_TTL),
+    ...externalUpstreamEnv(),
   });
   service("dev-hub", "dev-hub.env", "tools/dev-hub/src/server.ts");
   await waitFor(`${ISSUER}/readyz`);
@@ -75,6 +80,7 @@ try {
   console.log(`${green("✔")} identity, core-api and the dev login stub are ready`);
 
   await installDevApps({ activate: false });
+  await installExternalApp();
 
   const next = path.join(NOTES_DIR, "node_modules/next/dist/bin/next");
   console.log(bold("Building notes…"));
@@ -138,6 +144,7 @@ try {
   console.error(red(`\ne2e setup FAILED: ${err.message}`));
 } finally {
   for (const c of children) c.kill();
+  stopExternalApp();
   if (process.argv.includes("--down")) compose("down", "--volumes", "--remove-orphans");
 }
 process.exit(exitCode);

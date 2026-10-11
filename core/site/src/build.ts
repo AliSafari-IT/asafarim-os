@@ -1,6 +1,7 @@
 /**
  * `pnpm --filter @asafarim/site build`: progress.json → dist/ (index.html, styles.css, favicon.svg and the
- * screenshots the page uses). Node built-ins only: the image build runs this with no `pnpm install`.
+ * screenshots the page uses), plus the app manifest's JSON Schema under /schemas/ (#87). Node built-ins
+ * only: the image build runs this with no `pnpm install`.
  */
 import { copyFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -21,12 +22,38 @@ export function pngSize(bytes: Buffer): ImageSize {
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
 
+/**
+ * The app manifest's JSON Schema, as @asafarim/app-manifest ships it (its own test keeps that file equal to
+ * the Zod schema). Served at its `$id` and at a path versioned by the manifest's major version, so an
+ * external app's tooling can pin `v1` while the unversioned URL follows the latest.
+ */
+export const MANIFEST_SCHEMA_MAJOR = 1;
+export const MANIFEST_SCHEMA_PATHS = [
+  "schemas/app-manifest.schema.json",
+  `schemas/app-manifest/v${MANIFEST_SCHEMA_MAJOR}.json`,
+] as const;
+/** Where the schema is, from core/site: the same relative path in the repository and in the image build. */
+export const defaultSchemaFile = (siteDir: string) =>
+  path.join(siteDir, "..", "..", "packages", "app-manifest", "schema", "app-manifest.schema.json");
+
 export function loadProgress(file: string): Progress {
   return parseProgress(JSON.parse(readFileSync(file, "utf8")));
 }
 
 /** Build the site from `siteDir` (core/site) into `outDir`. Returns the files written, relative to outDir. */
-export function buildSite(siteDir: string, outDir: string): string[] {
+export function buildSite(siteDir: string, outDir: string, opts: { schemaFile?: string } = {}): string[] {
+  const schemaFile = opts.schemaFile ?? defaultSchemaFile(siteDir);
+  let schema: string;
+  try {
+    schema = readFileSync(schemaFile, "utf8");
+  } catch {
+    throw new Error(`the app manifest JSON Schema is missing at ${schemaFile}`);
+  }
+  const { $id } = JSON.parse(schema) as { $id?: unknown };
+  if ($id !== `https://asafarim.site/${MANIFEST_SCHEMA_PATHS[0]}`) {
+    throw new Error(`the manifest schema's $id is ${String($id)}, not the URL this site serves it at`);
+  }
+
   const progress = loadProgress(path.join(siteDir, "src", "progress.json"));
   const shotsDir = path.join(siteDir, "public", "screenshots");
 
@@ -47,6 +74,7 @@ export function buildSite(siteDir: string, outDir: string): string[] {
 
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(path.join(outDir, "screenshots"), { recursive: true });
+  mkdirSync(path.join(outDir, "schemas", "app-manifest"), { recursive: true });
   const written: string[] = [];
   const put = (name: string, from: string) => {
     copyFileSync(from, path.join(outDir, name));
@@ -60,6 +88,10 @@ export function buildSite(siteDir: string, outDir: string): string[] {
   put("robots.txt", path.join(siteDir, "public", "robots.txt"));
   // Only the screenshots the page uses: a stale PNG in public/ never ships.
   for (const file of imageSizes.keys()) put(`screenshots/${file}`, path.join(shotsDir, file));
+  for (const name of MANIFEST_SCHEMA_PATHS) {
+    writeFileSync(path.join(outDir, name), schema);
+    written.push(name);
+  }
   return written;
 }
 
