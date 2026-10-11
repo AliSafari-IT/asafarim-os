@@ -5,6 +5,16 @@
  */
 import { useEffect, useState } from "react";
 
+/** The id a URL fragment names; a malformed escape (`#%E0%A4%A`) is compared as written. */
+export function hashId(hash: string): string {
+  const raw = hash.replace(/^#/, "");
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export interface TocItem {
   level: number;
   text: string;
@@ -28,7 +38,7 @@ export function Toc({ items }: { items: TocItem[] }) {
       for (const el of targets) if (el.getBoundingClientRect().top <= line) current = el.id;
       // At the bottom of the page the last sections can't reach the top: the one linked to wins.
       const atBottom = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
-      const linked = decodeURIComponent(window.location.hash.slice(1));
+      const linked = hashId(window.location.hash);
       if (atBottom && targets.some((el) => el.id === linked)) current = linked;
       setActive(current);
     };

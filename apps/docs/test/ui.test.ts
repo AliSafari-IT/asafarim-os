@@ -3,6 +3,7 @@ import { filterTree } from "../components/DocTree";
 import { mermaidLabel } from "../components/Mermaid";
 import type { NavNode } from "../components/nav";
 import { searchDocs } from "../components/Search";
+import { hashId } from "../components/Toc";
 
 const tree: NavNode[] = [
   {
@@ -86,5 +87,14 @@ describe("Mermaid (#80)", () => {
       "Diagram: Demo app timeline",
     );
     expect(mermaidLabel("graph TD\n  A --> B")).toBe("Diagram");
+  });
+});
+
+describe("hashId", () => {
+  it("decodes the fragment, and keeps a malformed one as written instead of throwing", () => {
+    expect(hashId("#setup")).toBe("setup");
+    expect(hashId("#caf%C3%A9")).toBe("café");
+    expect(hashId("#%E0%A4%A")).toBe("%E0%A4%A");
+    expect(hashId("")).toBe("");
   });
 });
