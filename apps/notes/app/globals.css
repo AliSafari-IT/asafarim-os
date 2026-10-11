@@ -5,6 +5,7 @@
   --ink: #1d1b16;
   --muted: #5d584d;
   --accent: #7c3aed;
+  --accent-ink: #ffffff;
   --line: #e4dfd3;
   --bad: #b91c1c;
 }
@@ -15,6 +16,7 @@
     --ink: #f1ece2;
     --muted: #b3ab9b;
     --accent: #a78bfa;
+    --accent-ink: #15130f;
     --line: #37322a;
     --bad: #f87171;
   }
@@ -85,7 +87,7 @@ button {
   border: 0;
   border-radius: 8px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   cursor: pointer;
 }
 button.secondary {
