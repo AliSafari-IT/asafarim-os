@@ -17,6 +17,8 @@ const TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".txt": "text/plain; charset=utf-8",
+  // The manifest JSON Schema (#87); nginx serves /schemas/ with the same type.
+  ".json": "application/schema+json",
 };
 
 createServer(async (req, res) => {

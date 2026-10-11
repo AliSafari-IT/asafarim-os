@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { MAX_SCREENSHOT_BYTES, buildSite, loadProgress, pngSize } from "../src/build.ts";
+import {
+  MANIFEST_SCHEMA_PATHS,
+  MAX_SCREENSHOT_BYTES,
+  buildSite,
+  defaultSchemaFile,
+  loadProgress,
+  pngSize,
+} from "../src/build.ts";
 
 const siteDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const temps: string[] = [];
@@ -53,11 +60,31 @@ describe("buildSite", () => {
     for (const [, src] of html.matchAll(/<img src="([^"]+)"/g)) expect(written).toContain(src);
   });
 
+  it("serves the app manifest JSON Schema at its $id and at the versioned path, byte for byte (#87)", () => {
+    const out = temp();
+    const written = buildSite(siteDir, out);
+    const source = readFileSync(defaultSchemaFile(siteDir), "utf8");
+    for (const name of MANIFEST_SCHEMA_PATHS) {
+      expect(written).toContain(name);
+      expect(readFileSync(path.join(out, name), "utf8"), name).toBe(source);
+    }
+    expect(MANIFEST_SCHEMA_PATHS).toEqual(["schemas/app-manifest.schema.json", "schemas/app-manifest/v1.json"]);
+    expect((JSON.parse(source) as { $id: string }).$id).toBe("https://asafarim.site/schemas/app-manifest.schema.json");
+  });
+
+  it("refuses a schema whose $id isn't the URL it is served at", () => {
+    const dir = temp();
+    const bad = path.join(dir, "schema.json");
+    writeFileSync(bad, JSON.stringify({ $id: "https://example.com/other.json" }));
+    expect(() => buildSite(siteDir, temp(), { schemaFile: bad })).toThrow(/\$id/);
+    expect(() => buildSite(siteDir, temp(), { schemaFile: path.join(dir, "missing.json") })).toThrow(/missing/);
+  });
+
   it("refuses a listed screenshot that is missing", () => {
     const dir = siteCopy();
     const first = loadProgress(path.join(dir, "src", "progress.json")).screenshots[0]!.file;
     rmSync(path.join(dir, "public", "screenshots", first));
-    expect(() => buildSite(dir, temp())).toThrow(/pnpm screenshots/);
+    expect(() => buildSite(dir, temp(), { schemaFile: defaultSchemaFile(siteDir) })).toThrow(/pnpm screenshots/);
   });
 
   it("refuses a screenshot over the 300 KB budget", () => {
@@ -65,7 +92,7 @@ describe("buildSite", () => {
     const first = loadProgress(path.join(dir, "src", "progress.json")).screenshots[0]!.file;
     const file = path.join(dir, "public", "screenshots", first);
     writeFileSync(file, Buffer.concat([readFileSync(file), Buffer.alloc(MAX_SCREENSHOT_BYTES)]));
-    expect(() => buildSite(dir, temp())).toThrow(/300 KB/);
+    expect(() => buildSite(dir, temp(), { schemaFile: defaultSchemaFile(siteDir) })).toThrow(/300 KB/);
   });
 });
 
