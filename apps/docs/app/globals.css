@@ -524,6 +524,8 @@ dialog.search::backdrop {
   .reader[data-drawer="open"] .tree {
     transform: none;
     visibility: visible;
+    /* Visible at once when opening (focus moves in straight away); hidden only after the slide out. */
+    transition: transform 0.2s ease;
   }
   .reader[data-drawer="open"] .scrim {
     display: block;
