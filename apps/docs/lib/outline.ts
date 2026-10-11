@@ -35,16 +35,20 @@ export const proseOf = (markdown: string) => stripFrontMatter(markdown).replace(
 
 /** A heading as it reads on the page: inline Markdown dropped, as the renderer's text is. */
 export function plainHeading(raw: string): string {
-  return raw
-    .replace(/\s+#+\s*$/, "")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/<[^>]+>/g, "")
-    .replace(/`([^`]*)`/g, "$1")
-    .replace(/(\*\*|__)(.+?)\1/g, "$2")
-    .replace(/(\*|_)(.+?)\1/g, "$2")
-    .replace(/~~(.+?)~~/g, "$1")
-    .trim();
+  return (
+    raw
+      .replace(/\s+#+\s*$/, "")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      // Tags dropped, then any stray angle bracket: the text is never HTML (React escapes it anyway).
+      .replace(/<[^>]*>/g, "")
+      .replace(/[<>]/g, "")
+      .replace(/`([^`]*)`/g, "$1")
+      .replace(/(\*\*|__)(.+?)\1/g, "$2")
+      .replace(/(\*|_)(.+?)\1/g, "$2")
+      .replace(/~~(.+?)~~/g, "$1")
+      .trim()
+  );
 }
 
 export interface Heading {

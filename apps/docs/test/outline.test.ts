@@ -53,6 +53,7 @@ describe("the outline of a document (#80)", () => {
 
   it("plain heading text and readable names", () => {
     expect(plainHeading("Use [Postgres](x.md) `now` ~~later~~ ##")).toBe("Use Postgres now later");
+    expect(plainHeading("<scr<script>ipt>alert(1) <b>bold</b>")).toBe("iptalert(1) bold");
     expect(readableName("example-app")).toBe("Example App");
     expect(readableName("roadmap.md")).toBe("Roadmap");
     expect(readableName("README.md")).toBe("README");
