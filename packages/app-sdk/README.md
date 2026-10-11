@@ -111,7 +111,7 @@ const apps = await platform.access.launcher(subject).catch(() => []); // never b
 ```
 
 - `access.launcher(sub)`: a signed `GET`, cached for the access TTL, **fails closed** (`AccessUnavailableError`; a stale or malformed answer is never served).
-- `<Launcher>` (from `@asafarim/app-sdk/react`; React is an optional peer): a labelled `<nav>` of links, `aria-current` on the current app, a visible focus style, light and dark, the host's tokens (`--card`, `--ink`, `--line`, `--accent`) when present, nothing for an empty list, and **http(s) links only**.
+- `<Launcher>` (from `@asafarim/app-sdk/react`; React is an optional peer): a labelled `<nav>` of links, `aria-current` on the current app, a visible focus style, light and dark, the host's tokens (`--card`, `--ink`, `--line`, `--accent`, `--accent-ink` for text on the accent) when present, nothing for an empty list, and **http(s) links only**.
 
 ## Typed config (`createConfig`)
 

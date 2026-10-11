@@ -154,4 +154,36 @@ describe("<Launcher>", () => {
     expect(LAUNCHER_CSS).toContain("prefers-color-scheme:dark");
     expect(LAUNCHER_CSS).toContain("var(--card,");
   });
+
+  // WCAG 2.x relative luminance and contrast ratio of two #rrggbb colours.
+  const luminance = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => {
+      const c = Number.parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  };
+  const contrast = (a: string, b: string) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi! + 0.05) / (lo! + 0.05);
+  };
+  const expand = (hex: string) => (hex.length === 4 ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex);
+  const fallback = (css: string, token: string) => {
+    const m = new RegExp(`--l-${token}:var\\(--${token},(#[0-9a-f]{3,6})\\)`).exec(css);
+    if (!m) throw new Error(`no fallback for --${token}`);
+    return expand(m[1]!);
+  };
+
+  it("the glyph's text reads on its accent in light and dark (WCAG AA, 4.5:1), with the host's --accent-ink first", () => {
+    const [light, dark] = LAUNCHER_CSS.split("@media (prefers-color-scheme:dark)");
+    for (const [scheme, css] of [
+      ["light", light!],
+      ["dark", dark!],
+    ] as const) {
+      const ratio = contrast(fallback(css, "accent"), fallback(css, "accent-ink"));
+      expect(ratio, `${scheme}: ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(LAUNCHER_CSS).toMatch(/\.asafarim-launcher__glyph\{[^}]*color:var\(--l-accent-ink\)/);
+    expect(LAUNCHER_CSS).not.toMatch(/\.asafarim-launcher__glyph\{[^}]*color:#fff/);
+  });
 });
