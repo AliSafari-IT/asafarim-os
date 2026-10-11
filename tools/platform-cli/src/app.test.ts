@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { adminEndpoint, appCommand, roleCommand } from "./app.ts";
+import { FIXTURE_MANIFEST, fakeDocker } from "./fake-docker.ts";
+import { MANIFEST_LABEL } from "./image.ts";
 
 function workspace(withManifest = true) {
   const root = mkdtempSync(path.join(tmpdir(), "app-cmd-"));
@@ -223,5 +225,93 @@ CORE_API_ADMIN_TOKEN=dev-token
     const r = await roleCommand(["grant", "notes.editor", "u"], root, {}, fetchImpl);
     expect(r?.ok).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("platform app install --image (#87)", () => {
+  const ENV = { CORE_API_URL: "http://localhost:4020", CORE_API_ADMIN_TOKEN: "t".repeat(40) };
+  const REF = "ghcr.io/example/ext-demo:1.0.0";
+  const installed = () =>
+    reply(201, { appId: "ext-demo", state: "installed", credential: "osk1.ext-demo.abcdef012345.KEY", database: null });
+  const withManifest = (manifest: string) => fakeDocker({ local: { [REF]: { [MANIFEST_LABEL]: manifest } } });
+
+  it("installs from the label and records the app under external-apps/", async () => {
+    const root = workspace(false);
+    const fetchImpl = installed();
+    const r = await appCommand(["install", "--image", REF], root, ENV, fetchImpl, withManifest(FIXTURE_MANIFEST));
+    expect(r?.ok).toBe(true);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://localhost:4020/admin/v1/apps/ext-demo/install");
+    expect(JSON.parse(String(init.body))).toEqual(JSON.parse(FIXTURE_MANIFEST));
+
+    const dir = path.join(root, "external-apps", "ext-demo");
+    expect(JSON.parse(readFileSync(path.join(dir, "platform.app.json"), "utf8"))).toEqual(JSON.parse(FIXTURE_MANIFEST));
+    expect(JSON.parse(readFileSync(path.join(dir, "source.json"), "utf8"))).toEqual({ image: REF });
+    const text = r!.lines.join("\n");
+    expect(text).toContain('auth.client is "none"');
+    expect(text).toContain("platform sync");
+    expect(text).toContain(`The image is ${REF}`);
+    expect(text).toContain("ASAFARIM_REGISTRY_CREDENTIAL=osk1.ext-demo.abcdef012345.KEY");
+  });
+
+  it("an image without a valid manifest label installs nothing and calls nothing", async () => {
+    for (const run of [
+      fakeDocker({ local: { [REF]: {} } }),
+      withManifest("{not json"),
+      withManifest(JSON.stringify({ ...JSON.parse(FIXTURE_MANIFEST), id: "Bad Id" })),
+      fakeDocker({}),
+    ]) {
+      const root = workspace(false);
+      const fetchImpl = installed();
+      const r = await appCommand(["install", "--image", REF], root, ENV, fetchImpl, run);
+      expect(r?.ok).toBe(false);
+      expect(r!.lines.at(-1)).toBe("Nothing was installed.");
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(existsSync(path.join(root, "external-apps"))).toBe(false);
+    }
+  });
+
+  it("refuses an id an in-repo app already has", async () => {
+    const root = workspace(false);
+    mkdirSync(path.join(root, "apps", "ext-demo"), { recursive: true });
+    const fetchImpl = installed();
+    const r = await appCommand(["install", "--image", REF], root, ENV, fetchImpl, withManifest(FIXTURE_MANIFEST));
+    expect(r?.ok).toBe(false);
+    expect(r!.lines[0]).toContain("apps/ext-demo");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('refuses auth.client "none" with declared roles or permissions', async () => {
+    const m = JSON.parse(FIXTURE_MANIFEST);
+    const withRoles = {
+      ...m,
+      permissions: [{ key: "ext-demo.read", description: "Read" }],
+      roles: [{ key: "ext-demo.reader", description: "Reader", grants: ["ext-demo.read"] }],
+    };
+    const root = workspace(false);
+    const fetchImpl = installed();
+    const r = await appCommand(
+      ["install", "--image", REF],
+      root,
+      ENV,
+      fetchImpl,
+      withManifest(JSON.stringify(withRoles)),
+    );
+    expect(r?.ok).toBe(false);
+    expect(r!.lines[0]).toContain("declares 1 permission(s) and 1 role(s)");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("core-api refusing the install leaves nothing recorded", async () => {
+    const root = workspace(false);
+    const r = await appCommand(
+      ["install", "--image", REF],
+      root,
+      ENV,
+      reply(409, { error: "already_installed" }),
+      withManifest(FIXTURE_MANIFEST),
+    );
+    expect(r?.ok).toBe(false);
+    expect(existsSync(path.join(root, "external-apps"))).toBe(false);
   });
 });

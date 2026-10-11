@@ -143,12 +143,23 @@ jobs:
       - name: The security headers
         run: |
           set -euo pipefail
-          for path in / /styles.css /does-not-exist; do
+          for path in / /styles.css /does-not-exist /schemas/app-manifest.schema.json; do
             headers="$(curl -sS -D - -o /dev/null "http://127.0.0.1:8088${path}")"
             echo "$headers"
             grep -qi '^strict-transport-security: max-age=' <<<"$headers"
             grep -qi '^x-content-type-options: nosniff' <<<"$headers"
             grep -qi "^content-security-policy: default-src 'none'; script-src 'none';" <<<"$headers"
+          done
+
+      # #87: the served copy is the Zod schema's JSON Schema output, byte for byte. Regenerating it must
+      # change nothing in git, and both served paths must equal that file.
+      - name: The served manifest schema matches the Zod schema
+        run: |
+          set -euo pipefail
+          pnpm --filter @asafarim/app-manifest schema
+          git diff --exit-code packages/app-manifest/schema/
+          for path in /schemas/app-manifest.schema.json /schemas/app-manifest/v1.json; do
+            curl -fsS "http://127.0.0.1:8088${path}" | cmp - packages/app-manifest/schema/app-manifest.schema.json
           done
 
       - name: Install the browser
@@ -274,4 +285,6 @@ jobs:
           path: |
             apps/notes/test-results/
             apps/notes/playwright-report/
+            core/admin/test-results/
+            core/admin/playwright-report/
           if-no-files-found: ignore

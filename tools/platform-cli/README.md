@@ -13,6 +13,8 @@ pnpm platform sync --check --against <dir> [--other-stack-sites <file>]
 pnpm platform manifest validate <file>  # check one manifest (.json, or a .ts default export)
 pnpm platform manifest compile <file>   # validate and write platform.app.json beside it
 pnpm platform boundaries                # fail if core/ or packages/ import from apps/
+pnpm platform app install --image <ref> [--env-out <file>]
+                                        # install an app from another repository by its image
 ```
 
 `--other-stack-sites <file>` lists gateway sites that belong to **another stack
@@ -20,10 +22,38 @@ sharing the same edge** (one host per line, `#` comments allowed). The drift
 report shows them under "Other stacks on the same edge (not drift)" instead of
 as unclaimed sites.
 
+## External apps (`app install --image`)
+
+An app that lives in another repository is installed from its image. Its manifest
+travels in the image's OCI label `org.asafarim.app.manifest` (the whole
+`platform.app.json`), set when the image is built:
+
+```bash
+docker build --label "org.asafarim.app.manifest=$(cat platform.app.json)" -t <ref> .
+pnpm platform app install --image <ref>
+pnpm platform sync
+```
+
+The CLI reads the label with `docker image inspect` (pulling the image only when it
+isn't local) and validates it with the same schema as an in-repo manifest. A missing,
+non-JSON or invalid label stops it before core-api is called or anything is written.
+It also refuses an id that `apps/<id>/` already has, and `auth.client: "none"` with
+declared permissions or roles (such an app keeps its own sign-in). After core-api
+accepts the install, the manifest is recorded in `external-apps/<id>/platform.app.json`
+with `source.json` (`{ "image": "<ref>" }`), so `sync` generates its launcher tile and
+gateway site exactly as for `apps/<id>/`. An `oidc` app also needs an OIDC client at
+identity, which this command doesn't create.
+
+The published JSON Schema is at
+`https://asafarim.site/schemas/app-manifest.schema.json` (and `/schemas/app-manifest/v1.json`).
+`fixtures/external-app/` is a made-up external app; `pnpm e2e` builds it, installs it this
+way and checks the Admin Status board shows it up.
+
 ## Generators
 
-`sync` reads `<root>/apps/<id>/platform.app.json` only (compile a `platform.app.ts`
-first) and never executes app code, so `--root` can point at another checkout.
+`sync` reads `<root>/apps/<id>/platform.app.json` and `<root>/external-apps/<id>/platform.app.json`
+only (compile a `platform.app.ts` first) and never executes app code, so `--root` can point at
+another checkout. Two manifests with the same id are refused.
 
 | Output                                      | From                                                                                                                                                                             |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -46,8 +76,8 @@ its default export. That is acceptable only for **in-repo, trusted apps**:
   `platform.app.ts` is reported as a problem ("compile it first"). Compile in
   that repository's own trusted context: `platform manifest compile
 apps/<app>/platform.app.ts`, run from that repository.
-- **Apps installed from an image** (a later phase) are read **only** from their
-  `platform.app.json`, delivered as an OCI image label or served at
-  `/.well-known/`. The CLI and the core API **never execute app code** for an
-  installed app. Any future install path must use the JSON-only loader
+- **Apps installed from an image** are read **only** from their `platform.app.json`,
+  delivered as the OCI image label (`app install --image` parses it as JSON and
+  never starts the image). The CLI and the core API **never execute app code** for
+  an installed app. Any other install path must use the JSON-only loader
   (`loadManifestFile(file, { jsonOnly: true })`), never the module loader.

@@ -14,6 +14,9 @@
  *   pnpm platform manifest compile <file>    validate and write platform.app.json beside it
  *   pnpm platform boundaries                 fail if core/ or packages/ import from apps/
  *   pnpm platform app install <id> [--env-out <file>]   install apps/<id> via core-api (P3.1)
+ *   pnpm platform app install --image <ref> [--env-out <file>]
+ *                                            install an app from another repository from its image (#87):
+ *                                            the manifest comes from its org.asafarim.app.manifest label
  *   pnpm platform app activate|deactivate <id>          change its lifecycle state
  *   pnpm platform role grant|revoke <role> <subject>    an admin (un)grants an app's declared role
  */
@@ -32,7 +35,10 @@ const USAGE = [
   "  platform manifest validate <file>",
   "  platform manifest compile <file>",
   "  platform boundaries",
-  "  platform app install <id> [--env-out <file>]",
+  "  platform app install <id> [--env-out <file>]          an app in apps/<id>",
+  "  platform app install --image <ref> [--env-out <file>]  an app from another repository, by image",
+  "      (the explicit --image flag tells the two apart; the manifest is read from the image's",
+  "      org.asafarim.app.manifest label, pulling it first if needed, and never by running it)",
   "  platform app activate|deactivate <id>",
   "  platform role grant|revoke <role> <subject>",
 ].join("\n");

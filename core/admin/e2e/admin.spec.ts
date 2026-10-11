@@ -4,7 +4,7 @@
  *
  *   a non-admin opening /admin → 403 →
  *   the admin signs in → activates notes (a styled dialog, never window.confirm) →
- *   the Status page shows core-api and notes up (P6.1) →
+ *   the Status page shows core-api, notes and the external-app fixture up (P6.1, #87) →
  *   grants notes.editor to the member → the member's launcher shows Notes and they can write →
  *   the admin deactivates notes → it disappears from the launcher and isn't polled any more →
  *   every admin action is in the audit log under the admin's own name →
@@ -193,34 +193,37 @@ test("the Events page lists notes' published type with its schema", async () => 
   await page.close();
 });
 
-test("the Status page shows core-api and notes as up and ready (P6.1)", async () => {
+// #87: an app from another repository, installed by `pnpm e2e` from its image (the manifest in its OCI
+// label) with `platform app install --image`, never from apps/.
+const EXTERNAL = "ext-demo";
+
+test("the Status page shows core-api, notes and the external app as up and ready (P6.1, #87)", async () => {
   const page = await adminCtx.newPage();
   // Activating notes made core-api check it at once; wait for that round rather than racing it.
-  await expect
-    .poll(
-      async () => (
-        await page.goto(`${ADMIN}/admin/status`),
-        await page
-          .getByTestId("status-notes")
-          .getAttribute("data-overall")
-          .catch(() => null)
-      ),
-      { timeout: 20_000 },
-    )
-    .toBe("up");
+  const overall = async () => {
+    await page.goto(`${ADMIN}/admin/status`);
+    const of = (id: string) =>
+      page
+        .getByTestId(`status-${id}`)
+        .getAttribute("data-overall", { timeout: 1_000 })
+        .catch(() => null);
+    return [await of("notes"), await of(EXTERNAL)];
+  };
+  await expect.poll(overall, { timeout: 20_000 }).toEqual(["up", "up"]);
   await expect(page.getByRole("heading", { level: 2, name: "Status" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Admin" }).getByRole("link", { name: "Status" })).toHaveAttribute(
     "aria-current",
     "page",
   );
   // Text, not just color: each badge says what it means.
-  for (const id of ["core-api", "notes"]) {
+  for (const id of ["core-api", "notes", EXTERNAL]) {
     await expect(page.getByTestId(`live-${id}`)).toHaveText("Up");
     await expect(page.getByTestId(`ready-${id}`)).toHaveText("Up");
     await expect(page.getByTestId(`problem-${id}`)).toHaveText("None");
   }
   await expect(page.getByTestId("status-summary")).toContainText("up");
   await page.screenshot({ path: `${SHOTS}/a4c-status.png` });
+  await page.getByTestId(`status-${EXTERNAL}`).screenshot({ path: `${SHOTS}/a4d-status-external-app.png` });
   await page.getByTestId("status-refresh").click();
   await expect(page).toHaveURL(/\/admin\/status$/);
   await page.close();
