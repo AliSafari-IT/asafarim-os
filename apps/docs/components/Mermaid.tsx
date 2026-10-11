@@ -21,17 +21,22 @@ export function Mermaid({ source, children }: { source: string; children: React.
 
   useEffect(() => {
     let cancelled = false;
+    // A colour-scheme change can start a draw while one is running: each gets its own id, and only
+    // the latest one is shown.
+    let latest = 0;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     async function draw() {
+      const run = ++latest;
+      const current = () => !cancelled && run === latest;
       try {
         const mermaid = (await import("mermaid")).default;
         mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark() ? "dark" : "default" });
-        const { svg } = await mermaid.render(id, source);
-        if (cancelled || !ref.current) return;
+        const { svg } = await mermaid.render(`${id}-${run}`, source);
+        if (!current() || !ref.current) return;
         ref.current.innerHTML = svg;
         setState("drawn");
       } catch {
-        if (!cancelled) setState("failed");
+        if (current()) setState("failed");
       }
     }
     void draw();

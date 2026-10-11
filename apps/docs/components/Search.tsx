@@ -61,14 +61,16 @@ export function Search() {
   const open = useCallback(() => {
     dialog.current?.showModal();
     input.current?.select();
-    if (docs || error) return;
+    if (docs) return;
+    // A failed load is tried again the next time the dialog opens.
+    setError(false);
     fetch("/api/search", { headers: { accept: "application/json" } })
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status));
         setDocs(((await res.json()) as { docs: Entry[] }).docs);
       })
       .catch(() => setError(true));
-  }, [docs, error]);
+  }, [docs]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

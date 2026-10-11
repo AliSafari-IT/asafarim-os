@@ -128,8 +128,11 @@ test("on a phone the documents are a drawer", async ({ page }) => {
   await expect(drawer).toBeHidden();
   await page.getByTestId("drawer-toggle").click();
   await expect(drawer).toBeVisible();
+  // Focus moves into the drawer, and back to the button when it closes.
+  await expect(page.getByTestId("tree-filter")).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(drawer).toBeHidden();
+  await expect(page.getByTestId("drawer-toggle")).toBeFocused();
   await page.getByTestId("drawer-toggle").click();
   await page.getByTestId("doc-ventures/demo-app/overview.md").click();
   await expect(page.getByTestId("doc-title")).toHaveText("Demo app overview");
