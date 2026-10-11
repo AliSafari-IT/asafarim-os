@@ -10,3 +10,10 @@ packages:
 allowBuilds:
   # tsx/vitest native binary (same as asafarim-platform)
   esbuild: true
+overrides:
+  # Security (pnpm audit, asafarim-platform#817): patched versions of transitive
+  # dependencies whose parents haven't released a fix yet. Drop an entry once
+  # its parent ships the fix on its own.
+  # next / vite -> postcss -> source-map-js: high, event-loop DoS through
+  # crafted source maps (GHSA-68fv-2mgg-jv7q, fixed in 1.2.2).
+  "source-map-js@>=1.0.0 <1.2.2": ^1.2.2
