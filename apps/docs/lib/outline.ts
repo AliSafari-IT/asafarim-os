@@ -33,22 +33,35 @@ export const bodyOf = (markdown: string) => stripFrontMatter(markdown).replace(L
 /** The prose: no front matter and no fenced code, whose `# comments` aren't headings. */
 export const proseOf = (markdown: string) => stripFrontMatter(markdown).replace(FENCE, "");
 
+/**
+ * Inline HTML dropped from a heading: from a `<` that starts a tag (a letter, `/` or `!` follows) to
+ * its `>`, nested too, so a split tag like `<scr<script>ipt>` can't leave one behind; a lone `<` or
+ * `>` (as in "a < b") is text. A scanner, not a regex. The text is never HTML anyway: React escapes it.
+ */
+function stripTags(text: string): string {
+  let out = "";
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === "<" && /[A-Za-z/!]/.test(text[i + 1] ?? "")) depth++;
+    else if (ch === ">" && depth > 0) depth--;
+    else if (depth === 0) out += ch;
+  }
+  return out;
+}
+
 /** A heading as it reads on the page: inline Markdown dropped, as the renderer's text is. */
 export function plainHeading(raw: string): string {
-  return (
-    raw
-      .replace(/\s+#+\s*$/, "")
-      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-      // Tags dropped, then any stray angle bracket: the text is never HTML (React escapes it anyway).
-      .replace(/<[^>]*>/g, "")
-      .replace(/[<>]/g, "")
-      .replace(/`([^`]*)`/g, "$1")
-      .replace(/(\*\*|__)(.+?)\1/g, "$2")
-      .replace(/(\*|_)(.+?)\1/g, "$2")
-      .replace(/~~(.+?)~~/g, "$1")
-      .trim()
-  );
+  const linksDropped = raw
+    .replace(/\s+#+\s*$/, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+  return stripTags(linksDropped)
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/(\*|_)(.+?)\1/g, "$2")
+    .replace(/~~(.+?)~~/g, "$1")
+    .trim();
 }
 
 export interface Heading {
