@@ -99,8 +99,8 @@ test("On this page, the filter, ⌘K search and links inside the documents", asy
   await expect(toc.getByRole("link")).toHaveText(["Milestones", "Timeline", "Architecture", "Setup", "Tracking"]);
   await toc.getByRole("link", { name: "Setup" }).click();
   await expect(page).toHaveURL(/#setup$/);
-  // The section being read is marked (Setup, or Tracking when the page can't scroll that far).
-  await expect(toc.locator('[aria-current="location"]')).toHaveText(/^(Setup|Tracking)$/);
+  // The section linked to is marked, even when the page can't scroll it to the top.
+  await expect(toc.locator('[aria-current="location"]')).toHaveText("Setup");
 
   await page.getByTestId("tree-filter").fill("roadm");
   await expect(page.locator("#documents").getByRole("link")).toHaveText(["Roadmap"]);
