@@ -7,8 +7,10 @@
  *   the external-app fixture: its image built with the manifest label, run, installed with
  *   `platform app install --image` and activated (#87; the Status spec checks it's up) →
  *   the Admin console (build and start) →
+ *   Docs (build and start), reading the made-up fixtures in apps/docs/fixtures (#80) →
  *   Playwright: notes.spec.ts (direct) and gateway.spec.ts (through http://notes.localhost:8080) in
- *   apps/notes, then admin.spec.ts (the console at http://core.localhost:8080, P3.3b) in core/admin →
+ *   apps/notes, then admin.spec.ts (the console at http://core.localhost:8080, P3.3b) in core/admin,
+ *   then docs.spec.ts (the reader, with Lighthouse) in apps/docs →
  *   stop everything. `--down` also removes the dev volumes (CI).
  *   `--screenshots` (`pnpm screenshots`): the same stack, then only core/site's screenshot spec, which
  *   writes the asafarim.site screenshots to core/site/public/screenshots/ (#70).
@@ -35,6 +37,8 @@ import {
 import { DEV, DEV_DIR, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
 
 const NOTES_DIR = path.join(ROOT, "apps/notes");
+const DOCS_DIR = path.join(ROOT, "apps/docs");
+const DOCS_URL = `http://localhost:${DEV.apps.docs}`;
 const ADMIN_DIR = path.join(ROOT, "core/admin");
 const ADMIN_URL = `http://localhost:${DEV.adminPort}`;
 const ADMIN_GATEWAY_URL = `http://core.localhost:${DEV.gatewayPort}`;
@@ -103,12 +107,25 @@ try {
   await waitForGateway(DEV.gatewayPort, `core.localhost:${DEV.gatewayPort}`, "/api/health", 200);
   console.log(`${green("✔")} the Admin console is up at ${ADMIN_URL} and at ${ADMIN_GATEWAY_URL}`);
 
+  // Docs (#80): a production build reading the fixtures from disk (no GitHub token in the e2e).
+  console.log(bold("Building Docs…"));
+  const docsNext = path.join(DOCS_DIR, "node_modules/next/dist/bin/next");
+  const docsBuild = spawnSync(process.execPath, [docsNext, "build"], { cwd: DOCS_DIR, stdio: "inherit" });
+  if (docsBuild.status !== 0) throw new Error("next build (docs) failed");
+  start("docs", [docsNext, "start", "--port", String(DEV.apps.docs)], DOCS_DIR, {
+    ...process.env,
+    DOCS_SOURCE_DIR: path.join(DOCS_DIR, "fixtures"),
+  });
+  await waitFor(`${DOCS_URL}/api/health`);
+  console.log(`${green("✔")} Docs is up at ${DOCS_URL}, reading the fixtures`);
+
   const core = readEnvFile(path.join(DEV_DIR, "core-api.env"));
   const e2eEnv = {
     ...process.env,
     E2E_BASE_URL: NOTES_URL,
     E2E_GATEWAY_URL: GATEWAY_URL,
     E2E_ADMIN_URL: ADMIN_GATEWAY_URL,
+    E2E_DOCS_URL: DOCS_URL,
     E2E_TOKEN_TTL: String(TOKEN_TTL),
     E2E_CORE_API_URL: core.CORE_API_URL,
     E2E_ADMIN_TOKEN: core.CORE_API_ADMIN_TOKEN,
@@ -120,13 +137,14 @@ try {
     E2E_ISSUER: ISSUER,
     E2E_HUB_ASSERTION_PRIVATE_JWK: readEnvFile(path.join(DEV_DIR, "dev-hub.env")).DEV_HUB_ASSERTION_PRIVATE_JWK,
   };
-  // Both suites always run (they share the stack, one after the other); the exit code is the first failure.
+  // Every suite always runs (they share the stack, one after the other); the exit code is the first failure.
   // `--screenshots` (`pnpm screenshots`, #70) runs the site's screenshot spec on the same stack instead.
   const runs = SCREENSHOTS
     ? [["@asafarim/site", "screenshots"]]
     : [
         ["@asafarim/notes", "e2e"],
         ["@asafarim/admin", "e2e"],
+        ["@asafarim/docs", "e2e"],
       ];
   const results = runs.map(([pkg, script]) => {
     const run = spawnSync("pnpm", ["--filter", pkg, script], {

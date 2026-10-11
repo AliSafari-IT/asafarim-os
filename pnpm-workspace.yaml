@@ -17,3 +17,9 @@ overrides:
   # next / vite -> postcss -> source-map-js: high, event-loop DoS through
   # crafted source maps (GHSA-68fv-2mgg-jv7q, fixed in 1.2.2).
   "source-map-js@>=1.0.0 <1.2.2": ^1.2.2
+  # docs (#80) -> mermaid -> chevrotain -> lodash-es: high, code injection through
+  # `_.template` (and a moderate prototype pollution), fixed in 4.18.1.
+  "lodash-es@>=4.0.0 <4.18.1": ^4.18.1
+  # docs (#80) -> mermaid -> katex: low, prototype pollution bypassing trust
+  # restrictions (GHSA-238p-pmpm-9mq7), fixed in 0.18.2.
+  "katex@>=0.11.0 <0.18.2": 0.18.9

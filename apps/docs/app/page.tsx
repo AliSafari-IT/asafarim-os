@@ -1,49 +1,37 @@
 import { Launcher } from "@asafarim/app-sdk/react";
-import Link from "next/link";
 import { forbidden, unauthorized } from "next/navigation";
 import { refreshAction, signOutAction } from "./actions";
+import { Markdown } from "@/components/Markdown";
+import type { NavNode } from "@/components/nav";
+import { ReaderShell } from "@/components/ReaderShell";
+import { Search } from "@/components/Search";
+import { Toc } from "@/components/Toc";
 import { auth } from "@/lib/auth";
 import { gate } from "@/lib/gate";
+import { readableName, tocOf } from "@/lib/outline";
 import { getPlatform } from "@/lib/platform";
 import { docParam, loadReader, type TreeNode } from "@/lib/reader";
 import { getSource } from "@/lib/source";
 
 export const dynamic = "force-dynamic";
 
-function Tree({ nodes, selected }: { nodes: TreeNode[]; selected?: string }) {
-  return (
-    <ul>
-      {nodes.map((n) =>
-        n.entry ? (
-          <li key={n.entry.path}>
-            {n.entry.kind === "doc" ? (
-              <Link
-                href={`/?doc=${encodeURIComponent(n.entry.path)}`}
-                aria-current={n.entry.path === selected ? "page" : undefined}
-                data-testid={`doc-${n.entry.path}`}
-              >
-                {n.name.replace(/\.md$/i, "")}
-              </Link>
-            ) : (
-              <a href={`/api/files/${n.entry.path.split("/").map(encodeURIComponent).join("/")}`} className="file">
-                {n.name}
-              </a>
-            )}
-          </li>
-        ) : (
-          <li key={`dir:${n.name}`} className="folder">
-            <span>{n.name}</span>
-            <Tree nodes={n.children} selected={selected} />
-          </li>
-        ),
-      )}
-    </ul>
+/** The tree as the browser gets it: readable names, worked out here. */
+function toNav(nodes: TreeNode[]): NavNode[] {
+  return nodes.map((n) =>
+    n.entry
+      ? {
+          label: n.entry.kind === "doc" ? readableName(n.name) : n.name,
+          path: n.entry.path,
+          kind: n.entry.kind,
+          children: [],
+        }
+      : { label: readableName(n.name), children: toNav(n.children) },
   );
 }
 
 /**
- * The reading layout: the file tree on the left, the document in the centre, its table of contents
- * on the right (#80). Documents come from the source repository at runtime (lib/source.ts).
+ * The reading layout (#80): the documents on the left (a drawer on a phone), the rendered document
+ * in the centre, "On this page" on the right, ⌘K search in the top bar. Documents come from the source repository at runtime (lib/source.ts).
  */
 export default async function Home({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   // The gate comes first (#79): signed out is a 401 sign-in page, no docs.read a plain 403 page.
@@ -108,6 +96,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           ) : null}
         </div>
         <div className="who">
+          {view.status === "ok" ? <Search /> : null}
           <form action={refreshAction}>
             {selected ? <input type="hidden" name="doc" value={selected} /> : null}
             <button type="submit" className="secondary" data-testid="refresh">
@@ -139,17 +128,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
         </p>
       ) : null}
 
-      <div className="reader" data-testid="reader">
-        <nav className="tree" aria-label="Documents">
-          <h2>Documents</h2>
-          {view.status === "ok" && view.tree.length ? (
-            <Tree nodes={view.tree} selected={selected} />
-          ) : (
-            <p className="muted" data-testid="tree-empty">
-              No documents yet.
-            </p>
-          )}
-        </nav>
+      <ReaderShell
+        nodes={view.status === "ok" ? toNav(view.tree) : []}
+        selected={selected}
+        toc={doc && !doc.missing ? <Toc items={tocOf(doc.headings)} /> : <p className="muted">Nothing open.</p>}
+      >
         <main id="document" className="document" tabIndex={-1}>
           <article>
             {doc?.missing ? (
@@ -159,35 +142,47 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
                   <span className="mono">{doc.path}</span> isn&apos;t in the source repository (any more).
                 </p>
               </>
-            ) : doc ? (
+            ) : doc && view.status === "ok" ? (
               <>
+                {doc.breadcrumb.length ? (
+                  <nav aria-label="Breadcrumb" className="crumbs" data-testid="breadcrumb">
+                    <ol>
+                      {doc.breadcrumb.map((c, i) => (
+                        <li key={`${i}:${c}`}>{c}</li>
+                      ))}
+                    </ol>
+                  </nav>
+                ) : null}
                 <h1 data-testid="doc-title">{doc.title}</h1>
                 <p className="meta">
                   <span className="badge owner" data-testid="owner" title={`Owner (from ${doc.owner.via})`}>
                     {doc.owner.repo}
-                  </span>{" "}
-                  <span className="muted mono">{doc.path}</span>
+                  </span>
+                  <span className="muted" data-testid="stats">
+                    {doc.stats.minutes} min read · {doc.stats.words.toLocaleString("en")} words
+                  </span>
                 </p>
-                <pre className="raw" data-testid="doc-raw">
-                  {doc.markdown}
-                </pre>
+                <div className="prose" data-testid="doc-body">
+                  <Markdown
+                    markdown={doc.markdown}
+                    fromDoc={doc.path}
+                    docs={view.paths.docs}
+                    images={view.paths.images}
+                  />
+                </div>
               </>
             ) : (
               <>
                 <h1>Nothing open</h1>
                 <p className="lead">
-                  Pick a document on the left to read it here. Documents are loaded from{" "}
-                  <span className="mono">{repo}</span> when you open them; none are stored in this app.
+                  Pick a document to read it here. Documents are loaded from <span className="mono">{repo}</span> when
+                  you open them; none are stored in this app.
                 </p>
               </>
             )}
           </article>
         </main>
-        <aside className="toc" aria-label="On this page">
-          <h2>On this page</h2>
-          <p className="muted">The headings of the open document.</p>
-        </aside>
-      </div>
+      </ReaderShell>
     </>
   );
 }

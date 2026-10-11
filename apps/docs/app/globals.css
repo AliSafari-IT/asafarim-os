@@ -134,10 +134,10 @@ button.secondary {
   color: var(--warn);
 }
 
-/* The reader: file tree | document | table of contents */
+/* The reader: documents | document | on this page (#80) */
 .reader {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 220px;
+  grid-template-columns: 270px minmax(0, 1fr) 230px;
   min-height: calc(100vh - 120px);
 }
 .tree,
@@ -151,6 +151,10 @@ button.secondary {
 .toc {
   border-left: 1px solid var(--line);
 }
+.toc > *:not(h2) {
+  position: sticky;
+  top: 24px;
+}
 .tree h2,
 .toc h2 {
   margin: 0 0 0.75rem;
@@ -159,72 +163,78 @@ button.secondary {
   text-transform: uppercase;
   color: var(--muted);
 }
+.drawer-toggle,
+.scrim {
+  display: none;
+}
 .document {
-  padding: 48px 32px 96px;
+  padding: 40px 32px 96px;
   outline: none;
+  min-width: 0;
 }
 .document article {
-  max-width: 70ch;
+  max-width: 72ch;
   margin: 0 auto;
 }
 .document h1 {
   font-family: var(--serif);
   font-size: 2.2rem;
   line-height: 1.2;
-  margin: 0 0 1rem;
+  margin: 0 0 0.75rem;
 }
 .lead {
   font-size: 1.1rem;
   color: var(--muted);
 }
-
-@media (max-width: 1100px) {
-  .reader {
-    grid-template-columns: 240px minmax(0, 1fr);
-  }
-  .toc {
-    display: none;
-  }
-}
-@media (max-width: 720px) {
-  .reader {
-    grid-template-columns: 1fr;
-  }
-  .tree {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .topbar {
-    padding: 12px 16px;
-  }
-  .document {
-    padding: 32px 16px 64px;
-  }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
-/* The tree, the owner badge and the raw document (#78; rendering comes with #80) */
+/* The documents */
+.filter input,
+.search input {
+  width: 100%;
+  font: inherit;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+}
+.filter {
+  display: block;
+  margin-bottom: 12px;
+}
 .tree ul {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 .tree ul ul {
-  padding-left: 14px;
+  padding-left: 12px;
   border-left: 1px solid var(--line);
-  margin: 2px 0 6px 4px;
+  margin: 2px 0 6px 6px;
 }
 .tree li {
   margin: 2px 0;
 }
-.tree .folder > span {
+.tree summary {
+  cursor: pointer;
   font-weight: 600;
   color: var(--muted);
+  padding: 2px 4px;
+  border-radius: 6px;
 }
 .tree a {
   color: var(--ink);
   text-decoration: none;
   display: block;
-  padding: 2px 6px;
+  padding: 3px 8px;
   border-radius: 6px;
 }
 .tree a:hover {
@@ -239,6 +249,54 @@ button.secondary {
   font-family: var(--mono);
   font-size: 0.85em;
 }
+
+/* On this page */
+.toc ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.toc li.level-3 {
+  padding-left: 14px;
+}
+.toc a {
+  display: block;
+  padding: 3px 8px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  text-decoration: none;
+}
+.toc a:hover {
+  color: var(--ink);
+}
+.toc a[aria-current="location"] {
+  border-left-color: var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Title block */
+.crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.crumbs li + li::before {
+  content: "›";
+  padding: 0 0.4em;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 2rem;
+  font-size: 0.9rem;
+}
 .badge {
   display: inline-block;
   padding: 1px 8px;
@@ -252,15 +310,240 @@ button.secondary {
   border-color: var(--accent);
   font-family: var(--mono);
 }
-.meta {
-  margin: -0.5rem 0 1.5rem;
+
+/* The rendered document */
+.prose {
+  font-family: var(--serif);
+  font-size: 1.08rem;
+  line-height: 1.7;
 }
-.raw {
-  white-space: pre-wrap;
-  word-break: break-word;
-  font: 0.92rem/1.6 var(--mono);
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-family: var(--sans);
+  line-height: 1.3;
+  margin: 2.2rem 0 0.6rem;
+  scroll-margin-top: 16px;
+}
+.prose h2 {
+  font-size: 1.45rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--line);
+}
+.prose h3 {
+  font-size: 1.2rem;
+}
+.prose a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+.prose .anchor {
+  margin-left: 0.4em;
+  color: var(--muted);
+  text-decoration: none;
+  opacity: 0;
+}
+.prose :is(h1, h2, h3, h4, h5, h6):hover .anchor {
+  opacity: 1;
+}
+.prose code {
+  font-family: var(--mono);
+  font-size: 0.88em;
   background: var(--card);
   border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.05em 0.3em;
+}
+.prose pre {
+  font: 0.88rem/1.55 var(--mono);
+  border: 1px solid var(--line);
   border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+}
+.prose pre code {
+  border: 0;
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+/* shiki writes both themes as variables (defaultColor: false); the colour scheme picks one. */
+.prose .shiki,
+.prose .shiki span {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+@media (prefers-color-scheme: dark) {
+  .prose .shiki,
+  .prose .shiki span {
+    color: var(--shiki-dark);
+    background-color: var(--shiki-dark-bg);
+  }
+}
+.prose .shiki span {
+  background-color: transparent;
+}
+.prose blockquote {
+  margin: 1.2rem 0;
+  padding: 0 1rem;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+}
+.prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.table-wrap {
+  overflow-x: auto;
+  margin: 1.2rem 0;
+}
+.prose table {
+  border-collapse: collapse;
+  font-family: var(--sans);
+  font-size: 0.92rem;
+  min-width: 100%;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+}
+.prose th {
+  background: var(--card);
+}
+.prose li.task-list-item {
+  list-style: none;
+}
+.prose li.task-list-item input {
+  margin: 0 0.4em 0 -1.4em;
+}
+.dead-link {
+  text-decoration: underline dotted;
+  color: var(--muted);
+  cursor: help;
+}
+.missing-image {
+  font-family: var(--sans);
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.mermaid {
+  margin: 1.4rem 0;
+}
+.mermaid figcaption {
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ⌘K search */
+.search-button kbd {
+  font-family: var(--mono);
+  font-size: 0.8em;
+  margin-left: 6px;
+  opacity: 0.8;
+}
+dialog.search {
+  width: min(640px, calc(100vw - 32px));
+  margin: 12vh auto auto;
   padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+}
+dialog.search::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+.search ul {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.search li {
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.search li[aria-selected="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.search li .context {
+  display: block;
+  font-size: 0.85rem;
+}
+.search li[aria-selected="true"] .context {
+  color: inherit;
+}
+.search .hint {
+  margin: 10px 0 0;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 1100px) {
+  .reader {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+  .toc {
+    display: none;
+  }
+}
+/* On a phone the documents are a drawer. */
+@media (max-width: 760px) {
+  .reader {
+    grid-template-columns: 1fr;
+  }
+  .drawer-toggle {
+    display: inline-block;
+    justify-self: start;
+    margin: 12px 16px 0;
+  }
+  .tree {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(320px, 85vw);
+    overflow-y: auto;
+    background: var(--bg);
+    border-right: 1px solid var(--line);
+    z-index: 20;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition:
+      transform 0.2s ease,
+      visibility 0.2s;
+  }
+  .reader[data-drawer="open"] .tree {
+    transform: none;
+    visibility: visible;
+    /* Visible at once when opening (focus moves in straight away); hidden only after the slide out. */
+    transition: transform 0.2s ease;
+  }
+  .reader[data-drawer="open"] .scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgb(0 0 0 / 0.35);
+    z-index: 15;
+  }
+  .topbar {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+  }
+  .document {
+    padding: 24px 16px 64px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tree {
+    transition: none;
+  }
 }
