@@ -1,3 +1,5 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -202,5 +204,30 @@ describe("the fixture source (local development)", () => {
     expect(await s.readDoc("guides/getting-started.md")).toMatch(/^# Getting started/);
     const backend = createFixtureBackend(path.resolve(import.meta.dirname, "../fixtures"));
     await expect(backend.read("../package.json")).rejects.toBeInstanceOf(DocNotFoundError);
+  });
+});
+
+describe("a source folder (DOCS_SOURCE_DIR) never follows symbolic links (#80)", () => {
+  let base: string;
+  beforeEach(() => {
+    base = mkdtempSync(path.join(tmpdir(), "docs-src-"));
+    mkdirSync(path.join(base, "outside"));
+    writeFileSync(path.join(base, "outside", "secret.md"), "# secret\n");
+    writeFileSync(path.join(base, "outside", "secret.png"), "not an image");
+    mkdirSync(path.join(base, "root"));
+    writeFileSync(path.join(base, "root", "real.md"), "# Real\n");
+    symlinkSync(path.join(base, "outside", "secret.md"), path.join(base, "root", "linked.md"));
+    symlinkSync(path.join(base, "outside", "secret.png"), path.join(base, "root", "linked.png"));
+    symlinkSync(path.join(base, "outside"), path.join(base, "root", "folder"));
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+  it("lists only real files, and refuses to read through a link", async () => {
+    const backend = createFixtureBackend(path.join(base, "root"));
+    expect((await backend.tree()).paths).toEqual(["real.md"]);
+    expect(new TextDecoder().decode(await backend.read("real.md"))).toBe("# Real\n");
+    for (const p of ["linked.md", "linked.png", "folder/secret.md", "../outside/secret.md"]) {
+      await expect(backend.read(p), p).rejects.toBeInstanceOf(DocNotFoundError);
+    }
   });
 });

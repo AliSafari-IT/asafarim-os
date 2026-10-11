@@ -10,7 +10,7 @@ import "server-only";
  * logged, isn't in an error message, and `server-only` keeps this file out of browser bundles.
  */
 import { createHash } from "node:crypto";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { parseOwnersConfig, type ParsedOwners } from "./owners";
 
@@ -131,16 +131,26 @@ export function createFixtureBackend(dir: string): SourceBackend {
   return {
     mode: "fixtures",
     async tree() {
-      let names: string[];
+      // Only real files and folders: a symbolic link (to a file or a folder) is never listed or
+      // descended into, so nothing outside the folder is reachable through one (DOCS_SOURCE_DIR works
+      // in a production build).
+      const names: string[] = [];
+      const walk = async (rel: string): Promise<void> => {
+        for (const d of await readdir(path.join(root, rel), { withFileTypes: true })) {
+          const name = rel ? `${rel}/${d.name}` : d.name;
+          if (d.isDirectory()) await walk(name);
+          else if (d.isFile()) names.push(name);
+        }
+      };
       try {
-        names = (await readdir(root, { recursive: true })).map((n) => n.split(path.sep).join("/"));
+        await walk("");
       } catch {
         throw new SourceUnavailableError("the fixture folder can't be read");
       }
       const files: string[] = [];
       const digest = createHash("sha256");
       for (const name of names.sort()) {
-        const s = await stat(path.join(root, name));
+        const s = await lstat(path.join(root, name));
         if (!s.isFile()) continue;
         files.push(name);
         digest.update(`${name}\0${s.size}\0${s.mtimeMs}\n`);
@@ -151,7 +161,13 @@ export function createFixtureBackend(dir: string): SourceBackend {
       const full = path.resolve(root, filePath);
       if (!full.startsWith(root + path.sep)) throw new DocNotFoundError(filePath);
       try {
-        return new Uint8Array(await readFile(full));
+        // The real path (any linked folder on the way resolved) must still be inside the real root,
+        // and the file itself must not be a link.
+        const [realRoot, realFull] = await Promise.all([realpath(root), realpath(full)]);
+        if (!realFull.startsWith(realRoot + path.sep) || (await lstat(full)).isSymbolicLink()) {
+          throw new DocNotFoundError(filePath);
+        }
+        return new Uint8Array(await readFile(realFull));
       } catch {
         throw new DocNotFoundError(filePath);
       }
