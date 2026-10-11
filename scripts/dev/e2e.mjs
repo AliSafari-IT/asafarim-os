@@ -10,7 +10,8 @@
  *   Docs (build and start), reading the made-up fixtures in apps/docs/fixtures (#80) →
  *   Playwright: notes.spec.ts (direct) and gateway.spec.ts (through http://notes.localhost:8080) in
  *   apps/notes, then admin.spec.ts (the console at http://core.localhost:8080, P3.3b) in core/admin,
- *   then docs.spec.ts (the reader, with Lighthouse) in apps/docs →
+ *   then docs.spec.ts (the reader, with Lighthouse) and notes.spec.ts (study notes, #81) in apps/docs →
+ *   restart Docs, then the `@after-restart` test: the notes are still in its database →
  *   stop everything. `--down` also removes the dev volumes (CI).
  *   `--screenshots` (`pnpm screenshots`): the same stack, then only core/site's screenshot spec, which
  *   writes the asafarim.site screenshots to core/site/public/screenshots/ (#70).
@@ -112,11 +113,15 @@ try {
   const docsNext = path.join(DOCS_DIR, "node_modules/next/dist/bin/next");
   const docsBuild = spawnSync(process.execPath, [docsNext, "build"], { cwd: DOCS_DIR, stdio: "inherit" });
   if (docsBuild.status !== 0) throw new Error("next build (docs) failed");
-  start("docs", [docsNext, "start", "--port", String(DEV.apps.docs)], DOCS_DIR, {
-    ...process.env,
-    DOCS_SOURCE_DIR: path.join(DOCS_DIR, "fixtures"),
-  });
-  await waitFor(`${DOCS_URL}/api/health`);
+  const startDocs = async () => {
+    const child = start("docs", [docsNext, "start", "--port", String(DEV.apps.docs)], DOCS_DIR, {
+      ...process.env,
+      DOCS_SOURCE_DIR: path.join(DOCS_DIR, "fixtures"),
+    });
+    await waitFor(`${DOCS_URL}/api/health`);
+    return child;
+  };
+  let docs = await startDocs();
   console.log(`${green("✔")} Docs is up at ${DOCS_URL}, reading the fixtures`);
 
   const core = readEnvFile(path.join(DEV_DIR, "core-api.env"));
@@ -144,17 +149,35 @@ try {
     : [
         ["@asafarim/notes", "e2e"],
         ["@asafarim/admin", "e2e"],
-        ["@asafarim/docs", "e2e"],
+        ["@asafarim/docs", "e2e", "--grep-invert", "@after-restart"],
       ];
-  const results = runs.map(([pkg, script]) => {
-    const run = spawnSync("pnpm", ["--filter", pkg, script], {
+  const run = ([pkg, script, ...args], env = e2eEnv) =>
+    spawnSync("pnpm", ["--filter", pkg, script, ...args], {
       cwd: ROOT,
       stdio: "inherit",
       shell: process.platform === "win32",
-      env: e2eEnv,
-    });
-    return run.status ?? 1;
-  });
+      env,
+    }).status ?? 1;
+  const results = runs.map((r) => run(r));
+  if (!SCREENSHOTS) {
+    // Study notes survive a restart (#81): stop Docs, start it again, and look for them.
+    console.log(bold("Restarting Docs…"));
+    if (docs.exitCode === null) {
+      await new Promise((resolve) => {
+        docs.once("exit", resolve);
+        docs.kill();
+      });
+    }
+    docs = await startDocs();
+    // Its own output and report folders: Playwright empties the ones it writes to, and the first
+    // run's screenshots, Lighthouse scores and report must stay.
+    results.push(
+      run(["@asafarim/docs", "e2e", "--grep", "@after-restart", "--output", "test-results/after-restart"], {
+        ...e2eEnv,
+        PLAYWRIGHT_HTML_OUTPUT_DIR: "playwright-report/after-restart",
+      }),
+    );
+  }
   exitCode = results.find((code) => code !== 0) ?? 0;
   const label = SCREENSHOTS ? "screenshots" : "e2e";
   console.log(exitCode === 0 ? green(bold(`\n${label}: OK`)) : red(bold(`\n${label}: FAILED`)));

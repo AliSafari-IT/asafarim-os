@@ -39,6 +39,18 @@ Around it: the documents with readable names and a filter (a drawer on a phone),
 
 The browser check is `e2e/docs.spec.ts`, run by `pnpm e2e` after notes and admin: the roadmap fixture renders, every navigation lands in the right place, the drawer works, and Lighthouse accessibility is at least 95 in light and dark (`test-results/lighthouse.json`, with screenshots in `test-results/screens/`).
 
+## Study notes (#81)
+
+While reading, select some text (or point at a heading) and choose **Add note**: a private note in Markdown, kept in the app's own Postgres database (`DATABASE_URL`, created by `platform app install`; the table is made by `lib/notes.ts` on first use, indexed on `(author, doc_path)`).
+
+- **Anchoring.** A note keeps the heading id, the quoted text (plain text) and the version of the document it was written on (sha-256 of the Markdown); never line numbers. When the document changes, `lib/anchor.ts` looks for the quote again, whitespace ignored: in its own section, then anywhere. If it's gone, the note is kept under its heading (or at the top when the heading is gone too) and marked **text changed**.
+- **Highlights** are drawn in the browser with the CSS Custom Highlight API over the page's text nodes: nothing is re-parsed or inserted. A quote that occurs more than once is highlighted at its first match after its heading. Clicking a highlight shows its note.
+- **Notes are private and untrusted.** `GET /api/notes` needs `docs.read` and returns only the caller's own notes; `POST /api/notes`, `PATCH` and `DELETE /api/notes/:id` also need `docs.notes.write`, and every query is scoped to the author, so anyone else's note is "not found". Writes must be `application/json`. A note's body goes through the same Markdown pipeline as a document (sanitized first, no raw HTML); its quote is shown as text.
+- **/notes** lists every note by document, filterable by document. Notes are edited and deleted on their document.
+- **Generate GitHub issue** is shown next to **Add note** but does nothing yet (#82 needs the issue token).
+
+`e2e/notes.spec.ts` creates, edits and deletes notes, checks the "text changed" case and Lighthouse accessibility (light and dark, `test-results/lighthouse-notes.json`); `pnpm e2e` then restarts Docs and checks the notes are still there.
+
 ## Try it
 
 ```bash

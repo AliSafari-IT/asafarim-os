@@ -10,48 +10,14 @@
  * Screenshots go to test-results/screens/ and the Lighthouse scores to test-results/lighthouse.json
  * (both uploaded by CI).
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { chromium, expect, test, type Page } from "@playwright/test";
-import lighthouse from "lighthouse";
-
-const CORE_API = process.env.E2E_CORE_API_URL ?? "http://localhost:4020";
-const ADMIN_TOKEN = process.env.E2E_ADMIN_TOKEN ?? "";
-const BASE = process.env.E2E_DOCS_URL ?? "http://localhost:4110";
-const SHOTS = "test-results/screens";
-const ROADMAP = "ventures/demo-app/roadmap/roadmap.md";
-const roadmapUrl = (hash = "") => `/?doc=${encodeURIComponent(ROADMAP)}${hash}`;
-const MIN_A11Y = 0.95;
-
-async function admin(method: string, p: string) {
-  const res = await fetch(`${CORE_API}${p}`, { method, headers: { authorization: `Bearer ${ADMIN_TOKEN}` } });
-  return res.status;
-}
-
-/** Sign in through identity and the dev login stub as dev-member. */
-async function signIn(page: Page) {
-  await page.goto(`${BASE}/`);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("button", { name: /Dev Member/ }).click();
-  await expect(page.getByTestId("who")).toBeVisible();
-}
+import { mkdirSync, writeFileSync } from "node:fs";
+import { expect, test } from "@playwright/test";
+import { accessibilityScore, grantOwner, MIN_A11Y, revokeOwner, roadmapUrl, SHOTS, signIn } from "./support";
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeAll(async () => {
-  expect(ADMIN_TOKEN, "E2E_ADMIN_TOKEN must be set (pnpm e2e sets it)").not.toBe("");
-  // 409 when it's already active: fine.
-  expect([200, 409]).toContain(await admin("POST", "/admin/v1/apps/docs/activate"));
-  expect(await admin("PUT", "/admin/v1/roles/docs.owner/grants/dev-member")).toBeLessThan(300);
-  // The app caches a person's access for 1 s in development.
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-});
-
-test.afterAll(async () => {
-  await admin("DELETE", "/admin/v1/roles/docs.owner/grants/dev-member");
-  await admin("POST", "/admin/v1/apps/docs/deactivate");
-});
+test.beforeAll(grantOwner);
+test.afterAll(revokeOwner);
 
 test("the roadmap renders: table, tasks, code, Mermaid, the image and its links", async ({ page }) => {
   await signIn(page);
@@ -139,46 +105,6 @@ test("on a phone the documents are a drawer", async ({ page }) => {
   await expect(drawer).toBeHidden();
   await page.screenshot({ path: `${SHOTS}/docs-phone.png`, fullPage: true });
 });
-
-/**
- * Lighthouse (accessibility only) on the roadmap, signed in: Chromium is launched with a DevTools
- * port, signed in through Playwright, and Lighthouse opens the page in that same browser.
- */
-async function accessibilityScore(scheme: "light" | "dark") {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "docs-lh-"));
-  const context = await chromium.launchPersistentContext(userDataDir, {
-    // Full Chromium (new headless), the browser Lighthouse is made for.
-    channel: "chromium",
-    args: ["--remote-debugging-port=0", ...(scheme === "dark" ? ["--force-dark-mode"] : [])],
-    viewport: { width: 1350, height: 940 },
-    // No emulated colour scheme: Lighthouse's tab has to see the browser's own.
-    colorScheme: null,
-  });
-  try {
-    const page = context.pages()[0] ?? (await context.newPage());
-    await signIn(page);
-    await page.goto(`${BASE}${roadmapUrl()}`);
-    // The scheme Lighthouse will see is the browser's own, not an emulation of this page.
-    expect(await page.evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches)).toBe(scheme === "dark");
-    const port = Number(readFileSync(path.join(userDataDir, "DevToolsActivePort"), "utf8").split("\n")[0]);
-    const result = await lighthouse(
-      `${BASE}${roadmapUrl()}`,
-      { port, onlyCategories: ["accessibility"], disableStorageReset: true, logLevel: "error", output: "json" },
-      {
-        extends: "lighthouse:default",
-        settings: { formFactor: "desktop", screenEmulation: { disabled: true }, throttlingMethod: "provided" },
-      },
-    );
-    const lhr = result!.lhr;
-    const failing = Object.values(lhr.audits)
-      .filter((a) => a.score !== null && a.score < 1 && a.scoreDisplayMode === "binary")
-      .map((a) => `${a.id}: ${a.title}`);
-    return { scheme, score: lhr.categories.accessibility!.score ?? 0, failing };
-  } finally {
-    await context.close();
-    rmSync(userDataDir, { recursive: true, force: true });
-  }
-}
 
 test("Lighthouse accessibility is at least 95, light and dark", async () => {
   const results = [await accessibilityScore("light"), await accessibilityScore("dark")];
