@@ -1,5 +1,6 @@
 import { countNotes, createNote, listNotes } from "@/lib/db";
 import { gate } from "@/lib/gate";
+import { log } from "@/lib/log";
 import { getPlatform } from "@/lib/platform";
 
 export const dynamic = "force-dynamic";
@@ -7,7 +8,9 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const g = await gate("notes.read");
   if (!g.ok) return Response.json(g.body, { status: g.status });
-  return Response.json({ notes: await listNotes(100) });
+  const notes = await listNotes(100);
+  log.info("notes listed", { count: notes.length });
+  return Response.json({ notes });
 }
 
 export async function POST(request: Request) {

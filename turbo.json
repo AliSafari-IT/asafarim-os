@@ -32,7 +32,8 @@
     },
     "dev": {
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": ["OTEL_EXPORTER_OTLP_ENDPOINT", "DEPLOYMENT_ENVIRONMENT"]
     }
   }
 }

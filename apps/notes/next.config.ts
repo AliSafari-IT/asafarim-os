@@ -15,8 +15,8 @@ const nextConfig: NextConfig = {
   output: process.env.BUILD_STANDALONE === "true" ? "standalone" : undefined,
   // Hide the floating Next.js dev-tools indicator.
   devIndicators: false,
-  // pg and the SDK use Node APIs; keep them out of the bundler.
-  serverExternalPackages: ["pg"],
+  // pg and the OpenTelemetry SDK (@asafarim/telemetry) use Node APIs; keep them out of the bundler.
+  serverExternalPackages: ["pg", "@asafarim/telemetry"],
   transpilePackages: ["@asafarim/app-sdk"],
 };
 
