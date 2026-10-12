@@ -5,7 +5,7 @@
 //   node --test deploy/redeploy.test.mjs          (needs bash and git)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -52,7 +52,7 @@ function setup() {
   const bin = path.join(dir, "bin");
   mkdirSync(src);
   git(src, "init", "-q", "-b", "main");
-  const c0 = commit(src, "scripts", {
+  commit(src, "scripts", {
     "deploy/redeploy.sh": script,
     "deploy/vps-deploy.sh": '#!/usr/bin/env bash\necho "vps-deploy $* (HEAD $(git rev-parse HEAD))" >> "$CALLS"\n',
     "core/site/index.html": "v0",
@@ -62,12 +62,12 @@ function setup() {
   for (const file of ["deploy/redeploy.sh", "deploy/vps-deploy.sh"]) chmodSync(path.join(src, file), 0o755);
   git(src, "add", "-A");
   git(src, "commit", "-q", "--amend", "--no-edit");
-  const c0x = git(src, "rev-parse", "HEAD");
+  const c0 = git(src, "rev-parse", "HEAD");
   const c1 = commit(src, "site", { "core/site/deep/page.html": "v1" });
   const c2 = commit(src, "readme", { "README.md": "r1" });
   git(dir, "clone", "-q", "--bare", src, origin);
   git(dir, "clone", "-q", origin, vps);
-  git(vps, "reset", "-q", "--hard", c0x);
+  git(vps, "reset", "-q", "--hard", c0);
   // Stand-ins. docker answers `manifest inspect <image>` like a registry that only has $PUBLISHED.
   mkdirSync(bin);
   writeFileSync(
@@ -76,7 +76,7 @@ function setup() {
     { mode: 0o755 },
   );
   writeFileSync(path.join(dir, "calls.log"), "");
-  return { dir, vps, bin, c0: c0x, c1, c2, calls: path.join(dir, "calls.log") };
+  return { dir, vps, bin, c0, c1, c2, calls: path.join(dir, "calls.log") };
 }
 
 function run(env, args = []) {
