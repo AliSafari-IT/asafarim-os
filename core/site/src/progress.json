@@ -50,6 +50,13 @@
       "date": "2026-10-10",
       "summary": "The last lifecycle step: an admin removes an app, its grants and bus resources are cleaned up, and it can be installed again from scratch.",
       "prs": [69]
+    },
+    {
+      "id": "Landing",
+      "title": "This page is live",
+      "date": "2026-10-12",
+      "summary": "asafarim.site now serves the OS landing page from its own container, deployed on its own with one command and no identity. The placeholder page is gone.",
+      "prs": [74, 98]
     }
   ],
   "screenshots": [
