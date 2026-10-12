@@ -15,7 +15,8 @@
 #   <site-image-commit>  the commit whose site image to run (default: <commit>). Same rule, with the
 #                   "Site image" workflow (#70): pass the sha of its latest run.
 #   --site-only     the landing page alone (#97): steps 1, 4 (edge_net and the edge script only), 5 and 6 for
-#                   os-site only, then step 7 with sites/asafarim-os-site.caddy. It never decrypts anything,
+#                   os-site only, then step 7 with sites/asafarim-os-site.caddy, and step 8: before the edge
+#                   cutover, the same file for the Caddy that serves 443 today. It never decrypts anything,
 #                   needs no age, no identity_db and no clients.json, and never starts or touches identity or
 #                   os-redis. It refuses to run while identity is running: the site-only file would take
 #                   id.asafarim.site off the edge. A later full deploy replaces the site-only file.
@@ -83,6 +84,8 @@ main() {
   # The reset can bring a newer env checker than the one this run started with: load it now.
   # shellcheck source=deploy/lib/env-check.sh
   source "${repo_dir}/deploy/lib/env-check.sh"
+  # shellcheck source=deploy/lib/live-caddy.sh
+  source "${repo_dir}/deploy/lib/live-caddy.sh"
 
   if [[ "$site_only" != true ]]; then
     # 2. Decrypt with plain age. The file is created private from the start, then moved into place.
@@ -176,6 +179,14 @@ main() {
   [[ "$site_only" == true ]] && site_file=sites/asafarim-os-site.caddy
   log "Publishing ${site_file} on the shared edge..."
   EDGE_DIR="$edge_dir" bash "${edge_dir}/scripts/edge-deploy-site.sh" asafarim-os "${repo_dir}/${site_file}"
+
+  # 8. Site-only: before the edge cutover the edge only stores the file, so also install it for the Caddy
+  # that serves 443 today (deploy/lib/live-caddy.sh). After the cutover this does nothing.
+  if [[ "$site_only" == true ]]; then
+    log "Publishing ${site_file} on the live Caddy (before the edge cutover)..."
+    publish_live_site "${repo_dir}/${site_file}" \
+      || fatal "the live Caddy did not take ${site_file} (see above). The edge has it; the live Caddy is unchanged or restored."
+  fi
 
   if [[ "$site_only" == true ]]; then
     log "Done. Check: curl -fsSI https://asafarim.site/"
