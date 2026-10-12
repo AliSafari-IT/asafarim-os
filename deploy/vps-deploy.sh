@@ -5,6 +5,7 @@
 # Run by the OWNER, from the repository folder (normally /var/repos/asafarim-os). Nothing else runs it.
 #
 #   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>]
+#   deploy/vps-deploy.sh --site-only <commit> [<site-image-commit>]
 #
 #   <commit>        the repository state to deploy, as a full 40-character sha: this script, the
 #                   compose file, the site file, the encrypted env. It must be on origin/main.
@@ -13,6 +14,12 @@
 #                   image of its own: pass the sha shown by the latest "Identity image" run.
 #   <site-image-commit>  the commit whose site image to run (default: <commit>). Same rule, with the
 #                   "Site image" workflow (#70): pass the sha of its latest run.
+#   --site-only     the landing page alone (#97): steps 1, 4 (edge_net and the edge script only), 5 and 6 for
+#                   os-site only, then step 7 with sites/asafarim-os-site.caddy, and step 8: before the edge
+#                   cutover, the same file for the Caddy that serves 443 today. It never decrypts anything,
+#                   needs no age, no identity_db and no clients.json, and never starts or touches identity or
+#                   os-redis. It refuses to run while identity is running: the site-only file would take
+#                   id.asafarim.site off the edge. A later full deploy replaces the site-only file.
 #
 # What it does, in this order (it stops at the first failure and says why):
 #   1. fetch and `git reset --hard` to <commit>;
@@ -32,7 +39,17 @@ set -euo pipefail
 # Everything lives in main(), called on ONE line at the very end. Step 1 resets this checkout, which can
 # replace this very file while bash is still reading it; bash has parsed all of main() by then.
 main() {
-  local commit="${1:?usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>]}"
+  local usage="usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] | --site-only <commit> [<site-image-commit>]"
+  local site_only=false
+  if [[ "${1:-}" == "--site-only" ]]; then
+    site_only=true
+    shift
+    (($# <= 2)) || { echo "FATAL: ${usage}" >&2; exit 1; }
+    # The same positions as a full deploy. There is no identity image here, so <image-commit> stays unset
+    # (it defaults to <commit> and is never pulled).
+    set -- "${1:-}" "" "${2:-}"
+  fi
+  local commit="${1:?$usage}"
   local image_commit="${2:-$commit}"
   local site_image_commit="${3:-$commit}"
 
@@ -48,7 +65,9 @@ main() {
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<commit> must be a full 40-character sha, got '${commit}'."
   [[ "$image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<image-commit> must be a full 40-character sha, got '${image_commit}'."
   [[ "$site_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<site-image-commit> must be a full 40-character sha, got '${site_image_commit}'."
-  for tool in git age docker flock; do
+  local tools=(git age docker flock)
+  [[ "$site_only" == true ]] && tools=(git docker flock)
+  for tool in "${tools[@]}"; do
     command -v "$tool" >/dev/null 2>&1 || fatal "'${tool}' is not installed on this host."
   done
 
@@ -65,57 +84,79 @@ main() {
   # The reset can bring a newer env checker than the one this run started with: load it now.
   # shellcheck source=deploy/lib/env-check.sh
   source "${repo_dir}/deploy/lib/env-check.sh"
+  # shellcheck source=deploy/lib/live-caddy.sh
+  source "${repo_dir}/deploy/lib/live-caddy.sh"
 
-  # 2. Decrypt with plain age. The file is created private from the start, then moved into place.
-  log "Decrypting core/identity/.env.production.age..."
-  [[ -f .age/key.txt ]] || fatal ".age/key.txt is missing on this host. Provision it once (chmod 600)."
-  [[ -f core/identity/.env.production.age ]] || fatal "core/identity/.env.production.age is not in this commit."
-  ( umask 077 && age -d -i .age/key.txt core/identity/.env.production.age > .env.identity.tmp ) \
-    || { rm -f .env.identity.tmp; fatal "age could not decrypt core/identity/.env.production.age."; }
-  mv -f .env.identity.tmp .env.identity
-  chmod 600 .env.identity
+  if [[ "$site_only" != true ]]; then
+    # 2. Decrypt with plain age. The file is created private from the start, then moved into place.
+    log "Decrypting core/identity/.env.production.age..."
+    [[ -f .age/key.txt ]] || fatal ".age/key.txt is missing on this host. Provision it once (chmod 600)."
+    [[ -f core/identity/.env.production.age ]] || fatal "core/identity/.env.production.age is not in this commit."
+    ( umask 077 && age -d -i .age/key.txt core/identity/.env.production.age > .env.identity.tmp ) \
+      || { rm -f .env.identity.tmp; fatal "age could not decrypt core/identity/.env.production.age."; }
+    mv -f .env.identity.tmp .env.identity
+    chmod 600 .env.identity
 
-  # 3. Every variable the example lists must be filled. The failure names it; it never shows a value.
-  log "Checking the environment (names only)..."
-  require_env_vars .env.identity core/identity/.env.production.example \
-    || fatal "fill the variables named above in core/identity/.env.production, re-encrypt it, commit the .age file, and deploy that commit."
+    # 3. Every variable the example lists must be filled. The failure names it; it never shows a value.
+    log "Checking the environment (names only)..."
+    require_env_vars .env.identity core/identity/.env.production.example \
+      || fatal "fill the variables named above in core/identity/.env.production, re-encrypt it, commit the .age file, and deploy that commit."
 
-  # 4. What this stack cannot create for itself.
-  docker network inspect identity_db >/dev/null 2>&1 \
-    || fatal "the identity_db network does not exist. Deploy the asafarim-com change first (it creates the network and puts postgres on it)."
+    # 4. What this stack cannot create for itself.
+    docker network inspect identity_db >/dev/null 2>&1 \
+      || fatal "the identity_db network does not exist. Deploy the asafarim-com change first (it creates the network and puts postgres on it)."
+    [[ -f deploy/identity/clients.json && ! -L deploy/identity/clients.json ]] \
+      || fatal "deploy/identity/clients.json is missing. Create it from core/identity/clients.example.json (see deploy/README.md); Docker would otherwise create a directory there."
+  fi
   docker network inspect edge_net >/dev/null 2>&1 \
     || fatal "the edge_net network does not exist. The shared edge is not installed on this host."
-  [[ -f deploy/identity/clients.json && ! -L deploy/identity/clients.json ]] \
-    || fatal "deploy/identity/clients.json is missing. Create it from core/identity/clients.example.json (see deploy/README.md); Docker would otherwise create a directory there."
   [[ -f "${edge_dir}/scripts/edge-deploy-site.sh" ]] \
     || fatal "${edge_dir}/scripts/edge-deploy-site.sh is missing. The shared edge is not installed on this host."
 
   # 5. Pull and start.
   export IMAGE_TAG="$image_commit"
   export SITE_IMAGE_TAG="$site_image_commit"
-  log "Checking the compose file..."
-  "${compose[@]}" config -q
-  log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG} and :site-${SITE_IMAGE_TAG}..."
-  if ! "${compose[@]}" pull; then
-    fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image or ${SITE_IMAGE_TAG} no site image (see the 'Identity image' and 'Site image' workflow runs)."
+  if [[ "$site_only" == true ]]; then
+    # The site-only file has no id.asafarim.site: publishing it while identity runs would take identity off the edge.
+    local identity_running
+    identity_running="$("${compose[@]}" ps -q identity)" || fatal "could not list this stack's containers. Nothing changed."
+    [[ -z "$identity_running" ]] \
+      || fatal "identity is running. A site-only deploy would take id.asafarim.site off the edge; run the full deploy instead. Nothing changed."
+    # Only os-site, and without reading .env.identity (identity's env_file, which this mode never creates).
+    log "Checking the compose file (os-site only)..."
+    "${compose[@]}" config -q --no-env-resolution os-site
+    log "Pulling ghcr.io/alisafari-it/asafarim-os:site-${SITE_IMAGE_TAG}..."
+    "${compose[@]}" pull os-site \
+      || fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if the image does not exist, ${SITE_IMAGE_TAG} has no site image (see the 'Site image' workflow runs)."
+    log "Starting os-site..."
+    "${compose[@]}" up -d --no-deps os-site
+  else
+    log "Checking the compose file..."
+    "${compose[@]}" config -q
+    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG} and :site-${SITE_IMAGE_TAG}..."
+    if ! "${compose[@]}" pull; then
+      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image or ${SITE_IMAGE_TAG} no site image (see the 'Identity image' and 'Site image' workflow runs)."
+    fi
+    log "Starting the stack..."
+    "${compose[@]}" up -d --remove-orphans
   fi
-  log "Starting the stack..."
-  "${compose[@]}" up -d --remove-orphans
 
   # 6. Ready means identity answers /readyz, which checks its Redis and the accounts database.
-  log "Waiting for identity's /readyz..."
-  local ready=false
-  for _ in $(seq 1 45); do
-    if "${compose[@]}" exec -T identity wget -qO- http://127.0.0.1:3000/readyz >/dev/null 2>&1; then
-      ready=true
-      break
+  if [[ "$site_only" != true ]]; then
+    log "Waiting for identity's /readyz..."
+    local ready=false
+    for _ in $(seq 1 45); do
+      if "${compose[@]}" exec -T identity wget -qO- http://127.0.0.1:3000/readyz >/dev/null 2>&1; then
+        ready=true
+        break
+      fi
+      sleep 2
+    done
+    if [[ "$ready" != true ]]; then
+      fatal "identity did not become ready within 90s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 identity (logs hold names and codes, never secrets)."
     fi
-    sleep 2
-  done
-  if [[ "$ready" != true ]]; then
-    fatal "identity did not become ready within 90s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 identity (logs hold names and codes, never secrets)."
+    log "identity is ready."
   fi
-  log "identity is ready."
 
   # os-site (asafarim.site) is static files: ready as soon as nginx answers /healthz.
   log "Waiting for os-site's /healthz..."
@@ -133,10 +174,25 @@ main() {
   log "os-site is ready."
 
   # 7. Publish the site file. The edge validates the WHOLE config first and restores the old file on failure.
-  log "Publishing sites/asafarim-os.caddy on the shared edge..."
-  EDGE_DIR="$edge_dir" bash "${edge_dir}/scripts/edge-deploy-site.sh" asafarim-os "${repo_dir}/sites/asafarim-os.caddy"
+  # Both files are published under the same edge site name, so a full deploy replaces the site-only one.
+  local site_file=sites/asafarim-os.caddy
+  [[ "$site_only" == true ]] && site_file=sites/asafarim-os-site.caddy
+  log "Publishing ${site_file} on the shared edge..."
+  EDGE_DIR="$edge_dir" bash "${edge_dir}/scripts/edge-deploy-site.sh" asafarim-os "${repo_dir}/${site_file}"
 
-  log "Done. Check: curl -fsS https://id.asafarim.site/.well-known/openid-configuration && curl -fsSI https://asafarim.site/"
+  # 8. Site-only: before the edge cutover the edge only stores the file, so also install it for the Caddy
+  # that serves 443 today (deploy/lib/live-caddy.sh). After the cutover this does nothing.
+  if [[ "$site_only" == true ]]; then
+    log "Publishing ${site_file} on the live Caddy (before the edge cutover)..."
+    publish_live_site "${repo_dir}/${site_file}" \
+      || fatal "the live Caddy did not take ${site_file} (see above). The edge has it; the live Caddy is unchanged or restored."
+  fi
+
+  if [[ "$site_only" == true ]]; then
+    log "Done. Check: curl -fsSI https://asafarim.site/"
+  else
+    log "Done. Check: curl -fsS https://id.asafarim.site/.well-known/openid-configuration && curl -fsSI https://asafarim.site/"
+  fi
 }
 
 main "$@"; exit $?

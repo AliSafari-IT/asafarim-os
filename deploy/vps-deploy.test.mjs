@@ -5,7 +5,7 @@
 //   node --test deploy/vps-deploy.test.mjs          (needs bash)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -185,4 +185,225 @@ test("it refuses a commit that is not a full sha or not on origin/main, and runs
   assert.match(script, /\[\[ "\$commit" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
   assert.match(script, /git merge-base --is-ancestor "\$commit" origin\/main/);
   assert.equal(script.trimEnd().split("\n").at(-1), 'main "$@"; exit $?');
+});
+
+// #97: run the real script against stand-ins for git, docker, age, flock and the edge's edge-deploy-site.sh, in a
+// throwaway copy of the files it reads. Each stand-in logs its arguments, so the tests see exactly what a deploy
+// would run, and a mode that must not read a file is run without that file.
+const SHA = "a".repeat(40);
+const SITE_SHA = "b".repeat(40);
+const STUB = (name, body = "") => `#!/usr/bin/env bash\necho "${name} $*" >> "$CALLS"\n${body}\n`;
+
+/**
+ * `live`: the Caddy that serves 443 before the edge cutover (asafarim-com's). `null` means none runs.
+ * `edgeId`: the edge container's id after the cutover ("" = none). `prevLive`: a file already in its sites.local/.
+ */
+function runDeploy(
+  args,
+  {
+    full = false,
+    identityRunning = "",
+    live = { id: "live0caddy01", networks: "asafarim-com_default edge_net", validate: 0, reload: 0 },
+    edgeId = "",
+    prevLive = null,
+  } = {},
+) {
+  const dir = mkdtempSync(path.join(tmpdir(), "vps-deploy-"));
+  const repo = path.join(dir, "repo");
+  const bin = path.join(dir, "bin");
+  const edge = path.join(dir, "edge");
+  const calls = path.join(dir, "calls.log");
+  const liveRepo = path.join(dir, "asafarim-com");
+  const liveSite = path.join(liveRepo, "infra/caddy/sites.local/asafarim-os.caddy");
+  try {
+    for (const file of [
+      "deploy/vps-deploy.sh",
+      "deploy/lib/env-check.sh",
+      "deploy/lib/live-caddy.sh",
+      "deploy/compose.prod.yml",
+      "sites/asafarim-os.caddy",
+      "sites/asafarim-os-site.caddy",
+      "core/identity/.env.production.example",
+    ]) {
+      cpSync(path.join(root, file), path.join(repo, file), { recursive: true });
+    }
+    if (full) {
+      mkdirSync(path.join(repo, ".age"));
+      writeFileSync(path.join(repo, ".age", "key.txt"), "stand-in key\n");
+      writeFileSync(path.join(repo, "core/identity/.env.production.age"), "stand-in ciphertext\n");
+      mkdirSync(path.join(repo, "deploy/identity"));
+      writeFileSync(path.join(repo, "deploy/identity/clients.json"), "{}\n");
+    }
+    const filled = readFileSync(realExample, "utf8")
+      .match(/^[A-Z][A-Z0-9_]*(?==)/gm)
+      .map((n) => `echo ${n}=stand-in`)
+      .join("\n");
+    mkdirSync(bin);
+    const stubs = {
+      git: STUB("git"),
+      flock: STUB("flock"),
+      age: STUB("age", filled),
+      docker: STUB(
+        "docker",
+        [
+          `case "$*" in`,
+          `  *"ps -q identity"*) printf '%s' "$IDENTITY_RUNNING" ;;`,
+          `  "ps -q --filter label=com.docker.compose.project=asafarim-com"*) printf '%s\\n' "$LIVE_ID" ;;`,
+          `  "compose -p edge ps -q caddy") printf '%s\\n' "$EDGE_ID" ;;`,
+          `  "inspect -f {{range"*) echo "$LIVE_NETWORKS" ;;`,
+          `  "inspect -f {{.Config.Image}}"*) echo caddy:live ;;`,
+          `  "run --rm -v "*"caddy validate"*) exit "$LIVE_VALIDATE" ;;`,
+          `  "exec $LIVE_ID caddy reload"*) exit "$LIVE_RELOAD" ;;`,
+          `  "exec $LIVE_ID sha256sum "*) sha256sum "$LIVE_REPO_DIR/infra/caddy/sites.local/asafarim-os.caddy" ;;`,
+          `esac`,
+          `exit 0`,
+        ].join("\n"),
+      ),
+    };
+    for (const [name, body] of Object.entries(stubs)) writeFileSync(path.join(bin, name), body, { mode: 0o755 });
+    mkdirSync(path.join(edge, "scripts"), { recursive: true });
+    writeFileSync(path.join(edge, "scripts", "edge-deploy-site.sh"), STUB("edge-deploy-site.sh"));
+    writeFileSync(calls, "");
+    mkdirSync(path.dirname(liveSite), { recursive: true });
+    writeFileSync(path.join(liveRepo, "infra/caddy/Caddyfile"), "import sites.local/*.caddy\n");
+    if (prevLive !== null) writeFileSync(liveSite, prevLive);
+    const run = spawnSync("bash", [path.join(repo, "deploy/vps-deploy.sh"), ...args], {
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        CALLS: calls,
+        EDGE_DIR: edge,
+        IDENTITY_RUNNING: identityRunning,
+        LIVE_REPO_DIR: liveRepo,
+        LIVE_ID: live?.id ?? "",
+        LIVE_NETWORKS: live?.networks ?? "",
+        LIVE_VALIDATE: String(live?.validate ?? 0),
+        LIVE_RELOAD: String(live?.reload ?? 0),
+        EDGE_ID: edgeId,
+      },
+    });
+    return {
+      status: run.status,
+      stderr: run.stderr,
+      calls: readFileSync(calls, "utf8").trim().split("\n").filter(Boolean),
+      envIdentityWritten: existsSync(path.join(repo, ".env.identity")),
+      liveSite: existsSync(liveSite) ? readFileSync(liveSite, "utf8") : null,
+      repo,
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const compose = "docker compose -p asafarim-os -f deploy/compose.prod.yml";
+
+test("--site-only: never decrypts, never checks identity_db or clients.json, starts only os-site, publishes the site-only file", () => {
+  const r = runDeploy(["--site-only", SHA, SITE_SHA]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!r.calls.some((c) => c.startsWith("age ")), "age must not run");
+  assert.equal(r.envIdentityWritten, false, ".env.identity must not be written");
+  assert.ok(!r.calls.some((c) => c.includes("identity_db")), "identity_db must not be checked");
+  assert.ok(r.calls.includes("docker network inspect edge_net"));
+  assert.ok(r.calls.includes("git reset --hard " + SHA));
+  const composeCalls = r.calls.filter((c) => c.startsWith(compose)).map((c) => c.slice(compose.length + 1));
+  assert.deepEqual(composeCalls, [
+    "ps -q identity",
+    "config -q --no-env-resolution os-site",
+    "pull os-site",
+    "up -d --no-deps os-site",
+    "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+  ]);
+  assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os-site.caddy`));
+});
+
+test("--site-only refuses to run while identity is running, and changes nothing", () => {
+  const r = runDeploy(["--site-only", SHA], { identityRunning: "0123456789ab" });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /identity is running/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c) || c.startsWith("edge-deploy-site.sh")), r.calls.join("\n"));
+  assert.equal(r.liveSite, null);
+});
+
+test("--site-only takes at most two shas, each a full sha", () => {
+  assert.match(runDeploy(["--site-only", SHA, SITE_SHA, SHA]).stderr, /usage:/);
+  assert.match(runDeploy(["--site-only", SHA, "abc"]).stderr, /<site-image-commit> must be a full 40-character sha/);
+  assert.match(runDeploy(["--site-only"]).stderr, /usage:/);
+});
+
+test("full mode still decrypts, checks, starts the whole stack, waits for both and publishes the full site file", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA], { full: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.calls.includes("age -d -i .age/key.txt core/identity/.env.production.age"));
+  assert.ok(r.calls.includes("docker network inspect identity_db"));
+  const composeCalls = r.calls.filter((c) => c.startsWith(compose)).map((c) => c.slice(compose.length + 1));
+  assert.deepEqual(composeCalls, [
+    "config -q",
+    "pull",
+    "up -d --remove-orphans",
+    "exec -T identity wget -qO- http://127.0.0.1:3000/readyz",
+    "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+  ]);
+  assert.equal(r.calls.at(-1), `edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os.caddy`);
+  assert.ok(
+    !r.calls.some((c) => c.includes("asafarim-com") || c.includes("caddy reload")),
+    "full mode never touches the live Caddy",
+  );
+  assert.equal(r.liveSite, null);
+});
+
+// Before the edge cutover the edge only stores the file: the Caddy that serves 443 is asafarim-com's.
+const siteOnlyFile = readFileSync(path.join(root, "sites", "asafarim-os-site.caddy"), "utf8");
+
+test("--site-only, before the cutover: after the edge, validates and installs the file for the live Caddy, reloads it", () => {
+  const r = runDeploy(["--site-only", SHA]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.liveSite, siteOnlyFile, "sites.local/asafarim-os.caddy is the site-only file");
+  const edgeAt = r.calls.findIndex((c) => c.startsWith("edge-deploy-site.sh"));
+  const validateAt = r.calls.findIndex(
+    (c) => c.startsWith("docker run --rm -v ") && c.includes("caddy:live caddy validate"),
+  );
+  const reloadAt = r.calls.indexOf(
+    "docker exec live0caddy01 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
+  );
+  assert.ok(edgeAt >= 0 && validateAt > edgeAt && reloadAt > validateAt, r.calls.join("\n"));
+});
+
+test("--site-only: a live config that refuses the file (asafarim.site still defined there) leaves the live Caddy untouched", () => {
+  const r = runDeploy(["--site-only", SHA], {
+    live: { id: "live0caddy01", networks: "edge_net", validate: 1, reload: 0 },
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /invalid with the live Caddy config/);
+  assert.equal(r.liveSite, null);
+  assert.ok(!r.calls.some((c) => c.includes("caddy reload")));
+});
+
+test("--site-only: a failed reload puts the previous live file back", () => {
+  const r = runDeploy(["--site-only", SHA], {
+    live: { id: "live0caddy01", networks: "edge_net", validate: 0, reload: 1 },
+    prevLive: "# the previous file\n",
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /caddy reload failed; restoring/);
+  assert.equal(r.liveSite, "# the previous file\n");
+});
+
+test("--site-only: a live Caddy that is not on edge_net is refused, with the one command that fixes it", () => {
+  const r = runDeploy(["--site-only", SHA], { live: { id: "live0caddy01", networks: "asafarim-com_default" } });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /docker network connect edge_net live0caddy01/);
+  assert.equal(r.liveSite, null);
+});
+
+test("--site-only after the cutover (an edge container, no asafarim-com Caddy): the edge publish is enough", () => {
+  const r = runDeploy(["--site-only", SHA], { live: null, edgeId: "edge0caddy01" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.liveSite, null);
+  assert.ok(!r.calls.some((c) => c.includes("caddy reload")));
+});
+
+test("--site-only with neither Caddy running fails: nothing serves 443", () => {
+  const r = runDeploy(["--site-only", SHA], { live: null, edgeId: "" });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /nothing serves 443/);
 });

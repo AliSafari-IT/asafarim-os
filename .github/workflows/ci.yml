@@ -93,12 +93,12 @@ jobs:
           IMAGE_TAG=ci SITE_IMAGE_TAG=ci docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
 
       - name: shellcheck the deploy scripts
-        run: shellcheck -S warning deploy/vps-deploy.sh deploy/lib/env-check.sh deploy/test-fixtures/run-env-check.sh
+        run: shellcheck -S warning deploy/vps-deploy.sh deploy/lib/env-check.sh deploy/lib/live-caddy.sh deploy/test-fixtures/run-env-check.sh
 
       # The same pinned image the edge's own edge-deploy-site.sh validates with.
       - name: The site files validate in the edge's Caddy
         run: |
-          for site in sites/asafarim-os.caddy deploy/rollback.caddy; do
+          for site in sites/asafarim-os.caddy sites/asafarim-os-site.caddy deploy/rollback.caddy; do
             dir="$(mktemp -d)"
             mkdir "$dir/sites"
             echo 'import sites/*.caddy' > "$dir/Caddyfile"
