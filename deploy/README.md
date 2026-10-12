@@ -13,7 +13,43 @@ runs it, and nothing here holds a secret.
 | `deploy/lib/env-check.sh`      | The check that every variable is filled, by name, never by value.                                  |
 | `deploy/rollback.caddy`        | An empty site file: publishing it takes `id.asafarim.site` off the edge.                           |
 | `sites/asafarim-os.caddy`      | This stack's site file: `id.asafarim.site` → `os-identity:3000`, `asafarim.site` → `os-site:8080`. |
+| `sites/asafarim-os-site.caddy` | The site-only file (`--site-only`): `asafarim.site` → `os-site:8080`, no `id.asafarim.site`.       |
 | `deploy/identity/clients.json` | **Not in git.** The client config you put there (below).                                           |
+
+## Landing page only
+
+`deploy/vps-deploy.sh --site-only` ([#97](https://github.com/AliSafari-IT/asafarim-os/issues/97)) puts the
+`asafarim.site` landing page live **without identity**: no secret is decrypted and nothing of identity's is checked,
+started or touched.
+
+**Before you run it:**
+
+- The repository is checked out on the VPS (normally `/var/repos/asafarim-os`). **`age` and `.age/key.txt` are not
+  needed** in this mode, and neither are `identity_db` nor `deploy/identity/clients.json`.
+- The shared edge is installed (`/var/repos/edge/scripts/edge-deploy-site.sh` exists) and `edge_net` exists.
+- The `os-site` image can be pulled: the package is public, or `docker login ghcr.io` was run on the VPS.
+- `asafarim.site` and `www.asafarim.site` are no longer in asafarim-platform's `asafarim-com.caddy`
+  (asafarim-platform#837). Until they are gone, the edge refuses the duplicate hosts and keeps the old config.
+- identity is **not** running in this stack. The site-only file has no `id.asafarim.site`, so the script refuses to
+  run while identity runs (it would take identity off the edge). Use the full deploy then.
+
+**Deploy:**
+
+```bash
+cd /var/repos/asafarim-os
+deploy/vps-deploy.sh --site-only <commit> [<site-image-commit>]
+curl -fsSI https://asafarim.site/
+```
+
+- `<commit>`: a full 40-character sha on `origin/main` (the script, compose file and site file come from it).
+- `<site-image-commit>`: the commit whose `os-site` image to run, default `<commit>`. Take the sha of the latest
+  "Site image" run.
+
+It does steps 1, 4 (`edge_net` and the edge script only), 5 (`pull` and `up` for `os-site` only), 6 (`os-site`'s
+`/healthz`, up to 30 seconds) and 7 below, and it publishes `sites/asafarim-os-site.caddy` under the same edge site
+name, `asafarim-os`. A later full deploy simply replaces it with `sites/asafarim-os.caddy`.
+
+**Rollback:** the same as a full deploy ([Rollback](#rollback)): publish `deploy/rollback.caddy`, then stop the stack.
 
 ## Networks: who can reach what
 

@@ -5,7 +5,7 @@
 //   node --test deploy/vps-deploy.test.mjs          (needs bash)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -185,4 +185,121 @@ test("it refuses a commit that is not a full sha or not on origin/main, and runs
   assert.match(script, /\[\[ "\$commit" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
   assert.match(script, /git merge-base --is-ancestor "\$commit" origin\/main/);
   assert.equal(script.trimEnd().split("\n").at(-1), 'main "$@"; exit $?');
+});
+
+// #97: run the real script against stand-ins for git, docker, age, flock and the edge's edge-deploy-site.sh, in a
+// throwaway copy of the files it reads. Each stand-in logs its arguments, so the tests see exactly what a deploy
+// would run, and a mode that must not read a file is run without that file.
+const SHA = "a".repeat(40);
+const SITE_SHA = "b".repeat(40);
+const STUB = (name, body = "") => `#!/usr/bin/env bash\necho "${name} $*" >> "$CALLS"\n${body}\n`;
+
+function runDeploy(args, { full = false, identityRunning = "" } = {}) {
+  const dir = mkdtempSync(path.join(tmpdir(), "vps-deploy-"));
+  const repo = path.join(dir, "repo");
+  const bin = path.join(dir, "bin");
+  const edge = path.join(dir, "edge");
+  const calls = path.join(dir, "calls.log");
+  try {
+    for (const file of [
+      "deploy/vps-deploy.sh",
+      "deploy/lib/env-check.sh",
+      "deploy/compose.prod.yml",
+      "sites/asafarim-os.caddy",
+      "sites/asafarim-os-site.caddy",
+      "core/identity/.env.production.example",
+    ]) {
+      cpSync(path.join(root, file), path.join(repo, file), { recursive: true });
+    }
+    if (full) {
+      mkdirSync(path.join(repo, ".age"));
+      writeFileSync(path.join(repo, ".age", "key.txt"), "stand-in key\n");
+      writeFileSync(path.join(repo, "core/identity/.env.production.age"), "stand-in ciphertext\n");
+      mkdirSync(path.join(repo, "deploy/identity"));
+      writeFileSync(path.join(repo, "deploy/identity/clients.json"), "{}\n");
+    }
+    const filled = readFileSync(realExample, "utf8")
+      .match(/^[A-Z][A-Z0-9_]*(?==)/gm)
+      .map((n) => `echo ${n}=stand-in`)
+      .join("\n");
+    mkdirSync(bin);
+    const stubs = {
+      git: STUB("git"),
+      flock: STUB("flock"),
+      age: STUB("age", filled),
+      docker: STUB("docker", `[[ "$*" == *"ps -q identity"* ]] && printf '%s' "$IDENTITY_RUNNING"\nexit 0`),
+    };
+    for (const [name, body] of Object.entries(stubs)) writeFileSync(path.join(bin, name), body, { mode: 0o755 });
+    mkdirSync(path.join(edge, "scripts"), { recursive: true });
+    writeFileSync(path.join(edge, "scripts", "edge-deploy-site.sh"), STUB("edge-deploy-site.sh"));
+    writeFileSync(calls, "");
+    const run = spawnSync("bash", [path.join(repo, "deploy/vps-deploy.sh"), ...args], {
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        CALLS: calls,
+        EDGE_DIR: edge,
+        IDENTITY_RUNNING: identityRunning,
+      },
+    });
+    return {
+      status: run.status,
+      stderr: run.stderr,
+      calls: readFileSync(calls, "utf8").trim().split("\n").filter(Boolean),
+      envIdentityWritten: existsSync(path.join(repo, ".env.identity")),
+      repo,
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const compose = "docker compose -p asafarim-os -f deploy/compose.prod.yml";
+
+test("--site-only: never decrypts, never checks identity_db or clients.json, starts only os-site, publishes the site-only file", () => {
+  const r = runDeploy(["--site-only", SHA, SITE_SHA]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!r.calls.some((c) => c.startsWith("age ")), "age must not run");
+  assert.equal(r.envIdentityWritten, false, ".env.identity must not be written");
+  assert.ok(!r.calls.some((c) => c.includes("identity_db")), "identity_db must not be checked");
+  assert.ok(r.calls.includes("docker network inspect edge_net"));
+  assert.ok(r.calls.includes("git reset --hard " + SHA));
+  const composeCalls = r.calls.filter((c) => c.startsWith(compose)).map((c) => c.slice(compose.length + 1));
+  assert.deepEqual(composeCalls, [
+    "ps -q identity",
+    "config -q --no-env-resolution os-site",
+    "pull os-site",
+    "up -d --no-deps os-site",
+    "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+  ]);
+  assert.equal(r.calls.at(-1), `edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os-site.caddy`);
+});
+
+test("--site-only refuses to run while identity is running, and changes nothing", () => {
+  const r = runDeploy(["--site-only", SHA], { identityRunning: "0123456789ab" });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /identity is running/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c) || c.startsWith("edge-deploy-site.sh")), r.calls.join("\n"));
+});
+
+test("--site-only takes at most two shas, each a full sha", () => {
+  assert.match(runDeploy(["--site-only", SHA, SITE_SHA, SHA]).stderr, /usage:/);
+  assert.match(runDeploy(["--site-only", SHA, "abc"]).stderr, /<site-image-commit> must be a full 40-character sha/);
+  assert.match(runDeploy(["--site-only"]).stderr, /usage:/);
+});
+
+test("full mode still decrypts, checks, starts the whole stack, waits for both and publishes the full site file", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA], { full: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.calls.includes("age -d -i .age/key.txt core/identity/.env.production.age"));
+  assert.ok(r.calls.includes("docker network inspect identity_db"));
+  const composeCalls = r.calls.filter((c) => c.startsWith(compose)).map((c) => c.slice(compose.length + 1));
+  assert.deepEqual(composeCalls, [
+    "config -q",
+    "pull",
+    "up -d --remove-orphans",
+    "exec -T identity wget -qO- http://127.0.0.1:3000/readyz",
+    "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+  ]);
+  assert.equal(r.calls.at(-1), `edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os.caddy`);
 });

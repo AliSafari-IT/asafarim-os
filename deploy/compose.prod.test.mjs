@@ -19,12 +19,19 @@ const activeSite = siteText
   .filter((l) => !l.trim().startsWith("#"))
   .join("\n");
 
-/** One top-level block of the site file, by its exact site address (comments removed). */
-function siteBlock(address) {
-  const start = activeSite.search(new RegExp(`^${address.replaceAll(".", "\\.")} \\{`, "m"));
+/** The site-only file (#97): the landing page without id.asafarim.site, for `vps-deploy.sh --site-only`. */
+const siteOnlyText = readFileSync(path.join(root, "sites", "asafarim-os-site.caddy"), "utf8");
+const activeSiteOnly = siteOnlyText
+  .split("\n")
+  .filter((l) => !l.trim().startsWith("#"))
+  .join("\n");
+
+/** One top-level block of a site file, by its exact site address (comments removed). */
+function siteBlock(address, text = activeSite) {
+  const start = text.search(new RegExp(`^${address.replaceAll(".", "\\.")} \\{`, "m"));
   assert.ok(start >= 0, `the site file has no ${address} block`);
-  const end = activeSite.indexOf("\n}", start);
-  return activeSite.slice(start, end + 2);
+  const end = text.indexOf("\n}", start);
+  return text.slice(start, end + 2);
 }
 
 /**
@@ -210,4 +217,20 @@ test("id.asafarim.site has no Content-Security-Policy of its own (identity sets 
   assert.doesNotMatch(active, /Content-Security-Policy/i);
   assert.match(active, /Strict-Transport-Security/);
   assert.match(active, /X-Content-Type-Options nosniff/);
+});
+
+test("the site-only file serves asafarim.site and its www redirect, and nothing else: no id.asafarim.site (#97)", () => {
+  const sites = [...activeSiteOnly.matchAll(/^([a-z0-9.*-]+)(?:, [a-z0-9.*-]+)*\s*\{/gm)].map((m) => m[1]);
+  assert.deepEqual(sites.sort(), ["asafarim.site", "www.asafarim.site"]);
+  assert.doesNotMatch(activeSiteOnly, /id\.asafarim\.site|os-identity/);
+});
+
+test("the site-only file's landing blocks are identical to the full site file's (#97)", () => {
+  for (const address of ["asafarim.site", "www.asafarim.site"]) {
+    assert.equal(
+      siteBlock(address, activeSiteOnly),
+      siteBlock(address),
+      `${address} differs between the two site files`,
+    );
+  }
 });

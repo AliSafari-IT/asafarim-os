@@ -1,0 +1,30 @@
+# asafarim-os stack's SITE-ONLY file on the shared edge (asafarim-os#97): the asafarim.site landing page
+# without id.asafarim.site. Published by `deploy/vps-deploy.sh --site-only` through the edge's
+# edge-deploy-site.sh, under the SAME edge site name as sites/asafarim-os.caddy (asafarim-os), so a later
+# full deploy simply replaces it. The landing blocks below must stay identical to that file's
+# (deploy/compose.prod.test.mjs checks it). Edit both, never one.
+#
+# Cutover: the asafarim.site and www.asafarim.site blocks must first be removed from asafarim-com.caddy
+# (asafarim-platform#837); the edge validates the WHOLE config, so publishing this file while both define
+# asafarim.site fails safely.
+
+# The OS landing page (#70): static files from os-site:8080 (core/site). The page has no scripts and
+# loads nothing from another origin, so the CSP allows only this origin's stylesheet and images. The
+# container sends the same headers itself (core/site/nginx.conf; deploy/compose.prod.test.mjs checks
+# that the two CSPs match); `defer` makes the edge's values replace the upstream's instead of
+# sending each header twice.
+asafarim.site {
+  header {
+    defer
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options nosniff
+    Referrer-Policy strict-origin-when-cross-origin
+    Content-Security-Policy "default-src 'none'; script-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    -Server
+  }
+  reverse_proxy os-site:8080
+}
+
+www.asafarim.site {
+  redir https://asafarim.site{uri} 301
+}

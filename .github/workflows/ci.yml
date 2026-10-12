@@ -98,7 +98,7 @@ jobs:
       # The same pinned image the edge's own edge-deploy-site.sh validates with.
       - name: The site files validate in the edge's Caddy
         run: |
-          for site in sites/asafarim-os.caddy deploy/rollback.caddy; do
+          for site in sites/asafarim-os.caddy sites/asafarim-os-site.caddy deploy/rollback.caddy; do
             dir="$(mktemp -d)"
             mkdir "$dir/sites"
             echo 'import sites/*.caddy' > "$dir/Caddyfile"
