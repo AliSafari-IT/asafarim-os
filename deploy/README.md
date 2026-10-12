@@ -10,6 +10,7 @@ runs it, and nothing here holds a secret.
 | ------------------------------ | -------------------------------------------------------------------------------------------------- |
 | `deploy/compose.prod.yml`      | `identity`, `os-redis` and `os-site`, compose project `asafarim-os`.                               |
 | `deploy/vps-deploy.sh`         | The deploy. Run it from the repository folder on the VPS.                                          |
+| `deploy/redeploy.sh`           | `pnpm redeploy`: redeploy the landing page with the newest build, with no shas to look up.         |
 | `deploy/lib/live-caddy.sh`     | `--site-only` before the edge cutover: install the site file for the Caddy that serves 443 today.  |
 | `deploy/lib/env-check.sh`      | The check that every variable is filled, by name, never by value.                                  |
 | `deploy/rollback.caddy`        | An empty site file: publishing it takes `id.asafarim.site` off the edge.                           |
@@ -38,7 +39,21 @@ started or touched.
 - identity is **not** running in this stack. The site-only file has no `id.asafarim.site`, so the script refuses to
   run while identity runs (it would take identity off the edge). Use the full deploy then.
 
-**Deploy:**
+**Deploy the newest build (the usual way):**
+
+```bash
+cd /var/repos/asafarim-os
+pnpm redeploy            # or, without pnpm on the VPS: deploy/redeploy.sh
+curl -fsSI https://asafarim.site/
+```
+
+`deploy/redeploy.sh` finds the shas for you: `<commit>` is the newest commit on `origin/main`, and `<site-image-commit>` is
+the newest commit that changed what the site image is built from (the same paths as the "Site image" workflow), because
+that is the commit the newest image is tagged with. It checks that image is published and **stops if it isn't yet** (the
+workflow may still be building), rather than quietly deploying an older one. Then it brings the checkout to `<commit>`
+and runs `vps-deploy.sh --site-only` below. `pnpm redeploy --dry-run` only prints what it would deploy.
+
+**Deploy a specific build** (for example, to roll back to an earlier image):
 
 ```bash
 cd /var/repos/asafarim-os
