@@ -34,6 +34,13 @@ const EXPORT_TIMEOUT_MS = 2000;
 const disabled: Telemetry = { enabled: false, shutdown: async () => {} };
 let current: Telemetry | undefined;
 
+/** `http://host:4318/` → `http://host:4318` (a loop, not a regex: the value comes from the environment). */
+function withoutTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === "/") end--;
+  return url.slice(0, end);
+}
+
 export function registerTelemetry({
   appId,
   version,
@@ -41,7 +48,7 @@ export function registerTelemetry({
   metricIntervalMs = 15_000,
 }: TelemetryOptions): Telemetry {
   if (current) return current;
-  const endpoint = env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim().replace(/\/+$/, "");
+  const endpoint = withoutTrailingSlashes(env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() ?? "");
   if (!endpoint) return disabled;
 
   const resource = resourceFromAttributes({

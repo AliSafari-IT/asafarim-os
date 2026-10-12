@@ -63,7 +63,8 @@ export function safeSpanName(span: Pick<ReadableSpan, "attributes" | "name">): s
   const route = routeOf(span);
   const method = methodOf(span);
   if (route) return method ? `${method} ${route}` : route;
-  return span.name.replace(/\?.*$/, "");
+  const query = span.name.indexOf("?");
+  return query === -1 ? span.name : span.name.slice(0, query);
 }
 
 /** The span as exported: same span, with only allowlisted attributes and a safe name. */
