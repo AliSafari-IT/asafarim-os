@@ -57,6 +57,13 @@
       "date": "2026-10-12",
       "summary": "asafarim.site now serves the OS landing page from its own container, deployed on its own with one command and no identity. The placeholder page is gone.",
       "prs": [74, 98]
+    },
+    {
+      "id": "P6.2",
+      "title": "Traces, request metrics and trace-id logs",
+      "date": "2026-10-12",
+      "summary": "Every app's requests become OpenTelemetry traces and per-route rate, error and duration metrics, with only route patterns leaving the app, and its JSON log lines carry the trace id. One command starts a local collector.",
+      "prs": [96]
     }
   ],
   "screenshots": [
@@ -96,11 +103,6 @@
       "id": "P4",
       "title": "Events, finished",
       "summary": "A read-only live demo of core-api, Admin and Notes, and the production event bus (TLS, operator mode)."
-    },
-    {
-      "id": "P6.2",
-      "title": "Observability: traces, request metrics and trace-id logs for every app",
-      "summary": "Every app's requests become OpenTelemetry traces and per-route rate, error and duration metrics, with only route patterns leaving the app, and its JSON log lines carry the trace id."
     },
     {
       "id": "P6",

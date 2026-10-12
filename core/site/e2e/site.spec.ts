@@ -26,7 +26,7 @@ test("the page has its sections, a title and a description, and no console error
     await expect(page.getByRole("heading", { level: 2, name })).toBeVisible();
   }
   await expect(page.locator("#shipped li.milestone").first()).toBeVisible();
-  await expect(page.locator("#roadmap li")).toHaveCount(4);
+  await expect(page.locator("#roadmap li")).toHaveCount(3);
   await expect(page.locator("body")).not.toContainText(/migrating|until (its|the) apps migrate/i);
   // Every screenshot has alt text and actually loads.
   const images = page.locator("img");
