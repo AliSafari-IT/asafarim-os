@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-10",
+  "updated": "2026-10-12",
   "repo": "https://github.com/AliSafari-IT/asafarim-os",
   "shipped": [
     {
@@ -50,6 +50,13 @@
       "date": "2026-10-10",
       "summary": "The last lifecycle step: an admin removes an app, its grants and bus resources are cleaned up, and it can be installed again from scratch.",
       "prs": [69]
+    },
+    {
+      "id": "P6.2",
+      "title": "Traces, request metrics and trace-id logs",
+      "date": "2026-10-12",
+      "summary": "A shared telemetry package: every app's requests become OpenTelemetry traces and per-route duration and error metrics, with only route patterns leaving the app, and its JSON log lines carry the trace id. One command starts a local collector.",
+      "prs": [96]
     }
   ],
   "screenshots": [
