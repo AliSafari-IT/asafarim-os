@@ -1,0 +1,32 @@
+# The local OpenTelemetry collector (P6.2, `pnpm dev:telemetry`). It receives the
+# apps' traces and metrics over OTLP/HTTP and prints them, in full, to its own
+# log; nothing is stored or sent on. Apps send here when they run with
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: detailed
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

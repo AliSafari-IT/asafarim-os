@@ -19,8 +19,8 @@ const nextConfig: NextConfig = {
   // today; this keeps it that way if that ever changes (scripts/check-no-content.mjs checks the build).
   outputFileTracingExcludes: { "*": ["./fixtures/**"] },
   transpilePackages: ["@asafarim/app-sdk"],
-  // pg uses Node APIs; keep it out of the bundler (study notes, #81).
-  serverExternalPackages: ["pg"],
+  // pg (study notes, #81) and the OpenTelemetry SDK (@asafarim/telemetry) use Node APIs; keep them out of the bundler.
+  serverExternalPackages: ["pg", "@asafarim/telemetry"],
   // unauthorized() and forbidden() answer 401 and 403 with app/unauthorized.tsx and app/forbidden.tsx (#79).
   experimental: { authInterrupts: true },
   async headers() {

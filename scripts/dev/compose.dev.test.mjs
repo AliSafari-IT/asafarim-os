@@ -14,17 +14,21 @@ import { DEV } from "./keys.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /** Render compose.dev.yml in a throwaway copy, with an EMPTY .dev/gateway.env and a stand-in .dev/nats.env (Compose refuses a missing env_file). */
-function render() {
+function render(profiles = []) {
   const dir = mkdtempSync(path.join(tmpdir(), "compose-dev-"));
   try {
     cpSync(path.join(root, "compose.dev.yml"), path.join(dir, "compose.dev.yml"));
     mkdirSync(path.join(dir, ".dev"));
     writeFileSync(path.join(dir, ".dev", "gateway.env"), "");
     writeFileSync(path.join(dir, ".dev", "nats.env"), "NATS_CORE_PASSWORD=pw\nNATS_AUTH_ISSUER=issuer\n");
-    const run = spawnSync("docker", ["compose", "-f", "compose.dev.yml", "config", "--format", "json"], {
-      cwd: dir,
-      encoding: "utf8",
-    });
+    const run = spawnSync(
+      "docker",
+      ["compose", "-f", "compose.dev.yml", ...profiles.flatMap((p) => ["--profile", p]), "config", "--format", "json"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+      },
+    );
     assert.equal(run.status, 0, `docker compose config failed:\n${run.stderr}`);
     return JSON.parse(run.stdout);
   } finally {
@@ -94,4 +98,35 @@ test("nats.conf has no secrets: both values come from the environment, and anony
   assert.match(text, /auth_users:\s*\[\s*core\s*\]/);
   assert.ok(!/no_auth_user/.test(text), "no anonymous user");
   assert.ok(!/\b[AU][A-Z2-7]{55}\b/.test(text), "no nkey in the file");
+});
+
+// P6.2: the local OpenTelemetry collector, started only by `pnpm dev:telemetry`.
+const telemetry = render(["telemetry"]);
+const collector = telemetry.services["otel-collector"];
+
+test("the OpenTelemetry collector is off in `pnpm dev`: only the telemetry profile starts it", () => {
+  assert.equal(config.services["otel-collector"], undefined);
+  assert.ok(collector, "the telemetry profile has an otel-collector service");
+  assert.deepEqual(collector.profiles, ["telemetry"]);
+});
+
+test("the collector is pinned, limited, and receives OTLP/HTTP on 127.0.0.1:4318 only", () => {
+  assert.match(collector.image, /^otel\/opentelemetry-collector:\d+\.\d+\.\d+$/, "an exact version");
+  assert.ok(collector.mem_limit, "mem_limit is set");
+  assert.ok(Number(collector.cpus) > 0, "cpus is set");
+  assert.deepEqual(
+    collector.ports.map((p) => [p.host_ip, p.published, p.target]),
+    [["127.0.0.1", "4318", 4318]],
+  );
+});
+
+test("the collector runs scripts/dev/otel/config.yaml, mounted as a read-only directory", () => {
+  const at = collector.command.indexOf("--config");
+  const file = collector.command[at + 1];
+  const mount = collector.volumes.find((v) => v.target === path.posix.dirname(file));
+  assert.ok(mount && mount.type === "bind" && mount.read_only, "a read-only bind mount");
+  assert.ok(mount.source.endsWith(path.join("scripts", "dev", "otel")), "the mount is scripts/dev/otel (a directory)");
+  const text = readFileSync(path.join(root, "scripts", "dev", "otel", path.posix.basename(file)), "utf8");
+  assert.match(text, /endpoint: 0\.0\.0\.0:4318/);
+  assert.match(text, /exporters: \[debug\]/);
 });

@@ -26,6 +26,7 @@
     "dev:keys": "node scripts/dev/keys.mjs",
     "dev:reset": "node scripts/dev/reset.mjs",
     "dev:smoke": "node scripts/dev/smoke.mjs",
+    "dev:telemetry": "node scripts/dev/telemetry.mjs",
     "e2e": "node scripts/dev/e2e.mjs",
     "screenshots": "node scripts/dev/e2e.mjs --screenshots",
     "env:status": "envage status",

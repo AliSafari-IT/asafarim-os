@@ -3,6 +3,7 @@
 #
 #   pnpm dev          start it, bootstrap the databases, run the OS
 #   pnpm dev:reset    drop the dev volumes (asks first): Postgres, Redis and the NATS store
+#   pnpm dev:telemetry  start the local OpenTelemetry collector (profile "telemetry") and follow its log
 name: asafarim-os-dev
 
 services:
@@ -84,6 +85,21 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # P6.2: the local OpenTelemetry collector. Only with `pnpm dev:telemetry` (the "telemetry" profile):
+  # `pnpm dev` leaves it off, and the apps send nothing unless OTEL_EXPORTER_OTLP_ENDPOINT is set.
+  # It prints what it receives (debug exporter) and stores nothing. The config DIRECTORY is mounted,
+  # not one file (the asafarim-platform #733 lesson). 13133 is its health endpoint, inside only.
+  otel-collector:
+    image: otel/opentelemetry-collector:0.161.0
+    profiles: ["telemetry"]
+    command: ["--config", "/etc/otelcol/config.yaml"]
+    ports:
+      - "127.0.0.1:4318:4318"
+    volumes:
+      - ./scripts/dev/otel:/etc/otelcol:ro
+    mem_limit: 256m
+    cpus: 0.5
 
 volumes:
   postgres_data:
