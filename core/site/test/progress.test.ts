@@ -12,7 +12,7 @@ describe("the checked-in progress file", () => {
     const progress = parseProgress(real());
     expect(progress.shipped.length).toBeGreaterThan(0);
     expect(progress.screenshots.length).toBeGreaterThan(0);
-    expect(progress.roadmap.map((r) => r.id)).toEqual(["P4", "P6.2", "P6", "P7"]);
+    expect(progress.roadmap.map((r) => r.id)).toEqual(["P4", "P6", "P7"]);
   });
 
   it("says nothing about migrating asafarim.com apps (ADR 0001 Amendment B)", () => {
