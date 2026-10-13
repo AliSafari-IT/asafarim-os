@@ -101,9 +101,7 @@ describe("the generated file", () => {
   it("gives the migrator DSN to the migrator only", () => {
     const { yaml } = built(IGS, igsOptions());
     const s = services(yaml);
-    expect(s.migrate!.environment).toEqual({
-      DATABASE_URL: "${IGS_PHARMA_MIGRATOR_DATABASE_URL:?set IGS_PHARMA_MIGRATOR_DATABASE_URL}",
-    });
+    expect(s.migrate!.environment).toEqual({ DATABASE_URL: "${IGS_PHARMA_MIGRATOR_DATABASE_URL:-}" });
     for (const name of ["web", "worker"]) {
       const text = JSON.stringify(s[name]);
       expect(text, name).not.toContain("MIGRATOR");
@@ -116,9 +114,7 @@ describe("the generated file", () => {
       .split("\n")
       .filter((l) => l.includes("MIGRATOR") && !l.startsWith("#"))
       .map((l) => l.trim());
-    expect(outside).toEqual([
-      "DATABASE_URL: ${IGS_PHARMA_MIGRATOR_DATABASE_URL:?set IGS_PHARMA_MIGRATOR_DATABASE_URL}",
-    ]);
+    expect(outside).toEqual(["DATABASE_URL: ${IGS_PHARMA_MIGRATOR_DATABASE_URL:-}"]);
   });
 
   it("gives the web service and every worker the declared secrets, and the migrator none", () => {
@@ -181,13 +177,28 @@ describe("the generated file", () => {
     expect(parse(prod.yaml).networks.db_net.name).toBe("igs_pharma_db");
   });
 
-  it("lists the variables compose asks for, by name, and who gets each", () => {
-    expect(built(IGS, igsOptions()).variables).toEqual([
+  it("lists the variables `up` requires, by name and who gets each, and keeps the migrator's apart", () => {
+    const file = built(IGS, igsOptions());
+    expect(file.variables).toEqual([
       { name: "IGS_PHARMA_DATABASE_URL", for: ["web", "worker"] },
       { name: "IGS_SESSION_SECRET", for: ["web", "worker"] },
       { name: "IGS_MAIL_API_KEY", for: ["web", "worker"] },
-      { name: "IGS_PHARMA_MIGRATOR_DATABASE_URL", for: ["migrate"] },
     ]);
+    expect(file.migratorVariable).toBe("IGS_PHARMA_MIGRATOR_DATABASE_URL");
+    const none = built({ ...IGS, database: { engine: "none" as const }, secrets: [] }, igsOptions());
+    expect(none.migratorVariable).toBeUndefined();
+  });
+
+  it("says in its header that the migrator DSN is only for the migration command", () => {
+    const header = built(IGS, igsOptions())
+      .yaml.split("\n")
+      .filter((l) => l.startsWith("#"))
+      .join("\n");
+    expect(header).toContain("`up` needs IGS_PHARMA_DATABASE_URL, IGS_SESSION_SECRET, IGS_MAIL_API_KEY");
+    expect(header).toContain("IGS_PHARMA_MIGRATOR_DATABASE_URL is only for the migration, not for `up`");
+    expect(header).toContain(
+      "IGS_PHARMA_MIGRATOR_DATABASE_URL=… docker compose -p os-app-igs-pharma-staging -f <this file> --profile migrate run --rm migrate",
+    );
   });
 
   it("has no database, network or migrator for an app that declares none", () => {
@@ -314,7 +325,10 @@ describe("secret values never reach the file or the output", () => {
       expect(everything).not.toContain(VALUE);
       expect(everything).not.toMatch(/postgres:\/\//);
       for (const line of readFileSync(out, "utf8").split("\n")) {
-        if (/(SECRET|API_KEY|DATABASE_URL):/.test(line)) expect(line).toMatch(/: \$\{[A-Z_]+:\?set [A-Z_]+\}$/);
+        if (/(SECRET|API_KEY|DATABASE_URL):/.test(line)) {
+          // a required reference, or the migrator's optional one: never a value
+          expect(line).toMatch(/: \$\{[A-Z_]+(?::\?set [A-Z_]+|:-)\}$/);
+        }
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -342,7 +356,13 @@ describe("platform app compose", () => {
     expect(existsSync(out)).toBe(true);
     const text = result!.lines.join("\n");
     expect(text).toContain("OS_APP_IGS_PHARMA_UPSTREAM=os-app-igs-pharma-staging:3000");
-    expect(text).toContain("IGS_PHARMA_MIGRATOR_DATABASE_URL  (migrate)");
+    expect(text).toContain("IGS_PHARMA_DATABASE_URL  (web, worker)");
+    expect(text).toContain("Only for the migration, supplied inline for that one command");
+    expect(text).toContain(
+      "IGS_PHARMA_MIGRATOR_DATABASE_URL=… docker compose -p os-app-igs-pharma-staging -f out/compose.staging.yml --profile migrate run --rm migrate",
+    );
+    // the migrator's variable is not among the ones `up` requires
+    expect(text.split("Only for the migration")[0]).not.toContain("MIGRATOR");
   });
 
   it("writes nothing when an image is floating", async () => {
@@ -458,38 +478,68 @@ describe("platform app compose", () => {
 const compose = spawnSync("docker", ["compose", "version"], { encoding: "utf8" });
 const hasCompose = compose.status === 0;
 describe("docker compose config", () => {
+  const cases: [string, AppManifest, ComposeOptions][] = [
+    ["igs-staging", IGS, igsOptions({ env: "staging" })],
+    ["igs-prod", IGS, igsOptions({ env: "prod" })],
+    ["ext-demo-prod", EXT, extOptions({ env: "prod" })],
+    ["ext-demo-staging", EXT, extOptions({ env: "staging" })],
+  ];
+  const withoutVariables = (names: string[]) =>
+    Object.fromEntries(Object.entries(process.env).filter(([k]) => !names.includes(k)));
+
   it.skipIf(!hasCompose && !process.env.CI)(
-    "accepts the generated files",
+    "accepts the generated files with only the runtime variables set, and refuses them without",
     () => {
       expect(hasCompose, "docker compose is needed in CI").toBe(true);
       const dir = mkdtempSync(path.join(tmpdir(), "compose-config-"));
       try {
-        const cases: [string, AppManifest, ComposeOptions][] = [
-          ["igs-staging", IGS, igsOptions({ env: "staging" })],
-          ["igs-prod", IGS, igsOptions({ env: "prod" })],
-          ["ext-demo-prod", EXT, extOptions({ env: "prod" })],
-          ["ext-demo-staging", EXT, extOptions({ env: "staging" })],
-        ];
         for (const [name, manifest, options] of cases) {
           const file = built(manifest, options);
           const out = path.join(dir, `${name}.yml`);
           writeFileSync(out, file.yaml);
-          // The variables compose insists on get stand-ins of the right shape; none is a real value.
+          const required = file.variables.map((v) => v.name);
+          const migrator = file.migratorVariable!;
+          // Stand-ins of the right shape for what `up` requires; none is a real value. The migrator's is NOT set.
           const env = {
-            ...process.env,
-            ...Object.fromEntries(file.variables.map((v) => [v.name, `stand-in-${v.name}`])),
+            ...withoutVariables([...required, migrator]),
+            ...Object.fromEntries(required.map((n) => [n, `stand-in-${n}`])),
           };
-          const r = spawnSync("docker", ["compose", "-f", out, "config", "--quiet"], { encoding: "utf8", env });
-          expect(r.stderr, name).toBe("");
-          expect(r.status, name).toBe(0);
-          // and it refuses to start without them
+          const config = (args: string[], extra: Record<string, string> = {}) =>
+            spawnSync("docker", ["compose", "-f", out, ...args, "config", "--format", "json"], {
+              encoding: "utf8",
+              env: { ...env, ...extra },
+            });
+
+          // `up` needs only the runtime variables: no migration credential beside them.
+          const up = config([]);
+          expect(up.stderr, name).toBe("");
+          expect(up.status, name).toBe(0);
+          expect(Object.keys(JSON.parse(up.stdout).services), name).not.toContain("migrate");
+
+          // The migrate profile renders too, with the migrator's DSN empty: no value comes from the file.
+          const migrate = config(["--profile", "migrate"]);
+          expect(migrate.status, `${name} with the migrate profile: ${migrate.stderr}`).toBe(0);
+          expect(JSON.parse(migrate.stdout).services.migrate.environment.DATABASE_URL, name).toBe("");
+          expect(readFileSync(out, "utf8"), name).not.toContain("stand-in");
+
+          // Supplied inline, the DSN reaches the migrator and no other service.
+          const inline = config(["--profile", "migrate"], { [migrator]: "inline-dsn" });
+          const services = JSON.parse(inline.stdout).services as Record<
+            string,
+            { environment?: Record<string, string> }
+          >;
+          expect(services.migrate!.environment!.DATABASE_URL, name).toBe("inline-dsn");
+          for (const [svc, def] of Object.entries(services)) {
+            if (svc !== "migrate")
+              expect(JSON.stringify(def.environment), `${name} ${svc}`).not.toContain("inline-dsn");
+          }
+
+          // It still refuses to start without the runtime variables.
           const bare = spawnSync("docker", ["compose", "-f", out, "config", "--quiet"], {
             encoding: "utf8",
-            env: Object.fromEntries(
-              Object.entries(process.env).filter(([k]) => !file.variables.some((v) => v.name === k)),
-            ),
+            env: withoutVariables([...required, migrator]),
           });
-          expect(bare.status, `${name} without its variables`).not.toBe(0);
+          expect(bare.status, `${name} without its runtime variables`).not.toBe(0);
         }
       } finally {
         rmSync(dir, { recursive: true, force: true });
