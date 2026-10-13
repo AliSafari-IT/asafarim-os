@@ -1,78 +1,55 @@
 /**
  * The external-app fixture in `pnpm e2e` (#87): an app from "another repository", installed the way such
- * apps are, from its image. The image is built here with the manifest in its OCI label, runs as a
- * container on the host, and is installed with `platform app install --image` (never from apps/), so the
- * Admin Status board shows an app the OS only knows by its image.
+ * apps are, from its image. The image is built here with the manifest in its OCI label, then run through
+ * `pnpm dev:app`'s own code (#104): installed with `platform app install --image` (never from apps/),
+ * its database provisioned, its declared secret checked, its web container and worker started, and
+ * activated, so the Admin Status board shows an app the OS only knows by its image.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { appState, platform } from "./apps.mjs";
-import { ROOT, upstreamVar } from "./keys.mjs";
+import { MANIFEST_LABEL, devApp, devAppDown } from "./dev-app.mjs";
+import { DEV_DIR, ROOT, upstreamVar } from "./keys.mjs";
 
-export const EXTERNAL_APP = {
-  id: "ext-demo",
-  image: "ext-demo:e2e",
-  container: "asafarim-os-e2e-ext-demo",
-  port: 4120,
-  dir: path.join(ROOT, "tools/platform-cli/fixtures/external-app"),
-};
-const LABEL = "org.asafarim.app.manifest";
+const DIR = path.join(ROOT, "tools/platform-cli/fixtures/external-app");
+const MANIFEST = JSON.parse(readFileSync(path.join(DIR, "platform.app.json"), "utf8"));
 
-function docker(args, what) {
-  const r = spawnSync("docker", args, { cwd: ROOT, encoding: "utf8" });
-  if (r.status !== 0) throw new Error(`${what} failed: ${(r.stderr || r.stdout || "").trim()}`);
-  return r.stdout;
-}
+export const EXTERNAL_APP = { id: MANIFEST.id, image: "ext-demo:e2e", port: MANIFEST.runtime.port };
 
 /** core-api polls the app's health here (as for the apps under apps/*, keys.mjs). */
 export const externalUpstreamEnv = () => ({ [upstreamVar(EXTERNAL_APP.id)]: `localhost:${EXTERNAL_APP.port}` });
 
-/** Build the image with its manifest label and run it. Call before core-api starts polling. */
-export function startExternalApp() {
-  const { image, container, port, dir } = EXTERNAL_APP;
-  const manifest = readFileSync(path.join(dir, "platform.app.json"), "utf8");
-  docker(["build", "-q", "--label", `${LABEL}=${manifest}`, "-t", image, dir], "docker build (ext-demo)");
-  spawnSync("docker", ["rm", "-f", container], { stdio: "ignore" });
-  docker(
-    [
-      "run",
-      "-d",
-      "--rm",
-      "--name",
-      container,
-      "-p",
-      `127.0.0.1:${port}:8080`,
-      "--read-only",
-      "--cap-drop",
-      "ALL",
-      image,
-    ],
-    "docker run (ext-demo)",
+/** Build the image with its manifest label, and give each declared secret a throwaway value. */
+export function buildExternalApp() {
+  const manifest = readFileSync(path.join(DIR, "platform.app.json"), "utf8");
+  const r = spawnSync(
+    "docker",
+    ["build", "-q", "--label", `${MANIFEST_LABEL}=${manifest}`, "-t", EXTERNAL_APP.image, DIR],
+    {
+      cwd: ROOT,
+      encoding: "utf8",
+    },
+  );
+  if (r.status !== 0) throw new Error(`docker build (ext-demo) failed: ${(r.stderr || r.stdout || "").trim()}`);
+  const appsDir = path.join(DEV_DIR, "apps");
+  mkdirSync(appsDir, { recursive: true, mode: 0o700 });
+  writeFileSync(
+    path.join(appsDir, `${EXTERNAL_APP.id}.secrets.env`),
+    `${(MANIFEST.secrets ?? []).map((n) => `${n}=e2e-${randomBytes(12).toString("base64url")}`).join("\n")}\n`,
+    { mode: 0o600 },
   );
 }
 
-/**
- * Install it from the image (its manifest from the label) and activate it. A run without `--down`
- * leaves it installed in the dev database: then it's only activated.
- */
-export async function installExternalApp({ log = console.log } = {}) {
-  const { id, image } = EXTERNAL_APP;
-  const state = await appState(id);
-  if (state === null) {
-    const r = platform(["app", "install", "--image", image, "--env-out", `.dev/${id}.env`]);
-    if (!r.ok) throw new Error(`platform app install --image ${image} failed:\n${r.output}`);
-    log(`app ${id}: installed from ${image}`);
-  }
-  if (state !== "active") {
-    const r = platform(["app", "activate", id]);
-    if (!r.ok) throw new Error(`activating ${id} failed:\n${r.output}`);
-  }
-  log(`app ${id}: active`);
-}
+/** `pnpm dev:app ext-demo:e2e`, in process. Call once core-api is ready. */
+export const runExternalApp = () => devApp({ ref: EXTERNAL_APP.image });
 
-/** Stop the container and forget the local record (external-apps/ext-demo), so `platform sync --check` stays clean. */
+/** `pnpm dev:app ext-demo --down`, and forget the local record (external-apps/ext-demo), so `platform sync --check` stays clean. */
 export function stopExternalApp() {
-  spawnSync("docker", ["rm", "-f", EXTERNAL_APP.container], { stdio: "ignore" });
+  try {
+    devAppDown(EXTERNAL_APP.id);
+  } catch (err) {
+    console.error(err.message);
+  }
   rmSync(path.join(ROOT, "external-apps", EXTERNAL_APP.id), { recursive: true, force: true });
 }
