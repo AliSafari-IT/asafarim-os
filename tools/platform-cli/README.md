@@ -17,6 +17,8 @@ pnpm platform app install --image <ref> [--env-out <file>]
                                         # install an app from another repository by its image
 pnpm platform app new <id> [--name "<Display name>"] [--root <dir>]
                                         # write a minimal app to <dir>/apps/<id>/ (installs nothing)
+pnpm platform app compose <id|image-ref> --env prod|staging --out <file>
+                                        # write the compose file that runs an external app (--help)
 ```
 
 `--other-stack-sites <file>` lists gateway sites that belong to **another stack

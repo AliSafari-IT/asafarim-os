@@ -1,0 +1,51 @@
+{
+  "id": "igs-pharma",
+  "name": "IGS-Pharma (shaped like it, synthetic)",
+  "version": "0.1.0",
+  "platform": ">=0.1 <1",
+  "owner": "ASafariM Digital",
+  "domains": {
+    "primary": "igs-pharma.example"
+  },
+  "runtime": {
+    "image": "igs-pharma-web",
+    "port": 3000,
+    "health": {
+      "live": "/health/live",
+      "ready": "/health/ready"
+    },
+    "resources": {
+      "memory": "512m",
+      "cpus": 1
+    },
+    "workers": [
+      {
+        "name": "worker",
+        "image": "igs-pharma-worker",
+        "network": "egress-only",
+        "resources": {
+          "memory": "256m",
+          "cpus": 0.5
+        }
+      }
+    ]
+  },
+  "database": {
+    "engine": "postgres",
+    "migrations": "drizzle",
+    "dedicated": true
+  },
+  "auth": {
+    "client": "none",
+    "publicPaths": ["/"]
+  },
+  "permissions": [],
+  "roles": [],
+  "secrets": ["IGS_SESSION_SECRET", "IGS_MAIL_API_KEY"],
+  "ui": {
+    "glyph": "IG",
+    "color": "#0f766e",
+    "nav": [],
+    "status": "coming-soon"
+  }
+}
