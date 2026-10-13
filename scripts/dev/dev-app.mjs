@@ -31,7 +31,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appState, coreApiAdmin, platform } from "./apps.mjs";
 import { readEnvFile } from "./bootstrap.mjs";
+import { HARDENING, workerImage } from "../../tools/platform-cli/src/external-runtime.mjs";
 import { DEV, DEV_DIR, ROOT, upsertLines, upstreamVar } from "./keys.mjs";
+
+// The worker-image rule and the hardening are shared with `platform app compose` (#106).
+export { workerImage };
 
 export const MANIFEST_LABEL = "org.asafarim.app.manifest";
 /** Containers this script starts carry this label (value: the app id), so `--down` finds them all. */
@@ -97,25 +101,6 @@ const lastLine = (s) =>
     .split(/\r?\n/)
     .at(-1) ?? "";
 
-/**
- * The image a worker runs. The manifest names images by short name (`igs-pharma-worker`), while what
- * was installed is a full reference (`ghcr.io/alisafari-it/igs-pharma-web:<sha>`):
- *   - the worker's image is the web image's name → the installed reference itself;
- *   - the installed reference ends in the web image's name → the same registry path and tag, with the
- *     worker's name (and the worker's own tag, when it gives one);
- *   - otherwise the worker's image as the manifest gives it.
- */
-export function workerImage(webRef, manifest, worker) {
-  const webName = manifest.runtime.image.split(":")[0];
-  const [workerName, workerTag] = worker.image.split(":");
-  if (worker.image === manifest.runtime.image || (workerName === webName && !workerTag)) return webRef;
-  if (webRef.includes("@")) return worker.image; // a digest names one image; it can't be re-used for another
-  const m = /^(?<prefix>(?:[^/]+\/)*)(?<name>[^/:]+)(?::(?<tag>[^/]+))?$/.exec(webRef);
-  if (!m || m.groups.name !== webName.split("/").at(-1)) return worker.image;
-  const tag = workerTag ?? m.groups.tag;
-  return `${m.groups.prefix}${workerName.split("/").at(-1)}${tag ? `:${tag}` : ""}`;
-}
-
 /** DATABASE_URL as the container sees it: the dev Postgres is `postgres:5432` on the compose network. */
 export function containerDatabaseUrl(url) {
   let u;
@@ -154,11 +139,11 @@ export function runArgs({ id, name, image, envNames, resources, port, hostPort }
     "host.docker.internal:host-gateway",
     "--read-only",
     "--tmpfs",
-    "/tmp:rw,noexec,nosuid,size=64m",
+    HARDENING.tmpfs,
     "--cap-drop",
-    "ALL",
+    HARDENING.capDrop,
     "--security-opt",
-    "no-new-privileges:true",
+    HARDENING.securityOpt,
     ...(resources?.memory ? ["--memory", resources.memory] : []),
     ...(resources?.cpus ? ["--cpus", String(resources.cpus)] : []),
     ...envNames.flatMap((n) => ["-e", n]),
