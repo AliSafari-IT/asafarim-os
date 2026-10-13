@@ -256,6 +256,20 @@ describe("refusals", () => {
     }
   });
 
+  it.each(["DATABASE_URL", "IGS_PHARMA_DATABASE_URL", "IGS_PHARMA_MIGRATOR_DATABASE_URL"])(
+    "refuses a declared secret named %s, which would hand a database credential to the wrong process",
+    (name) => {
+      const result = buildCompose({ ...IGS, secrets: [name, "IGS_MAIL_API_KEY"] }, igsOptions());
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.lines.join("\n")).toContain(`the secret ${name} would clash`);
+    },
+  );
+
+  it("lets an app with no database use those names for its secrets", () => {
+    const m = { ...IGS, database: { engine: "none" as const }, secrets: ["IGS_PHARMA_DATABASE_URL"] };
+    expect(buildCompose(m, igsOptions()).ok).toBe(true);
+  });
+
   it("reports every problem at once", () => {
     const result = buildCompose(EXT, { env: "prod", image: "x/ext-demo:latest" });
     expect(result.ok).toBe(false);

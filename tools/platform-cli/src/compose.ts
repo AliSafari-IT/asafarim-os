@@ -109,14 +109,17 @@ export function buildCompose(manifest: AppManifest, options: ComposeOptions): Co
       if (!processes.includes(p))
         problems.push(`--scope ${name}=${p}: ${id} has no process "${p}" (${processes.join(", ")}).`);
   }
-  const reserved = new Set(["DATABASE_URL"]);
-  for (const name of declared)
-    if (reserved.has(name)) problems.push(`the secret ${name} would clash with the app's database variable.`);
-
   // The database and its migrator.
   const postgres = manifest.database.engine === "postgres" ? manifest.database : undefined;
   const dsn = variableName(id, "DATABASE_URL");
   const migratorDsn = variableName(id, "MIGRATOR_DATABASE_URL");
+  // A declared secret may not take the name of a variable this file generates: it would go to the web
+  // service and the workers by default, and the migrator's DSN must never reach them.
+  const reserved = new Set(postgres ? ["DATABASE_URL", dsn, migratorDsn] : []);
+  for (const name of declared) {
+    if (reserved.has(name))
+      problems.push(`the secret ${name} would clash with a database variable of the generated file.`);
+  }
   let migrateCommand: string[] | undefined;
   if (postgres) {
     migrateCommand = options.migrateCommand ?? MIGRATE_COMMANDS[postgres.migrations];
