@@ -4,8 +4,9 @@
  *   compose up (Postgres, Redis, the dev gateway) → bootstrap → identity + core-api (with a short
  *   access-token lifetime, so the revocation bound is tested for real) + dev login stub →
  *   install notes (NOT activated: the tests do that) → build and start notes →
- *   the external-app fixture: its image built with the manifest label, run, installed with
- *   `platform app install --image` and activated (#87; the Status spec checks it's up) →
+ *   the external-app fixture: its image built with the manifest label, then `pnpm dev:app`'s code
+ *   (#104): installed with `platform app install --image` (its database, its declared secret checked),
+ *   its web container and worker run, activated (#87; the Status spec checks it's up) →
  *   the Admin console (build and start) →
  *   Docs (build and start), reading the made-up fixtures in apps/docs/fixtures (#80) →
  *   Playwright: notes.spec.ts (direct) and gateway.spec.ts (through http://notes.localhost:8080) in
@@ -22,7 +23,7 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { bootstrap, readEnvFile } from "./bootstrap.mjs";
 import { installDevApps } from "./apps.mjs";
-import { externalUpstreamEnv, installExternalApp, startExternalApp, stopExternalApp } from "./external-app.mjs";
+import { buildExternalApp, externalUpstreamEnv, runExternalApp, stopExternalApp } from "./external-app.mjs";
 import {
   bold,
   buildWorkspaceDependencies,
@@ -70,7 +71,7 @@ try {
   checkGatewayEnv();
   compose("up", "-d", "--wait");
   await bootstrap(dbEnv());
-  startExternalApp();
+  buildExternalApp();
 
   service("identity", "identity.env", "core/identity/src/server.ts");
   service("core-api", "core-api.env", "core/core-api/src/server.ts", {
@@ -85,7 +86,7 @@ try {
   console.log(`${green("✔")} identity, core-api and the dev login stub are ready`);
 
   await installDevApps({ activate: false });
-  await installExternalApp();
+  await runExternalApp();
 
   const next = path.join(NOTES_DIR, "node_modules/next/dist/bin/next");
   console.log(bold("Building notes…"));

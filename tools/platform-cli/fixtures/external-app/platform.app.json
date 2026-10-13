@@ -6,21 +6,43 @@
   "owner": "ASafariM Digital",
   "runtime": {
     "image": "ext-demo",
-    "port": 8080,
-    "health": { "live": "/health/live", "ready": "/health/ready" },
-    "resources": { "memory": "32m", "cpus": 0.25 },
+    "port": 4120,
+    "health": {
+      "live": "/health/live",
+      "ready": "/health/ready"
+    },
+    "resources": {
+      "memory": "32m",
+      "cpus": 0.25
+    },
     "workers": [
       {
         "name": "jobs",
-        "image": "ext-demo-worker",
+        "image": "ext-demo",
         "network": "internal",
-        "resources": { "memory": "32m", "cpus": 0.25 }
+        "resources": {
+          "memory": "32m",
+          "cpus": 0.25
+        }
       }
     ]
   },
-  "database": { "engine": "postgres", "migrations": "sql", "dedicated": true },
-  "auth": { "client": "none", "publicPaths": ["/"] },
+  "database": {
+    "engine": "postgres",
+    "migrations": "sql",
+    "dedicated": true
+  },
+  "auth": {
+    "client": "none",
+    "publicPaths": ["/"]
+  },
   "permissions": [],
   "roles": [],
-  "ui": { "glyph": "EX", "color": "#64748b", "nav": [], "status": "coming-soon" }
+  "secrets": ["EXT_DEMO_API_KEY"],
+  "ui": {
+    "glyph": "EX",
+    "color": "#64748b",
+    "nav": [],
+    "status": "coming-soon"
+  }
 }
