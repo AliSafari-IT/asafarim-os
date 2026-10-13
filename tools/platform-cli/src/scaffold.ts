@@ -10,7 +10,16 @@
  * `.tmpl` suffix is dropped from the file name. The scaffold only writes files: installing the app in
  * core-api, creating its OIDC client and deploying it stay separate steps.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  rmdirSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatProblems, validateManifest } from "@asafarim/app-manifest";
@@ -33,13 +42,22 @@ export interface ScaffoldIo {
   write: (file: string, content: string) => void;
   rename: (from: string, to: string) => void;
   remove: (target: string) => void;
+  /** Removes a directory only if it is empty; anything else in it is left alone. */
+  removeIfEmpty: (dir: string) => void;
 }
 
-const nodeIo: ScaffoldIo = {
+export const nodeIo: ScaffoldIo = {
   mkdir: (dir) => void mkdirSync(dir, { recursive: true }),
   write: (file, content) => writeFileSync(file, content),
   rename: (from, to) => renameSync(from, to),
   remove: (target) => rmSync(target, { recursive: true, force: true }),
+  removeIfEmpty: (dir) => {
+    try {
+      rmdirSync(dir); // fails on a directory that has content
+    } catch {
+      // not empty (something else lives there now) or already gone: leave it
+    }
+  },
 };
 
 export const TEMPLATE_DIR = fileURLToPath(new URL("../templates/app/", import.meta.url));
@@ -167,7 +185,7 @@ export function scaffoldApp(
     io.rename(staging, target);
   } catch (error) {
     io.remove(staging);
-    if (createdApps) io.remove(appsDir);
+    if (createdApps) io.removeIfEmpty(appsDir);
     return refuse(`Writing apps/${id} failed: ${(error as Error).message}`);
   }
 

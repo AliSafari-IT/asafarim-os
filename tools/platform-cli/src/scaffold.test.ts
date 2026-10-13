@@ -5,6 +5,7 @@ import { validateManifest } from "@asafarim/app-manifest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   TEMPLATE_DIR,
+  nodeIo,
   defaultGlyph,
   defaultName,
   newAppCommand,
@@ -147,13 +148,11 @@ describe("scaffoldApp", () => {
   it("is never partial: a failing write leaves neither the app nor the folders it created", () => {
     let writes = 0;
     const io: ScaffoldIo = {
-      mkdir: (dir) => void mkdirSync(dir, { recursive: true }),
+      ...nodeIo,
       write: (file, content) => {
         if (++writes === 5) throw new Error("disk full");
-        writeFileSync(file, content);
+        nodeIo.write(file, content);
       },
-      rename: () => undefined,
-      remove: (target) => rmSync(target, { recursive: true, force: true }),
     };
     const result = scaffoldApp(root, { id: "demo-hello" }, io);
     expect(result.ok).toBe(false);
@@ -161,15 +160,25 @@ describe("scaffoldApp", () => {
     expect(tree()).toEqual([]);
   });
 
+  it("leaves alone what another process put in the apps/ folder it created, when a write fails", () => {
+    const io: ScaffoldIo = {
+      ...nodeIo,
+      write: () => {
+        mkdirSync(path.join(root, "apps/other"), { recursive: true }); // someone else, meanwhile
+        throw new Error("nope");
+      },
+    };
+    expect(() => scaffoldApp(root, { id: "demo-hello" }, io)).not.toThrow();
+    expect(tree()).toEqual(["apps", "apps/other"]);
+  });
+
   it("keeps an apps/ folder that was already there when a write fails", () => {
     mkdirSync(path.join(root, "apps/other"), { recursive: true });
     const io: ScaffoldIo = {
-      mkdir: (dir) => void mkdirSync(dir, { recursive: true }),
+      ...nodeIo,
       write: () => {
         throw new Error("nope");
       },
-      rename: () => undefined,
-      remove: (target) => rmSync(target, { recursive: true, force: true }),
     };
     expect(scaffoldApp(root, { id: "demo-hello" }, io).ok).toBe(false);
     expect(tree()).toEqual(["apps", "apps/other"]);
