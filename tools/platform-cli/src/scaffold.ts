@@ -62,6 +62,15 @@ export const nodeIo: ScaffoldIo = {
 
 export const TEMPLATE_DIR = fileURLToPath(new URL("../templates/app/", import.meta.url));
 const TEMPLATE_SUFFIX = ".tmpl";
+/** The folders of pnpm-workspace.yaml (plus external-apps/), where an id would collide with something already there. */
+const TAKEN_IN = ["apps", EXTERNAL_APPS_DIR, "core", "packages", "tools"] as const;
+const TAKEN_IN_WHAT: Record<(typeof TAKEN_IN)[number], string> = {
+  apps: "an app in apps/",
+  "external-apps": "an app in external-apps/",
+  core: "a core service",
+  packages: "a shared package",
+  tools: "a tool",
+};
 const FIRST_DEV_PORT = 4120;
 const PORT_STEP = 10;
 
@@ -105,6 +114,27 @@ export function nextDevPort(root: string): number {
     }
   }
   return highest + PORT_STEP;
+}
+
+/**
+ * The folder (relative, e.g. `packages/telemetry`) of the workspace package called `name`, if any. Folder
+ * names are checked separately; this catches a package whose folder differs from its name.
+ */
+export function workspacePackageNamed(root: string, name: string): string | undefined {
+  for (const dir of TAKEN_IN) {
+    const base = path.join(root, dir);
+    if (!existsSync(base)) continue;
+    for (const entry of readdirSync(base, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const pkg = JSON.parse(readFileSync(path.join(base, entry.name, "package.json"), "utf8")) as { name?: string };
+        if (pkg.name === name) return `${dir}/${entry.name}`;
+      } catch {
+        // no package.json, or not JSON: not a package
+      }
+    }
+  }
+  return undefined;
 }
 
 function templateFiles(dir: string, base = dir): string[] {
@@ -164,11 +194,14 @@ export function scaffoldApp(
     return refuse(`"${id}" can't be scaffolded: the manifest would not validate.`, formatProblems(checked.problems));
   }
 
-  for (const dir of ["apps", EXTERNAL_APPS_DIR, "core"]) {
+  for (const dir of TAKEN_IN) {
     if (existsSync(path.join(root, dir, id))) {
-      const what = dir === "core" ? "a core service" : `an app in ${dir}/`;
-      return refuse(`"${id}" is taken: ${dir}/${id} already exists (${what}).`);
+      return refuse(`"${id}" is taken: ${dir}/${id} already exists (${TAKEN_IN_WHAT[dir]}).`);
     }
+  }
+  const holder = workspacePackageNamed(root, `@asafarim/${id}`);
+  if (holder) {
+    return refuse(`"${id}" is taken: ${holder} already is the workspace package @asafarim/${id}.`);
   }
 
   const appsDir = path.join(root, "apps");

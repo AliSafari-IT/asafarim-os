@@ -28,6 +28,10 @@ function tree(dir = root): string[] {
   return readdirSync(dir, { recursive: true }).map(String).sort();
 }
 
+function failTest(): never {
+  throw new Error("nothing may be written");
+}
+
 /** Only the files under `dir` (relative). */
 function files(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -123,6 +127,8 @@ describe("scaffoldApp", () => {
     ["apps", "an app in apps/"],
     ["external-apps", "an app in external-apps/"],
     ["core", "a core service"],
+    ["packages", "a shared package"],
+    ["tools", "a tool"],
   ])("refuses an id that already exists in %s/", (dir, what) => {
     mkdirSync(path.join(root, dir, "taken"), { recursive: true });
     const before = tree();
@@ -130,6 +136,37 @@ describe("scaffoldApp", () => {
     expect(result.ok).toBe(false);
     expect(result.lines.join("\n")).toContain(what);
     expect(tree()).toEqual(before);
+  });
+
+  it("refuses an id that is the name of a workspace package whose folder is called something else", () => {
+    mkdirSync(path.join(root, "packages/shared-bits"), { recursive: true });
+    writeFileSync(
+      path.join(root, "packages/shared-bits/package.json"),
+      JSON.stringify({ name: "@asafarim/telemetry" }),
+    );
+    const before = tree();
+    const result = scaffoldApp(root, { id: "telemetry" });
+    expect(result.ok).toBe(false);
+    expect(result.lines.join("\n")).toContain("packages/shared-bits");
+    expect(tree()).toEqual(before);
+  });
+
+  it("refuses the real package ids of this workspace when scaffolding into it", () => {
+    const repo = path.resolve(import.meta.dirname, "..", "..", "..");
+    for (const id of [
+      "telemetry",
+      "config",
+      "events",
+      "app-sdk",
+      "app-manifest",
+      "registry-protocol",
+      "dev-hub",
+      "platform-cli",
+    ]) {
+      const result = scaffoldApp(repo, { id }, { ...nodeIo, mkdir: failTest, write: failTest, rename: failTest });
+      expect(result.ok, id).toBe(false);
+      expect(result.lines.join("\n"), id).toContain("is taken");
+    }
   });
 
   it.each(["", "<b>", 'say "hi"', "a{{id}}", "back\\slash", "x".repeat(65), " leading", "tab\tname"])(
