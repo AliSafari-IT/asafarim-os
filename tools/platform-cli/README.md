@@ -15,6 +15,8 @@ pnpm platform manifest compile <file>   # validate and write platform.app.json b
 pnpm platform boundaries                # fail if core/ or packages/ import from apps/
 pnpm platform app install --image <ref> [--env-out <file>]
                                         # install an app from another repository by its image
+pnpm platform app new <id> [--name "<Display name>"] [--root <dir>]
+                                        # write a minimal app to <dir>/apps/<id>/ (installs nothing)
 ```
 
 `--other-stack-sites <file>` lists gateway sites that belong to **another stack
@@ -48,6 +50,17 @@ The published JSON Schema is at
 `https://asafarim.site/schemas/app-manifest.schema.json` (and `/schemas/app-manifest/v1.json`).
 `fixtures/external-app/` is a made-up external app; `pnpm e2e` builds it, installs it this
 way and checks the Admin Status board shows it up.
+
+## New app (`app new <id>`)
+
+`app new` writes a minimal Next.js app to `<root>/apps/<id>/` from the files in `templates/app/`: a typed
+manifest (`platform.app.ts`) and its compiled `platform.app.json`, a page that signs in through core/identity and
+shows the launcher, `/health/live` and `/health/ready`, telemetry, and one test. Placeholders (`{{id}}`, `{{name}}`,
+`{{glyph}}`, `{{port}}`) are replaced and a `.tmpl` suffix is dropped. The id is checked with the manifest schema's own
+rules and an id that is reserved, already used under `apps/`, `external-apps/`, `core/`, `packages/` or `tools/`, or that is already the name of a workspace package (`@asafarim/<id>`) is refused. The folder is
+written next to its place and renamed into it, so a failure leaves nothing behind. It only writes files: run
+`pnpm install` and `pnpm platform sync` after it; installing in core-api (`app install`), the OIDC client and any
+deploy stay separate steps. `--name` is the display name (default: the id in title case).
 
 ## Generators
 

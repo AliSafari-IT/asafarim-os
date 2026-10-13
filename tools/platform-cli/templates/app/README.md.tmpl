@@ -1,0 +1,16 @@
+# apps/{{id}}
+
+**{{name}}**, an app on ASafariM OS, scaffolded by `pnpm platform app new {{id}}`.
+
+It is a folder with a manifest ([`platform.app.ts`](platform.app.ts), compiled to `platform.app.json`) and one page
+that signs people in through core/identity and shows the platform launcher. Edit the manifest to declare what the
+app needs (permissions, roles, routes, a database); the platform wires the rest.
+
+```bash
+pnpm install                          # link the new workspace package
+pnpm platform sync                    # generate the launcher tile and the gateway site
+pnpm platform app install {{id}}      # register it with core-api (needs `pnpm dev` running)
+pnpm --filter @asafarim/{{id}} dev    # http://localhost:{{port}}
+```
+
+After changing `platform.app.ts`: `pnpm platform manifest compile apps/{{id}}/platform.app.ts`, then `pnpm platform sync`.

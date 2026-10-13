@@ -1,0 +1,16 @@
+import { validateManifest } from "@asafarim/app-manifest";
+import { describe, expect, it } from "vitest";
+import compiled from "../platform.app.json";
+import manifest from "../platform.app";
+
+describe("{{id}} manifest", () => {
+  it("is a valid app manifest, and keeps to its own namespace", () => {
+    expect(validateManifest(manifest)).toMatchObject({ ok: true });
+    for (const p of manifest.permissions) expect(p.key.startsWith("{{id}}.")).toBe(true);
+  });
+
+  it("has platform.app.json compiled from platform.app.ts (run `pnpm platform manifest compile` after editing it)", () => {
+    const result = validateManifest(manifest);
+    expect(result.ok && result.manifest).toEqual(compiled);
+  });
+});

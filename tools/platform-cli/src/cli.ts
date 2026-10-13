@@ -13,6 +13,8 @@
  *   pnpm platform manifest validate <file>   check one manifest (.json, or a .ts default export)
  *   pnpm platform manifest compile <file>    validate and write platform.app.json beside it
  *   pnpm platform boundaries                 fail if core/ or packages/ import from apps/
+ *   pnpm platform app new <id> [--name "<Display name>"] [--root <dir>]
+ *                                            write a minimal app to <dir>/apps/<id>/ (P7.1); installs nothing
  *   pnpm platform app install <id> [--env-out <file>]   install apps/<id> via core-api (P3.1)
  *   pnpm platform app install --image <ref> [--env-out <file>]
  *                                            install an app from another repository from its image (#87):
@@ -26,6 +28,7 @@ import { appCommand, roleCommand } from "./app.ts";
 import { loadPlatformWiring, readSiteList } from "./against/load.ts";
 import { boundariesCommand } from "./boundaries.ts";
 import { compileCommand, validateCommand } from "./manifest.ts";
+import { newAppCommand } from "./scaffold.ts";
 import { findRepoRoot, sync } from "./sync.ts";
 
 const USAGE = [
@@ -35,6 +38,7 @@ const USAGE = [
   "  platform manifest validate <file>",
   "  platform manifest compile <file>",
   "  platform boundaries",
+  '  platform app new <id> [--name "<Display name>"] [--root <dir>]   write a minimal app to apps/<id>',
   "  platform app install <id> [--env-out <file>]          an app in apps/<id>",
   "  platform app install --image <ref> [--env-out <file>]  an app from another repository, by image",
   "      (the explicit --image flag tells the two apart; the manifest is read from the image's",
@@ -81,6 +85,8 @@ async function main(argv: string[]): Promise<number> {
     result = boundariesCommand(findRepoRoot(cwd));
   } else if (command === "role") {
     result = await roleCommand(rest, findRepoRoot(cwd));
+  } else if (command === "app" && rest[0] === "new") {
+    result = newAppCommand(rest.slice(1), cwd, () => findRepoRoot(cwd));
   } else if (command === "app") {
     result = await appCommand(rest, findRepoRoot(cwd));
   }

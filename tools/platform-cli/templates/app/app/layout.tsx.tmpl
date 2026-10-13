@@ -1,0 +1,12 @@
+import type { Metadata } from "next";
+import "./globals.css";
+
+export const metadata: Metadata = { title: "{{name}} · ASafariM", description: "{{name}}, an app on ASafariM OS" };
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  );
+}
