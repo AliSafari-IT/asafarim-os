@@ -1,0 +1,59 @@
+{
+  "id": "{{id}}",
+  "name": "{{name}}",
+  "version": "0.1.0",
+  "platform": ">=0.1 <1",
+  "owner": "ASafariM Digital",
+  "domains": {
+    "primary": "{{id}}.asafarim.site"
+  },
+  "runtime": {
+    "image": "{{id}}",
+    "port": 3000,
+    "health": {
+      "live": "/health/live",
+      "ready": "/health/ready"
+    },
+    "resources": {
+      "memory": "192m",
+      "cpus": 0.5
+    }
+  },
+  "database": {
+    "engine": "none"
+  },
+  "auth": {
+    "client": "oidc",
+    "publicPaths": ["/health/live", "/health/ready"]
+  },
+  "permissions": [
+    {
+      "key": "{{id}}.read",
+      "description": "Open {{name}}"
+    }
+  ],
+  "roles": [
+    {
+      "key": "{{id}}.user",
+      "grants": ["{{id}}.read"],
+      "description": "Can open {{name}}"
+    }
+  ],
+  "ui": {
+    "glyph": "{{glyph}}",
+    "color": "#2563eb",
+    "nav": [
+      {
+        "label": "{{name}}",
+        "href": "/"
+      }
+    ],
+    "status": "active",
+    "launcher": {
+      "description": "{{name}}, an app on ASafariM OS.",
+      "meta": "{{id}}.asafarim.site",
+      "access": "authenticated",
+      "order": 100
+    }
+  }
+}

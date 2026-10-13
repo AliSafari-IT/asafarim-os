@@ -1,0 +1,32 @@
+{
+  "name": "@asafarim/{{id}}",
+  "version": "0.1.0",
+  "private": true,
+  "description": "{{name}}: an ASafariM OS app, scaffolded by `pnpm platform app new {{id}}`.",
+  "scripts": {
+    "dev": "next dev --port {{port}}",
+    "build": "next build",
+    "start": "next start --port {{port}}",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@asafarim/app-manifest": "workspace:*",
+    "@asafarim/app-sdk": "workspace:*",
+    "@asafarim/telemetry": "workspace:*",
+    "next": "^16.4.0",
+    "next-auth": "5.0.0-beta.32",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}
