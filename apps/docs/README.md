@@ -47,7 +47,17 @@ While reading, select some text (or point at a heading) and choose **Add note**:
 - **Highlights** are drawn in the browser with the CSS Custom Highlight API over the page's text nodes: nothing is re-parsed or inserted. A quote that occurs more than once is highlighted at its first match after its heading. Clicking a highlight shows its note.
 - **Notes are private and untrusted.** `GET /api/notes` needs `docs.read` and returns only the caller's own notes; `POST /api/notes`, `PATCH` and `DELETE /api/notes/:id` also need `docs.notes.write`, and every query is scoped to the author, so anyone else's note is "not found". Writes must be `application/json`. A note's body goes through the same Markdown pipeline as a document (sanitized first, no raw HTML); its quote is shown as text.
 - **/notes** lists every note by document, filterable by document. Notes are edited and deleted on their document.
-- **Generate GitHub issue** is shown next to **Add note** but does nothing yet (#82 needs the issue token).
+- **Generate GitHub issue** is shown next to **Add note**; its server side is below, the preview UI is the next step of #82.
+
+## Generate GitHub issue (#82, server)
+
+Two routes, both for `docs.issues.create` (after `docs.read`) on the caller's own note, JSON bodies only:
+
+- `POST /api/notes/:id/issue/draft` (`{}` or `{ "repo": "owner/name" }`): builds the context (`lib/issue-context.ts`: the note, its quote, the section and its heading path, the title and outline, the section's issue links, the repo's labels; about 2 000 words at most, the outline is cut first), asks Claude for one forced `issue_draft` tool call (`ai.model`, 60 s timeout) and validates it with Zod (`lib/issue-draft.ts`: a title and the sections _Context_, _Problem / request_, _Suggested steps_, _Done when_). Returns the preview `{ repo, public, draft, labels, issueUrl }`. **Nothing is created on GitHub.**
+- `POST /api/notes/:id/issue` (`{ repo, title, body, labels, confirm? }`): creates the issue and saves its URL on the note. A note that already has an issue answers 409 `issue_exists` unless `confirm: true`.
+- Labels are only ever the target repo's existing ones. Links to the reader's own domain are replaced by the document's path in a draft and refused on create.
+- Errors: 422 `no_repo_access` ("No access to owner/name") when the issues token can't reach the repo, 502 `invalid_ai_answer` for an answer that fails validation, 504 `ai_timeout`, 503 `issues_unavailable` without `DOCS_ISSUES_TOKEN` (both routes) or `DOCS_AI_API_KEY` (draft).
+- Logs carry the note id, the repo's visibility, word counts and token usage, never the prompt, the note or the generated text. The AI and GitHub are called with `fetch` (`lib/issue-clients.ts`) and mocked in `test/issue.test.ts`.
 
 `e2e/notes.spec.ts` creates, edits and deletes notes, checks the "text changed" case and Lighthouse accessibility (light and dark, `test-results/lighthouse-notes.json`); `pnpm e2e` then restarts Docs and checks the notes are still there.
 
