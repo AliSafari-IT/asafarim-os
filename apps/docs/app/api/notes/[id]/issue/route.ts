@@ -3,7 +3,9 @@
  * the owner kept or edited in the preview, and saves its URL on the note. A note that already has an
  * issue answers 409 unless the owner confirmed a second one (`confirm: true`). Once GitHub has created
  * the issue, a URL that can't be saved (500 `issue_url_not_saved`) or a note deleted meanwhile (410
- * `note_gone`) still answers with the issue, so nobody retries into a duplicate.
+ * `note_gone`) still answers with the issue, so nobody retries into a duplicate. A public repo needs
+ * `acknowledgedPublic: true` (the preview showed its banner); without it the answer is 409
+ * `public_not_acknowledged` and nothing is created, whatever the client shows.
  */
 import {
   APP_DOMAIN,
@@ -30,7 +32,7 @@ export async function POST(request: Request, { params }: Params) {
   if (!input.success) {
     return invalidIssue("An issue needs a repository (owner/name), a title (1–200) and a body (1–20 000).");
   }
-  const { repo, title, confirm } = input.data;
+  const { repo, title, confirm, acknowledgedPublic } = input.data;
   if (a.note.issueUrl && !confirm) {
     return json(
       { error: "issue_exists", issueUrl: a.note.issueUrl, message: "This note already has an issue. Create another?" },
@@ -46,6 +48,18 @@ export async function POST(request: Request, { params }: Params) {
   let labels: string[];
   let issue: { url: string; number: number };
   try {
+    // Asked at create time: the repo may have been made public since the draft.
+    if ((await github.tracker.repo(repo)).public && !acknowledgedPublic) {
+      return json(
+        {
+          error: "public_not_acknowledged",
+          repo,
+          public: true,
+          message: `${repo} is public: everything in this issue will be visible to everyone. Check it, then create again.`,
+        },
+        409,
+      );
+    }
     labels = existingLabels(input.data.labels, await github.tracker.labels(repo));
     issue = await github.tracker.create(repo, { title, body: input.data.body, labels });
   } catch (err) {
