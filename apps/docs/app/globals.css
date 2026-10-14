@@ -761,3 +761,78 @@ dialog.note-editor h2 {
 .notes-filter label {
   margin-bottom: 0;
 }
+
+/* "Generate GitHub issue" (#82) */
+dialog.issue-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+.issue-dialog input:not([type="checkbox"]) {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+}
+.issue-dialog textarea {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+.public-banner {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--danger);
+  color: var(--danger-ink);
+  font-weight: 700;
+}
+.issue-labels {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.issue-labels legend {
+  padding: 0 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.issue-label-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.note-editor label.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  font-weight: 400;
+}
+.issue-existing {
+  margin: 12px 0;
+}
+.issue-existing p {
+  margin: 0 0 4px;
+}
+.issue-existing a,
+a.issue-link {
+  color: var(--accent);
+  font-weight: 600;
+}
+.issue-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.small-print {
+  margin: -6px 0 0;
+  font-size: 0.82rem;
+}

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { filterTree } from "../components/DocTree";
+import { PUBLIC_BANNER } from "../components/IssueDialog";
 import { mermaidLabel } from "../components/Mermaid";
 import type { NavNode } from "../components/nav";
 import { searchDocs } from "../components/Search";
 import { hashId } from "../components/Toc";
+import { issueHref } from "../lib/issue-link";
 
 const tree: NavNode[] = [
   {
@@ -96,5 +98,28 @@ describe("hashId", () => {
     expect(hashId("#caf%C3%A9")).toBe("café");
     expect(hashId("#%E0%A4%A")).toBe("%E0%A4%A");
     expect(hashId("")).toBe("");
+  });
+});
+
+describe("Generate GitHub issue, in the page (#82)", () => {
+  it("a note's issue link is only ever a GitHub issue's own URL", () => {
+    expect(issueHref("https://github.com/example-org/demo-app/issues/42")).toBe(
+      "https://github.com/example-org/demo-app/issues/42",
+    );
+    for (const bad of [
+      null,
+      "",
+      "javascript:alert(1)",
+      "https://github.com.evil.test/o/r/issues/1",
+      "https://github.com/o/r/pull/1",
+      "https://github.com/o/r/issues/1#x",
+      "http://github.com/o/r/issues/1",
+    ]) {
+      expect(issueHref(bad), String(bad)).toBeUndefined();
+    }
+  });
+
+  it("the public-repo banner says what the issue says", () => {
+    expect(PUBLIC_BANNER).toBe("This repo is public. Everything below will be visible to everyone.");
   });
 });

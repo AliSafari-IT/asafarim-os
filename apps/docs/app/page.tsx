@@ -10,6 +10,7 @@ import { Toc } from "@/components/Toc";
 import { auth } from "@/lib/auth";
 import { anchorNote, sectionsOf } from "@/lib/anchor";
 import { gate } from "@/lib/gate";
+import { issuesConfigured } from "@/lib/issue-api";
 import { getNotes } from "@/lib/notes";
 import { readableName, tocOf } from "@/lib/outline";
 import { getPlatform } from "@/lib/platform";
@@ -81,6 +82,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
   // Study notes (#81): the caller's own, each placed where its quote is in this version of the document.
   const store = getNotes();
   const canWrite = (await gate("docs.notes.write")).ok;
+  // "Generate GitHub issue" (#82): for docs.issues.create, working once the server has its secrets.
+  const issues = { allowed: (await gate("docs.issues.create")).ok, ready: issuesConfigured() };
   let notesAvailable = Boolean(store);
   let notes: NoteView[] = [];
   const sections = doc && !doc.missing ? sectionsOf(doc.markdown) : [];
@@ -99,6 +102,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
             body: n.body,
             status: at.status,
             updatedAt: n.updatedAt,
+            issueUrl: n.issueUrl,
             rendered: (
               <Markdown
                 markdown={n.body}
@@ -213,6 +217,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
                   notes={notes}
                   canWrite={canWrite}
                   available={notesAvailable}
+                  issues={issues}
                 >
                   <Markdown
                     markdown={doc.markdown}

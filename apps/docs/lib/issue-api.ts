@@ -47,6 +47,9 @@ export async function issueAccess(
   return { ok: true, subject: read.subject, store, note };
 }
 
+/** Both secrets are set, so the buttons work; without them they show, disabled, as "not set up yet". */
+export const issuesConfigured = () => Boolean(process.env.DOCS_AI_API_KEY && process.env.DOCS_ISSUES_TOKEN);
+
 const notConfigured = () => fail(503, "issues_unavailable", "Creating GitHub issues isn't set up on this server yet.");
 
 /** GitHub, for both routes. */

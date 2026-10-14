@@ -43,7 +43,7 @@ test.describe("before a restart", () => {
     const body = page.getByTestId("doc-body");
     await expect(page.getByTestId("notes")).toContainText("No notes on this document yet");
 
-    // Select text: "Add note" (and the not-yet-available "Generate GitHub issue") appear by it.
+    // Select text: "Add note" (and "Generate GitHub issue", disabled: this stack has no AI key or issue token) appear by it.
     const item = body.getByRole("listitem").filter({ hasText: "Ship the beta" });
     await item.selectText();
     await item.dispatchEvent("mouseup");
