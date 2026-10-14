@@ -85,10 +85,14 @@ export const noteId = (raw: string) => (/^[1-9]\d{0,17}$/.test(raw) ? raw : unde
 
 export interface NotesStore {
   list(author: string, docPath?: string): Promise<Note[]>;
+  /** null: no such note of this author. */
+  get(author: string, id: string): Promise<Note | null>;
   create(author: string, input: z.output<typeof NoteInput> & { docSha: string }): Promise<Note>;
   /** null: no such note of this author. */
   update(author: string, id: string, body: string): Promise<Note | null>;
   remove(author: string, id: string): Promise<boolean>;
+  /** The GitHub issue made from the note (#82). null: no such note of this author. */
+  setIssueUrl(author: string, id: string, url: string): Promise<Note | null>;
 }
 
 export function createNotesStore(pool: pg.Pool): NotesStore {
@@ -112,6 +116,12 @@ export function createNotesStore(pool: pg.Pool): NotesStore {
       );
       return rows.map(toNote);
     },
+    async get(author, id) {
+      const { rows } = await (
+        await db()
+      ).query<Row>(`SELECT ${COLUMNS} FROM notes WHERE id = $2 AND author = $1`, [author, id]);
+      return rows[0] ? toNote(rows[0]) : null;
+    },
     async create(author, n) {
       const { rows } = await (
         await db()
@@ -134,6 +144,15 @@ export function createNotesStore(pool: pg.Pool): NotesStore {
     async remove(author, id) {
       const res = await (await db()).query("DELETE FROM notes WHERE id = $2 AND author = $1", [author, id]);
       return (res.rowCount ?? 0) > 0;
+    },
+    async setIssueUrl(author, id, url) {
+      const { rows } = await (
+        await db()
+      ).query<Row>(
+        `UPDATE notes SET issue_url = $3, updated_at = now() WHERE id = $2 AND author = $1 RETURNING ${COLUMNS}`,
+        [author, id, url],
+      );
+      return rows[0] ? toNote(rows[0]) : null;
     },
   };
 }
