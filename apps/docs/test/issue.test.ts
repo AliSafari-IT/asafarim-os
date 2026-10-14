@@ -385,6 +385,44 @@ describe("POST /api/notes/:id/issue (#82)", () => {
     expect((await POST(jsonReq({ ...issue, confirm: true }), params(noteIdOf))).status).toBe(201);
   });
 
+  it("the issue is created but its URL can't be saved: 500 with the issue, created exactly once", async () => {
+    const gh = fakeTracker();
+    services.tracker = gh.tracker;
+    store.setIssueUrl = async () => {
+      throw new Error("connection lost");
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const res = await (await createRoute()).POST(jsonReq(issue), params(noteIdOf));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({
+      error: "issue_url_not_saved",
+      message: "The issue was created, but the link could not be saved on this note.",
+      issue: { url: "https://github.com/example-org/demo-app/issues/7", number: 7 },
+    });
+    expect(gh.calls.filter((c) => c.op === "create")).toHaveLength(1);
+    // Ids only: no title, body or error text.
+    const logged = warn.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(JSON.parse(logged)).toMatchObject({ msg: "issue.url_not_saved", note: noteIdOf, issue: 7 });
+    expect(logged).not.toContain("Ship the beta");
+    expect(logged).not.toContain("connection lost");
+    warn.mockRestore();
+  });
+
+  it("the note was deleted meanwhile: 410 note_gone with the issue, not a plain success", async () => {
+    const gh = fakeTracker();
+    services.tracker = gh.tracker;
+    store.setIssueUrl = async () => null;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const res = await (await createRoute()).POST(jsonReq(issue), params(noteIdOf));
+    expect(res.status).toBe(410);
+    expect(await res.json()).toMatchObject({
+      error: "note_gone",
+      issue: { url: "https://github.com/example-org/demo-app/issues/7", number: 7 },
+    });
+    expect(gh.calls.filter((c) => c.op === "create")).toHaveLength(1);
+    warn.mockRestore();
+  });
+
   it("refuses a link to the reader", async () => {
     const body = `${GOOD_BODY}\nhttps://docs.asafarim.site/?doc=x.md`;
     const gh = fakeTracker();

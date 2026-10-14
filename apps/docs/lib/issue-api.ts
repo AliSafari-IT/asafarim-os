@@ -47,6 +47,9 @@ export async function issueAccess(
   return { ok: true, subject: read.subject, store, note };
 }
 
+/** Both secrets are set, so the buttons work; without them they show, disabled, as "not set up yet". */
+export const issuesConfigured = () => Boolean(process.env.DOCS_AI_API_KEY && process.env.DOCS_ISSUES_TOKEN);
+
 const notConfigured = () => fail(503, "issues_unavailable", "Creating GitHub issues isn't set up on this server yet.");
 
 /** GitHub, for both routes. */
@@ -99,7 +102,42 @@ export function serviceFailure(err: unknown): Response {
   throw err;
 }
 
+/**
+ * Saves a created issue's URL on its note. The issue already exists on GitHub, so a failure here is
+ * never a plain error: the answer carries the issue (`{ error, message, issue }`), so the preview shows
+ * its link instead of offering a retry that would create a second one.
+ *   500 `issue_url_not_saved`: the database refused the update.
+ *   410 `note_gone`: the note was deleted in the meantime.
+ */
+export async function saveIssueUrl(
+  store: NotesStore,
+  subject: string,
+  noteId: string,
+  issue: { url: string; number: number },
+): Promise<{ ok: true; note: Note } | { ok: false; res: Response }> {
+  let note: Note | null;
+  try {
+    note = await store.setIssueUrl(subject, noteId, issue.url);
+  } catch {
+    logIssue("issue.url_not_saved", { note: noteId, issue: issue.number }, "warn");
+    const message = "The issue was created, but the link could not be saved on this note.";
+    return { ok: false, res: fail(500, "issue_url_not_saved", message, { issue }) };
+  }
+  if (!note) {
+    logIssue("issue.note_gone", { note: noteId, issue: issue.number }, "warn");
+    const message = "The issue was created, but the link could not be saved on this note: the note is gone.";
+    return { ok: false, res: fail(410, "note_gone", message, { issue }) };
+  }
+  return { ok: true, note };
+}
+
 /** One log line: ids, counts and token usage only. */
-export function logIssue(msg: string, fields: Record<string, string | number | boolean>) {
-  console.info(JSON.stringify({ app: "docs", level: "info", msg, ...fields }));
+export function logIssue(
+  msg: string,
+  fields: Record<string, string | number | boolean>,
+  level: "info" | "warn" = "info",
+) {
+  const line = JSON.stringify({ app: "docs", level, msg, ...fields });
+  if (level === "warn") console.warn(line);
+  else console.info(line);
 }

@@ -11,7 +11,9 @@
  */
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { issueHref } from "@/lib/issue-link";
 import { findQuote } from "@/lib/quote";
+import { IssueDialog } from "./IssueDialog";
 
 export interface NoteView {
   id: string;
@@ -23,13 +25,15 @@ export interface NoteView {
   body: string;
   status: "ok" | "changed";
   updatedAt: string;
+  /** The GitHub issue made from this note (#82). */
+  issueUrl: string | null;
   /** The body, rendered on the server (sanitized). */
   rendered: React.ReactNode;
 }
 
 const HEADINGS = "h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]";
 const BLOCKS = "p, li, td, th, h1, h2, h3, h4, h5, h6, pre, blockquote, dt, dd, figcaption";
-const ISSUE_SOON = "Coming soon: turning a note into a GitHub issue isn't set up yet.";
+const ISSUES_NOT_SET_UP = "Not set up yet: the server needs DOCS_AI_API_KEY and DOCS_ISSUES_TOKEN.";
 const MAX_QUOTE = 1000;
 
 /** The document's text nodes in order, as a reader sees them: no heading anchors, no drawn charts. */
@@ -74,8 +78,18 @@ function headingBefore(root: HTMLElement, node: Node): HTMLElement | undefined {
 const highlights = () =>
   typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined" ? CSS.highlights : undefined;
 
-/** `pick`: the note's place is chosen in the dialog (the "Add a note" button), not given by the page. */
-type Draft = { kind: "new"; headingId: string; quote: string; pick?: boolean } | { kind: "edit"; note: NoteView };
+/** Who may turn notes into issues (docs.issues.create), and whether the server has the secrets for it. */
+export interface IssuesState {
+  allowed: boolean;
+  ready: boolean;
+}
+
+/**
+ * `pick`: the note's place is chosen in the dialog (the "Add a note" button), not given by the page.
+ * `issue`: "Generate GitHub issue" on a selection or heading: save the note, then open the preview.
+ */
+type NewDraft = { kind: "new"; headingId: string; quote: string; pick?: boolean; issue?: boolean };
+type Draft = NewDraft | { kind: "edit"; note: NoteView };
 type Spot = { top: number; left: number };
 
 export function Notes({
@@ -84,6 +98,7 @@ export function Notes({
   notes,
   canWrite,
   available,
+  issues,
   children,
 }: {
   docPath: string;
@@ -91,6 +106,7 @@ export function Notes({
   notes: NoteView[];
   canWrite: boolean;
   available: boolean;
+  issues: IssuesState;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -105,6 +121,7 @@ export function Notes({
   const [removing, setRemoving] = useState<NoteView | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [issueFor, setIssueFor] = useState<{ id: string; issueUrl: string | null } | null>(null);
   const writable = canWrite && available;
 
   // Highlights: each note's quote, at its first match after its heading.
@@ -213,7 +230,8 @@ export function Notes({
     router.refresh();
   };
 
-  async function send(url: string, method: string, payload?: unknown): Promise<boolean> {
+  /** The answer's JSON (`{}` for none) when it succeeded; null (and the error shown) when it didn't. */
+  async function send(url: string, method: string, payload?: unknown): Promise<{ body: unknown } | null> {
     setBusy(true);
     setError("");
     try {
@@ -222,13 +240,13 @@ export function Notes({
         headers: payload === undefined ? {} : { "content-type": "application/json" },
         body: payload === undefined ? undefined : JSON.stringify(payload),
       });
-      if (res.ok) return true;
+      if (res.ok) return { body: (await res.json().catch(() => null)) ?? {} };
       const answer = (await res.json().catch(() => null)) as { message?: string } | null;
       setError(answer?.message ?? `The note couldn't be saved (${res.status}).`);
-      return false;
+      return null;
     } catch {
       setError("The note couldn't be saved: the app isn't reachable.");
-      return false;
+      return null;
     } finally {
       setBusy(false);
     }
@@ -239,7 +257,7 @@ export function Notes({
     if (!draft) return;
     const form = new FormData(e.currentTarget);
     const text = String(form.get("body") ?? "");
-    const ok =
+    const saved =
       draft.kind === "edit"
         ? await send(`/api/notes/${draft.note.id}`, "PATCH", { body: text })
         : await send("/api/notes", "POST", {
@@ -248,7 +266,12 @@ export function Notes({
             quote: draft.quote,
             body: text,
           });
-    if (ok) done();
+    if (!saved) return;
+    const thenIssue = draft.kind === "new" && draft.issue;
+    done();
+    // "Generate GitHub issue" on a selection or heading: the note is saved, now the preview.
+    const id = (saved.body as { note?: { id?: unknown } }).note?.id;
+    if (thenIssue && typeof id === "string") setIssueFor({ id, issueUrl: null });
   }
 
   async function remove() {
@@ -283,7 +306,10 @@ export function Notes({
             >
               Add note
             </button>
-            <IssueButton />
+            <IssueButton
+              issues={issues}
+              onClick={() => open({ kind: "new", headingId: hovered.headingId, quote: "", issue: true })}
+            />
           </div>
         ) : null}
         {selection ? (
@@ -299,7 +325,7 @@ export function Notes({
             <button type="button" className="small" onClick={() => open({ kind: "new", ...selection })}>
               Add note
             </button>
-            <IssueButton />
+            <IssueButton issues={issues} onClick={() => open({ kind: "new", ...selection, issue: true })} />
           </div>
         ) : null}
       </div>
@@ -373,6 +399,22 @@ export function Notes({
                   <div className="note-body">{n.rendered}</div>
                   <p className="note-foot muted">
                     <span>{n.updatedAt.slice(0, 10)}</span>
+                    {issueHref(n.issueUrl) ? (
+                      <a
+                        className="issue-link"
+                        href={issueHref(n.issueUrl)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        data-testid="issue-link"
+                      >
+                        Issue created ✓
+                      </a>
+                    ) : null}
+                    <IssueButton
+                      issues={issues}
+                      className="link"
+                      onClick={() => setIssueFor({ id: n.id, issueUrl: n.issueUrl })}
+                    />
                     {writable ? (
                       <>
                         <button type="button" className="link" onClick={() => open({ kind: "edit", note: n })}>
@@ -441,7 +483,7 @@ export function Notes({
                 Cancel
               </button>
               <button type="submit" disabled={busy}>
-                Save note
+                {draft.kind === "new" && draft.issue ? "Save note and generate issue" : "Save note"}
               </button>
             </div>
           </form>
@@ -470,20 +512,52 @@ export function Notes({
           </button>
         </div>
       </dialog>
+
+      {issueFor ? (
+        <IssueDialog
+          key={issueFor.id}
+          noteId={issueFor.id}
+          issueUrl={issueFor.issueUrl}
+          onClose={() => setIssueFor(null)}
+          onCreated={() => {
+            setIssueFor(null);
+            router.refresh();
+          }}
+        />
+      ) : null}
     </>
   );
 }
 
-/** #82 needs a token only Ali can add: shown, but it does nothing yet. */
-function IssueButton() {
+/**
+ * "Generate GitHub issue", on a note or by a selection or heading (which writes the note first).
+ * Hidden without docs.issues.create; shown but disabled until the server has its secrets.
+ */
+function IssueButton({
+  issues,
+  onClick,
+  className = "secondary small",
+}: {
+  issues: IssuesState;
+  onClick: () => void;
+  className?: string;
+}) {
+  if (!issues.allowed) return null;
+  if (!issues.ready) {
+    return (
+      <button
+        type="button"
+        className={className}
+        aria-disabled="true"
+        title={ISSUES_NOT_SET_UP}
+        onClick={(e) => e.preventDefault()}
+      >
+        Generate GitHub issue
+      </button>
+    );
+  }
   return (
-    <button
-      type="button"
-      className="secondary small"
-      aria-disabled="true"
-      title={ISSUE_SOON}
-      onClick={(e) => e.preventDefault()}
-    >
+    <button type="button" className={className} onClick={onClick}>
       Generate GitHub issue
     </button>
   );

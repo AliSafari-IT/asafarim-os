@@ -47,9 +47,9 @@ While reading, select some text (or point at a heading) and choose **Add note**:
 - **Highlights** are drawn in the browser with the CSS Custom Highlight API over the page's text nodes: nothing is re-parsed or inserted. A quote that occurs more than once is highlighted at its first match after its heading. Clicking a highlight shows its note.
 - **Notes are private and untrusted.** `GET /api/notes` needs `docs.read` and returns only the caller's own notes; `POST /api/notes`, `PATCH` and `DELETE /api/notes/:id` also need `docs.notes.write`, and every query is scoped to the author, so anyone else's note is "not found". Writes must be `application/json`. A note's body goes through the same Markdown pipeline as a document (sanitized first, no raw HTML); its quote is shown as text.
 - **/notes** lists every note by document, filterable by document. Notes are edited and deleted on their document.
-- **Generate GitHub issue** is shown next to **Add note**; its server side is below, the preview UI is the next step of #82.
+- **Generate GitHub issue** is shown next to **Add note** and on every note (#82, below).
 
-## Generate GitHub issue (#82, server)
+## Generate GitHub issue (#82)
 
 Two routes, both for `docs.issues.create` (after `docs.read`) on the caller's own note, JSON bodies only:
 
@@ -58,6 +58,8 @@ Two routes, both for `docs.issues.create` (after `docs.read`) on the caller's ow
 - Labels are only ever the target repo's existing ones. Links to the reader's own domain are replaced by the document's path in a draft and refused on create.
 - Errors: 422 `no_repo_access` ("No access to owner/name") when the issues token can't reach the repo, 502 `invalid_ai_answer` for an answer that fails validation, 504 `ai_timeout`, 503 `issues_unavailable` without `DOCS_ISSUES_TOKEN` (both routes) or `DOCS_AI_API_KEY` (draft).
 - Logs carry the note id, the repo's visibility, word counts and token usage, never the prompt, the note or the generated text. The AI and GitHub are called with `fetch` (`lib/issue-clients.ts`) and mocked in `test/issue.test.ts`.
+
+**The preview** (`components/IssueDialog.tsx`): **Generate GitHub issue** on a note opens it (on a selection or a heading, the note is saved first). It asks for a draft, then shows the title, body (Markdown), the repo's labels as checkboxes and the target repo, all editable, with **Regenerate** and **Create issue**. A public repo shows a red banner ("This repo is public. Everything below will be visible to everyone."); `no_repo_access` shows "No access to owner/name" by the repo field; an error shows with **Try again**. The banner and labels are those of the repo the draft was made for: after typing another repo, **Regenerate** comes before **Create issue**. A note that already has an issue links to it and needs "Yes, create a second issue" ticked. Once created, the note (and `/notes`) shows **Issue created ✓** with the link. Without `docs.issues.create` the buttons are hidden; without `DOCS_AI_API_KEY` and `DOCS_ISSUES_TOKEN` they show disabled, "Not set up yet".
 
 `e2e/notes.spec.ts` creates, edits and deletes notes, checks the "text changed" case and Lighthouse accessibility (light and dark, `test-results/lighthouse-notes.json`); `pnpm e2e` then restarts Docs and checks the notes are still there.
 

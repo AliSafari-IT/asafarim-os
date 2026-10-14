@@ -4,6 +4,7 @@ import { Markdown } from "@/components/Markdown";
 import { anchorNote, sectionsOf, type Section } from "@/lib/anchor";
 import { auth } from "@/lib/auth";
 import { gate } from "@/lib/gate";
+import { issueHref } from "@/lib/issue-link";
 import { getNotes, type Note } from "@/lib/notes";
 import { readableName } from "@/lib/outline";
 import { getPlatform } from "@/lib/platform";
@@ -185,7 +186,20 @@ export default async function NotesPage({
                                 variant="note"
                               />
                             </div>
-                            <p className="note-foot muted">{n.updatedAt.slice(0, 10)}</p>
+                            <p className="note-foot muted">
+                              <span>{n.updatedAt.slice(0, 10)}</span>
+                              {issueHref(n.issueUrl) ? (
+                                <a
+                                  className="issue-link"
+                                  href={issueHref(n.issueUrl)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  data-testid="issue-link"
+                                >
+                                  Issue created ✓
+                                </a>
+                              ) : null}
+                            </p>
                           </article>
                         </li>
                       );
