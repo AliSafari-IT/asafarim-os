@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { filterTree } from "../components/DocTree";
-import { PUBLIC_BANNER } from "../components/IssueDialog";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createOutcome, IssueCreatedUnsaved, PUBLIC_BANNER } from "../components/IssueDialog";
 import { mermaidLabel } from "../components/Mermaid";
 import type { NavNode } from "../components/nav";
 import { searchDocs } from "../components/Search";
@@ -121,5 +123,42 @@ describe("Generate GitHub issue, in the page (#82)", () => {
 
   it("the public-repo banner says what the issue says", () => {
     expect(PUBLIC_BANNER).toBe("This repo is public. Everything below will be visible to everyone.");
+  });
+
+  const URL_7 = "https://github.com/example-org/demo-app/issues/7";
+  const issue7 = { url: URL_7, number: 7 };
+
+  it("a created issue whose link couldn't be saved is shown, never offered as a retry", () => {
+    expect(createOutcome(201, { issue: issue7 })).toEqual({ kind: "created", url: URL_7 });
+    for (const error of ["issue_url_not_saved", "note_gone"]) {
+      const outcome = createOutcome(error === "note_gone" ? 410 : 500, {
+        error,
+        message: "The issue was created, but the link could not be saved on this note.",
+        issue: issue7,
+      });
+      expect(outcome).toEqual({
+        kind: "created_unsaved",
+        url: URL_7,
+        message: "The issue was created, but the link could not be saved on this note.",
+      });
+    }
+    // A failure without an issue stays a failure.
+    expect(createOutcome(502, { error: "github_unavailable", message: "GitHub isn't answering." })).toMatchObject({
+      kind: "failed",
+      message: "GitHub isn't answering.",
+    });
+  });
+
+  it("renders the created issue's link and the message", () => {
+    const html = renderToStaticMarkup(
+      createElement(IssueCreatedUnsaved, {
+        url: URL_7,
+        message: "The issue was created, but the link could not be saved on this note.",
+      }),
+    );
+    expect(html).toContain(`href="${URL_7}"`);
+    expect(html).toContain("example-org/demo-app/issues/7");
+    expect(html).toContain("The issue was created, but the link could not be saved on this note.");
+    expect(html).toContain('role="alert"');
   });
 });

@@ -23,7 +23,7 @@ interface DraftAnswer {
   message?: string;
 }
 
-interface CreateAnswer {
+export interface CreateAnswer {
   issue?: { url: string; number: number };
   issueUrl?: string;
   error?: string;
@@ -35,6 +35,43 @@ interface Checked {
   repo: string;
   public: boolean;
   labels: string[];
+}
+
+export type CreateOutcome =
+  | { kind: "created"; url: string }
+  /** GitHub has the issue, but its link isn't on the note (500 issue_url_not_saved, 410 note_gone). */
+  | { kind: "created_unsaved"; url: string; message: string }
+  | { kind: "failed"; error?: string; message: string; issueUrl?: string };
+
+const UNSAVED_MESSAGE = "The issue was created, but the link could not be saved on this note.";
+
+/** What a Create answer means for the preview. An answer that carries a created issue is never a retryable failure. */
+export function createOutcome(status: number, answer: CreateAnswer): CreateOutcome {
+  if (status === 201 && answer.issue) return { kind: "created", url: answer.issue.url };
+  if (answer.issue && (answer.error === "issue_url_not_saved" || answer.error === "note_gone")) {
+    return { kind: "created_unsaved", url: answer.issue.url, message: answer.message ?? UNSAVED_MESSAGE };
+  }
+  return {
+    kind: "failed",
+    error: answer.error,
+    message: answer.message ?? `The issue couldn't be created (${status}). Try again.`,
+    issueUrl: answer.issueUrl,
+  };
+}
+
+/** The issue exists on GitHub but its link isn't on the note: its link, and nothing that creates it again. */
+export function IssueCreatedUnsaved({ url, message }: { url: string; message: string }) {
+  return (
+    <div className="notice issue-existing" role="alert" data-testid="issue-unsaved">
+      <p>{message}</p>
+      <p>
+        The issue:{" "}
+        <a href={url} target="_blank" rel="noopener noreferrer" data-testid="issue-unsaved-link">
+          {url.replace(/^https:\/\/github\.com\//, "")}
+        </a>
+      </p>
+    </div>
+  );
 }
 
 /** A little longer than the server's 60 s AI timeout, so the server's answer comes first. */
@@ -90,6 +127,7 @@ export function IssueDialog({
   const [second, setSecond] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [unsaved, setUnsaved] = useState<{ url: string; message: string } | null>(null);
 
   const generate = useCallback(
     async (forRepo?: string) => {
@@ -136,7 +174,8 @@ export function IssueDialog({
   // The draft, banner and labels are for `checked.repo`; another repo needs Regenerate first.
   const current = checked && checked.repo === typedRepo ? checked : null;
   const busy = phase === "drafting" || creating;
-  const canCreate = phase === "ready" && current !== null && !creating && (!existing || second);
+  // Once an issue exists whose link couldn't be saved, nothing here creates another one.
+  const canCreate = phase === "ready" && current !== null && !creating && !unsaved && (!existing || second);
 
   async function create(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -151,13 +190,18 @@ export function IssueDialog({
       confirm: Boolean(existing) && second,
     });
     setCreating(false);
-    if (status === 201 && answer.issue) {
-      onCreated(answer.issue.url);
+    const outcome = createOutcome(status, answer);
+    if (outcome.kind === "created") {
+      onCreated(outcome.url);
       return;
     }
-    if (answer.error === "issue_exists" && answer.issueUrl) setExisting(answer.issueUrl);
-    if (answer.error === "no_repo_access") setNoAccess(answer.message ?? `No access to ${current.repo}`);
-    else setCreateError(answer.message ?? `The issue couldn't be created (${status}). Try again.`);
+    if (outcome.kind === "created_unsaved") {
+      setUnsaved({ url: outcome.url, message: outcome.message });
+      return;
+    }
+    if (outcome.error === "issue_exists" && outcome.issueUrl) setExisting(outcome.issueUrl);
+    if (outcome.error === "no_repo_access") setNoAccess(outcome.message);
+    else setCreateError(outcome.message);
   }
 
   const toggle = (name: string, on: boolean) =>
@@ -296,6 +340,8 @@ export function IssueDialog({
           </div>
         ) : null}
 
+        {unsaved ? <IssueCreatedUnsaved url={unsaved.url} message={unsaved.message} /> : null}
+
         {createError ? (
           <p className="error" role="alert" data-testid="create-error">
             {createError}
@@ -304,12 +350,12 @@ export function IssueDialog({
 
         <div className="actions">
           <button type="button" className="secondary" onClick={() => dialog.current?.close()}>
-            Cancel
+            {unsaved ? "Close" : "Cancel"}
           </button>
           <button
             type="button"
             className="secondary"
-            disabled={busy}
+            disabled={busy || Boolean(unsaved)}
             onClick={() => void generate(typedRepo || undefined)}
           >
             Regenerate
