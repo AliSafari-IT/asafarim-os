@@ -88,9 +88,8 @@ export interface IssuesState {
  * `pick`: the note's place is chosen in the dialog (the "Add a note" button), not given by the page.
  * `issue`: "Generate GitHub issue" on a selection or heading: save the note, then open the preview.
  */
-type Draft =
-  | { kind: "new"; headingId: string; quote: string; pick?: boolean; issue?: boolean }
-  | { kind: "edit"; note: NoteView };
+type NewDraft = { kind: "new"; headingId: string; quote: string; pick?: boolean; issue?: boolean };
+type Draft = NewDraft | { kind: "edit"; note: NoteView };
 type Spot = { top: number; left: number };
 
 export function Notes({
@@ -124,7 +123,6 @@ export function Notes({
   const [busy, setBusy] = useState(false);
   const [issueFor, setIssueFor] = useState<{ id: string; issueUrl: string | null } | null>(null);
   const writable = canWrite && available;
-  const issuesUsable = issues.allowed && issues.ready && available;
 
   // Highlights: each note's quote, at its first match after its heading.
   useEffect(() => {
@@ -412,22 +410,11 @@ export function Notes({
                         Issue created ✓
                       </a>
                     ) : null}
-                    {issues.allowed ? (
-                      <button
-                        type="button"
-                        className="link"
-                        data-testid="generate-issue"
-                        {...(issuesUsable
-                          ? { onClick: () => setIssueFor({ id: n.id, issueUrl: n.issueUrl }) }
-                          : {
-                              "aria-disabled": true,
-                              title: issues.ready ? "Notes aren't available right now." : ISSUES_NOT_SET_UP,
-                              onClick: (e: React.MouseEvent) => e.preventDefault(),
-                            })}
-                      >
-                        Generate GitHub issue
-                      </button>
-                    ) : null}
+                    <IssueButton
+                      issues={issues}
+                      className="link"
+                      onClick={() => setIssueFor({ id: n.id, issueUrl: n.issueUrl })}
+                    />
                     {writable ? (
                       <>
                         <button type="button" className="link" onClick={() => open({ kind: "edit", note: n })}>
@@ -543,16 +530,24 @@ export function Notes({
 }
 
 /**
- * "Generate GitHub issue" by a selection or a heading: writes a note first, then opens the preview.
+ * "Generate GitHub issue", on a note or by a selection or heading (which writes the note first).
  * Hidden without docs.issues.create; shown but disabled until the server has its secrets.
  */
-function IssueButton({ issues, onClick }: { issues: IssuesState; onClick: () => void }) {
+function IssueButton({
+  issues,
+  onClick,
+  className = "secondary small",
+}: {
+  issues: IssuesState;
+  onClick: () => void;
+  className?: string;
+}) {
   if (!issues.allowed) return null;
   if (!issues.ready) {
     return (
       <button
         type="button"
-        className="secondary small"
+        className={className}
         aria-disabled="true"
         title={ISSUES_NOT_SET_UP}
         onClick={(e) => e.preventDefault()}
@@ -562,7 +557,7 @@ function IssueButton({ issues, onClick }: { issues: IssuesState; onClick: () => 
     );
   }
   return (
-    <button type="button" className="secondary small" onClick={onClick}>
+    <button type="button" className={className} onClick={onClick}>
       Generate GitHub issue
     </button>
   );
