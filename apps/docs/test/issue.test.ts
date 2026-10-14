@@ -423,6 +423,41 @@ describe("POST /api/notes/:id/issue (#82)", () => {
     warn.mockRestore();
   });
 
+  it("a public repo needs the banner acknowledged: 409 and nothing created without it", async () => {
+    const gh = fakeTracker({ public: true });
+    services.tracker = gh.tracker;
+    const { POST } = await createRoute();
+    const res = await POST(jsonReq(issue), params(noteIdOf));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      error: "public_not_acknowledged",
+      repo: "example-org/demo-app",
+      public: true,
+    });
+    expect(gh.calls.filter((c) => c.op === "create")).toEqual([]);
+    expect(store.notes.find((n) => n.id === noteIdOf)?.issueUrl).toBeNull();
+
+    const acked = await POST(jsonReq({ ...issue, acknowledgedPublic: true }), params(noteIdOf));
+    expect(acked.status).toBe(201);
+    expect(gh.calls.filter((c) => c.op === "create")).toHaveLength(1);
+  });
+
+  it("a private repo needs no acknowledgement, and the visibility is asked before creating", async () => {
+    const gh = fakeTracker({ public: false });
+    services.tracker = gh.tracker;
+    expect((await (await createRoute()).POST(jsonReq(issue), params(noteIdOf))).status).toBe(201);
+    expect(gh.calls.map((c) => c.op)).toEqual(["repo", "labels", "create"]);
+  });
+
+  it("a repo the token can't reach is 'No access', and nothing is created", async () => {
+    const gh = fakeTracker({ noAccess: ["example-org/demo-app"] });
+    services.tracker = gh.tracker;
+    const res = await (await createRoute()).POST(jsonReq(issue), params(noteIdOf));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "no_repo_access" });
+    expect(gh.calls.filter((c) => c.op === "create")).toEqual([]);
+  });
+
   it("refuses a link to the reader", async () => {
     const body = `${GOOD_BODY}\nhttps://docs.asafarim.site/?doc=x.md`;
     const gh = fakeTracker();

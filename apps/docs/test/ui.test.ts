@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { filterTree } from "../components/DocTree";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createOutcome, IssueCreatedUnsaved, PUBLIC_BANNER } from "../components/IssueDialog";
+import { createOutcome, createRequest, IssueCreatedUnsaved, PUBLIC_BANNER } from "../components/IssueDialog";
 import { mermaidLabel } from "../components/Mermaid";
 import type { NavNode } from "../components/nav";
 import { searchDocs } from "../components/Search";
@@ -123,6 +123,32 @@ describe("Generate GitHub issue, in the page (#82)", () => {
 
   it("the public-repo banner says what the issue says", () => {
     expect(PUBLIC_BANNER).toBe("This repo is public. Everything below will be visible to everyone.");
+  });
+
+  it("Create acknowledges a public repo only when its banner was shown, and sends only the repo's labels", () => {
+    const issue = { title: "Ship the beta", body: "Body", labels: ["docs", "typed-by-hand"] };
+    const shown = { repo: "example-org/handbook", public: true, labels: ["docs"] };
+    expect(createRequest(shown, issue, false)).toEqual({
+      repo: "example-org/handbook",
+      title: "Ship the beta",
+      body: "Body",
+      labels: ["docs"],
+      confirm: false,
+      acknowledgedPublic: true,
+    });
+    expect(createRequest({ ...shown, public: false }, issue, true)).toMatchObject({
+      confirm: true,
+      acknowledgedPublic: false,
+    });
+  });
+
+  it("a repo that turned public since the draft is a failure to show, not a created issue", () => {
+    expect(createOutcome(409, { error: "public_not_acknowledged", public: true, message: "o/r is public" })).toEqual({
+      kind: "failed",
+      error: "public_not_acknowledged",
+      message: "o/r is public",
+      issueUrl: undefined,
+    });
   });
 
   const URL_7 = "https://github.com/example-org/demo-app/issues/7";

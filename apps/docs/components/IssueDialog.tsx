@@ -26,12 +26,14 @@ interface DraftAnswer {
 export interface CreateAnswer {
   issue?: { url: string; number: number };
   issueUrl?: string;
+  /** On 409 public_not_acknowledged: the repo turned out to be public. */
+  public?: boolean;
   error?: string;
   message?: string;
 }
 
 /** The repo the current draft was made for. */
-interface Checked {
+export interface Checked {
   repo: string;
   public: boolean;
   labels: string[];
@@ -42,6 +44,25 @@ export type CreateOutcome =
   /** GitHub has the issue, but its link isn't on the note (500 issue_url_not_saved, 410 note_gone). */
   | { kind: "created_unsaved"; url: string; message: string }
   | { kind: "failed"; error?: string; message: string; issueUrl?: string };
+
+/**
+ * The Create request for the repo the draft was made for. `acknowledgedPublic` is true only when the
+ * banner was shown for that repo, so the server never takes a public repo on the client's word alone.
+ */
+export function createRequest(
+  current: Checked,
+  issue: { title: string; body: string; labels: string[] },
+  again: boolean,
+) {
+  return {
+    repo: current.repo,
+    title: issue.title,
+    body: issue.body,
+    labels: issue.labels.filter((l) => current.labels.includes(l)),
+    confirm: again,
+    acknowledgedPublic: current.public,
+  };
+}
 
 const UNSAVED_MESSAGE = "The issue was created, but the link could not be saved on this note.";
 
@@ -182,13 +203,10 @@ export function IssueDialog({
     if (!canCreate || !current) return;
     setCreating(true);
     setCreateError("");
-    const { status, answer } = await post<CreateAnswer>(`/api/notes/${noteId}/issue`, {
-      repo: current.repo,
-      title,
-      body,
-      labels: labels.filter((l) => current.labels.includes(l)),
-      confirm: Boolean(existing) && second,
-    });
+    const { status, answer } = await post<CreateAnswer>(
+      `/api/notes/${noteId}/issue`,
+      createRequest(current, { title, body, labels }, Boolean(existing) && second),
+    );
     setCreating(false);
     const outcome = createOutcome(status, answer);
     if (outcome.kind === "created") {
@@ -199,6 +217,8 @@ export function IssueDialog({
       setUnsaved({ url: outcome.url, message: outcome.message });
       return;
     }
+    // The repo is public after all (made public since the draft): show the banner, then Create again.
+    if (outcome.error === "public_not_acknowledged") setChecked({ ...current, public: true });
     if (outcome.error === "issue_exists" && outcome.issueUrl) setExisting(outcome.issueUrl);
     if (outcome.error === "no_repo_access") setNoAccess(outcome.message);
     else setCreateError(outcome.message);

@@ -38,6 +38,8 @@ export const CreateRequest = z.object({
   labels: Labels.default([]),
   /** The note already has an issue and the owner confirmed a second one. */
   confirm: z.boolean().default(false),
+  /** The owner saw the public-repo banner for this repo: required before creating in a public repo. */
+  acknowledgedPublic: z.boolean().default(false),
 });
 
 function escapeRe(text: string) {
