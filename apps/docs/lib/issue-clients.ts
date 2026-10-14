@@ -54,13 +54,28 @@ export interface IssueWriter {
   draft(prompt: { system: string; user: string }): Promise<{ answer: unknown; usage: Usage }>;
 }
 
+export interface NewIssue {
+  title: string;
+  body: string;
+  labels: string[];
+}
+
 export interface IssueTracker {
   repo(repo: string): Promise<{ public: boolean }>;
   labels(repo: string): Promise<string[]>;
-  create(
-    repo: string,
-    issue: { title: string; body: string; labels: string[] },
-  ): Promise<{ url: string; number: number }>;
+  create(repo: string, issue: NewIssue): Promise<{ url: string; number: number }>;
+}
+
+/** The parts of a Messages API answer this reads. */
+interface MessagesAnswer {
+  content?: { type: string; name?: string; input?: unknown }[];
+  usage?: Record<string, number>;
+}
+
+/** The parts of GitHub's created issue this reads. */
+interface CreatedIssue {
+  html_url?: string;
+  number?: number;
 }
 
 const isAbort = (err: unknown) => err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
@@ -98,9 +113,7 @@ export function createAnthropicWriter(opts: {
         throw new AiUnavailableError("the request failed");
       }
       if (!res.ok) throw new AiUnavailableError(`HTTP ${res.status}`);
-      const data = (await res.json().catch(() => undefined)) as
-        | { content?: { type: string; name?: string; input?: unknown }[]; usage?: Record<string, number> }
-        | undefined;
+      const data = (await res.json().catch(() => undefined)) as MessagesAnswer | undefined;
       const call = data?.content?.find((c) => c.type === "tool_use" && c.name === ISSUE_TOOL.name);
       if (!call) throw new AiUnavailableError("no issue in the answer");
       return {
@@ -145,10 +158,7 @@ export function createGitHubIssues(opts: { token: string; fetch?: Fetch; timeout
       return Array.isArray(data) ? data.map((l) => l.name).filter((n): n is string => typeof n === "string") : [];
     },
     async create(repo, issue) {
-      const data = (await call(repo, "/issues", { method: "POST", body: issue })) as {
-        html_url?: string;
-        number?: number;
-      };
+      const data = (await call(repo, "/issues", { method: "POST", body: issue })) as CreatedIssue;
       if (typeof data.html_url !== "string" || typeof data.number !== "number") {
         throw new GitHubUnavailableError("the created issue has no URL");
       }
