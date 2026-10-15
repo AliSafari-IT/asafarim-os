@@ -1,4 +1,5 @@
-// The production stack's compose file and site file (asafarim-os#45; os-site and asafarim.site: #70). Compose parses the file, not a regex:
+// The production stack's compose file and site file (asafarim-os#45; os-site and asafarim.site: #70; os-docs and
+// docs.asafarim.site: #83). Compose parses the file, not a regex:
 // these tests read `docker compose config --format json`, the model Compose itself will run.
 //
 //   node --test deploy/compose.prod.test.mjs        (needs the docker CLI; no daemon, no network)
@@ -14,6 +15,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const composeText = readFileSync(path.join(root, "deploy", "compose.prod.yml"), "utf8");
 const siteText = readFileSync(path.join(root, "sites", "asafarim-os.caddy"), "utf8");
 const nginxText = readFileSync(path.join(root, "core", "site", "nginx.conf"), "utf8");
+const docsManifest = JSON.parse(readFileSync(path.join(root, "apps", "docs", "platform.app.json"), "utf8"));
 const activeSite = siteText
   .split("\n")
   .filter((l) => !l.trim().startsWith("#"))
@@ -36,17 +38,19 @@ function siteBlock(address, text = activeSite) {
 
 /**
  * Render the compose file in a throwaway copy of the layout it expects: deploy/compose.prod.yml, and an EMPTY
- * ../.env.identity (Compose refuses a missing env_file, and the real one holds secrets: never read or print it).
+ * ../.env.identity and ../.env.docs (Compose refuses a missing env_file, and the real ones hold secrets: never read
+ * or print them).
  */
-function render(env = { IMAGE_TAG: "testsha", SITE_IMAGE_TAG: "sitesha" }) {
+function render(env = { IMAGE_TAG: "testsha", SITE_IMAGE_TAG: "sitesha", DOCS_IMAGE_TAG: "docssha" }) {
   const dir = mkdtempSync(path.join(tmpdir(), "compose-prod-"));
   try {
     mkdirSync(path.join(dir, "deploy"));
     cpSync(path.join(root, "deploy", "compose.prod.yml"), path.join(dir, "deploy", "compose.prod.yml"));
     writeFileSync(path.join(dir, ".env.identity"), "");
+    writeFileSync(path.join(dir, ".env.docs"), "");
     const run = spawnSync("docker", ["compose", "-f", "compose.prod.yml", "config", "--format", "json"], {
       cwd: path.join(dir, "deploy"),
-      env: { ...process.env, IMAGE_TAG: "", SITE_IMAGE_TAG: "", ...env },
+      env: { ...process.env, IMAGE_TAG: "", SITE_IMAGE_TAG: "", DOCS_IMAGE_TAG: "", ...env },
       encoding: "utf8",
     });
     return run;
@@ -62,24 +66,24 @@ assert.equal(
   `docker compose config failed (is the docker CLI installed?):\n${rendered.stderr}${rendered.error ?? ""}`,
 );
 const config = JSON.parse(rendered.stdout);
-const { identity, "os-redis": redis, "os-site": site } = config.services;
+const { identity, "os-redis": redis, "os-site": site, "os-docs": docs } = config.services;
 const networkNames = (service) => Object.keys(service.networks ?? {}).sort();
 
-test("the file renders as the asafarim-os project with exactly identity, os-redis and os-site", () => {
+test("the file renders as the asafarim-os project with exactly identity, os-redis, os-site and os-docs", () => {
   assert.equal(config.name, "asafarim-os");
-  assert.deepEqual(Object.keys(config.services).sort(), ["identity", "os-redis", "os-site"]);
+  assert.deepEqual(Object.keys(config.services).sort(), ["identity", "os-docs", "os-redis", "os-site"]);
 });
 
 test("the image tag comes from IMAGE_TAG, and there is no default", () => {
   assert.equal(identity.image, "ghcr.io/alisafari-it/asafarim-os:identity-testsha");
-  const unset = render({ IMAGE_TAG: "", SITE_IMAGE_TAG: "sitesha" });
+  const unset = render({ IMAGE_TAG: "", SITE_IMAGE_TAG: "sitesha", DOCS_IMAGE_TAG: "docssha" });
   assert.notEqual(unset.status, 0, "a deploy without IMAGE_TAG must fail, not pull identity-");
   assert.match(unset.stderr, /IMAGE_TAG/);
 });
 
 test("os-site's image tag comes from SITE_IMAGE_TAG, and there is no default", () => {
   assert.equal(site.image, "ghcr.io/alisafari-it/asafarim-os:site-sitesha");
-  const unset = render({ IMAGE_TAG: "testsha", SITE_IMAGE_TAG: "" });
+  const unset = render({ IMAGE_TAG: "testsha", SITE_IMAGE_TAG: "", DOCS_IMAGE_TAG: "docssha" });
   assert.notEqual(unset.status, 0, "a deploy without SITE_IMAGE_TAG must fail, not pull site-");
   assert.match(unset.stderr, /SITE_IMAGE_TAG/);
 });
@@ -100,6 +104,45 @@ test("os-site is small and hardened: read_only, no capabilities, no-new-privileg
 test("os-site is on edge_net ONLY, under the unique alias os-site", () => {
   assert.deepEqual(networkNames(site), ["edge_net"]);
   assert.deepEqual(site.networks.edge_net.aliases, ["os-site"]);
+});
+
+test("os-docs's image tag comes from DOCS_IMAGE_TAG, and there is no default (#83)", () => {
+  assert.equal(docs.image, "ghcr.io/alisafari-it/asafarim-os:docs-docssha");
+  const unset = render({ IMAGE_TAG: "testsha", SITE_IMAGE_TAG: "sitesha", DOCS_IMAGE_TAG: "" });
+  assert.notEqual(unset.status, 0, "a deploy without DOCS_IMAGE_TAG must fail, not pull docs-");
+  assert.match(unset.stderr, /DOCS_IMAGE_TAG/);
+});
+
+test("os-docs is hardened: read_only, no capabilities, no-new-privileges, the manifest's memory and CPU limits", () => {
+  assert.equal(docs.read_only, true);
+  assert.deepEqual(docs.cap_drop, ["ALL"]);
+  assert.ok(docs.security_opt.includes("no-new-privileges:true"));
+  assert.equal(docs.mem_limit, String(256 * 1024 * 1024));
+  assert.equal(docsManifest.runtime.resources.memory, "256m");
+  assert.equal(docs.cpus, docsManifest.runtime.resources.cpus);
+  assert.ok(
+    docs.tmpfs?.some((t) => t.startsWith("/tmp:")),
+    "a read-only root needs a tmpfs /tmp",
+  );
+  assert.ok(
+    docs.tmpfs?.some((t) => t.startsWith("/app/apps/docs/.next/cache:") && t.includes("uid=1000")),
+    "Next's cache needs a tmpfs the node user can write",
+  );
+});
+
+test("os-docs reads its secrets from ../.env.docs only, and signs in through id.asafarim.site (#83)", () => {
+  assert.match(composeText, /env_file:\n\s+- \.\.\/\.env\.docs\n/);
+  assert.equal(docs.environment.OIDC_ISSUER, identity.environment.IDENTITY_ISSUER);
+  assert.equal(docs.environment.ASAFARIM_APP_ID, docsManifest.id);
+  assert.equal(docs.environment.HOSTNAME, "0.0.0.0", "Next's standalone server binds to HOSTNAME");
+  for (const name of ["AUTH_SECRET", ...docsManifest.secrets]) {
+    assert.ok(!(name in docs.environment), `${name} is a secret: it belongs in .env.docs, never in the compose file`);
+  }
+});
+
+test("os-docs is on edge_net ONLY, under the unique alias os-docs", () => {
+  assert.deepEqual(networkNames(docs), ["edge_net"]);
+  assert.deepEqual(docs.networks.edge_net.aliases, ["os-docs"]);
 });
 
 test("os-redis is on os_net ONLY: never on edge_net or identity_db", () => {
@@ -172,9 +215,9 @@ test("the secrets come from ../.env.identity (decrypted at the repo root by vps-
   assert.match(composeText, /env_file:\n\s+- \.\.\/\.env\.identity\n/);
 });
 
-test("the site file serves id.asafarim.site, asafarim.site and its www redirect, nothing else", () => {
+test("the site file serves id.asafarim.site, asafarim.site and its www redirect, and docs.asafarim.site, nothing else", () => {
   const sites = [...activeSite.matchAll(/^([a-z0-9.*-]+)(?:, [a-z0-9.*-]+)*\s*\{/gm)].map((m) => m[1]);
-  assert.deepEqual(sites.sort(), ["asafarim.site", "id.asafarim.site", "www.asafarim.site"]);
+  assert.deepEqual(sites.sort(), ["asafarim.site", "docs.asafarim.site", "id.asafarim.site", "www.asafarim.site"]);
   assert.match(siteBlock("www.asafarim.site"), /redir https:\/\/asafarim\.site\{uri\} 301/);
 });
 
@@ -212,6 +255,27 @@ test("the site file proxies id.asafarim.site to identity's alias", () => {
   assert.equal(upstream[2], "3000");
 });
 
+test("docs.asafarim.site proxies to os-docs's edge_net alias on the manifest's port, its primary domain (#83)", () => {
+  assert.equal(docsManifest.domains.primary, "docs.asafarim.site");
+  const upstream = /reverse_proxy ([\w-]+):(\d+)/.exec(siteBlock("docs.asafarim.site"));
+  assert.ok(upstream, "docs.asafarim.site must reverse_proxy to os-docs");
+  assert.ok(docs.networks.edge_net.aliases.includes(upstream[1]), `${upstream[1]} is not os-docs's edge_net alias`);
+  assert.equal(Number(upstream[2]), docsManifest.runtime.port);
+});
+
+test("docs.asafarim.site has the landing page's HSTS, nosniff, no Referer, noindex, and no edge CSP", () => {
+  const block = siteBlock("docs.asafarim.site");
+  const hsts = /Strict-Transport-Security "([^"]+)"/;
+  assert.equal(hsts.exec(block)?.[1], hsts.exec(siteBlock("asafarim.site"))?.[1]);
+  assert.match(block, /X-Content-Type-Options nosniff/);
+  assert.match(block, /Referrer-Policy no-referrer/);
+  assert.match(block, /X-Frame-Options DENY/);
+  assert.match(block, /X-Robots-Tag "noindex, nofollow"/);
+  assert.match(block, /^\s*defer$/m);
+  // The app's /api/files sets a sandboxing CSP on SVGs; an edge CSP under `defer` would replace it.
+  assert.doesNotMatch(block, /Content-Security-Policy/i);
+});
+
 test("id.asafarim.site has no Content-Security-Policy of its own (identity sets a strict one per page)", () => {
   const active = siteBlock("id.asafarim.site");
   assert.doesNotMatch(active, /Content-Security-Policy/i);
@@ -219,14 +283,14 @@ test("id.asafarim.site has no Content-Security-Policy of its own (identity sets 
   assert.match(active, /X-Content-Type-Options nosniff/);
 });
 
-test("the site-only file serves asafarim.site and its www redirect, and nothing else: no id.asafarim.site (#97)", () => {
+test("the site-only file serves asafarim.site, its www redirect and docs.asafarim.site: no id.asafarim.site (#97, #83)", () => {
   const sites = [...activeSiteOnly.matchAll(/^([a-z0-9.*-]+)(?:, [a-z0-9.*-]+)*\s*\{/gm)].map((m) => m[1]);
-  assert.deepEqual(sites.sort(), ["asafarim.site", "www.asafarim.site"]);
+  assert.deepEqual(sites.sort(), ["asafarim.site", "docs.asafarim.site", "www.asafarim.site"]);
   assert.doesNotMatch(activeSiteOnly, /id\.asafarim\.site|os-identity/);
 });
 
-test("the site-only file's landing blocks are identical to the full site file's (#97)", () => {
-  for (const address of ["asafarim.site", "www.asafarim.site"]) {
+test("the site-only file's landing and docs blocks are identical to the full site file's (#97, #83)", () => {
+  for (const address of ["asafarim.site", "www.asafarim.site", "docs.asafarim.site"]) {
     assert.equal(
       siteBlock(address, activeSiteOnly),
       siteBlock(address),

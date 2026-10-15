@@ -19,6 +19,7 @@ const code = script
   .filter((l) => !l.trim().startsWith("#"))
   .join("\n");
 const realExample = path.join(root, "core", "identity", ".env.production.example");
+const docsExample = path.join(root, "apps", "docs", ".env.production.example");
 
 /** Run require_env_vars on two fixture files; returns { status, output } with stdout and stderr together. */
 function check(envText, exampleText) {
@@ -109,6 +110,17 @@ test("the real example lists the five required variables, and a filled file pass
   }
 });
 
+test("the docs example requires AUTH_SECRET only, for now; the app's later secrets are listed commented out (#83)", () => {
+  const text = readFileSync(docsExample, "utf8");
+  assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), ["AUTH_SECRET"]);
+  const manifest = JSON.parse(readFileSync(path.join(root, "apps", "docs", "platform.app.json"), "utf8"));
+  for (const name of manifest.secrets) assert.match(text, new RegExp(`^# ${name}=$`, "m"), `${name} is not listed`);
+  const empty = check("", text);
+  assert.equal(empty.status, 1);
+  assert.match(empty.output, /AUTH_SECRET/);
+  assert.equal(check("AUTH_SECRET=stand-in\n", text).status, 0, "the app's later secrets are not required yet");
+});
+
 test("the script is valid bash", () => {
   for (const file of ["deploy/vps-deploy.sh", "deploy/lib/env-check.sh"]) {
     const run = spawnSync("bash", ["-n", path.join(root, file)], { encoding: "utf8" });
@@ -164,12 +176,26 @@ test("the site is published only after identity is ready", () => {
 test("it decrypts into a private file and sets mode 600", () => {
   assert.match(script, /umask 077/);
   assert.match(script, /chmod 600 \.env\.identity/);
+  assert.match(script, /chmod 600 \.env\.docs/);
+});
+
+test("docs.asafarim.site is published only after os-docs answers /api/health (#83)", () => {
+  const ready = code.indexOf('if [[ "$docs_ready" != true ]]');
+  const publish = code.indexOf('edge-deploy-site.sh" asafarim-os');
+  assert.ok(ready > 0 && publish > ready);
+  assert.match(code.slice(ready, publish), /fatal /, "a not-ready os-docs must stop the script before publishing");
+  assert.match(code, /export DOCS_IMAGE_TAG="\$docs_image_commit"/);
+  assert.ok(code.indexOf("export DOCS_IMAGE_TAG") < code.indexOf('"${compose[@]}" config -q'));
 });
 
 test("it can never print a secret: no set -x, no source/cat of the env, and `compose config` only with -q", () => {
   assert.doesNotMatch(code, /set -[a-z]*x/, "set -x would print every command, and its variables");
-  assert.doesNotMatch(code, /\b(source|\.)\s+\S*\.env\.identity/, "never source the secrets");
-  assert.doesNotMatch(code, /\b(cat|less|head|tail|echo|printf)\b[^\n]*\.env\.identity/, "never print the secrets");
+  assert.doesNotMatch(code, /\b(source|\.)\s+\S*\.env\.(identity|docs)/, "never source the secrets");
+  assert.doesNotMatch(
+    code,
+    /\b(cat|less|head|tail|echo|printf)\b[^\n]*\.env\.(identity|docs)/,
+    "never print the secrets",
+  );
   // `docker compose config` inlines env_file values into its output: only the quiet form is allowed.
   for (const m of code.matchAll(/"\$\{compose\[@\]\}" config([^\n]*)/g)) {
     assert.match(m[1], /^ -q\b/, "compose config without -q would print the secrets");
@@ -192,6 +218,7 @@ test("it refuses a commit that is not a full sha or not on origin/main, and runs
 // would run, and a mode that must not read a file is run without that file.
 const SHA = "a".repeat(40);
 const SITE_SHA = "b".repeat(40);
+const DOCS_SHA = "c".repeat(40);
 const STUB = (name, body = "") => `#!/usr/bin/env bash\necho "${name} $*" >> "$CALLS"\n${body}\n`;
 
 /**
@@ -206,6 +233,8 @@ function runDeploy(
     live = { id: "live0caddy01", networks: "asafarim-com_default edge_net", validate: 0, reload: 0 },
     edgeId = "",
     prevLive = null,
+    docsEnv = true,
+    docsEnvEmpty = false,
   } = {},
 ) {
   const dir = mkdtempSync(path.join(tmpdir(), "vps-deploy-"));
@@ -224,20 +253,33 @@ function runDeploy(
       "sites/asafarim-os.caddy",
       "sites/asafarim-os-site.caddy",
       "core/identity/.env.production.example",
+      "apps/docs/.env.production.example",
     ]) {
       cpSync(path.join(root, file), path.join(repo, file), { recursive: true });
     }
+    // Both modes decrypt the docs env (#83).
+    mkdirSync(path.join(repo, ".age"));
+    writeFileSync(path.join(repo, ".age", "key.txt"), "stand-in key\n");
+    if (docsEnv) writeFileSync(path.join(repo, "apps/docs/.env.production.age"), "stand-in ciphertext\n");
     if (full) {
-      mkdirSync(path.join(repo, ".age"));
-      writeFileSync(path.join(repo, ".age", "key.txt"), "stand-in key\n");
       writeFileSync(path.join(repo, "core/identity/.env.production.age"), "stand-in ciphertext\n");
       mkdirSync(path.join(repo, "deploy/identity"));
       writeFileSync(path.join(repo, "deploy/identity/clients.json"), "{}\n");
     }
-    const filled = readFileSync(realExample, "utf8")
-      .match(/^[A-Z][A-Z0-9_]*(?==)/gm)
-      .map((n) => `echo ${n}=stand-in`)
-      .join("\n");
+    const fill = (example) =>
+      readFileSync(example, "utf8")
+        .match(/^[A-Z][A-Z0-9_]*(?==)/gm)
+        .map((n) => `echo ${n}=stand-in`)
+        .join("\n");
+    // The stand-in age "decrypts" each file into its example's names, filled (the docs one empty if asked).
+    const filled = [
+      `if [[ "$*" == *apps/docs/* ]]; then`,
+      `  [[ -n "$DOCS_ENV_EMPTY" ]] && exit 0`,
+      fill(docsExample),
+      `else`,
+      fill(realExample),
+      `fi`,
+    ].join("\n");
     mkdirSync(bin);
     const stubs = {
       git: STUB("git"),
@@ -280,6 +322,7 @@ function runDeploy(
         LIVE_VALIDATE: String(live?.validate ?? 0),
         LIVE_RELOAD: String(live?.reload ?? 0),
         EDGE_ID: edgeId,
+        DOCS_ENV_EMPTY: docsEnvEmpty ? "1" : "",
       },
     });
     return {
@@ -287,6 +330,7 @@ function runDeploy(
       stderr: run.stderr,
       calls: readFileSync(calls, "utf8").trim().split("\n").filter(Boolean),
       envIdentityWritten: existsSync(path.join(repo, ".env.identity")),
+      envDocsWritten: existsSync(path.join(repo, ".env.docs")),
       liveSite: existsSync(liveSite) ? readFileSync(liveSite, "utf8") : null,
       repo,
     };
@@ -297,23 +341,43 @@ function runDeploy(
 
 const compose = "docker compose -p asafarim-os -f deploy/compose.prod.yml";
 
-test("--site-only: never decrypts, never checks identity_db or clients.json, starts only os-site, publishes the site-only file", () => {
-  const r = runDeploy(["--site-only", SHA, SITE_SHA]);
+test("--site-only: decrypts the docs env only, never checks identity_db or clients.json, starts only os-site and os-docs, publishes the site-only file", () => {
+  const r = runDeploy(["--site-only", SHA, SITE_SHA, DOCS_SHA]);
   assert.equal(r.status, 0, r.stderr);
-  assert.ok(!r.calls.some((c) => c.startsWith("age ")), "age must not run");
+  assert.deepEqual(
+    r.calls.filter((c) => c.startsWith("age ")),
+    ["age -d -i .age/key.txt apps/docs/.env.production.age"],
+    "only the docs env is decrypted",
+  );
   assert.equal(r.envIdentityWritten, false, ".env.identity must not be written");
+  assert.equal(r.envDocsWritten, true, ".env.docs is os-docs's env_file");
   assert.ok(!r.calls.some((c) => c.includes("identity_db")), "identity_db must not be checked");
   assert.ok(r.calls.includes("docker network inspect edge_net"));
   assert.ok(r.calls.includes("git reset --hard " + SHA));
   const composeCalls = r.calls.filter((c) => c.startsWith(compose)).map((c) => c.slice(compose.length + 1));
   assert.deepEqual(composeCalls, [
     "ps -q identity",
-    "config -q --no-env-resolution os-site",
-    "pull os-site",
-    "up -d --no-deps os-site",
+    "config -q --no-env-resolution os-site os-docs",
+    "pull os-site os-docs",
+    "up -d --no-deps os-site os-docs",
     "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
   ]);
   assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os-site.caddy`));
+});
+
+test("--site-only without apps/docs/.env.production.age in the commit stops before pulling anything (#83)", () => {
+  const r = runDeploy(["--site-only", SHA], { docsEnv: false });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /apps\/docs\/\.env\.production\.age is not in this commit/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c) || c.startsWith("edge-deploy-site.sh")), r.calls.join("\n"));
+});
+
+test("a docs env without AUTH_SECRET stops the deploy, naming the variable and never a value (#83)", () => {
+  const r = runDeploy(["--site-only", SHA], { docsEnvEmpty: true });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /missing or empty in \.env\.docs: AUTH_SECRET/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c)), r.calls.join("\n"));
 });
 
 test("--site-only refuses to run while identity is running, and changes nothing", () => {
@@ -324,16 +388,23 @@ test("--site-only refuses to run while identity is running, and changes nothing"
   assert.equal(r.liveSite, null);
 });
 
-test("--site-only takes at most two shas, each a full sha", () => {
-  assert.match(runDeploy(["--site-only", SHA, SITE_SHA, SHA]).stderr, /usage:/);
+test("--site-only takes at most three shas, each a full sha", () => {
+  assert.match(runDeploy(["--site-only", SHA, SITE_SHA, DOCS_SHA, SHA]).stderr, /usage:/);
   assert.match(runDeploy(["--site-only", SHA, "abc"]).stderr, /<site-image-commit> must be a full 40-character sha/);
+  assert.match(
+    runDeploy(["--site-only", SHA, SITE_SHA, "abc"]).stderr,
+    /<docs-image-commit> must be a full 40-character sha/,
+  );
+  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA], { full: true }).stderr, /usage:/);
   assert.match(runDeploy(["--site-only"]).stderr, /usage:/);
 });
 
-test("full mode still decrypts, checks, starts the whole stack, waits for both and publishes the full site file", () => {
-  const r = runDeploy([SHA, SHA, SITE_SHA], { full: true });
+test("full mode still decrypts, checks, starts the whole stack, waits for all three and publishes the full site file", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA], { full: true });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.calls.includes("age -d -i .age/key.txt core/identity/.env.production.age"));
+  assert.ok(r.calls.includes("age -d -i .age/key.txt apps/docs/.env.production.age"));
+  assert.equal(r.envDocsWritten, true);
   assert.ok(r.calls.includes("docker network inspect identity_db"));
   const composeCalls = r.calls.filter((c) => c.startsWith(compose)).map((c) => c.slice(compose.length + 1));
   assert.deepEqual(composeCalls, [
@@ -342,6 +413,7 @@ test("full mode still decrypts, checks, starts the whole stack, waits for both a
     "up -d --remove-orphans",
     "exec -T identity wget -qO- http://127.0.0.1:3000/readyz",
     "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
   ]);
   assert.equal(r.calls.at(-1), `edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os.caddy`);
   assert.ok(

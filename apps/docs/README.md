@@ -70,6 +70,12 @@ pnpm dev                                         # installs and activates docs: 
 pnpm platform role grant docs.owner dev-admin    # the owner role; nobody holds it by default
 ```
 
+## Production (#83)
+
+`docs.asafarim.site` runs the image `apps/docs/Dockerfile` builds (the "Docs image" workflow) as `os-docs` in the OS
+production stack; `pnpm redeploy` on the VPS deploys the newest one. What it shows at each stage, its secrets
+(`apps/docs/.env.production.age`) and the DNS record: [deploy/README.md](../../deploy/README.md#docsasafarimsite).
+
 ## Who gets in
 
 Every page, route handler and server action goes through `lib/gate.ts`:

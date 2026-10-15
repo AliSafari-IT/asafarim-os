@@ -1,7 +1,7 @@
-# asafarim-os stack's SITE-ONLY file on the shared edge (asafarim-os#97): the asafarim.site landing page
-# without id.asafarim.site. Published by `deploy/vps-deploy.sh --site-only` through the edge's
-# edge-deploy-site.sh, under the SAME edge site name as sites/asafarim-os.caddy (asafarim-os), so a later
-# full deploy simply replaces it. The landing blocks below must stay identical to that file's
+# asafarim-os stack's SITE-ONLY file on the shared edge (asafarim-os#97): the asafarim.site landing page and
+# docs.asafarim.site (#83), without id.asafarim.site. Published by `deploy/vps-deploy.sh --site-only` through
+# the edge's edge-deploy-site.sh, under the SAME edge site name as sites/asafarim-os.caddy (asafarim-os), so
+# a later full deploy simply replaces it. The landing and docs blocks below must stay identical to that file's
 # (deploy/compose.prod.test.mjs checks it). Edit both, never one.
 #
 # Cutover: the asafarim.site and www.asafarim.site blocks must first be removed from asafarim-com.caddy
@@ -27,4 +27,24 @@ asafarim.site {
 
 www.asafarim.site {
   redir https://asafarim.site{uri} 301
+}
+
+# The Docs app (#83): a Next.js server at os-docs:3000 (apps/docs). Private: every page but /api/health asks
+# for a sign-in, and the app sends X-Robots-Tag itself. No Content-Security-Policy here on purpose: Next's
+# pages need their inline scripts, and the app sets a sandboxing CSP of its own on the SVG images it serves
+# (/api/files), which an edge CSP under `defer` would replace. `defer` makes the edge's values replace the
+# upstream's instead of sending each header twice.
+docs.asafarim.site {
+  header {
+    defer
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options nosniff
+    # Document paths are private: never leak them in a Referer.
+    Referrer-Policy no-referrer
+    X-Frame-Options DENY
+    X-Robots-Tag "noindex, nofollow"
+    -Server
+    -X-Powered-By
+  }
+  reverse_proxy os-docs:3000
 }

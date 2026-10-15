@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Redeploy the asafarim.site landing page with the NEWEST build (asafarim-os): one command, no shas to look up.
+# Redeploy the asafarim.site landing page and docs.asafarim.site with the NEWEST builds (asafarim-os): one command, no
+# shas to look up.
 # Run by the OWNER on the VPS, from the repository folder (normally /var/repos/asafarim-os). Nothing else runs it.
 #
 #   pnpm redeploy                   (the same as deploy/redeploy.sh; pnpm is optional on the VPS)
@@ -10,20 +11,24 @@
 #   1. fetch origin/main; <commit> is its newest commit;
 #   2. <site-image-commit> is the newest commit on origin/main that changed what the site image is built from
 #      (the same paths as .github/workflows/site-image.yml: a test keeps the two lists equal). That is the commit the
-#      "Site image" workflow tags the newest image with: the image is built only when those paths change;
-#   3. check that image is published. If it is not (the workflow may still be building), it stops and says so: it
+#      "Site image" workflow tags the newest image with: the image is built only when those paths change.
+#      <docs-image-commit> is found the same way, with the paths of .github/workflows/docs-image.yml;
+#   3. check both images are published. If one is not (its workflow may still be building), it stops and says so: it
 #      never quietly deploys an older image;
 #   4. bring this checkout to <commit>, so the newest deploy/vps-deploy.sh runs (under the deploy lock), then hand over to
-#      `deploy/vps-deploy.sh --site-only <commit> <site-image-commit>`, which does everything else and prints its own
-#      steps (see deploy/README.md, "Landing page only").
+#      `deploy/vps-deploy.sh --site-only <commit> <site-image-commit> <docs-image-commit>`, which does everything else
+#      and prints its own steps (see deploy/README.md, "Landing page and docs").
 #
-# It is for the landing page only: while identity runs in this stack, vps-deploy.sh --site-only refuses, and the
-# full deploy (with its identity image) is still `deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>]`.
+# It is for the landing page and docs only: while identity runs in this stack, vps-deploy.sh --site-only refuses, and the
+# full deploy (with its identity image) is still `deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>]
+# [<docs-image-commit>]`.
 # It holds no secret and prints none. Rollback: deploy/README.md.
 set -euo pipefail
 
 # The inputs of the site image: the same list as `on.push.paths` in .github/workflows/site-image.yml.
 SITE_IMAGE_PATHS=("core/site/**" "packages/app-manifest/schema/**" ".github/workflows/site-image.yml")
+# The inputs of the docs image: the same list as `on.push.paths` in .github/workflows/docs-image.yml.
+DOCS_IMAGE_PATHS=("apps/docs/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/docs-image.yml")
 IMAGE_REPO="${REDEPLOY_IMAGE_REPO:-ghcr.io/alisafari-it/asafarim-os}"
 
 # Everything lives in main(), called on ONE line at the very end: the reset in step 4 can replace this very file
@@ -54,23 +59,31 @@ main() {
   # 1 and 2. What is newest.
   log "Fetching origin/main..."
   git fetch --prune origin main
-  local commit site_commit
+  local commit site_commit docs_commit
   commit="$(git rev-parse origin/main)"
   site_commit="$(git log -1 --format=%H origin/main -- "${SITE_IMAGE_PATHS[@]}")"
+  docs_commit="$(git log -1 --format=%H origin/main -- "${DOCS_IMAGE_PATHS[@]}")"
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fatal "could not read origin/main."
   [[ "$site_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "no commit on origin/main changed the site image's inputs."
+  [[ "$docs_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "no commit on origin/main changed the docs image's inputs."
   log "Newest commit on main:  ${commit}"
   log "Newest site image from: ${site_commit}"
+  log "Newest docs image from: ${docs_commit}"
 
   # 3. Never deploy an older image than the newest one, quietly.
-  local image="${IMAGE_REPO}:site-${site_commit}"
-  if ! docker manifest inspect "$image" >/dev/null 2>&1; then
-    fatal "${image} is not published (yet). The 'Site image' workflow may still be building it: check its run for ${site_commit:0:12} on GitHub, then run this again. If it failed there, fix that first. (If the build is done, the VPS may not be able to reach ghcr.io: run 'docker login ghcr.io' if the package is private.) Nothing changed."
-  fi
-  log "The image ${image##*/} exists."
+  local image workflow sha
+  for image in "${IMAGE_REPO}:site-${site_commit}" "${IMAGE_REPO}:docs-${docs_commit}"; do
+    sha="${image##*-}"
+    workflow="Site image"
+    [[ "${image##*:}" == docs-* ]] && workflow="Docs image"
+    if ! docker manifest inspect "$image" >/dev/null 2>&1; then
+      fatal "${image} is not published (yet). The '${workflow}' workflow may still be building it: check its run for ${sha:0:12} on GitHub, then run this again. If it failed there, fix that first. (If the build is done, the VPS may not be able to reach ghcr.io: run 'docker login ghcr.io' if the package is private.) Nothing changed."
+    fi
+    log "The image ${image##*/} exists."
+  done
 
   if [[ "$dry_run" == true ]]; then
-    log "Dry run. It would run: deploy/vps-deploy.sh --site-only ${commit} ${site_commit}"
+    log "Dry run. It would run: deploy/vps-deploy.sh --site-only ${commit} ${site_commit} ${docs_commit}"
     exit 0
   fi
 
@@ -80,7 +93,7 @@ main() {
     flock -w 300 "${repo_dir}/.vps-deploy.lock" git reset --hard "$commit" ||
       fatal "could not update this checkout (another deploy holds ${repo_dir}/.vps-deploy.lock?). Nothing deployed."
   fi
-  exec deploy/vps-deploy.sh --site-only "$commit" "$site_commit"
+  exec deploy/vps-deploy.sh --site-only "$commit" "$site_commit" "$docs_commit"
 }
 
 main "$@"; exit $?
