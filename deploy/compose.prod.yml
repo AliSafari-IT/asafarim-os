@@ -1,8 +1,9 @@
 # ASafariM OS production stack: the identity service (id.asafarim.site) and its own Redis
-# (asafarim-os#45, part of #22, P2.3), and the asafarim.site landing page, os-site (#70). The owner deploys it with deploy/vps-deploy.sh; nothing else
-# runs this file. See deploy/README.md for the deploy, the rollback and the network rules.
+# (asafarim-os#45, part of #22, P2.3), the asafarim.site landing page, os-site (#70), and docs.asafarim.site, os-docs
+# (#83). The owner deploys it with deploy/vps-deploy.sh; nothing else runs this file. See deploy/README.md for the
+# deploy, the rollback and the network rules.
 #
-#   IMAGE_TAG=<sha> SITE_IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config
+#   IMAGE_TAG=<sha> SITE_IMAGE_TAG=<sha> DOCS_IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
 #
 # Paths here are relative to THIS file (deploy/), not to the repository root.
 name: asafarim-os
@@ -93,6 +94,38 @@ services:
         # Unique on the shared edge_net; sites/asafarim-os.caddy proxies asafarim.site to it.
         aliases:
           - os-site
+
+  os-docs:
+    # docs.asafarim.site: the Docs app's Next.js server (apps/docs/Dockerfile), published by
+    # .github/workflows/docs-image.yml. DOCS_IMAGE_TAG is the full commit sha of that build; like IMAGE_TAG it
+    # has no default.
+    image: ghcr.io/alisafari-it/asafarim-os:docs-${DOCS_IMAGE_TAG:?set DOCS_IMAGE_TAG to the docs image's commit sha}
+    restart: unless-stopped
+    read_only: true
+    # uid/gid 1000 is the image's `node` user, the only writer.
+    tmpfs:
+      - /tmp:size=16m
+      - /app/apps/docs/.next/cache:size=32m,uid=1000,gid=1000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # The manifest's resources (apps/docs/platform.app.json).
+    mem_limit: 256m
+    cpus: 0.5
+    # Decrypted from apps/docs/.env.production.age by deploy/vps-deploy.sh, at the repository root. Today it
+    # holds AUTH_SECRET only (apps/docs/.env.production.example).
+    env_file:
+      - ../.env.docs
+    environment:
+      HOSTNAME: 0.0.0.0
+      ASAFARIM_APP_ID: docs
+      # Sign-in goes through this stack's identity, at its public URL.
+      OIDC_ISSUER: https://id.asafarim.site
+    networks:
+      edge_net:
+        # Unique on the shared edge_net; sites/asafarim-os.caddy proxies docs.asafarim.site to it.
+        aliases:
+          - os-docs
 
 networks:
   # The shared edge's network, created with the edge. identity joins it to be reachable by the edge's Caddy.

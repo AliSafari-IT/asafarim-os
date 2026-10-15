@@ -1,0 +1,16 @@
+# Build context filter for apps/docs/Dockerfile (BuildKit reads <Dockerfile>.dockerignore).
+# apps/docs/fixtures stays in: the build's no-content check reads its markers. Nothing from it reaches the image.
+**/node_modules
+.git
+**/.turbo
+**/.next
+**/dist
+**/coverage
+**/.env*
+**/*.log
+**/test-results
+**/playwright-report
+tools/dev-hub
+.dev
+.age
+deploy/identity

@@ -5,9 +5,10 @@
 # Snippet names share one namespace across every stack's file: keep the asafarim_os_ prefix
 # (there are no snippets here yet).
 #
-# id.asafarim.site (identity) and, since #70, the asafarim.site landing page (os-site). Cutover: the
-# asafarim.site and www.asafarim.site blocks must first be removed from asafarim-com.caddy; the edge
-# validates the WHOLE config, so publishing this file while both define asafarim.site fails safely.
+# id.asafarim.site (identity), since #70 the asafarim.site landing page (os-site), and since #83
+# docs.asafarim.site (os-docs). Cutover: the asafarim.site and www.asafarim.site blocks must first be
+# removed from asafarim-com.caddy; the edge validates the WHOLE config, so publishing this file while both
+# define asafarim.site fails safely.
 
 # The OpenID Connect provider. Reached on the shared edge_net under the unique alias
 # os-identity (never the bare service name: upstream names on edge_net are shared).
@@ -45,4 +46,24 @@ asafarim.site {
 
 www.asafarim.site {
   redir https://asafarim.site{uri} 301
+}
+
+# The Docs app (#83): a Next.js server at os-docs:3000 (apps/docs). Private: every page but /api/health asks
+# for a sign-in, and the app sends X-Robots-Tag itself. No Content-Security-Policy here on purpose: Next's
+# pages need their inline scripts, and the app sets a sandboxing CSP of its own on the SVG images it serves
+# (/api/files), which an edge CSP under `defer` would replace. `defer` makes the edge's values replace the
+# upstream's instead of sending each header twice.
+docs.asafarim.site {
+  header {
+    defer
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options nosniff
+    # Document paths are private: never leak them in a Referer.
+    Referrer-Policy no-referrer
+    X-Frame-Options DENY
+    X-Robots-Tag "noindex, nofollow"
+    -Server
+    -X-Powered-By
+  }
+  reverse_proxy os-docs:3000
 }

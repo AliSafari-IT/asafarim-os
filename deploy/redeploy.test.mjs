@@ -1,5 +1,5 @@
-// deploy/redeploy.sh (the `pnpm redeploy` command): it works out the newest commit and the newest site image by
-// itself. The real script runs here against a throwaway origin repository and stand-ins for docker and for the
+// deploy/redeploy.sh (the `pnpm redeploy` command): it works out the newest commit and the newest site and docs
+// images by itself. The real script runs here against a throwaway origin repository and stand-ins for docker and for the
 // repository's own deploy/vps-deploy.sh, which log what they are asked to do.
 //
 //   node --test deploy/redeploy.test.mjs          (needs bash and git)
@@ -38,11 +38,12 @@ function commit(cwd, message, files) {
 }
 
 /**
- * origin.git with three commits, and `vps`, a clone of it left at the FIRST commit (as a VPS that has not deployed
+ * origin.git with four commits, and `vps`, a clone of it left at the FIRST commit (as a VPS that has not deployed
  * since):
- *   c0  adds the scripts (the real redeploy.sh and a stand-in vps-deploy.sh) and a site file
+ *   c0  adds the scripts (the real redeploy.sh and a stand-in vps-deploy.sh), a site file and a docs file
  *   c1  changes the site (core/site/deep/page.html)           ← the newest commit the site image is built from
- *   c2  changes something else (README)                       ← the newest commit on main
+ *   c2  changes the docs app (apps/docs/app/page.tsx)         ← the newest commit the docs image is built from
+ *   c3  changes something else (README)                       ← the newest commit on main
  */
 function setup() {
   const dir = mkdtempSync(path.join(tmpdir(), "redeploy-"));
@@ -56,6 +57,7 @@ function setup() {
     "deploy/redeploy.sh": script,
     "deploy/vps-deploy.sh": '#!/usr/bin/env bash\necho "vps-deploy $* (HEAD $(git rev-parse HEAD))" >> "$CALLS"\n',
     "core/site/index.html": "v0",
+    "apps/docs/app/page.tsx": "d0",
     "README.md": "r0",
   });
   // As in the real repository, both scripts are executable files in git (and stay so in later commits).
@@ -64,7 +66,8 @@ function setup() {
   git(src, "commit", "-q", "--amend", "--no-edit");
   const c0 = git(src, "rev-parse", "HEAD");
   const c1 = commit(src, "site", { "core/site/deep/page.html": "v1" });
-  const c2 = commit(src, "readme", { "README.md": "r1" });
+  const c2 = commit(src, "docs", { "apps/docs/app/page.tsx": "d1" });
+  const c3 = commit(src, "readme", { "README.md": "r1" });
   git(dir, "clone", "-q", "--bare", src, origin);
   git(dir, "clone", "-q", origin, vps);
   git(vps, "reset", "-q", "--hard", c0);
@@ -76,7 +79,7 @@ function setup() {
     { mode: 0o755 },
   );
   writeFileSync(path.join(dir, "calls.log"), "");
-  return { dir, vps, bin, c0, c1, c2, calls: path.join(dir, "calls.log") };
+  return { dir, vps, bin, c0, c1, c2, c3, calls: path.join(dir, "calls.log") };
 }
 
 function run(env, args = []) {
@@ -87,7 +90,7 @@ function run(env, args = []) {
       ...process.env,
       PATH: `${env.bin}:${process.env.PATH}`,
       CALLS: env.calls,
-      PUBLISHED: env.published ?? `site-${env.c1}`,
+      PUBLISHED: env.published ?? `site-${env.c1} docs-${env.c2}`,
     },
   });
   return {
@@ -107,26 +110,29 @@ function withSetup(fn) {
   }
 }
 
-test("--dry-run: the newest main commit, and the newest commit the site image is built from (not the same one here)", () =>
+test("--dry-run: the newest main commit, and the newest commits the site and docs images are built from (three different ones here)", () =>
   withSetup((env) => {
     const r = run(env, ["--dry-run"]);
     assert.equal(r.status, 0, r.output);
-    assert.match(r.output, new RegExp(`deploy/vps-deploy\\.sh --site-only ${env.c2} ${env.c1}`));
-    assert.deepEqual(r.calls, [`docker manifest inspect ghcr.io/alisafari-it/asafarim-os:site-${env.c1}`]);
+    assert.match(r.output, new RegExp(`deploy/vps-deploy\\.sh --site-only ${env.c3} ${env.c1} ${env.c2}`));
+    assert.deepEqual(r.calls, [
+      `docker manifest inspect ghcr.io/alisafari-it/asafarim-os:site-${env.c1}`,
+      `docker manifest inspect ghcr.io/alisafari-it/asafarim-os:docs-${env.c2}`,
+    ]);
     assert.equal(r.head, env.c0, "a dry run changes nothing: the checkout stays where it was");
   }));
 
-test("it deploys: brings the checkout to the newest commit, then runs the newest vps-deploy.sh --site-only with both shas", () =>
+test("it deploys: brings the checkout to the newest commit, then runs the newest vps-deploy.sh --site-only with the three shas", () =>
   withSetup((env) => {
     const r = run(env);
     assert.equal(r.status, 0, r.output);
-    assert.equal(r.head, env.c2);
-    assert.equal(r.calls.at(-1), `vps-deploy --site-only ${env.c2} ${env.c1} (HEAD ${env.c2})`);
+    assert.equal(r.head, env.c3);
+    assert.equal(r.calls.at(-1), `vps-deploy --site-only ${env.c3} ${env.c1} ${env.c2} (HEAD ${env.c3})`);
   }));
 
 test("a site image that is not published yet stops it, says why, and changes nothing (never an older image)", () =>
   withSetup((env) => {
-    const r = run({ ...env, published: `site-${env.c0}` }); // an OLDER image exists; the newest does not
+    const r = run({ ...env, published: `site-${env.c0} docs-${env.c2}` }); // an OLDER site image exists; the newest does not
     assert.equal(r.status, 1);
     assert.match(r.output, /is not published \(yet\)/);
     assert.match(r.output, /'Site image' workflow/);
@@ -134,12 +140,23 @@ test("a site image that is not published yet stops it, says why, and changes not
     assert.ok(!r.calls.some((c) => c.startsWith("vps-deploy")), "nothing was deployed");
   }));
 
-test("a commit that only changes something else does not move the site image", () =>
+test("a docs image that is not published yet stops it too, naming the 'Docs image' workflow (#83)", () =>
   withSetup((env) => {
-    // c2 changed the README only: the site image is still c1's.
+    const r = run({ ...env, published: `site-${env.c1} docs-${env.c0}` });
+    assert.equal(r.status, 1);
+    assert.match(r.output, new RegExp(`docs-${env.c2} is not published \\(yet\\)`));
+    assert.match(r.output, /'Docs image' workflow/);
+    assert.equal(r.head, env.c0);
+    assert.ok(!r.calls.some((c) => c.startsWith("vps-deploy")), "nothing was deployed");
+  }));
+
+test("a commit that only changes something else moves neither image; a docs change does not move the site image", () =>
+  withSetup((env) => {
+    // c3 changed the README only, c2 the docs app only: the site image is still c1's, the docs image c2's.
     const r = run(env, ["--dry-run"]);
     assert.match(r.output, new RegExp(`Newest site image from: ${env.c1}`));
-    assert.doesNotMatch(r.output, new RegExp(`Newest site image from: ${env.c2}`));
+    assert.match(r.output, new RegExp(`Newest docs image from: ${env.c2}`));
+    assert.doesNotMatch(r.output, new RegExp(`Newest (site|docs) image from: ${env.c3}`));
   }));
 
 test("anything but --dry-run is refused with the usage line", () =>
@@ -160,15 +177,31 @@ test("it is valid bash, runs main() on one last line, and never prints a secret"
   assert.doesNotMatch(script, /\.env\.identity|age -d/);
 });
 
-test("its list of the site image's inputs is the one in .github/workflows/site-image.yml", () => {
-  const workflow = readFileSync(path.join(root, ".github", "workflows", "site-image.yml"), "utf8");
-  const push = /^ {2}push:\n {4}branches:[^\n]*\n {4}paths:\n((?: {6}(?:#[^\n]*|- "[^"]+")\n)+)/m.exec(workflow);
-  assert.ok(push, "the workflow's push.paths block was not found: update this test with the workflow");
-  const fromWorkflow = [...push[1].matchAll(/- "([^"]+)"/g)].map((m) => m[1]);
-  const array = /SITE_IMAGE_PATHS=\(([^)]*)\)/.exec(script)?.[1] ?? "";
-  const fromScript = [...array.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(fromScript, fromWorkflow);
-});
+for (const [name, variable] of [
+  ["site", "SITE_IMAGE_PATHS"],
+  ["docs", "DOCS_IMAGE_PATHS"],
+]) {
+  test(`its list of the ${name} image's inputs is the one in .github/workflows/${name}-image.yml`, () => {
+    const workflow = readFileSync(path.join(root, ".github", "workflows", `${name}-image.yml`), "utf8");
+    const pathsOf = (event) =>
+      new RegExp(
+        `^ {2}${event}:\\n(?: {4}branches:[^\\n]*\\n)? {4}paths:\\n((?: {6}(?:#[^\\n]*|- "[^"]+")\\n)+)`,
+        "m",
+      ).exec(workflow);
+    const push = pathsOf("push");
+    assert.ok(push, "the workflow's push.paths block was not found: update this test with the workflow");
+    const fromWorkflow = [...push[1].matchAll(/- "([^"]+)"/g)].map((m) => m[1]);
+    const array = new RegExp(`${variable}=\\(([^)]*)\\)`).exec(script)?.[1] ?? "";
+    const fromScript = [...array.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(fromScript, fromWorkflow);
+    const pr = pathsOf("pull_request");
+    assert.ok(pr, "the workflow's pull_request.paths block was not found");
+    assert.deepEqual(
+      [...pr[1].matchAll(/- "([^"]+)"/g)].map((m) => m[1]),
+      fromWorkflow,
+    );
+  });
+}
 
 test("pnpm redeploy is deploy/redeploy.sh", () => {
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));

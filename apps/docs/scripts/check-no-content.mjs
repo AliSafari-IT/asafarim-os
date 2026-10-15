@@ -2,7 +2,7 @@
 /**
  * Proves no document content is baked into the docs app's build (#78): builds it (standalone, as the
  * image will be) and fails if any fixture's marker text turns up anywhere under `.next/`.
- * `--no-build` checks an existing `.next/`. The image-level check comes with the deploy (#83).
+ * `--no-build` checks an existing `.next/`: apps/docs/Dockerfile runs it that way on the image's build (#83).
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
