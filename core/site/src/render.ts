@@ -39,6 +39,35 @@ export function formatDate(iso: string): string {
 const anchor = (href: string, label: string, extra = "") =>
   `<a href="${escapeHtml(href)}"${extra}>${escapeHtml(label)}</a>`;
 
+/**
+ * The top bar's links to the OS's live apps. Docs asks a signed-out visitor to sign in first; "Sign in" opens
+ * id.asafarim.site's own sign-in page (email code or passkey), which also offers "Request connection" to someone
+ * who has no access yet.
+ */
+export const APP_LINKS = {
+  docs: { label: "Docs", href: "https://docs.asafarim.site/" },
+  signIn: { label: "Sign in", href: "https://id.asafarim.site/login" },
+} as const;
+
+function renderTopbar(): string {
+  return `
+    <nav class="topbar" aria-label="Main">
+      <a class="brand" href="./">ASafariM <span>OS</span></a>
+      <ul>
+        <li>${anchor(APP_LINKS.docs.href, APP_LINKS.docs.label)}</li>
+        <li>${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
+      </ul>
+    </nav>`;
+}
+
+function renderAccess(): string {
+  return `
+      <p class="access">
+        Have access? ${anchor(APP_LINKS.signIn.href, "Sign in")}, then open ${anchor(APP_LINKS.docs.href, "the docs")}.
+        No access yet? Sign in with your email and choose <em>Request connection</em>: an admin approves it.
+      </p>`;
+}
+
 const BENEFITS = ["Sign-in", "Permissions", "Routing", "Events", "Lifecycle", "Monitoring"];
 
 function renderShipped(progress: Progress): string {
@@ -121,7 +150,7 @@ export function renderPage(progress: Progress, options: RenderOptions): string {
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body>
+  <body>${renderTopbar()}
     <header class="hero">
       <span class="badge">In development · updated ${escapeHtml(formatDate(progress.updated))}</span>
       <h1>ASafariM <span>OS</span></h1>
@@ -136,7 +165,7 @@ export function renderPage(progress: Progress, options: RenderOptions): string {
       </p>
       <nav class="actions" aria-label="Links">
           ${links}
-      </nav>
+      </nav>${renderAccess()}
     </header>
     <main>${renderShipped(progress)}${renderScreenshots(progress, options.imageSizes)}${renderRoadmap(progress)}
     </main>

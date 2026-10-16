@@ -61,6 +61,9 @@ describe("isAllowedLink", () => {
   it("allows https links to github.com and asafarim.com only", () => {
     expect(isAllowedLink("https://github.com/AliSafari-IT/asafarim-os/pull/1")).toBe(true);
     expect(isAllowedLink("https://asafarim.com/")).toBe(true);
+    expect(isAllowedLink("https://docs.asafarim.site/")).toBe(true);
+    expect(isAllowedLink("https://id.asafarim.site/login")).toBe(true);
+    expect(isAllowedLink("https://evil.asafarim.site/")).toBe(false);
     expect(isAllowedLink("https://evil.github.com.example/")).toBe(false);
     expect(isAllowedLink("https://user@github.com/")).toBe(false);
     expect(isAllowedLink("https://github.com:8443/")).toBe(false);
