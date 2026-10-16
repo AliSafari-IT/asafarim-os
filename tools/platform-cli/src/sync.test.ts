@@ -209,6 +209,29 @@ describe("the dev gateway (P3.3a)", () => {
     );
   });
 
+  it("passes W3C trace context through to the check and the app, and records no span of its own (P6)", () => {
+    // Caddy's reverse_proxy (and forward_auth, which is one) forwards the request's headers as they came,
+    // minus hop-by-hop ones; traceparent and tracestate aren't hop-by-hop. So nothing must remove them here.
+    const text = renderGatewayCaddyfile([
+      notes({ routes: [{ path: "/internal/**", expose: false }] }),
+      { ...notes(), id: "alpha" } as AppManifest,
+    ]);
+    const directives = text
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+    expect(directives).not.toMatch(/traceparent|tracestate/i); // no header_up / request_header touches them
+    expect(directives).not.toMatch(/header_up\s+-/); // no header removed on the way to an upstream
+    expect(directives).not.toMatch(/request_header\s+-/);
+    expect(directives).not.toMatch(/^\s*tracing\b/m); // Caddy's own spans need an exporter: a VPS decision
+    // forward_auth adds only the app id; everything else about the original request goes to core-api as sent.
+    expect(directives.match(/header_up .*/g)).toEqual([
+      "header_up X-Asafarim-App alpha",
+      "header_up X-Asafarim-App notes",
+    ]);
+    expect(text).toContain("W3C traceparent and tracestate included, reach both the check and the app");
+  });
+
   it("expose: false routes answer 404 in the gateway before anything is checked or proxied", () => {
     const text = renderGatewayCaddyfile([
       notes({
