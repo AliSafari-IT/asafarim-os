@@ -7,7 +7,11 @@ import {
   exportedMethods,
   globRegex,
   localImports,
+  MARKDOWN_CLEAN_MARKER,
+  MARKDOWN_MARKER,
+  markdownCell,
   mentionsKey,
+  renderMarkdown,
   eventTypesIn,
   resolveImport,
   reviewCommand,
@@ -15,6 +19,7 @@ import {
   routeUrlRegex,
   samplePaths,
   sourceFiles,
+  type AppReview,
 } from "./review.ts";
 import { scaffoldApp } from "./scaffold.ts";
 
@@ -337,5 +342,92 @@ describe("platform manifest review", () => {
     const { reviews } = JSON.parse(out.lines[0]!) as { reviews: { app: string; findings: unknown[] }[] };
     expect(reviews.map((r) => r.app)).toEqual(expect.arrayContaining(["docs", "notes"]));
     expect(reviews.flatMap((r) => r.findings)).toEqual([]);
+  });
+});
+
+describe("platform manifest review --markdown", () => {
+  const finding = (app: string, kind: string, subject: string, message: string, file?: string) =>
+    ({ app, kind, subject, message, ...(file ? { file } : {}) }) as AppReview["findings"][number];
+  const reviewOf = (app: string, findings: AppReview["findings"]): AppReview => ({
+    app,
+    findings,
+    handlers: 0,
+    plumbing: 0,
+  });
+
+  it("starts with the hidden marker and says it is advisory", () => {
+    writeApp(manifest());
+    const out = review(["--markdown"]);
+    expect(out.ok).toBe(true);
+    expect(out.stdout).toBe(true);
+    const lines = out.lines[0]!.split("\n");
+    expect(lines[0]).toBe(MARKDOWN_MARKER);
+    expect(lines).not.toContain(MARKDOWN_CLEAN_MARKER);
+    expect(out.lines[0]).toMatch(/^2 findings across 1 app \(of 1 reviewed\)\.$/m);
+    expect(out.lines[0]).toMatch(/Advisory/);
+    expect(out.lines[0]).toContain("| permission-never-checked | shop.orders.read |  | permission shop.orders.read");
+  });
+
+  it("reports no findings plainly, with the clean marker second", () => {
+    expect(scaffoldApp(root, { id: "fresh" }).ok).toBe(true);
+    const md = review(["--markdown"]).lines[0]!;
+    const lines = md.split("\n");
+    expect(lines.slice(0, 2)).toEqual([MARKDOWN_MARKER, MARKDOWN_CLEAN_MARKER]);
+    expect(md).toContain("No findings in 1 app reviewed.");
+    expect(md).not.toContain("| kind |");
+    expect(renderMarkdown([])).toContain("No findings in 0 apps reviewed.");
+  });
+
+  it("keeps --strict's exit code, and still prints the report", () => {
+    writeApp(manifest());
+    const out = review(["--markdown", "--strict"]);
+    expect(out.ok).toBe(false);
+    expect(out.stdout).toBe(true);
+    expect(out.lines[0]!.split("\n")[0]).toBe(MARKDOWN_MARKER);
+  });
+
+  it("lists manifests it could not review, and is then not clean", () => {
+    put("apps/shop/platform.app.json", JSON.stringify({ id: "shop" }));
+    const out = review(["--markdown"]);
+    expect(out.ok).toBe(false);
+    expect(out.lines[0]).not.toContain(MARKDOWN_CLEAN_MARKER);
+    expect(out.lines[0]).toMatch(/### Not reviewed\n\n- ✖ apps\/shop\/platform\.app\.json: not a valid manifest/);
+  });
+
+  it("escapes cells: a | can't split a cell, and no newline, backtick or HTML gets through", () => {
+    expect(markdownCell("a|b")).toBe("a\\|b");
+    expect(markdownCell("one\ntwo\r\nthree")).toBe("one two three");
+    expect(markdownCell("`x` <!-- y --> & [z]")).toBe("\\`x\\` &lt;!-- y --&gt; &amp; \\[z\\]");
+    expect(markdownCell("a\\|b")).toBe("a\\\\\\|b");
+    const md = renderMarkdown([
+      reviewOf("shop", [finding("shop", "route-unguarded", "GET /a|b", "bad | pipe\nnext line", "apps/x`y`.ts")]),
+    ]);
+    const row = md.split("\n").find((l) => l.startsWith("| route-unguarded"))!;
+    expect(row).toBe("| route-unguarded | GET /a\\|b | apps/x\\`y\\`.ts | bad \\| pipe next line |");
+    // Exactly five unescaped pipes: four cells.
+    expect(row.replace(/\\\|/g, "").split("|")).toHaveLength(6);
+    expect(md.split("\n").filter((l) => l.includes("<!--"))).toEqual([MARKDOWN_MARKER]);
+  });
+
+  it("renders the same report whatever order apps and findings come in", () => {
+    const a = [
+      finding("shop", "route-unguarded", "POST /b", "m2", "apps/shop/b.ts"),
+      finding("shop", "permission-never-checked", "shop.x", "m1"),
+      finding("shop", "route-unguarded", "GET /a", "m3", "apps/shop/a.ts"),
+    ];
+    const b = [finding("billing", "event-not-declared", "billing.x.y.v1", "m4", "apps/billing/x.ts")];
+    const one = renderMarkdown([reviewOf("shop", a), reviewOf("billing", b), reviewOf("empty", [])]);
+    const two = renderMarkdown([reviewOf("empty", []), reviewOf("billing", b), reviewOf("shop", [...a].reverse())]);
+    expect(one).toBe(two);
+    expect(one).toMatch(/^4 findings across 2 apps \(of 3 reviewed\)\.$/m);
+    expect(one.indexOf("### billing")).toBeLessThan(one.indexOf("### shop"));
+    expect(one).not.toContain("### empty");
+    const rows = one.split("\n").filter((l) => /^\| (?!kind|---)/.test(l));
+    expect(rows.map((r) => r.split(" | ")[1])).toEqual(["billing.x.y.v1", "shop.x", "GET /a", "POST /b"]);
+  });
+
+  it("rejects --json together with --markdown", () => {
+    expect(reviewCommand(["--json", "--markdown"], root, () => root)).toBeNull();
+    expect(reviewCommand(["--markdown", "--json", "--root", root], root, () => root)).toBeNull();
   });
 });

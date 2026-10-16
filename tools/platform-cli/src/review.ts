@@ -1,5 +1,5 @@
 /**
- * `platform manifest review [<id>…] [--json] [--strict] [--root <dir>]` (P7.2, part 1).
+ * `platform manifest review [<id>…] [--json | --markdown] [--strict] [--root <dir>]` (P7.2, part 1).
  *
  * ADR 0001 §10 item 2: compare what an app's manifest declares with what its code does, and report the
  * gaps. This part is deterministic (no AI) and advisory: it prints findings and exits 0, unless
@@ -20,6 +20,10 @@
  *   core-api would refuse it and no subscriber can declare it.
  * - `event-handler-missing` (P7.2 part 2a): a declared subscription's `handler` path isn't served by
  *   any of the app's route files, and the app's code never names the event type either.
+ *
+ * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
+ * prints the report CI posts as one advisory pull request comment, updated in place (see
+ * `renderMarkdown`). The two are mutually exclusive. Exit codes don't depend on the format.
  *
  * Sign-in plumbing is not a finding: Auth.js's own endpoints under `/api/auth/` and the SDK's session
  * hand-off (`createSessionHandler`).
@@ -375,26 +379,95 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
 export interface ReviewOptions {
   ids: string[];
   json: boolean;
+  markdown: boolean;
   strict: boolean;
   root?: string;
 }
 
 export function parseReviewArgs(args: string[]): ReviewOptions | null {
-  const opts: ReviewOptions = { ids: [], json: false, strict: false };
+  const opts: ReviewOptions = { ids: [], json: false, markdown: false, strict: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "--json") opts.json = true;
+    else if (a === "--markdown") opts.markdown = true;
     else if (a === "--strict") opts.strict = true;
     else if (a === "--root" && args[i + 1] && !args[i + 1]!.startsWith("-")) opts.root = args[++i];
     else if (a.startsWith("-")) return null;
     else opts.ids.push(a);
   }
+  if (opts.json && opts.markdown) return null; // one output format at a time
   return opts;
+}
+
+/** The first line of the Markdown report: CI finds its own earlier comment by it. */
+export const MARKDOWN_MARKER = "<!-- asafarim:manifest-review -->";
+/** The second line of a report with no findings and no errors: CI posts nothing new for it. */
+export const MARKDOWN_CLEAN_MARKER = "<!-- asafarim:manifest-review:clean -->";
+
+/**
+ * Text for one Markdown table cell, shown literally: no HTML, no formatting, no line breaks, and a
+ * `|` can't end the cell. Findings quote file paths and code, so nothing is trusted.
+ */
+export function markdownCell(text: string): string {
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\r\n|\r|\n/g, " ")
+    .replace(/[|`*_~[\]]/g, (c) => `\\${c}`);
+}
+
+const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * The review as a Markdown report for a pull request comment (P7.2 part 2b). Deterministic: apps by id,
+ * findings by kind, subject, file and message, so an unchanged review renders byte for byte the same
+ * and CI's in-place update is a no-op. The first line is `MARKDOWN_MARKER`; a report with nothing to
+ * say has `MARKDOWN_CLEAN_MARKER` second. `errors` are manifests that couldn't be reviewed.
+ */
+export function renderMarkdown(reviews: AppReview[], errors: string[] = []): string {
+  const sorted = [...reviews].sort((a, b) => byText(a.app, b.app));
+  const total = sorted.reduce((n, r) => n + r.findings.length, 0);
+  const withFindings = sorted.filter((r) => r.findings.length > 0);
+  const apps = (n: number) => `${n} app${n === 1 ? "" : "s"}`;
+  const out = [MARKDOWN_MARKER];
+  if (total === 0 && errors.length === 0) out.push(MARKDOWN_CLEAN_MARKER);
+  out.push("## Manifest review", "");
+  out.push(
+    total === 0
+      ? `No findings in ${apps(sorted.length)} reviewed.`
+      : `${total} finding${total === 1 ? "" : "s"} across ${apps(withFindings.length)} (of ${sorted.length} reviewed).`,
+  );
+  out.push(
+    "",
+    "_Advisory (ADR 0001 §10 item 2): what each app's manifest declares compared with what its code does. It never fails CI; run `pnpm platform manifest review` locally for the same report._",
+  );
+  if (errors.length > 0) {
+    out.push("", "### Not reviewed", "");
+    for (const e of [...errors].sort(byText)) out.push(`- ${markdownCell(e)}`);
+  }
+  for (const r of withFindings) {
+    const rows = r.findings
+      .map((f) => [f.kind, f.subject, f.file ?? "", f.message].map(markdownCell))
+      .sort((a, b) => {
+        for (let i = 0; i < a.length; i++) {
+          const c = byText(a[i]!, b[i]!);
+          if (c !== 0) return c;
+        }
+        return 0;
+      });
+    out.push("", `### ${markdownCell(r.app)}`, "", "| kind | subject | file | message |", "| --- | --- | --- | --- |");
+    for (const row of rows) out.push(`| ${row.join(" | ")} |`);
+  }
+  return out.join("\n");
 }
 
 export interface ReviewResult {
   ok: boolean;
   lines: string[];
+  /** Print `lines` to stdout even when not ok: the Markdown report is wanted either way. */
+  stdout?: boolean;
 }
 
 /** Review the named apps under `<root>/apps/`, or all of them. */
@@ -449,6 +522,10 @@ export function reviewCommand(args: string[], cwd: string, findRoot: () => strin
   const ok = errors.length === 0 && !(opts.strict && findings.length > 0);
   if (opts.json) {
     return { ok, lines: [JSON.stringify({ reviews, errors }, null, 2)] };
+  }
+  if (opts.markdown) {
+    // The report goes to stdout whatever the outcome, so CI can post it; the exit code still tells.
+    return { ok, lines: [renderMarkdown(reviews, errors)], stdout: true };
   }
   const lines: string[] = [...errors];
   for (const r of reviews) {

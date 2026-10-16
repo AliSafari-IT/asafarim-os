@@ -93,6 +93,85 @@ jobs:
       - name: Manifest review (advisory)
         run: pnpm platform manifest review
 
+  # P7.2 part 2b (ADR 0001 §10 item 2): the same review, posted on the pull request as ONE comment
+  # that is updated in place (found by the report's hidden first-line marker). Advisory: the job may
+  # fail without failing CI. A clean report with no earlier comment posts nothing. Runs on
+  # `pull_request` only (never pull_request_target) with the default token; on a fork's PR that token
+  # is read-only, so the post is skipped with a warning.
+  manifest-review-comment:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The report is printed even when a manifest can't be reviewed (exit 1); `checks` fails on that.
+      - name: Manifest review as Markdown
+        run: pnpm --silent platform manifest review --markdown > "$RUNNER_TEMP/review.md" || echo "::warning::manifest review exited $?"
+
+      - name: Post or update the PR comment
+        uses: actions/github-script@v8
+        env:
+          REVIEW_FILE: ${{ runner.temp }}/review.md
+        with:
+          script: |
+            const fs = require("node:fs");
+            const MARKER = "<!-- asafarim:manifest-review -->";
+            const CLEAN = "<!-- asafarim:manifest-review:clean -->";
+            const raw = fs.existsSync(process.env.REVIEW_FILE) ? fs.readFileSync(process.env.REVIEW_FILE, "utf8") : "";
+            // Build tool output can come first on stdout: the report starts at its marker.
+            const start = raw.indexOf(MARKER);
+            if (start < 0) {
+              core.warning("The manifest review printed no Markdown report; nothing to post.");
+              return;
+            }
+            const body = raw.slice(start).trimEnd() + "\n";
+            const clean = body.includes(CLEAN);
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number,
+                per_page: 100,
+              });
+              const mine = comments.find((c) => c.user?.login === "github-actions[bot]" && c.body?.includes(MARKER));
+              if (mine) {
+                if (mine.body === body) {
+                  core.info(`Comment ${mine.id} is up to date.`);
+                } else {
+                  await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+                  core.info(`Updated comment ${mine.id}.`);
+                }
+              } else if (clean) {
+                core.info("No findings and no earlier comment: nothing to post.");
+              } else {
+                const { data } = await github.rest.issues.createComment({ owner, repo, issue_number, body });
+                core.info(`Created comment ${data.id}.`);
+              }
+            } catch (error) {
+              if (error.status === 403) {
+                core.warning(`Can't comment on this pull request (read-only token, e.g. a fork): ${error.message}`);
+              } else {
+                core.warning(`Posting the manifest review failed: ${error.message}`);
+              }
+            }
+
   # The production deploy files (#45). No secrets and no Docker daemon of ours: Compose renders the
   # file, shellcheck reads the scripts, and the edge's pinned Caddy validates the site files. The
   # tests of these files run with the others, in `checks` (pnpm test:scripts).

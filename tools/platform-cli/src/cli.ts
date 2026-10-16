@@ -12,9 +12,10 @@
  *                                            one per line (# comments allowed); listed, not drift
  *   pnpm platform manifest validate <file>   check one manifest (.json, or a .ts default export)
  *   pnpm platform manifest compile <file>    validate and write platform.app.json beside it
- *   pnpm platform manifest review [<id>…] [--json] [--strict] [--root <dir>]
+ *   pnpm platform manifest review [<id>…] [--json | --markdown] [--strict] [--root <dir>]
  *                                            compare apps' manifests with their code (P7.2); advisory,
- *                                            exits 0 unless --strict. Reads files only, never runs app code
+ *                                            exits 0 unless --strict. Reads files only, never runs app code.
+ *                                            --markdown: the report CI posts as one PR comment
  *   pnpm platform boundaries                 fail if core/ or packages/ import from apps/
  *   pnpm platform app new <id> [--name "<Display name>"] [--root <dir>]
  *                                            write a minimal app to <dir>/apps/<id>/ (P7.1); installs nothing
@@ -51,7 +52,8 @@ const USAGE = [
   "  platform sync --check --against <dir> [--other-stack-sites <file>]",
   "  platform manifest validate <file>",
   "  platform manifest compile <file>",
-  "  platform manifest review [<id>…] [--json] [--strict] [--root <dir>]   advisory; --strict fails on findings",
+  "  platform manifest review [<id>…] [--json | --markdown] [--strict] [--root <dir>]",
+  "                                                      advisory; --strict fails on findings",
   "  platform boundaries",
   '  platform app new <id> [--name "<Display name>"] [--root <dir>]   write a minimal app to apps/<id>',
   "  platform app compose <id|image-ref> --env prod|staging --out <file>   (--help for the options)",
@@ -73,7 +75,7 @@ const USAGE = [
 /** pnpm runs the CLI from its package folder; INIT_CWD is where the user typed the command. */
 const cwd = process.env.INIT_CWD ?? process.cwd();
 
-type Result = { ok: boolean; lines: string[] };
+type Result = { ok: boolean; lines: string[]; stdout?: boolean };
 
 async function syncCommand(args: string[]): Promise<Result | null> {
   let check = false;
@@ -124,7 +126,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(USAGE);
     return 2;
   }
-  for (const line of result.lines) (result.ok ? console.log : console.error)(line);
+  for (const line of result.lines) (result.ok || result.stdout ? console.log : console.error)(line);
   return result.ok ? 0 : 1;
 }
 
