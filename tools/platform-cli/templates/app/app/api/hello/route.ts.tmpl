@@ -1,0 +1,14 @@
+/**
+ * GET /api/hello: an example of a guarded route. Every route handler checks a permission the manifest
+ * declares (here {{id}}.read), or is listed in the manifest as public or gateway-guarded;
+ * `pnpm platform manifest review` reports any that does neither.
+ */
+import { gate } from "@/lib/gate";
+
+export const dynamic = "force-dynamic";
+
+export async function GET() {
+  const g = await gate("{{id}}.read");
+  if (!g.ok) return Response.json(g.body, { status: g.status });
+  return Response.json({ hello: g.subject, app: "{{id}}" });
+}

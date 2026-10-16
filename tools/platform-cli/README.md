@@ -89,7 +89,9 @@ before any request (exit 1). This is the same check as the Admin console's typed
 
 `app new` writes a minimal Next.js app to `<root>/apps/<id>/` from the files in `templates/app/`: a typed
 manifest (`platform.app.ts`) and its compiled `platform.app.json`, a page that signs in through core/identity and
-shows the launcher, `/health/live` and `/health/ready`, telemetry, and one test. Placeholders (`{{id}}`, `{{name}}`,
+shows the launcher and, to people holding `<id>.read`, the app; a guarded example route (`/api/hello`, through
+`lib/gate.ts`), `/health/live` and `/health/ready`, telemetry (flushed on shutdown), and one test. A fresh scaffold
+passes `manifest review --strict`. Placeholders (`{{id}}`, `{{name}}`,
 `{{glyph}}`, `{{port}}`) are replaced and a `.tmpl` suffix is dropped. The id is checked with the manifest schema's own
 rules and an id that is reserved, already used under `apps/`, `external-apps/`, `core/`, `packages/` or `tools/`, or that is already the name of a workspace package (`@asafarim/<id>`) is refused. The folder is
 written next to its place and renamed into it, so a failure leaves nothing behind. It only writes files: run

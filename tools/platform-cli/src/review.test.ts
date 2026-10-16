@@ -254,9 +254,13 @@ describe("platform manifest review", () => {
     expect(reviewCommand(["--root", "--json"], root, () => root)).toBeNull();
   });
 
-  it("in a freshly scaffolded app, finds only the placeholder permission the template never checks", () => {
+  it("finds nothing in a freshly scaffolded app: its permission is checked and its routes are guarded", () => {
     expect(scaffoldApp(root, { id: "fresh" }).ok).toBe(true);
-    expect(kinds(["fresh"])).toEqual(["permission-never-checked fresh.read"]);
+    expect(kinds(["fresh"])).toEqual([]);
+    const out = reviewCommand(["fresh", "--strict", "--json", "--root", root], root, () => root)!;
+    const [review] = (JSON.parse(out.lines[0]!) as { reviews: { handlers: number; plumbing: number }[] }).reviews;
+    expect(review!.handlers - review!.plumbing).toBe(3); // /health/live, /health/ready and the gated /api/hello
+    expect(out.ok).toBe(true);
   });
 
   it("finds nothing in this workspace's own apps", () => {
