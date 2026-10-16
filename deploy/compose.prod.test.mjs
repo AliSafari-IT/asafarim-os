@@ -360,6 +360,14 @@ test("os-postgres is Postgres 16 (core-api's pg_dump is 16), on os_core ONLY, pe
   );
   assert.ok(postgres.volumes.some((v) => v.target === "/docker-entrypoint-initdb.d" && v.read_only));
   assert.ok(postgres.healthcheck?.test?.includes("pg_isready"));
+  // TCP, not the socket: the first-start init's temporary server listens on the socket only.
+  assert.deepEqual(
+    postgres.healthcheck.test.slice(
+      postgres.healthcheck.test.indexOf("-h"),
+      postgres.healthcheck.test.indexOf("-h") + 2,
+    ),
+    ["-h", "127.0.0.1"],
+  );
   assert.match(composeText, /os-postgres:[\s\S]*?env_file:\n\s+- \.\.\/\.env\.core-api\n/);
 });
 

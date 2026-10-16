@@ -156,7 +156,9 @@ services:
       # First start only (an empty volume): the core_api role and the core database it owns.
       - ./core-api/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "core"]
+      # Over TCP: on the first start the image's init runs a temporary server on the Unix socket only (while
+      # 10-core.sh runs), then restarts. Only the real server answers on 127.0.0.1.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "core"]
       interval: 5s
       timeout: 3s
       retries: 20
