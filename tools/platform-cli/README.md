@@ -109,8 +109,10 @@ findings, `--json` prints them as JSON, and naming ids reviews only those apps.
 | `event-schema-invalid`     | that file isn't JSON, or isn't a JSON object                                                                                                                                                                                                                     |
 | `permission-never-checked` | a declared permission is named (as a whole string literal) by no runtime source file and by no manifest route                                                                                                                                                    |
 | `route-unguarded`          | an `app/**/route.ts` method that no manifest route covers with a permission or `expose: false`, whose path isn't in `auth.publicPaths`, and where neither the handler nor any app file it imports (`@/…` or relative, transitively) names one of the permissions |
+| `event-not-declared`       | a runtime source file names an event type in the app's own namespace (`<id>.<entity>.<verb>.v<N>`, as a whole string literal) that `events.publishes` and `events.subscribes` don't list (P7.2 part 2a)                                                          |
+| `event-handler-missing`    | an `events.subscribes` entry whose `handler` path no `app/**/route.ts` serves, and whose type no runtime source file names (P7.2 part 2a)                                                                                                                        |
 
-Runtime source means the app folder without `test/`, `e2e/`, `fixtures/`, `events/`, `node_modules/`, `.next/`,
+Runtime source means the app folder without `test/`, `e2e/`, `fixtures/`, the root `events/` (schemas), `node_modules/`, `.next/`,
 `*.test.*`, `*.spec.*`, `*.d.ts` and the manifest itself. Auth.js's endpoints under `/api/auth/` and the SDK's
 session hand-off (`createSessionHandler`) are sign-in plumbing, not findings. A text match can't prove a check runs
 on every path, so `route-unguarded` reads "possibly". A fresh `app new` reports one finding: its placeholder
