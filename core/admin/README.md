@@ -42,6 +42,8 @@ pnpm e2e                                  # the whole OS in a real browser: note
 
 Settings come from `.dev/app.env` and `.dev/admin.env`: `OIDC_ISSUER`, `AUTH_SECRET`, `CORE_API_URL`, `ADMIN_OIDC_CLIENT_ID` (default `core-admin`) and `ADMIN_USER_DIRECTORY_FILE` (the seeded users). See `.env.development.example`.
 
+Traces and metrics (P6.2) are off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set; then they go over OTLP/HTTP as service `admin` with this package's version, and are flushed when the server shuts down (`instrumentation.ts`).
+
 ## What it does not cover
 
 - **No production directory of people.** Locally it searches the seeded users; elsewhere, grant by typing the subject id.
