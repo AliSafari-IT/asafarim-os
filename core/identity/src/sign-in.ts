@@ -820,6 +820,10 @@ export function createSignIn(d: SignInDeps): SignIn {
     const { path, method } = ctx;
     if (method === "GET") {
       switch (path) {
+        case "/":
+          // id.asafarim.site itself: the account page, which sends a signed-out visitor to sign in.
+          seeOther(ctx, "/account");
+          return true;
         case "/connect":
           // The QR code's target. It carries nothing secret and grants nothing: it starts a sign-in.
           seeOther(ctx, "/login");

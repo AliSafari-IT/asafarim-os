@@ -11,6 +11,7 @@ import {
   createAccess,
   createConfig,
   envNameForConfigKey,
+  isAccessUnavailableError,
   registerApp,
   startApp,
 } from "../src/index.ts";
@@ -517,6 +518,19 @@ describe("startApp", () => {
     expect(await p.registered).toEqual({ ok: false, attempts: 0, error: "not_installed" });
     expect(warn).toHaveBeenCalledWith("app.not_installed", expect.objectContaining({ appId: "notes" }));
     expect(await p.access.can({ user: { id: "x" } }, "notes.read")).toBe(false);
+    // An app's gate turns this into a 503 page, never a 500: it must be an AccessUnavailableError.
+    for (const call of [
+      () => p.access.access("x"),
+      () => p.access.require({ user: { id: "x" } }, "notes.read"),
+      () => p.access.launcher("x"),
+    ]) {
+      const err = await call().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(isAccessUnavailableError(err)).toBe(true);
+      expect((err as Error).message).toContain("isn't installed");
+    }
   });
 
   it("with credentials registers in the background and exposes access", async () => {
