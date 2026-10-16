@@ -75,6 +75,11 @@ jobs:
       - name: Generated platform files are up to date
         run: pnpm platform:sync:check
 
+      # P7.2 (ADR 0001 §10): what each manifest declares vs what its code does. Advisory: it prints
+      # findings and only fails on an unreadable or invalid manifest.
+      - name: Manifest review (advisory)
+        run: pnpm platform manifest review
+
   # The production deploy files (#45). No secrets and no Docker daemon of ours: Compose renders the
   # file, shellcheck reads the scripts, and the edge's pinned Caddy validates the site files. The
   # tests of these files run with the others, in `checks` (pnpm test:scripts).

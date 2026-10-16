@@ -12,6 +12,8 @@ pnpm platform sync --check --against <dir> [--other-stack-sites <file>]
                                         # checkout's hand-written wiring (read-only)
 pnpm platform manifest validate <file>  # check one manifest (.json, or a .ts default export)
 pnpm platform manifest compile <file>   # validate and write platform.app.json beside it
+pnpm platform manifest review [<id>…] [--json] [--strict] [--root <dir>]
+                                        # compare apps' manifests with their code (advisory)
 pnpm platform boundaries                # fail if core/ or packages/ import from apps/
 pnpm platform app install --image <ref> [--env-out <file>]
                                         # install an app from another repository by its image
@@ -93,6 +95,26 @@ rules and an id that is reserved, already used under `apps/`, `external-apps/`, 
 written next to its place and renamed into it, so a failure leaves nothing behind. It only writes files: run
 `pnpm install` and `pnpm platform sync` after it; installing in core-api (`app install`), the OIDC client and any
 deploy stay separate steps. `--name` is the display name (default: the id in title case).
+
+## Manifest review (`manifest review`)
+
+ADR 0001 §10 item 2 (P7.2, part 1): it compares what each `apps/<id>/platform.app.json` declares with what the
+app's code does. It reads files as text only and never runs app code. It is deterministic (no AI) and
+**advisory**: it prints its findings and exits 0, and CI runs it that way. `--strict` exits 1 when there are
+findings, `--json` prints them as JSON, and naming ids reviews only those apps.
+
+| Finding                    | When                                                                                                                                                                                                                                                             |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `event-schema-missing`     | a `events.publishes` entry's schema file isn't in the app folder                                                                                                                                                                                                 |
+| `event-schema-invalid`     | that file isn't JSON, or isn't a JSON object                                                                                                                                                                                                                     |
+| `permission-never-checked` | a declared permission is named (as a whole string literal) by no runtime source file and by no manifest route                                                                                                                                                    |
+| `route-unguarded`          | an `app/**/route.ts` method that no manifest route covers with a permission or `expose: false`, whose path isn't in `auth.publicPaths`, and where neither the handler nor any app file it imports (`@/…` or relative, transitively) names one of the permissions |
+
+Runtime source means the app folder without `test/`, `e2e/`, `fixtures/`, `events/`, `node_modules/`, `.next/`,
+`*.test.*`, `*.spec.*`, `*.d.ts` and the manifest itself. Auth.js's endpoints under `/api/auth/` and the SDK's
+session hand-off (`createSessionHandler`) are sign-in plumbing, not findings. A text match can't prove a check runs
+on every path, so `route-unguarded` reads "possibly". A fresh `app new` reports one finding: its placeholder
+`<id>.read` permission, which the template declares but doesn't check yet.
 
 ## Generators
 
