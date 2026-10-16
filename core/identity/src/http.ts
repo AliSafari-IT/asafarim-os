@@ -17,6 +17,8 @@ export interface HttpContext {
     set(name: string, value?: string | null, opts?: CookieOptions): unknown;
   };
   is(type: string): string | false | null;
+  /** A request header ("" when absent). */
+  get(field: string): string;
   set(field: string, value: string): void;
   redirect(url: string): void;
 }
@@ -68,4 +70,21 @@ export function clientIp(ctx: Pick<HttpContext, "ip" | "ips">): string {
 export function queryValue(ctx: Pick<HttpContext, "query">, name: string): string | undefined {
   const v = ctx.query[name];
   return Array.isArray(v) ? v[0] : v;
+}
+
+/** A JSON body (at most 64 KiB), or null when it isn't JSON or doesn't parse. */
+export async function readJson(ctx: Pick<HttpContext, "is" | "req">): Promise<unknown> {
+  if (!ctx.is("application/json")) return null;
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const chunk of ctx.req) {
+    size += (chunk as Buffer).length;
+    if (size > 64 * 1024) return null;
+    chunks.push(chunk as Buffer);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  } catch {
+    return null;
+  }
 }

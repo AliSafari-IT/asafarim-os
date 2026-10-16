@@ -55,9 +55,37 @@ export type LoginTarget = { kind: "interaction"; uid: string } | { kind: "home" 
 export interface LoginFlow {
   csrf: string;
   target: LoginTarget;
-  /** Set once a code was sent: the number it went to (E.164) and its challenge. */
-  phone?: string;
+  /** Set once a code was sent: how, where to (an E.164 number or an email address), and its challenge. */
+  via?: "email" | "sms";
+  identifier?: string;
   challengeId?: string;
+}
+
+/** Short-lived, single-use values (passkey challenges): stored, then taken exactly once. */
+export interface Ephemeral {
+  put(key: string, value: string, ttlSeconds: number): Promise<void>;
+  /** Returns and deletes the value in one step; null if it's gone or was never there. */
+  take(key: string): Promise<string | null>;
+}
+
+export class RedisEphemeral implements Ephemeral {
+  private readonly client: Redis;
+
+  constructor(client: Redis) {
+    this.client = client;
+  }
+
+  private key(key: string) {
+    return `${KEY_PREFIX}once:${sha256(key)}`;
+  }
+
+  async put(key: string, value: string, ttlSeconds: number): Promise<void> {
+    await this.client.set(this.key(key), value, "EX", ttlSeconds);
+  }
+
+  async take(key: string): Promise<string | null> {
+    return this.client.getdel(this.key(key));
+  }
 }
 
 export interface LoginFlows {

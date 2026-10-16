@@ -4,48 +4,72 @@
 import { createServer } from "node:http";
 import { Redis } from "ioredis";
 import { PgAccountStore, type AccountStore } from "./accounts.ts";
-import { RedisAuthSessions, RedisLoginFlows } from "./auth-session.ts";
-import { ConfigError, loadConfig, type SmsLoginConfig } from "./config.ts";
+import { RedisAuthSessions, RedisEphemeral, RedisLoginFlows } from "./auth-session.ts";
+import { ConfigError, loadConfig, type LocalLoginConfig } from "./config.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { RedisOtpChallenges, RedisRateLimiter } from "./otp.ts";
 import { createProvider, type ProviderDeps } from "./provider.ts";
 import { RedisPendingLogins } from "./pending.ts";
 import { RedisReplayGuard, endSessionsOfAccount, redisAdapterFactory } from "./redis-adapter.ts";
+import { createSignIn } from "./sign-in.ts";
 import { DevLogSmsSender, TwilioSmsSender } from "./sms.ts";
-import { createSmsLogin } from "./sms-login.ts";
+import { DevLogMailer, SmtpMailer } from "./smtp.ts";
 import { PgIdentityStore, PrincipalAccounts } from "./store.ts";
 
 const log = createLogger();
 
-/** The SMS method's pieces: its database (migrated, first admin bootstrapped) and its sign-in. */
-async function smsLogin(config: SmsLoginConfig, issuer: string, redis: Redis, logger: Logger) {
+/** The local sign-in's pieces: its database (migrated, first admin bootstrapped) and its routes. */
+async function localSignIn(config: LocalLoginConfig, issuer: string, redis: Redis, logger: Logger) {
   const store = new PgIdentityStore(config.databaseUrl, (err) =>
     logger.warn("database.idle_error", { errorCode: (err as { code?: string }).code ?? err.name }),
   );
   const applied = await store.migrate();
   if (applied.length) logger.info("identity.migrated", { status: applied.join(",") });
-  if (config.bootstrapAdminPhone) {
-    const outcome = await store.bootstrapAdmin(config.bootstrapAdminPhone);
+  if (config.bootstrapAdmin.length) {
+    const outcome = await store.bootstrapAdmin(config.bootstrapAdmin);
     logger.info("identity.bootstrap_admin", { reason: outcome });
   }
-  const sender =
-    config.sender.provider === "twilio" ? new TwilioSmsSender(config.sender.twilio) : new DevLogSmsSender();
-  const sms = createSmsLogin({
+  const issuerUrl = new URL(issuer);
+  const signIn = createSignIn({
     issuer,
     homeUrl: config.homeUrl,
     otpSecret: config.otpSecret,
-    allowedPrefixes: config.allowedPrefixes,
-    dailySmsLimit: config.dailySmsLimit,
+    ...(config.email
+      ? {
+          email: {
+            mailer:
+              config.email.mailer.kind === "smtp"
+                ? new SmtpMailer({ ...config.email.mailer.smtp, heloName: issuerUrl.hostname })
+                : new DevLogMailer(),
+            dailyLimit: config.email.dailyLimit,
+          },
+        }
+      : {}),
+    ...(config.sms
+      ? {
+          sms: {
+            sender:
+              config.sms.sender.provider === "twilio"
+                ? new TwilioSmsSender(config.sms.sender.twilio)
+                : new DevLogSmsSender(),
+            allowedPrefixes: config.sms.allowedPrefixes,
+            dailyLimit: config.sms.dailyLimit,
+          },
+        }
+      : {}),
+    ...(config.passkeys
+      ? { passkeys: { rp: { id: issuerUrl.hostname, origin: issuerUrl.origin, name: "ASafariM" } } }
+      : {}),
+    ephemeral: new RedisEphemeral(redis),
     store,
     challenges: new RedisOtpChallenges(redis),
     limits: new RedisRateLimiter(redis),
     sessions: new RedisAuthSessions(redis),
     flows: new RedisLoginFlows(redis),
-    sender,
     endProviderSessions: (principalId) => endSessionsOfAccount(redis, principalId),
     log: logger,
   });
-  return { store, sms };
+  return { store, signIn };
 }
 
 async function main() {
@@ -57,13 +81,13 @@ async function main() {
   let closeDatabase: () => Promise<void>;
   let method: Pick<
     ProviderDeps,
-    "loginMethod" | "handoffPrivateKey" | "hubPublicKey" | "hubContinueUrl" | "replay" | "pending" | "sms"
+    "loginMethod" | "handoffPrivateKey" | "hubPublicKey" | "hubContinueUrl" | "replay" | "pending" | "signIn"
   >;
-  if (config.login.method === "sms") {
-    const { store, sms } = await smsLogin(config.login, config.issuer, redis, log);
+  if (config.login.method === "local") {
+    const { store, signIn } = await localSignIn(config.login, config.issuer, redis, log);
     accounts = new PrincipalAccounts(store);
     closeDatabase = () => store.close();
-    method = { loginMethod: "sms", sms };
+    method = { loginMethod: "local", signIn };
   } else {
     const platform = new PgAccountStore(config.login.accountsDatabaseUrl);
     accounts = platform;

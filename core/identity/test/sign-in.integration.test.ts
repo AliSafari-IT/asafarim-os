@@ -17,15 +17,15 @@ import { Redis } from "ioredis";
 import { exportJWK, generateKeyPair } from "jose";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { RedisAuthSessions, RedisLoginFlows } from "../src/auth-session.ts";
+import { RedisAuthSessions, RedisEphemeral, RedisLoginFlows } from "../src/auth-session.ts";
 import { loadClients } from "../src/clients.ts";
 import { createLogger } from "../src/log.ts";
 import { OTP_TTL_SECONDS, RedisOtpChallenges, RedisRateLimiter } from "../src/otp.ts";
 import { createProvider } from "../src/provider.ts";
 import { KEY_PREFIX, endSessionsOfAccount, redisAdapterFactory } from "../src/redis-adapter.ts";
-import { createSmsLogin } from "../src/sms-login.ts";
+import { createSignIn } from "../src/sign-in.ts";
 import { PgIdentityStore, PrincipalAccounts } from "../src/store.ts";
-import { CapturingSender, MemoryStore } from "./fakes.ts";
+import { CapturingMailer, MemoryStore } from "./fakes.ts";
 
 const REDIS_URL = process.env.IDENTITY_TEST_REDIS_URL;
 const DATABASE_URL = process.env.IDENTITY_TEST_DATABASE_URL;
@@ -41,8 +41,9 @@ function redisDb14(url: string) {
   return u.href;
 }
 
-const ADMIN = "+32470000001";
-const OTHER = "+32470000002";
+const ADMIN = "ali@example.test";
+const OTHER = "someone@example.test";
+const PHONE = "+32470000002";
 
 describe.skipIf(!REDIS_URL)("SMS sign-in storage in Redis", () => {
   let redis: Redis;
@@ -110,8 +111,14 @@ describe.skipIf(!REDIS_URL)("SMS sign-in storage in Redis", () => {
   it("a flow keeps its deadline when updated, and can't be resurrected once gone", async () => {
     const flows = new RedisLoginFlows(redis);
     const token = await flows.create({ csrf: "x", target: { kind: "home" } });
-    await flows.update(token, { csrf: "x", target: { kind: "home" }, phone: ADMIN, challengeId: "c" });
-    expect((await flows.get(token))!.phone).toBe(ADMIN);
+    await flows.update(token, {
+      csrf: "x",
+      target: { kind: "home" },
+      via: "email",
+      identifier: ADMIN,
+      challengeId: "c",
+    });
+    expect((await flows.get(token))!.identifier).toBe(ADMIN);
     await flows.destroy(token);
     await flows.update(token, { csrf: "x", target: { kind: "home" } });
     expect(await flows.get(token)).toBeNull();
@@ -131,7 +138,7 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
     u.pathname = `/${dbName}`;
     dbUrl = u.href;
     store = new PgIdentityStore(dbUrl);
-    expect(await store.migrate()).toEqual(["001_sms_login.sql"]);
+    expect(await store.migrate()).toEqual(["001_sms_login.sql", "002_email_passkeys.sql"]);
     expect(await store.migrate()).toEqual([]);
   });
 
@@ -142,28 +149,34 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
   });
 
   it("bootstraps the first admin once, and only while no admin is connected", async () => {
-    expect(await store.bootstrapAdmin(ADMIN)).toBe("bootstrapped");
-    expect(await store.bootstrapAdmin("+32470000099")).toBe("unchanged");
+    expect(
+      await store.bootstrapAdmin([
+        { method: "email", identifier: ADMIN },
+        { method: "phone", identifier: "+32470000001" },
+      ]),
+    ).toBe("bootstrapped");
+    expect(await store.bootstrapAdmin([{ method: "email", identifier: "x@example.test" }])).toBe("unchanged");
     const [c] = await store.connections();
-    expect(c).toMatchObject({ phone: ADMIN, status: "active", isAdmin: true, lastLoginAt: null });
+    expect(c).toMatchObject({ label: ADMIN, status: "active", isAdmin: true, lastLoginAt: null });
   });
 
   it("a proved number gets one principal and nothing else", async () => {
-    const id = await store.verifiedPhoneLogin(OTHER);
-    expect(await store.verifiedPhoneLogin(OTHER)).toBe(id);
-    expect(await store.principal(id)).toEqual({ id, isAdmin: false, connection: "none", phone: OTHER });
-    const parallel = await Promise.all(Array.from({ length: 5 }, () => store.verifiedPhoneLogin("+32470000003")));
+    const id = await store.verifiedLogin("email", OTHER);
+    expect(await store.verifiedLogin("email", OTHER)).toBe(id);
+    expect(await store.principal(id)).toEqual({ id, isAdmin: false, connection: "none", label: OTHER });
+    expect(await store.verifiedLogin("phone", PHONE)).not.toBe(id);
+    const parallel = await Promise.all(Array.from({ length: 5 }, () => store.verifiedLogin("email", "p@example.test")));
     expect(new Set(parallel).size).toBe(1);
     expect(await store.principal("not-a-uuid")).toBeNull();
   });
 
   it("requests: one pending at a time, decided once; revoke and reconnect", async () => {
     const adminId = (await store.connections())[0]!.principalId;
-    const id = await store.verifiedPhoneLogin(OTHER);
+    const id = await store.verifiedLogin("email", OTHER);
     expect(await store.requestConnection(id)).toBe("created");
     expect(await store.requestConnection(id)).toBe("already_pending");
     const [r] = await store.pendingRequests();
-    expect(r).toMatchObject({ principalId: id, phone: OTHER });
+    expect(r).toMatchObject({ principalId: id, label: OTHER });
     expect(await store.decideRequest(r!.id, "approved", adminId)).toBe(id);
     expect(await store.decideRequest(r!.id, "rejected", adminId)).toBeNull();
     expect((await store.principal(id))!.connection).toBe("active");
@@ -172,13 +185,31 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
     expect(await store.revoke(id, adminId)).toBe(true);
     expect(await store.revoke(id, adminId)).toBe(false);
     expect((await store.principal(id))!.connection).toBe("revoked");
-    expect(await store.addConnection(OTHER, adminId)).toBe(id);
+    expect(await store.addConnection("email", OTHER, adminId)).toBe(id);
     expect((await store.principal(id))!.connection).toBe("active");
 
     const events = (await store.recentAudit(20)).map((a) => a.event);
     expect(events).toEqual(
       expect.arrayContaining(["request.approved", "connection.revoked", "connection.added", "connection.bootstrapped"]),
     );
+  });
+
+  it("stores passkeys per principal: look up, count forward, remove", async () => {
+    const id = await store.verifiedLogin("email", "keys@example.test");
+    const credentialId = "A".repeat(43);
+    await store.addPasskey(id, {
+      credentialId,
+      publicKey: { kty: "OKP", crv: "Ed25519", x: "B".repeat(43) },
+      alg: -8,
+      signCount: 0,
+      transports: ["internal"],
+      name: "Passkey 1",
+    });
+    expect(await store.passkey(credentialId)).toMatchObject({ principalId: id, alg: -8, signCount: 0 });
+    await store.touchPasskey(credentialId, 7);
+    expect((await store.passkey(credentialId))!.signCount).toBe(7);
+    expect(await store.removePasskey(id, credentialId)).toBe(true);
+    expect(await store.passkey(credentialId)).toBeNull();
   });
 
   it("keeps the audit trail append-only and numbers in E.164", async () => {
@@ -208,7 +239,7 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
   let issuer: string;
   let rpBase: string;
   const store = new MemoryStore();
-  const sender = new CapturingSender();
+  const mailer = new CapturingMailer();
 
   class Jar {
     private readonly cookies = new Map<string, string>();
@@ -230,7 +261,7 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
   beforeAll(async () => {
     redis = new Redis(redisDb14(REDIS_URL!));
     await redis.flushdb();
-    await store.bootstrapAdmin(ADMIN);
+    await store.bootstrapAdmin([{ method: "email", identifier: ADMIN }]);
 
     rp = createServer((_req, res) => {
       res.statusCode = 200;
@@ -246,18 +277,17 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
     issuer = `http://localhost:${(op.address() as AddressInfo).port}`;
 
     const log = createLogger((l) => process.env.IDENTITY_TEST_LOG && console.log(l));
-    const sms = createSmsLogin({
+    const signIn = createSignIn({
       issuer,
       homeUrl: `${rpBase}/`,
       otpSecret: "o".repeat(40),
-      allowedPrefixes: ["+32"],
-      dailySmsLimit: 100,
+      email: { mailer, dailyLimit: 100 },
+      ephemeral: new RedisEphemeral(redis),
       store,
       challenges: new RedisOtpChallenges(redis),
       limits: new RedisRateLimiter(redis),
       sessions: new RedisAuthSessions(redis),
       flows: new RedisLoginFlows(redis),
-      sender,
       endProviderSessions: (id) => endSessionsOfAccount(redis, id),
       log,
     });
@@ -279,8 +309,8 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
         { DEMO_SECRET: SECRET },
         { allowLocalhost: true },
       ),
-      loginMethod: "sms",
-      sms,
+      loginMethod: "local",
+      signIn,
       trustProxy: false,
       adapter: redisAdapterFactory(redis),
       accounts: new PrincipalAccounts(store),
@@ -339,7 +369,7 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
   }
 
   /** From /auth to the SMS sign-in, through the code, to wherever the browser ends up. */
-  async function signIn(phone: string, jar: Jar, extra: Record<string, string> = {}) {
+  async function signInAs(email: string, jar: Jar, extra: Record<string, string> = {}) {
     const { verifier, challenge } = pkce();
     let res = await get(authUrl(challenge, extra), jar);
     const interaction = res.headers.get("location")!;
@@ -350,9 +380,9 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
     await redis.del(...(await redis.keys(`${KEY_PREFIX}sms-cd:*`)), "none"); // no resend cooldown between tests
     res = await get(login, jar);
     const csrf = csrfOf(await res.text());
-    res = await post("/login/phone", jar, { csrf, phone });
+    res = await post("/login/start", jar, { csrf, via: "email", identifier: email });
     expect(res.status).toBe(303);
-    res = await post("/login/verify", jar, { csrf, code: sender.lastCode(phone) });
+    res = await post("/login/verify", jar, { csrf, code: mailer.lastCode(email) });
     if (res.status !== 200) return { res, verifier };
     let location = refreshOf(await res.text())!;
     expect(location).toBe(new URL(interaction, issuer).pathname);
@@ -377,7 +407,7 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
 
   it("a connected number: SMS code → tokens for its principal; the next app sign-in needs no code", async () => {
     const jar = new Jar();
-    const { callback, verifier } = await signIn(ADMIN, jar);
+    const { callback, verifier } = await signInAs(ADMIN, jar);
     const code = callback!.searchParams.get("code")!;
     const t = await token({
       grant_type: "authorization_code",
@@ -389,11 +419,11 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
     const me = (await (
       await fetch(`${issuer}/me`, { headers: { authorization: `Bearer ${t.json.access_token}` } })
     ).json()) as { sub: string; roles: string[] };
-    expect(await store.principal(me.sub)).toMatchObject({ phone: ADMIN, connection: "active" });
+    expect(await store.principal(me.sub)).toMatchObject({ label: ADMIN, connection: "active" });
     expect(me.roles).toEqual(["identity.admin"]);
 
     // Single sign-on: a second authorization in the same browser goes straight to the callback.
-    const sent = sender.sent.length;
+    const sent = mailer.sent.length;
     const { challenge } = pkce();
     let res = await get(authUrl(challenge), jar);
     let location = new URL(res.headers.get("location")!, issuer).href;
@@ -402,12 +432,12 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
       location = new URL(res.headers.get("location")!, issuer).href;
     }
     expect(new URL(location).searchParams.get("code")).toBeTruthy();
-    expect(sender.sent.length).toBe(sent);
+    expect(mailer.sent.length).toBe(sent);
   });
 
   it("an unconnected number proves itself but gets no code for the app", async () => {
     const jar = new Jar();
-    const { res } = await signIn(OTHER, jar);
+    const { res } = await signInAs(OTHER, jar);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/login");
     const page = await (await get("/login", jar)).text();
@@ -415,10 +445,10 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
   });
 
   it("revoking ends the provider session and refresh tokens stop working", async () => {
-    const adminId = (await store.connections()).find((c) => c.phone === ADMIN)!.principalId;
-    const userId = await store.addConnection("+32470000005", adminId);
+    const adminId = (await store.connections()).find((c) => c.label === ADMIN)!.principalId;
+    const userId = await store.addConnection("email", "five@example.test", adminId);
     const jar = new Jar();
-    const { callback, verifier } = await signIn("+32470000005", jar, {
+    const { callback, verifier } = await signInAs("five@example.test", jar, {
       scope: "openid offline_access",
       prompt: "consent",
     });

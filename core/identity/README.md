@@ -3,7 +3,7 @@
 The ASafariM OS identity service: the **OpenID Connect provider** for `id.asafarim.site`. Apps on their own domains (first: Testora on `testora.cloud`) sign people in through it. How a person proves who they are is a **login method**, chosen by `IDENTITY_LOGIN_METHOD`:
 
 - **`hub`** (the default): login stays in Hub. The provider hands the browser to Hub with a signed ticket, and Hub posts back a signed assertion ([Login hand-off](#login-hand-off-adr-0002-a2)). Design: ADR 0002 and its Addendum A (private docs, `ventures/asafarim-os/adr/0002-…`).
-- **`sms`**: the service's own sign-in by SMS code, with access granted by an admin ([SMS sign-in](#sms-sign-in)).
+- **`local`**: the service's own sign-in with **email codes and passkeys** (SMS optional), with access granted by an admin ([Local sign-in](#local-sign-in)).
 
 It runs [`oidc-provider`](https://github.com/panva/node-oidc-provider) (major version 9) on Node 24, which runs the TypeScript directly (no build step).
 
@@ -36,9 +36,15 @@ Endpoints: discovery (`/.well-known/openid-configuration`), `/jwks`, `/auth`, `/
 
 Any failure shows a styled error page with a short code (`assertion_replayed`, `account_inactive`, `browser_mismatch`, …) and logs nothing that identifies the person; there is no partial login.
 
-## SMS sign-in
+## Local sign-in
 
-`IDENTITY_LOGIN_METHOD=sms`. The flow:
+`IDENTITY_LOGIN_METHOD=local`, `IDENTITY_SIGN_IN_METHODS=email,passkey` (default; `sms` optional; the first version's `IDENTITY_LOGIN_METHOD=sms` still means SMS only). No third-party service or library is involved: codes are emailed by the service's own SMTP client (`src/smtp.ts`) through your mail server, and passkeys are verified by its own WebAuthn code (`src/webauthn.ts`, `src/cbor.ts`).
+
+- **Email codes** work exactly like the SMS codes below (same storage, limits, single use, no probing), with `IDENTITY_SMTP_*` settings. TLS is always verified; `starttls` refuses a server that doesn't offer it; AUTH is only sent over TLS.
+- **Passkeys:** a signed-in person adds one on **`/account`**; after that "Sign in with a passkey" on `/login` needs no code. The server checks the challenge (single use), the origin (`IDENTITY_ISSUER`), the rpId hash, user presence **and** verification, the signature (ES256, EdDSA, RS256 ≥ 2048 bits) and the sign counter. Attestation is `none`. The page's only script is `/static/passkey.js` (`script-src 'self'`).
+- Passkeys alone can't be the only method: someone has to sign in once with a code to add the first one.
+
+The flow with codes (the same for email and SMS):
 
 **QR code or link → `/connect` → `/login` → mobile number → SMS code → verify → connected? → the app (or `IDENTITY_HOME_URL`)**. If the number isn't connected: **"Request connection" → an admin approves → sign in again**.
 

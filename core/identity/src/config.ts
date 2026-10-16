@@ -6,8 +6,11 @@
 import { readFileSync } from "node:fs";
 import { importJWK, type CryptoKey, type JWK, type KeyObject } from "jose";
 import { loadClients, type ClientConfigFile, type OidcClient } from "./clients.ts";
+import { normalizeEmail } from "./email.ts";
 import { isE164, normalizePhone, parsePrefixes } from "./phone.ts";
 import type { TwilioConfig } from "./sms.ts";
+import type { SmtpConfig, SmtpSecurity } from "./smtp.ts";
+import type { Identity } from "./store.ts";
 
 /** IDENTITY_LOGIN_METHOD=hub (the default): login delegated to Hub (ADR 0002, Addendum A). */
 export interface HubLoginConfig {
@@ -18,17 +21,24 @@ export interface HubLoginConfig {
   hubContinueUrl: string;
 }
 
-/** IDENTITY_LOGIN_METHOD=sms: the service's own SMS sign-in, connections in its own database. */
-export interface SmsLoginConfig {
-  method: "sms";
+/** IDENTITY_LOGIN_METHOD=local: the service's own sign-in (email codes, passkeys, SMS), connections in its own database. */
+export interface LocalLoginConfig {
+  method: "local";
   databaseUrl: string;
   otpSecret: string;
-  allowedPrefixes: string[];
-  dailySmsLimit: number;
   homeUrl: string;
-  /** The first admin's number (E.164), connected only while no admin is. Null when unset. */
-  bootstrapAdminPhone: string | null;
-  sender: { provider: "twilio"; twilio: TwilioConfig } | { provider: "dev-log" };
+  /** The first admin's identities, connected only while no admin is. Empty when unset. */
+  bootstrapAdmin: Identity[];
+  passkeys: boolean;
+  email: {
+    mailer: { kind: "smtp"; smtp: Omit<SmtpConfig, "heloName"> } | { kind: "dev-log" };
+    dailyLimit: number;
+  } | null;
+  sms: {
+    sender: { provider: "twilio"; twilio: TwilioConfig } | { provider: "dev-log" };
+    allowedPrefixes: string[];
+    dailyLimit: number;
+  } | null;
 }
 
 export interface IdentityConfig {
@@ -40,7 +50,7 @@ export interface IdentityConfig {
   cookieKeys: string[];
   clients: OidcClient[];
   trustProxy: boolean;
-  login: HubLoginConfig | SmsLoginConfig;
+  login: HubLoginConfig | LocalLoginConfig;
 }
 
 export class ConfigError extends Error {
@@ -133,12 +143,14 @@ export async function loadConfig(env: Env = process.env): Promise<IdentityConfig
   }
 
   const method = env.IDENTITY_LOGIN_METHOD ?? "hub";
-  if (method !== "hub" && method !== "sms") throw new ConfigError("IDENTITY_LOGIN_METHOD must be hub or sms");
-  const login = method === "sms" ? parseSmsLogin(env, { local }) : await parseHubLogin(env, { local });
+  if (method !== "hub" && method !== "local" && method !== "sms") {
+    throw new ConfigError("IDENTITY_LOGIN_METHOD must be hub or local");
+  }
+  const login = method === "hub" ? await parseHubLogin(env, { local }) : parseLocalLogin(env, { local });
   refuseLoopbackOutsideDevelopment(env, {
     IDENTITY_ISSUER: issuer,
     ...(login.method === "hub" ? { IDENTITY_HUB_CONTINUE_URL: login.hubContinueUrl } : {}),
-    ...(login.method === "sms" ? { IDENTITY_HOME_URL: login.homeUrl } : {}),
+    ...(login.method === "local" ? { IDENTITY_HOME_URL: login.homeUrl } : {}),
   });
 
   const clientsFile = required(env, "IDENTITY_CLIENTS_FILE");
@@ -183,16 +195,31 @@ function integerIn(env: Env, name: string, fallback: number, min: number, max: n
   return n;
 }
 
-/** The SMS login method's settings. Exported for tests; `local` = the issuer is on localhost. */
-export function parseSmsLogin(env: Env, opts: { local: boolean }): SmsLoginConfig {
+const devOnly = (env: Env, local: boolean) => env.NODE_ENV === "development" && local;
+
+/**
+ * The local sign-in's settings. Exported for tests; `local` = the issuer is on localhost.
+ * IDENTITY_LOGIN_METHOD=sms (the first version) still works: it means local with SMS only.
+ */
+export function parseLocalLogin(env: Env, opts: { local: boolean }): LocalLoginConfig {
   const otpSecret = required(env, "IDENTITY_OTP_SECRET");
   if (otpSecret.length < 32) throw new ConfigError("IDENTITY_OTP_SECRET must be at least 32 characters");
 
-  let allowedPrefixes: string[];
-  try {
-    allowedPrefixes = parsePrefixes(env.IDENTITY_SMS_ALLOWED_PREFIXES ?? "+32");
-  } catch {
-    throw new ConfigError("IDENTITY_SMS_ALLOWED_PREFIXES must be a comma-separated list like +32,+31");
+  const rawMethods = env.IDENTITY_SIGN_IN_METHODS ?? (env.IDENTITY_LOGIN_METHOD === "sms" ? "sms" : "email,passkey");
+  const methods = new Set(
+    rawMethods
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean),
+  );
+  for (const m of methods) {
+    if (m !== "email" && m !== "passkey" && m !== "sms") {
+      throw new ConfigError("IDENTITY_SIGN_IN_METHODS must list email, passkey and/or sms");
+    }
+  }
+  if (!methods.has("email") && !methods.has("sms")) {
+    // A passkey is added by someone already signed in, so there must be a first way in.
+    throw new ConfigError("IDENTITY_SIGN_IN_METHODS needs email or sms (passkeys are added after a first sign-in)");
   }
 
   const homeUrl = env.IDENTITY_HOME_URL ?? "https://asafarim.site/";
@@ -205,43 +232,88 @@ export function parseSmsLogin(env: Env, opts: { local: boolean }): SmsLoginConfi
   if (home.protocol !== "https:" && !(opts.local && isLoopbackHost(home.hostname)))
     throw new ConfigError("IDENTITY_HOME_URL must be https");
 
-  let bootstrapAdminPhone: string | null = null;
+  const bootstrapAdmin: Identity[] = [];
+  if (env.IDENTITY_BOOTSTRAP_ADMIN_EMAIL) {
+    const email = normalizeEmail(env.IDENTITY_BOOTSTRAP_ADMIN_EMAIL);
+    if (!email) throw new ConfigError("IDENTITY_BOOTSTRAP_ADMIN_EMAIL must be an email address");
+    bootstrapAdmin.push({ method: "email", identifier: email });
+  }
   if (env.IDENTITY_BOOTSTRAP_ADMIN_PHONE) {
-    bootstrapAdminPhone = normalizePhone(env.IDENTITY_BOOTSTRAP_ADMIN_PHONE);
-    if (!bootstrapAdminPhone || !isE164(bootstrapAdminPhone))
+    const phone = normalizePhone(env.IDENTITY_BOOTSTRAP_ADMIN_PHONE);
+    if (!phone || !isE164(phone))
       throw new ConfigError("IDENTITY_BOOTSTRAP_ADMIN_PHONE must be a full international number (+32…)");
+    bootstrapAdmin.push({ method: "phone", identifier: phone });
   }
 
-  const provider = env.IDENTITY_SMS_PROVIDER ?? "twilio";
-  let sender: SmsLoginConfig["sender"];
-  if (provider === "twilio") {
-    const accountSid = required(env, "IDENTITY_TWILIO_ACCOUNT_SID");
-    if (!/^AC[0-9a-f]{32}$/i.test(accountSid)) throw new ConfigError("IDENTITY_TWILIO_ACCOUNT_SID must look like AC…");
-    sender = {
-      provider: "twilio",
-      twilio: {
-        accountSid,
-        authToken: required(env, "IDENTITY_TWILIO_AUTH_TOKEN"),
-        from: required(env, "IDENTITY_TWILIO_FROM"),
-      },
-    };
-  } else if (provider === "dev-log") {
-    // Codes in the service's own output: development only, never where real people sign in.
-    if (env.NODE_ENV !== "development" || !opts.local)
-      throw new ConfigError("IDENTITY_SMS_PROVIDER=dev-log is only allowed with NODE_ENV=development on localhost");
-    sender = { provider: "dev-log" };
-  } else {
-    throw new ConfigError("IDENTITY_SMS_PROVIDER must be twilio or dev-log");
+  let email: LocalLoginConfig["email"] = null;
+  if (methods.has("email")) {
+    const dailyLimit = integerIn(env, "IDENTITY_EMAIL_DAILY_LIMIT", 500, 1, 100_000);
+    if ((env.IDENTITY_EMAIL_PROVIDER ?? "smtp") === "dev-log") {
+      if (!devOnly(env, opts.local))
+        throw new ConfigError("IDENTITY_EMAIL_PROVIDER=dev-log is only allowed with NODE_ENV=development on localhost");
+      email = { mailer: { kind: "dev-log" }, dailyLimit };
+    } else {
+      const host = required(env, "IDENTITY_SMTP_HOST");
+      const port = integerIn(env, "IDENTITY_SMTP_PORT", 465, 1, 65_535);
+      const security = (env.IDENTITY_SMTP_SECURITY ?? (port === 465 ? "tls" : "starttls")) as SmtpSecurity;
+      if (security !== "tls" && security !== "starttls" && security !== "none")
+        throw new ConfigError("IDENTITY_SMTP_SECURITY must be tls, starttls or none");
+      if (security === "none" && !isLoopbackHost(host))
+        throw new ConfigError("IDENTITY_SMTP_SECURITY=none is only allowed for a loopback host");
+      const user = env.IDENTITY_SMTP_USER;
+      const password = env.IDENTITY_SMTP_PASSWORD;
+      if (Boolean(user) !== Boolean(password))
+        throw new ConfigError("IDENTITY_SMTP_USER and IDENTITY_SMTP_PASSWORD: both or neither");
+      const from = required(env, "IDENTITY_SMTP_FROM");
+      if (!/^[^\r\n]+$/.test(from) || !normalizeEmail(/<([^<>]+)>\s*$/.exec(from)?.[1] ?? from))
+        throw new ConfigError("IDENTITY_SMTP_FROM must be an address or Name <address>");
+      email = {
+        mailer: { kind: "smtp", smtp: { host, port, security, from, ...(user && password ? { user, password } : {}) } },
+        dailyLimit,
+      };
+    }
+  }
+
+  let sms: LocalLoginConfig["sms"] = null;
+  if (methods.has("sms")) {
+    let allowedPrefixes: string[];
+    try {
+      allowedPrefixes = parsePrefixes(env.IDENTITY_SMS_ALLOWED_PREFIXES ?? "+32");
+    } catch {
+      throw new ConfigError("IDENTITY_SMS_ALLOWED_PREFIXES must be a comma-separated list like +32,+31");
+    }
+    const provider = env.IDENTITY_SMS_PROVIDER ?? "twilio";
+    let sender: NonNullable<LocalLoginConfig["sms"]>["sender"];
+    if (provider === "twilio") {
+      const accountSid = required(env, "IDENTITY_TWILIO_ACCOUNT_SID");
+      if (!/^AC[0-9a-f]{32}$/i.test(accountSid))
+        throw new ConfigError("IDENTITY_TWILIO_ACCOUNT_SID must look like AC…");
+      sender = {
+        provider: "twilio",
+        twilio: {
+          accountSid,
+          authToken: required(env, "IDENTITY_TWILIO_AUTH_TOKEN"),
+          from: required(env, "IDENTITY_TWILIO_FROM"),
+        },
+      };
+    } else if (provider === "dev-log") {
+      if (!devOnly(env, opts.local))
+        throw new ConfigError("IDENTITY_SMS_PROVIDER=dev-log is only allowed with NODE_ENV=development on localhost");
+      sender = { provider: "dev-log" };
+    } else {
+      throw new ConfigError("IDENTITY_SMS_PROVIDER must be twilio or dev-log");
+    }
+    sms = { sender, allowedPrefixes, dailyLimit: integerIn(env, "IDENTITY_SMS_DAILY_LIMIT", 200, 1, 100_000) };
   }
 
   return {
-    method: "sms",
+    method: "local",
     databaseUrl: required(env, "IDENTITY_DATABASE_URL"),
     otpSecret,
-    allowedPrefixes,
-    dailySmsLimit: integerIn(env, "IDENTITY_SMS_DAILY_LIMIT", 200, 1, 100_000),
     homeUrl: home.href,
-    bootstrapAdminPhone,
-    sender,
+    bootstrapAdmin,
+    passkeys: methods.has("passkey"),
+    email,
+    sms,
   };
 }

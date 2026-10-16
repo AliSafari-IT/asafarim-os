@@ -4,7 +4,7 @@
  * may use ASafariM), connection requests and the audit trail.
  *
  * Authentication and authorization stay separate here on purpose:
- * `verifiedPhoneLogin` records that someone proved a number and returns their
+ * `verifiedLogin` records that someone proved a number and returns their
  * principal, and grants nothing; `principal(...).connection === "active"` is
  * the one authorization check, read fresh on every use, so a revocation takes
  * effect at the next request.
@@ -19,20 +19,20 @@ export interface Principal {
   id: string;
   isAdmin: boolean;
   connection: ConnectionStatus;
-  /** The principal's phone number (E.164), if it has one. */
-  phone: string | null;
+  /** How the principal is shown: its email, else its phone number; null if it has neither. */
+  label: string | null;
 }
 
 export interface ConnectionRequestRow {
   id: string;
   principalId: string;
-  phone: string | null;
+  label: string | null;
   createdAt: Date;
 }
 
 export interface ConnectionRow {
   principalId: string;
-  phone: string | null;
+  label: string | null;
   status: "active" | "revoked";
   isAdmin: boolean;
   grantedAt: Date;
@@ -57,11 +57,14 @@ export type AuditEvent =
   | "connection.added"
   | "connection.revoked"
   | "connection.bootstrapped"
-  | "admin.denied";
+  | "admin.denied"
+  | "passkey.registered"
+  | "passkey.removed"
+  | "passkey.failed";
 
 export interface AuditEntry {
   event: AuditEvent;
-  method?: "sms";
+  method?: "sms" | "email" | "passkey";
   principalId?: string | null;
   actorId?: string | null;
   /** HMAC of the identifier (never the number itself), for attempts nobody has proved yet. */
@@ -76,15 +79,15 @@ export interface AuditRow {
   event: string;
   principalId: string | null;
   actorId: string | null;
-  phone: string | null;
+  label: string | null;
   detail: Record<string, unknown>;
 }
 
 export type RequestOutcome = "created" | "already_pending" | "already_connected";
 
 export interface IdentityStore {
-  /** Someone proved `phone` (E.164): their principal, created on first proof. Grants nothing. */
-  verifiedPhoneLogin(phone: string): Promise<string>;
+  /** Someone proved this identity (a phone in E.164, a lower-case email): their principal, created on first proof. Grants nothing. */
+  verifiedLogin(method: IdentityMethod, identifier: string): Promise<string>;
   principal(id: string): Promise<Principal | null>;
   requestConnection(principalId: string): Promise<RequestOutcome>;
   hasPendingRequest(principalId: string): Promise<boolean>;
@@ -94,19 +97,51 @@ export interface IdentityStore {
   decideRequest(requestId: string, decision: "approved" | "rejected", actorId: string): Promise<string | null>;
   /** Revoke an active connection. False if there was none. */
   revoke(principalId: string, actorId: string): Promise<boolean>;
-  /** Connect a number (creating its principal if needed); closes its pending request as approved. */
-  addConnection(phone: string, actorId: string): Promise<string>;
+  /** Connect an identity (creating its principal if needed); closes its pending request as approved. */
+  addConnection(method: IdentityMethod, identifier: string, actorId: string): Promise<string>;
   /**
    * The first admin, from IDENTITY_BOOTSTRAP_ADMIN_PHONE: acts ONLY when no admin has an active
-   * connection (a fresh database, or a recovery after every admin lost access), then makes `phone`
+   * connection (a fresh database, or a recovery after every admin lost access), then makes those identities
    * an admin with an active connection. Otherwise it changes nothing.
    */
-  bootstrapAdmin(phone: string): Promise<"bootstrapped" | "unchanged">;
+  bootstrapAdmin(identities: readonly Identity[]): Promise<"bootstrapped" | "unchanged">;
+  addPasskey(principalId: string, passkey: NewPasskeyRow): Promise<void>;
+  passkey(credentialId: string): Promise<PasskeyRow | null>;
+  passkeysOf(principalId: string): Promise<PasskeyRow[]>;
+  /** After a sign-in: the new counter, and when it was used. */
+  touchPasskey(credentialId: string, signCount: number): Promise<void>;
+  removePasskey(principalId: string, credentialId: string): Promise<boolean>;
   audit(entry: AuditEntry): Promise<void>;
   recentAudit(limit: number): Promise<AuditRow[]>;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
+
+export type IdentityMethod = "phone" | "email";
+
+export interface Identity {
+  method: IdentityMethod;
+  identifier: string;
+}
+
+export interface NewPasskeyRow {
+  credentialId: string;
+  publicKey: Record<string, string>;
+  alg: number;
+  signCount: number;
+  transports: string[];
+  name: string;
+}
+
+export interface PasskeyRow extends NewPasskeyRow {
+  principalId: string;
+  createdAt: Date;
+  lastUsedAt: Date | null;
+}
+
+/** The SQL for a principal's label: its email first, else its phone. `$col` is the principal id column. */
+const labelOf = (col: string) =>
+  `(SELECT identifier FROM identities i WHERE i.principal_id = ${col} ORDER BY (i.method = 'email') DESC, i.created_at LIMIT 1)`;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (s: string) => UUID.test(s);
@@ -131,26 +166,26 @@ async function inTransaction<T>(pool: pg.Pool, fn: (c: pg.PoolClient) => Promise
   }
 }
 
-/** The principal for `phone`, created (unverified) if there is none. Call inside a transaction. */
-async function principalForPhone(c: Queryable, phone: string): Promise<string> {
+/** The principal for an identity, created (unverified) if there is none. Call inside a transaction. */
+async function principalFor(c: Queryable, method: IdentityMethod, identifier: string): Promise<string> {
   const found = await c.query<{ principal_id: string }>(
-    "SELECT principal_id FROM identities WHERE method = 'phone' AND identifier = $1 FOR UPDATE",
-    [phone],
+    "SELECT principal_id FROM identities WHERE method = $1 AND identifier = $2 FOR UPDATE",
+    [method, identifier],
   );
   if (found.rows[0]) return found.rows[0].principal_id;
   const created = await c.query<{ id: string }>("INSERT INTO principals DEFAULT VALUES RETURNING id");
   const id = created.rows[0]!.id;
   const inserted = await c.query(
-    `INSERT INTO identities (method, identifier, principal_id) VALUES ('phone', $1, $2)
+    `INSERT INTO identities (method, identifier, principal_id) VALUES ($1, $2, $3)
      ON CONFLICT (method, identifier) DO NOTHING`,
-    [phone, id],
+    [method, identifier, id],
   );
   if (inserted.rowCount === 1) return id;
   // A concurrent first sign-in for the same number won the race: use its principal.
   await c.query("DELETE FROM principals WHERE id = $1", [id]);
   const again = await c.query<{ principal_id: string }>(
-    "SELECT principal_id FROM identities WHERE method = 'phone' AND identifier = $1",
-    [phone],
+    "SELECT principal_id FROM identities WHERE method = $1 AND identifier = $2",
+    [method, identifier],
   );
   return again.rows[0]!.principal_id;
 }
@@ -188,13 +223,13 @@ export class PgIdentityStore implements IdentityStore {
     return migrate(this.pool);
   }
 
-  async verifiedPhoneLogin(phone: string): Promise<string> {
+  async verifiedLogin(method: IdentityMethod, identifier: string): Promise<string> {
     return inTransaction(this.pool, async (c) => {
-      const id = await principalForPhone(c, phone);
+      const id = await principalFor(c, method, identifier);
       await c.query(
         `UPDATE identities SET verified_at = coalesce(verified_at, now()), last_login_at = now()
-         WHERE method = 'phone' AND identifier = $1`,
-        [phone],
+         WHERE method = $1 AND identifier = $2`,
+        [method, identifier],
       );
       return id;
     });
@@ -206,17 +241,15 @@ export class PgIdentityStore implements IdentityStore {
       id: string;
       is_admin: boolean;
       status: "active" | "revoked" | null;
-      phone: string | null;
+      label: string | null;
     }>(
-      `SELECT p.id, p.is_admin, c.status,
-              (SELECT identifier FROM identities i WHERE i.principal_id = p.id AND i.method = 'phone'
-               ORDER BY i.created_at LIMIT 1) AS phone
+      `SELECT p.id, p.is_admin, c.status, ${labelOf("p.id")} AS label
        FROM principals p LEFT JOIN connections c ON c.principal_id = p.id
        WHERE p.id = $1`,
       [id],
     );
     const r = rows[0];
-    return r ? { id: r.id, isAdmin: r.is_admin, connection: r.status ?? "none", phone: r.phone } : null;
+    return r ? { id: r.id, isAdmin: r.is_admin, connection: r.status ?? "none", label: r.label } : null;
   }
 
   async requestConnection(principalId: string): Promise<RequestOutcome> {
@@ -248,39 +281,37 @@ export class PgIdentityStore implements IdentityStore {
     const { rows } = await this.pool.query<{
       id: string;
       principal_id: string;
-      phone: string | null;
+      label: string | null;
       created_at: Date;
     }>(
-      `SELECT r.id, r.principal_id, r.created_at,
-              (SELECT identifier FROM identities i WHERE i.principal_id = r.principal_id AND i.method = 'phone'
-               ORDER BY i.created_at LIMIT 1) AS phone
+      `SELECT r.id, r.principal_id, r.created_at, ${labelOf("r.principal_id")} AS label
        FROM connection_requests r WHERE r.status = 'pending' ORDER BY r.created_at`,
     );
-    return rows.map((r) => ({ id: r.id, principalId: r.principal_id, phone: r.phone, createdAt: r.created_at }));
+    return rows.map((r) => ({ id: r.id, principalId: r.principal_id, label: r.label, createdAt: r.created_at }));
   }
 
   async connections(): Promise<ConnectionRow[]> {
     const { rows } = await this.pool.query<{
       principal_id: string;
-      phone: string | null;
+      label: string | null;
       status: "active" | "revoked";
       is_admin: boolean;
       granted_at: Date;
       revoked_at: Date | null;
       last_login_at: Date | null;
     }>(
-      `SELECT c.principal_id, c.status, c.granted_at, c.revoked_at, p.is_admin, i.identifier AS phone, i.last_login_at
+      `SELECT c.principal_id, c.status, c.granted_at, c.revoked_at, p.is_admin, i.identifier AS label, i.last_login_at
        FROM connections c
        JOIN principals p ON p.id = c.principal_id
        LEFT JOIN LATERAL (
          SELECT identifier, last_login_at FROM identities
-         WHERE principal_id = c.principal_id AND method = 'phone' ORDER BY created_at LIMIT 1
+         WHERE principal_id = c.principal_id ORDER BY (method = 'email') DESC, created_at LIMIT 1
        ) i ON true
        ORDER BY c.status, c.granted_at`,
     );
     return rows.map((r) => ({
       principalId: r.principal_id,
-      phone: r.phone,
+      label: r.label,
       status: r.status,
       isAdmin: r.is_admin,
       grantedAt: r.granted_at,
@@ -324,9 +355,9 @@ export class PgIdentityStore implements IdentityStore {
     });
   }
 
-  async addConnection(phone: string, actorId: string): Promise<string> {
+  async addConnection(method: IdentityMethod, identifier: string, actorId: string): Promise<string> {
     return inTransaction(this.pool, async (c) => {
-      const principalId = await principalForPhone(c, phone);
+      const principalId = await principalFor(c, method, identifier);
       await grant(c, principalId, actorId);
       await c.query(
         `UPDATE connection_requests SET status = 'approved', decided_at = now(), decided_by = $2
@@ -338,7 +369,9 @@ export class PgIdentityStore implements IdentityStore {
     });
   }
 
-  async bootstrapAdmin(phone: string): Promise<"bootstrapped" | "unchanged"> {
+  async bootstrapAdmin(identities: readonly Identity[]): Promise<"bootstrapped" | "unchanged"> {
+    const [first, ...more] = identities;
+    if (!first) return "unchanged";
     return inTransaction(this.pool, async (c) => {
       // Two instances starting together must not both act.
       await c.query("SELECT pg_advisory_xact_lock(7243102)");
@@ -347,12 +380,81 @@ export class PgIdentityStore implements IdentityStore {
          WHERE p.is_admin AND c.status = 'active' LIMIT 1`,
       );
       if (admins.rowCount) return "unchanged";
-      const principalId = await principalForPhone(c, phone);
+      const principalId = await principalFor(c, first.method, first.identifier);
+      // Further identities join the same principal, unless they already belong to someone else.
+      for (const extra of more) {
+        await c.query(
+          `INSERT INTO identities (method, identifier, principal_id) VALUES ($1, $2, $3)
+           ON CONFLICT (method, identifier) DO NOTHING`,
+          [extra.method, extra.identifier, principalId],
+        );
+      }
       await c.query("UPDATE principals SET is_admin = true WHERE id = $1", [principalId]);
       await grant(c, principalId, null);
       await writeAudit(c, { event: "connection.bootstrapped", principalId, detail: { admin: true } });
       return "bootstrapped";
     });
+  }
+
+  async addPasskey(principalId: string, k: NewPasskeyRow): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO passkeys (credential_id, principal_id, public_key, alg, sign_count, transports, name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [k.credentialId, principalId, JSON.stringify(k.publicKey), k.alg, k.signCount, k.transports, k.name],
+    );
+  }
+
+  private static passkeyRow(r: {
+    credential_id: string;
+    principal_id: string;
+    public_key: Record<string, string>;
+    alg: number;
+    sign_count: string | number;
+    transports: string[];
+    name: string;
+    created_at: Date;
+    last_used_at: Date | null;
+  }): PasskeyRow {
+    return {
+      credentialId: r.credential_id,
+      principalId: r.principal_id,
+      publicKey: r.public_key,
+      alg: r.alg,
+      signCount: Number(r.sign_count),
+      transports: r.transports,
+      name: r.name,
+      createdAt: r.created_at,
+      lastUsedAt: r.last_used_at,
+    };
+  }
+
+  async passkey(credentialId: string): Promise<PasskeyRow | null> {
+    const { rows } = await this.pool.query("SELECT * FROM passkeys WHERE credential_id = $1", [credentialId]);
+    return rows[0] ? PgIdentityStore.passkeyRow(rows[0]) : null;
+  }
+
+  async passkeysOf(principalId: string): Promise<PasskeyRow[]> {
+    if (!isUuid(principalId)) return [];
+    const { rows } = await this.pool.query("SELECT * FROM passkeys WHERE principal_id = $1 ORDER BY created_at", [
+      principalId,
+    ]);
+    return rows.map((r) => PgIdentityStore.passkeyRow(r));
+  }
+
+  async touchPasskey(credentialId: string, signCount: number): Promise<void> {
+    await this.pool.query("UPDATE passkeys SET sign_count = $2, last_used_at = now() WHERE credential_id = $1", [
+      credentialId,
+      signCount,
+    ]);
+  }
+
+  async removePasskey(principalId: string, credentialId: string): Promise<boolean> {
+    if (!isUuid(principalId)) return false;
+    const { rowCount } = await this.pool.query("DELETE FROM passkeys WHERE principal_id = $1 AND credential_id = $2", [
+      principalId,
+      credentialId,
+    ]);
+    return (rowCount ?? 0) > 0;
   }
 
   async audit(entry: AuditEntry): Promise<void> {
@@ -365,12 +467,10 @@ export class PgIdentityStore implements IdentityStore {
       event: string;
       principal_id: string | null;
       actor_id: string | null;
-      phone: string | null;
+      label: string | null;
       detail: Record<string, unknown>;
     }>(
-      `SELECT a.at, a.event, a.principal_id, a.actor_id, a.detail,
-              (SELECT identifier FROM identities i WHERE i.principal_id = a.principal_id AND i.method = 'phone'
-               ORDER BY i.created_at LIMIT 1) AS phone
+      `SELECT a.at, a.event, a.principal_id, a.actor_id, a.detail, ${labelOf("a.principal_id")} AS label
        FROM audit_log a ORDER BY a.at DESC, a.id DESC LIMIT $1`,
       [Math.max(1, Math.min(500, Math.trunc(limit)))],
     );
@@ -379,7 +479,7 @@ export class PgIdentityStore implements IdentityStore {
       event: r.event,
       principalId: r.principal_id,
       actorId: r.actor_id,
-      phone: r.phone,
+      label: r.label,
       detail: r.detail,
     }));
   }
