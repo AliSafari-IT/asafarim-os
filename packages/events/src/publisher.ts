@@ -5,6 +5,10 @@
  * after commit, so the event exists exactly when the change that caused it does (no dual write).
  *
  * An undeclared type or an invalid payload is a programming error: it throws before any write.
+ *
+ * Tracing (P6 part 2a): the envelope carries the W3C trace context of the request that published
+ * it, captured HERE, at outbox-write time, so the relay (later, outside the request) sends the
+ * original context. With no context (telemetry off, no active span) nothing is added.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -12,6 +16,7 @@ import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import addFormatsModule from "ajv-formats";
 import { createEvent, type CloudEvent } from "./envelope.ts";
 import { OUTBOX_TABLE } from "./outbox-sql.ts";
+import { traceContextOf, type TraceContext, type TraceContextSource } from "./trace-context.ts";
 
 // ajv-formats is CommonJS with a default export; under NodeNext its default import is the module object.
 const addFormats = ((addFormatsModule as unknown as { default?: typeof addFormatsModule }).default ??
@@ -31,8 +36,13 @@ export interface Queryable {
 export interface PublishOptions {
   /** CloudEvents `subject`: what the event is about inside the app (e.g. the note id). */
   subject?: string;
-  /** W3C traceparent of the request that caused the event. */
+  /**
+   * W3C traceparent of the request that caused the event. Given (with or without `tracestate`), it
+   * replaces what the publisher's `traceContext` would capture, and a malformed one throws.
+   */
   traceparent?: string;
+  /** W3C tracestate, only with `traceparent`. */
+  tracestate?: string;
 }
 
 export class EventValidationError extends Error {
@@ -72,6 +82,12 @@ export interface CreatePublisherOptions {
    * e.g. "./events/notes.note.created.v1.json"). `loadSchemas` reads them from disk.
    */
   schemas: Record<string, object>;
+  /**
+   * Captures the active request's W3C trace context for each event (`activeTraceContext` from
+   * `@asafarim/telemetry`). An invalid value is ignored and a throwing source is ignored: tracing
+   * never fails a publish. Without one, events carry only what `publish` is given.
+   */
+  traceContext?: TraceContextSource;
   /** For tests. */
   now?: () => Date;
 }
@@ -117,18 +133,33 @@ export function createPublisher(opts: CreatePublisherOptions): Publisher {
     }
   }
 
+  /** The context the source gives, validated; undefined when there is none or it is invalid. */
+  function captured(): TraceContext | undefined {
+    if (!opts.traceContext) return undefined;
+    try {
+      return traceContextOf(opts.traceContext());
+    } catch {
+      return undefined;
+    }
+  }
+
   return {
     appId,
     types: [...validators.keys()],
     validate,
     async publish<T>(tx: Queryable, type: string, data: T, o: PublishOptions = {}) {
       validate(type, data);
+      const trace =
+        o.traceparent !== undefined || o.tracestate !== undefined
+          ? { traceparent: o.traceparent, tracestate: o.tracestate }
+          : captured();
       const event = createEvent({
         source: appId,
         type,
         data,
         subject: o.subject,
-        traceparent: o.traceparent,
+        traceparent: trace?.traceparent,
+        tracestate: trace?.tracestate,
         now: opts.now?.(),
       });
       await tx.query(`INSERT INTO ${OUTBOX_TABLE} (id, type, envelope) VALUES ($1, $2, $3)`, [

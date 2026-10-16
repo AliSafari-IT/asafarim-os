@@ -1,16 +1,16 @@
 /**
  * The event envelope (ADR 0001 §5): CloudEvents 1.0, structured JSON mode
  * (https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md), with the W3C
- * `traceparent` carried as a CloudEvents extension attribute (the distributed-tracing extension).
+ * `traceparent` and `tracestate` carried as CloudEvents extension attributes (the distributed-tracing
+ * extension; see trace-context.ts).
  */
+import { TRACEPARENT, isTracestate } from "./trace-context.ts";
 import { ulid } from "./ulid.ts";
 
 /** `<app>.<entity>.<verb>.v<N>`, the same rule as the manifest's event types. */
 export const EVENT_TYPE = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.v[1-9]\d*$/;
 /** An app id, as the manifest allows it: kebab-case, 2–32 characters. */
 export const APP_ID = /^(?=.{2,32}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-/** W3C Trace Context, version 00 (https://www.w3.org/TR/trace-context/#traceparent-header). */
-export const TRACEPARENT = /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/;
 
 export interface CloudEvent<T = unknown> {
   specversion: "1.0";
@@ -27,6 +27,8 @@ export interface CloudEvent<T = unknown> {
   data: T;
   /** W3C traceparent (CloudEvents distributed-tracing extension). */
   traceparent?: string;
+  /** W3C tracestate (CloudEvents distributed-tracing extension); only next to a traceparent. */
+  tracestate?: string;
 }
 
 export interface CreateEventInput<T> {
@@ -36,6 +38,8 @@ export interface CreateEventInput<T> {
   subject?: string;
   data: T;
   traceparent?: string;
+  /** Only with a traceparent. */
+  tracestate?: string;
   /** For tests. */
   now?: Date;
   id?: string;
@@ -43,7 +47,7 @@ export interface CreateEventInput<T> {
 
 export const sourceFor = (appId: string) => `asafarim://${appId}`;
 
-/** Build a CloudEvents 1.0 envelope. Throws on a malformed type, app id, subject or traceparent. */
+/** Build a CloudEvents 1.0 envelope. Throws on a malformed type, app id, subject, traceparent or tracestate. */
 export function createEvent<T>(input: CreateEventInput<T>): CloudEvent<T> {
   if (!APP_ID.test(input.source)) throw new TypeError(`events: "${input.source}" is not an app id`);
   if (!EVENT_TYPE.test(input.type)) throw new TypeError(`events: "${input.type}" must be <app>.<entity>.<verb>.v<N>`);
@@ -56,6 +60,10 @@ export function createEvent<T>(input: CreateEventInput<T>): CloudEvent<T> {
   if (input.traceparent !== undefined && !TRACEPARENT.test(input.traceparent)) {
     throw new TypeError("events: traceparent is not a W3C version-00 traceparent");
   }
+  if (input.tracestate !== undefined) {
+    if (input.traceparent === undefined) throw new TypeError("events: a tracestate needs a traceparent");
+    if (!isTracestate(input.tracestate)) throw new TypeError("events: tracestate is not a W3C tracestate");
+  }
   const now = input.now ?? new Date();
   const event: CloudEvent<T> = {
     specversion: "1.0",
@@ -67,6 +75,7 @@ export function createEvent<T>(input: CreateEventInput<T>): CloudEvent<T> {
     datacontenttype: "application/json",
     data: input.data,
     ...(input.traceparent !== undefined ? { traceparent: input.traceparent } : {}),
+    ...(input.tracestate !== undefined ? { tracestate: input.tracestate } : {}),
   };
   return event;
 }

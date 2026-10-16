@@ -21,7 +21,23 @@ await client.query("COMMIT");
 
 ## The envelope
 
-CloudEvents 1.0, structured JSON mode: `specversion`, `id` (a ULID), `source` (`asafarim://<app-id>`), `type`, `subject`, `time`, `datacontenttype` (`application/json`), `data`, and the W3C `traceparent` as an extension attribute when given. `createEvent` builds one and refuses a type outside the app's namespace or a malformed traceparent.
+CloudEvents 1.0, structured JSON mode: `specversion`, `id` (a ULID), `source` (`asafarim://<app-id>`), `type`, `subject`, `time`, `datacontenttype` (`application/json`), `data`, and the W3C `traceparent` and `tracestate` as extension attributes when there is a trace context. `createEvent` builds one and refuses a type outside the app's namespace, a malformed traceparent or tracestate, or a tracestate without a traceparent.
+
+### Tracing across the bus (P6 part 2a)
+
+The trace context of the request that published an event travels with it (the CloudEvents distributed-tracing extension), so the consumer's handler span joins the publisher's trace:
+
+```ts
+import { activeTraceContext, traceEventHandler } from "@asafarim/telemetry";
+
+const publisher = createPublisher({ manifest, schemas, traceContext: activeTraceContext });
+subscribe(type, traceEventHandler(async (event, tx) => {…}), opts);
+```
+
+- The context is captured by `publish`, at **outbox-write time**, inside the request: the relay sends the row later, outside it, and carries the original context unchanged. An explicit `traceparent` / `tracestate` in `publish`'s options replaces what the source captures.
+- With telemetry off, or no active span, nothing is added: the envelope is byte for byte the one without tracing.
+- Captured and incoming values are validated strictly (`TRACEPARENT`: version `00`, a 32-hex trace id and a 16-hex span id that aren't all zeros, 2-hex flags; `isTracestate`: at most 32 members and 512 characters). An invalid captured value, or a source that throws, is ignored: tracing never fails a publish. `traceContextOf(event)` gives a consumer the valid context, or undefined.
+- The handler's span is a **child** of the publishing span (kind `CONSUMER`, named `<type> process`), not a link: each event has exactly one cause, and its handler runs once (the inbox), so one trace from the request to every consumer is what you want to see. Redeliveries are more child spans of the same parent.
 
 ## The outbox
 
