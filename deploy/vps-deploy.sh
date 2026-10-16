@@ -217,13 +217,12 @@ main() {
   log "Publishing ${site_file} on the shared edge..."
   EDGE_DIR="$edge_dir" bash "${edge_dir}/scripts/edge-deploy-site.sh" asafarim-os "${repo_dir}/${site_file}"
 
-  # 8. Site-only: before the edge cutover the edge only stores the file, so also install it for the Caddy
-  # that serves 443 today (deploy/lib/live-caddy.sh). After the cutover this does nothing.
-  if [[ "$site_only" == true ]]; then
-    log "Publishing ${site_file} on the live Caddy (before the edge cutover)..."
-    publish_live_site "${repo_dir}/${site_file}" \
-      || fatal "the live Caddy did not take ${site_file} (see above). The edge has it; the live Caddy is unchanged or restored."
-  fi
+  # 8. Before the edge cutover the edge only stores the file, so also install it for the Caddy that serves 443
+  # today (deploy/lib/live-caddy.sh), in BOTH modes: the full file is what puts id.asafarim.site live there.
+  # After the cutover this does nothing.
+  log "Publishing ${site_file} on the live Caddy (before the edge cutover)..."
+  publish_live_site "${repo_dir}/${site_file}" \
+    || fatal "the live Caddy did not take ${site_file} (see above). The edge has it; the live Caddy is unchanged or restored."
 
   if [[ "$site_only" == true ]]; then
     log "Done. Check: curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health"

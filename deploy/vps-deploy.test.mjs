@@ -483,11 +483,29 @@ test("full mode still decrypts, checks, starts the whole stack, waits for all th
     "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
     "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
   ]);
-  assert.equal(r.calls.at(-1), `edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os.caddy`);
-  assert.ok(
-    !r.calls.some((c) => c.includes("asafarim-com") || c.includes("caddy reload")),
-    "full mode never touches the live Caddy",
+  assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os.caddy`));
+});
+
+test("full mode, before the cutover: the live Caddy gets the FULL site file (with id.asafarim.site), after the edge", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA], { full: true });
+  assert.equal(r.status, 0, r.stderr);
+  const fullFile = readFileSync(path.join(root, "sites", "asafarim-os.caddy"), "utf8");
+  assert.equal(r.liveSite, fullFile, "sites.local/asafarim-os.caddy is the full file");
+  assert.match(r.liveSite ?? "", /^id\.asafarim\.site \{/m);
+  const edgeAt = r.calls.findIndex((c) => c.startsWith("edge-deploy-site.sh"));
+  const reloadAt = r.calls.indexOf(
+    "docker exec live0caddy01 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
   );
+  assert.ok(edgeAt >= 0 && reloadAt > edgeAt, r.calls.join("\n"));
+});
+
+test("full mode: a live Caddy that refuses the file fails the deploy and leaves the live file unchanged", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA], {
+    full: true,
+    live: { id: "live0caddy01", networks: "edge_net", validate: 1, reload: 0 },
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /the live Caddy did not take sites\/asafarim-os\.caddy/);
   assert.equal(r.liveSite, null);
 });
 
