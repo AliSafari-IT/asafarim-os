@@ -4,14 +4,17 @@ The production stack of ASafariM OS: the identity service and its own Redis, sin
 [#70](https://github.com/AliSafari-IT/asafarim-os/issues/70) `os-site`, the static `asafarim.site` landing page
 (`core/site`), and since [#83](https://github.com/AliSafari-IT/asafarim-os/issues/83) `os-docs`, the Docs app
 (`apps/docs`) at `docs.asafarim.site`. It is part of P2.3
-([#22](https://github.com/AliSafari-IT/asafarim-os/issues/22)), and **the owner deploys it by hand**: nothing in CI
-runs it, and nothing here holds a plaintext secret.
+([#22](https://github.com/AliSafari-IT/asafarim-os/issues/22)). The landing page and Docs deploy **automatically** after
+every green push to main ([Automatic deploy](#automatic-deploy)); identity's full deploy stays **by hand**. Nothing here
+holds a plaintext secret.
 
 | File                            | What it is                                                                                                                                |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `deploy/compose.prod.yml`       | `identity`, `os-redis`, `os-site` and `os-docs`, compose project `asafarim-os`.                                                           |
 | `deploy/vps-deploy.sh`          | The deploy. Run it from the repository folder on the VPS.                                                                                 |
 | `deploy/redeploy.sh`            | `pnpm redeploy`: redeploy the landing page and docs with the newest builds, with no shas to look up.                                      |
+| `deploy/ci-deploy.sh`           | The one command the Deploy workflow's SSH key may run (`deploy <sha>`), as a forced command. It hands over to `redeploy.sh <sha>`.        |
+| `.github/workflows/deploy.yml`  | The Deploy workflow: after CI passes on main, wait for the images, then `deploy <sha>` over SSH.                                          |
 | `deploy/lib/live-caddy.sh`      | `--site-only` before the edge cutover: install the site file for the Caddy that serves 443 today.                                         |
 | `deploy/lib/env-check.sh`       | The check that every variable is filled, by name, never by value.                                                                         |
 | `deploy/rollback.caddy`         | An empty site file: publishing it takes this stack's hosts off the edge.                                                                  |
@@ -121,6 +124,60 @@ docker exec asafarim-com-caddy-1 caddy reload --config /etc/caddy/Caddyfile --ad
 ```
 
 To bring the old placeholder back, revert asafarim-platform#837 and redeploy asafarim-com.
+
+## Automatic deploy
+
+The **Deploy** workflow (`.github/workflows/deploy.yml`) runs `pnpm redeploy` for you, for one exact commit:
+
+1. CI passes on a push to main. A pull request's run, a fork's, or a red or cancelled run never deploys. If main has
+   already moved on, it does nothing: the newer commit deploys after its own CI, so an older commit never lands after a
+   newer one. Only one deploy runs at a time.
+2. It waits, up to 30 minutes, until the site and docs images that commit needs are published (the image workflows run
+   alongside CI), using `deploy/redeploy.sh --dry-run <sha>` on the runner.
+3. It connects to the VPS with its own SSH key and asks for `deploy <sha>`. On the VPS, `deploy/ci-deploy.sh` checks the
+   sha is on `origin/main`, brings the checkout to it under the deploy lock, and runs `deploy/redeploy.sh <sha>`, which
+   runs `vps-deploy.sh --site-only` (all its checks, health waits and the edge publish, as by hand).
+4. It checks `https://asafarim.site/` answers. `docs.asafarim.site` only warns if it doesn't (DNS may not be set up yet).
+
+It deploys the landing page and Docs only. While identity runs in this stack, `--site-only` refuses, so the workflow fails
+safely and changes nothing; the full deploy is by hand.
+
+**Deploy or roll back by hand:** Actions → Deploy → Run workflow. Leave the commit empty for the newest commit on main,
+or give an earlier full sha on main to roll back to it.
+
+### Setup (once)
+
+On the VPS, as the user that runs deploys today (it can run `docker`, owns `/var/repos/asafarim-os` and can read
+`.age/key.txt`):
+
+1. Create a key used for nothing else, with no passphrase:
+   ```bash
+   ssh-keygen -t ed25519 -N "" -C asafarim-os-deploy -f ~/asafarim-os-deploy
+   ```
+2. Allow it to run `ci-deploy.sh` and nothing else: add **one line** to `~/.ssh/authorized_keys`, the content of
+   `~/asafarim-os-deploy.pub` after the options:
+   ```text
+   restrict,command="/var/repos/asafarim-os/deploy/ci-deploy.sh" ssh-ed25519 AAAA... asafarim-os-deploy
+   ```
+   `restrict` turns off port, agent and X11 forwarding and the terminal. Whatever the client asks, sshd runs that script,
+   which accepts only `deploy <sha on origin/main>`.
+3. Make sure the checkout has this commit's `deploy/ci-deploy.sh` (`git -C /var/repos/asafarim-os pull`, or the next
+   `pnpm redeploy`).
+
+In GitHub, Settings → Secrets and variables → Actions (or the `production` environment), add:
+
+| Secret                  | Value                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------- |
+| `OS_DEPLOY_HOST`        | The VPS address.                                                                       |
+| `OS_DEPLOY_USER`        | The user from step 1.                                                                  |
+| `OS_DEPLOY_SSH_KEY`     | The **private** key: the whole of `~/asafarim-os-deploy`. Then delete it from the VPS. |
+| `OS_DEPLOY_KNOWN_HOSTS` | The output of `ssh-keyscan -t ed25519 <host>`, checked against the VPS's own key.      |
+| `OS_DEPLOY_PORT`        | Optional: the SSH port, if it isn't 22.                                                |
+
+Until all four are set, the workflow stops before connecting and names the missing ones. To require an approval
+before each deploy, add a protection rule to the `production` environment (Settings → Environments).
+
+**To turn it off:** disable the Deploy workflow in Actions, or remove the key's line from `authorized_keys`.
 
 ## Networks: who can reach what
 

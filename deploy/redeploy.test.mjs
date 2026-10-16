@@ -133,7 +133,7 @@ test("it deploys: brings the checkout to the newest commit, then runs the newest
 test("a site image that is not published yet stops it, says why, and changes nothing (never an older image)", () =>
   withSetup((env) => {
     const r = run({ ...env, published: `site-${env.c0} docs-${env.c2}` }); // an OLDER site image exists; the newest does not
-    assert.equal(r.status, 1);
+    assert.equal(r.status, 3, "exit code 3 is the one the Deploy workflow waits out");
     assert.match(r.output, /is not published \(yet\)/);
     assert.match(r.output, /'Site image' workflow/);
     assert.equal(r.head, env.c0);
@@ -143,7 +143,7 @@ test("a site image that is not published yet stops it, says why, and changes not
 test("a docs image that is not published yet stops it too, naming the 'Docs image' workflow (#83)", () =>
   withSetup((env) => {
     const r = run({ ...env, published: `site-${env.c1} docs-${env.c0}` });
-    assert.equal(r.status, 1);
+    assert.equal(r.status, 3);
     assert.match(r.output, new RegExp(`docs-${env.c2} is not published \\(yet\\)`));
     assert.match(r.output, /'Docs image' workflow/);
     assert.equal(r.head, env.c0);
@@ -159,14 +159,56 @@ test("a commit that only changes something else moves neither image; a docs chan
     assert.doesNotMatch(r.output, new RegExp(`Newest (site|docs) image from: ${env.c3}`));
   }));
 
-test("anything but --dry-run is refused with the usage line", () =>
+test("anything but [--dry-run] [<full sha>] is refused with the usage line", () =>
   withSetup((env) => {
-    for (const args of [["--yes"], ["--dry-run", "x"]]) {
+    for (const args of [
+      ["--yes"],
+      ["--dry-run", "x"],
+      [env.c1.slice(0, 12)],
+      [env.c1.toUpperCase()],
+      [env.c1, "--dry-run"],
+      ["--dry-run", env.c1, env.c2],
+    ]) {
       const r = run(env, args);
-      assert.equal(r.status, 2, r.output);
-      assert.match(r.output, /usage: deploy\/redeploy\.sh \[--dry-run\]/);
+      assert.equal(r.status, 2, `${args.join(" ")}: ${r.output}`);
+      assert.match(r.output, /usage: deploy\/redeploy\.sh \[--dry-run\] \[<commit>\]/);
     }
     assert.deepEqual(run(env, ["--yes"]).calls, [], "it asked the registry nothing");
+  }));
+
+test("<commit>: the newest images AS OF that commit, not of main's head", () =>
+  withSetup((env) => {
+    // At c1 the docs app had not changed yet: its image is still c0's.
+    const r = run({ ...env, published: `site-${env.c1} docs-${env.c0}` }, ["--dry-run", env.c1]);
+    assert.equal(r.status, 0, r.output);
+    assert.match(r.output, new RegExp(`Commit to deploy: +${env.c1}`));
+    assert.match(r.output, new RegExp(`deploy/vps-deploy\\.sh --site-only ${env.c1} ${env.c1} ${env.c0}`));
+    assert.equal(r.head, env.c0, "a dry run changes nothing");
+  }));
+
+test("<commit>: deploys that commit, not the newest one", () =>
+  withSetup((env) => {
+    const r = run(env, [env.c2]);
+    assert.equal(r.status, 0, r.output);
+    assert.equal(r.head, env.c2);
+    assert.equal(r.calls.at(-1), `vps-deploy --site-only ${env.c2} ${env.c1} ${env.c2} (HEAD ${env.c2})`);
+  }));
+
+test("<commit> that is not on origin/main, or not in the repository at all, is refused and changes nothing", () =>
+  withSetup((env) => {
+    git(env.vps, "checkout", "-q", "-b", "side");
+    const side = commit(env.vps, "side", { "core/site/x.html": "x" });
+    git(env.vps, "checkout", "-q", "--detach", env.c0);
+    for (const [sha, why] of [
+      [side, /is not on origin\/main/],
+      ["0".repeat(40), /is not in this repository/],
+    ]) {
+      const r = run(env, [sha]);
+      assert.equal(r.status, 1, r.output);
+      assert.match(r.output, why);
+      assert.equal(r.head, env.c0);
+      assert.ok(!r.calls.some((c) => c.startsWith("vps-deploy")), "nothing was deployed");
+    }
   }));
 
 test("it is valid bash, runs main() on one last line, and never prints a secret", () => {
