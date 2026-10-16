@@ -190,6 +190,19 @@ test("the Events page lists notes' published type with its schema", async () => 
   await expect(row).toHaveCount(0);
   await page.goto(`${ADMIN}/admin/events?app=${encodeURIComponent("<bad id>")}`);
   await expect(row).toBeVisible();
+
+  // P7.4 part 1: ?q= keyword search over types, app ids and schema text; question words are ignored.
+  await page.goto(`${ADMIN}/admin/events?q=${encodeURIComponent("Which app emits something when a note is created?")}`);
+  await expect(row).toBeVisible();
+  await expect(page.getByTestId("matched-notes.note.created.v1")).toContainText("type");
+  await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue(
+    "Which app emits something when a note is created?",
+  );
+  await page.goto(`${ADMIN}/admin/events?q=author`);
+  await expect(page.getByTestId("matched-notes.note.created.v1")).toHaveText("Matched: schema property");
+  await page.goto(`${ADMIN}/admin/events?q=zzqx`);
+  await expect(row).toHaveCount(0);
+  await expect(page.getByTestId("events-empty")).toContainText("No event type matches");
   await page.close();
 });
 

@@ -1,6 +1,15 @@
 import Link from "next/link";
 import { coreApi } from "@/lib/core-api";
-import { catalogFor, entryFlags, eventsAppFilter, schemaText } from "@/lib/events";
+import {
+  MAX_QUERY_LENGTH,
+  type MatchField,
+  catalogFor,
+  entryFlags,
+  eventsAppFilter,
+  eventsQuery,
+  schemaText,
+  searchCatalog,
+} from "@/lib/events";
 import { requireAdmin } from "@/lib/session";
 import { formatTime } from "@/lib/util";
 
@@ -13,6 +22,13 @@ const SCHEMA_STATUS: Record<string, string> = {
   no_publisher: "no publisher",
 };
 
+const MATCHED: Record<MatchField, string> = {
+  type: "type",
+  app: "app",
+  description: "description",
+  property: "schema property",
+};
+
 export default async function EventsPage({
   searchParams,
 }: {
@@ -21,19 +37,24 @@ export default async function EventsPage({
   const admin = await requireAdmin();
   const params = await searchParams;
   const app = eventsAppFilter(params.app);
+  const q = eventsQuery(params.q);
 
   const api = coreApi(admin.idToken);
   const [listed, all] = await Promise.all([api.apps(), api.events()]);
   // A removed app publishes and subscribes to nothing: not a filter choice.
   const apps = listed.filter((a) => a.state !== "removed");
-  const entries = catalogFor(all, app);
+  const inApp = catalogFor(all, app);
+  // P7.4 part 1: keyword search, best match first; without ?q= the catalog keeps its type order.
+  const hits = q ? searchCatalog(inApp, q) : inApp.map((entry) => ({ entry, matched: [] as MatchField[] }));
+  const entries = hits.map((h) => h.entry);
 
   return (
     <>
       <h2>Events</h2>
       <p className="muted">
         Every event type an installed app publishes or subscribes to: who publishes it, its schema, and who listens.
-        Apps declare these in their manifests; publishers upload the schemas.
+        Apps declare these in their manifests; publishers upload the schemas. Search by words in the type, an app id, or
+        the schema&apos;s descriptions and properties, e.g. &ldquo;order shipped&rdquo;.
       </p>
       <form method="get" className="card row" aria-label="Filter the event catalog">
         <div>
@@ -47,8 +68,19 @@ export default async function EventsPage({
             ))}
           </select>
         </div>
+        <div>
+          <label htmlFor="events-q">Search</label>
+          <input
+            id="events-q"
+            name="q"
+            type="search"
+            defaultValue={q ?? ""}
+            maxLength={MAX_QUERY_LENGTH}
+            placeholder="e.g. order shipped"
+          />
+        </div>
         <button type="submit">Filter</button>
-        {app ? (
+        {app || q ? (
           <Link href="/admin/events" className="muted">
             Clear
           </Link>
@@ -57,9 +89,11 @@ export default async function EventsPage({
 
       {entries.length === 0 ? (
         <p className="muted" data-testid="events-empty">
-          {app
-            ? `${app} publishes and subscribes to no event types.`
-            : "No app publishes or subscribes to any event yet."}
+          {q
+            ? `No event type matches “${q}”${app ? ` among those ${app} publishes or subscribes to` : ""}.`
+            : app
+              ? `${app} publishes and subscribes to no event types.`
+              : "No app publishes or subscribes to any event yet."}
         </p>
       ) : (
         <div className="table-wrap">
@@ -67,6 +101,7 @@ export default async function EventsPage({
             <caption>
               {entries.length} event type{entries.length === 1 ? "" : "s"}
               {app ? ` that ${app} publishes or subscribes to` : ""}
+              {q ? ` matching “${q}”, best match first` : ""}
             </caption>
             <thead>
               <tr>
@@ -77,12 +112,17 @@ export default async function EventsPage({
               </tr>
             </thead>
             <tbody>
-              {entries.map((e) => {
+              {hits.map(({ entry: e, matched }) => {
                 const flags = entryFlags(e);
                 return (
                   <tr key={e.type} data-testid={`event-${e.type}`}>
                     <th scope="row" className="mono">
                       {e.type}
+                      {matched.length > 0 ? (
+                        <div className="muted" data-testid={`matched-${e.type}`}>
+                          Matched: {matched.map((m) => MATCHED[m]).join(", ")}
+                        </div>
+                      ) : null}
                     </th>
                     <td data-testid={`publisher-${e.type}`}>
                       {e.publisher ? (
