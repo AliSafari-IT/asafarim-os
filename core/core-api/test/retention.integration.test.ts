@@ -46,7 +46,6 @@ const OLD = `rold-${run}`; // removed "before backups existed": no backup row
 const NODB = `rnodb-${run}`; // no database at all
 const ALL = [KEEP, FAIL, EARLY, BACK, OLD, NODB];
 const ADMIN_TOKEN = "t".repeat(40);
-const DAY = 86_400_000;
 
 function manifest(id: string, database: "postgres" | "none" = "postgres") {
   return {

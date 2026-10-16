@@ -4,7 +4,18 @@
  * tested on their own. The real pg_dump against a real Postgres is in retention.integration.test.ts.
  */
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  fstatSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -52,9 +63,16 @@ describe("createPgDumpBackups", () => {
     expect(path.dirname(file.path)).toBe(dir);
     expect(path.basename(file.path)).toMatch(/^notes-20261016T120304Z-[0-9a-f]{8}\.dump$/);
     expect(files(dir)).toEqual([path.basename(file.path)]); // no .partial left
-    expect(statSync(file.path).mode & 0o777).toBe(0o600);
     expect(statSync(dir).mode & 0o777).toBe(0o700);
-    const content = readFileSync(file.path);
+    // One open file handle for the mode check and the read, so both look at the same file.
+    const fd = openSync(file.path, "r");
+    let content: Buffer;
+    try {
+      expect(fstatSync(fd).mode & 0o777).toBe(0o600);
+      content = readFileSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     expect(file.sizeBytes).toBe(content.length);
     expect(file.sha256).toBe(createHash("sha256").update(content).digest("hex"));
 
