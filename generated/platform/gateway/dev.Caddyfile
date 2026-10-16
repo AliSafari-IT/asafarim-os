@@ -4,6 +4,8 @@
 # Per app, <id>.localhost: expose:false paths answer 404 here; every other request is checked by core-api
 # (forward_auth → /authz/check: 503 not active, 404 hidden, 401, 403 naming the permission, or 200) and
 # only then proxied to the app. Upstreams come from the environment (the dev scripts write .dev/gateway.env).
+# Trace context (P6): request headers, W3C traceparent and tracestate included, reach both the check and the app
+# unchanged, so the app's spans join the caller's trace. Don't strip them; the gateway records no span of its own.
 {
 	admin off
 	auto_https off
