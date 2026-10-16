@@ -174,8 +174,14 @@ async function writeAudit(c: Queryable, e: AuditEntry): Promise<void> {
 export class PgIdentityStore implements IdentityStore {
   private readonly pool: pg.Pool;
 
-  constructor(connectionString: string) {
+  /**
+   * `onIdleError`: an idle connection failed (the database restarted, a network cut). pg drops that
+   * connection and the next query opens a new one; without a listener the pool's `error` event
+   * would crash the process.
+   */
+  constructor(connectionString: string, onIdleError: (err: Error) => void = () => undefined) {
     this.pool = new pg.Pool({ connectionString, max: 6, idleTimeoutMillis: 30_000 });
+    this.pool.on("error", onIdleError);
   }
 
   migrate(): Promise<string[]> {

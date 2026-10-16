@@ -19,7 +19,9 @@ const log = createLogger();
 
 /** The SMS method's pieces: its database (migrated, first admin bootstrapped) and its sign-in. */
 async function smsLogin(config: SmsLoginConfig, issuer: string, redis: Redis, logger: Logger) {
-  const store = new PgIdentityStore(config.databaseUrl);
+  const store = new PgIdentityStore(config.databaseUrl, (err) =>
+    logger.warn("database.idle_error", { errorCode: (err as { code?: string }).code ?? err.name }),
+  );
   const applied = await store.migrate();
   if (applied.length) logger.info("identity.migrated", { status: applied.join(",") });
   if (config.bootstrapAdminPhone) {

@@ -184,6 +184,7 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
   it("keeps the audit trail append-only and numbers in E.164", async () => {
     await store.audit({ event: "otp.sent", method: "sms", subjectHandle: "h", detail: { n: 1 } });
     const raw = new pg.Pool({ connectionString: dbUrl, max: 1 });
+    raw.on("error", () => undefined); // the final DROP DATABASE … WITH (FORCE) may catch it closing
     try {
       await expect(raw.query("UPDATE audit_log SET event = 'x'")).rejects.toThrow(/append-only/);
       await expect(raw.query("DELETE FROM audit_log")).rejects.toThrow(/append-only/);
