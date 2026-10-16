@@ -96,6 +96,15 @@ describe("local sign-in", () => {
     expect(js.body).toContain("navigator.credentials");
   });
 
+  it("the site root goes to the account page, and from there a signed-out visitor to sign in", async () => {
+    const b = new Browser();
+    const root = await go(b, "GET", "/");
+    expect(root.status).toBe(303);
+    expect(root.location).toBe("/account");
+    expect((await go(b, "GET", "/account")).location).toBe("/login");
+    expect(b.cookies.size).toBe(0);
+  });
+
   it("the QR code's /connect only starts a sign-in", async () => {
     const b = new Browser();
     const res = await go(b, "GET", "/connect");

@@ -7,7 +7,7 @@
  *   NextAuth(asafarimAuthConfig({ issuer, clientId }));  // sign-in through core/identity
  */
 import type { AppManifest } from "@asafarim/app-manifest";
-import { createAccess, type Access } from "./access.ts";
+import { AccessUnavailableError, createAccess, type Access } from "./access.ts";
 import { createConfig, type AppConfig } from "./config.ts";
 import { consoleLogger, registerApp, type RegisterResult, type SdkLogger } from "./register.ts";
 
@@ -40,10 +40,16 @@ export interface Platform {
   registered: Promise<RegisterResult>;
 }
 
-/** An access object for an app that isn't installed: everything is denied. */
+/**
+ * An access object for an app that isn't installed: everything is denied. Its calls throw
+ * `AccessUnavailableError`, the same as an unreachable core-api, so an app's gate answers 503
+ * ("permissions can't be checked") instead of crashing the page with a 500.
+ */
 function notInstalledAccess(): Access {
   const unavailable = async () => {
-    throw new Error("the app isn't installed (ASAFARIM_REGISTRY_CREDENTIAL / CORE_API_URL are not set)");
+    throw new AccessUnavailableError(
+      "the app isn't installed (ASAFARIM_REGISTRY_CREDENTIAL / CORE_API_URL are not set)",
+    );
   };
   return {
     access: unavailable,
