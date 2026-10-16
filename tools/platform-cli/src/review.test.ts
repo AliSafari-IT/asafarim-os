@@ -8,9 +8,11 @@ import {
   globRegex,
   localImports,
   mentionsKey,
+  eventTypesIn,
   resolveImport,
   reviewCommand,
   routeUrl,
+  routeUrlRegex,
   samplePaths,
   sourceFiles,
 } from "./review.ts";
@@ -112,6 +114,25 @@ describe("helpers", () => {
     expect(mentionsKey(`// shop.orders.read`, "shop.orders.read")).toBe(false);
   });
 
+  it("matches route URLs against concrete paths, dynamic segments included", () => {
+    expect(routeUrlRegex("/events/placed").test("/events/placed")).toBe(true);
+    expect(routeUrlRegex("/events/placed").test("/events/placedx")).toBe(false);
+    expect(routeUrlRegex("/events/[kind]").test("/events/placed")).toBe(true);
+    expect(routeUrlRegex("/events/[kind]").test("/events/a/b")).toBe(false);
+    expect(routeUrlRegex("/events/[...p]").test("/events/a/b")).toBe(true);
+    expect(routeUrlRegex("/events/[...p]").test("/events")).toBe(false);
+    expect(routeUrlRegex("/events/[[...p]]").test("/events")).toBe(true);
+    expect(routeUrlRegex("/").test("/")).toBe(true);
+  });
+
+  it("finds event types in the app's own namespace, as whole string literals only", () => {
+    const text = `publish("shop.order.placed.v1"); x = 'shop.order.paid.v2'; y = \`other.order.placed.v1\`;
+      import s from "./events/shop.order.sent.v1.json"; // shop.order.lost.v1
+      z = "shop.orders.read"; w = "shop.order.placed.v1";`;
+    expect(eventTypesIn(text, "shop")).toEqual(["shop.order.placed.v1", "shop.order.paid.v2"]);
+    expect(eventTypesIn(`"my-app.item.made.v1"`, "my-app")).toEqual(["my-app.item.made.v1"]);
+  });
+
   it("resolves the app's own imports and ignores packages", () => {
     const known = new Set(["lib/gate.ts", "lib/api/index.ts", "app/api/x/helper.tsx"]);
     expect(localImports(`import { a } from "@/lib/gate";\nimport b from "./helper";\nimport z from "zod";`)).toEqual([
@@ -134,7 +155,9 @@ describe("helpers", () => {
     put("apps/shop/node_modules/p/index.js", "x");
     put("apps/shop/.next/server.js", "x");
     put("apps/shop/app/page.tsx", "x");
-    expect(sourceFiles(path.join(root, "apps/shop"))).toEqual(["app/page.tsx", "lib/a.ts"]);
+    put("apps/shop/events/schema.js", "x"); // the schema folder at the root is skipped …
+    put("apps/shop/app/events/paid/route.ts", "x"); // … but an events/ route folder is code
+    expect(sourceFiles(path.join(root, "apps/shop"))).toEqual(["app/events/paid/route.ts", "app/page.tsx", "lib/a.ts"]);
   });
 });
 
@@ -215,6 +238,52 @@ describe("platform manifest review", () => {
     put("apps/shop/lib/x.ts", `"shop.orders.write"`);
     put("apps/shop/app/files/[...p]/route.ts", "export function GET() {}");
     expect(kinds()).toEqual(["route-unguarded GET /files/[...p]"]);
+  });
+
+  it("reports an event type the code names in its own namespace that the manifest doesn't publish", () => {
+    writeApp(
+      manifest({
+        events: {
+          publishes: [{ type: "shop.order.placed.v1", schema: "./events/placed.json" }],
+          subscribes: [{ type: "billing.invoice.paid.v1", handler: "/events/invoice-paid" }],
+        },
+      }),
+    );
+    put("apps/shop/events/placed.json", JSON.stringify({ type: "object" }));
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put(
+      "apps/shop/lib/events.ts",
+      `export const PLACED = "shop.order.placed.v1";\nexport const REFUNDED = "shop.order.refunded.v1";\nexport const PAID = "billing.invoice.paid.v1";`,
+    );
+    put("apps/shop/lib/more.ts", `send("shop.order.refunded.v1"); send("shop.cart.emptied.v1");`);
+    put("apps/shop/lib/events.test.ts", `"shop.order.tested.v1"`);
+    const found = json().reviews[0]!.findings as { kind: string; subject: string; file?: string }[];
+    expect(found.map((f) => `${f.kind} ${f.subject} ${f.file}`)).toEqual([
+      "event-not-declared shop.cart.emptied.v1 apps/shop/lib/more.ts",
+      "event-not-declared shop.order.refunded.v1 apps/shop/lib/events.ts",
+    ]);
+  });
+
+  it("reports a subscription with no route serving its handler and no code naming its type", () => {
+    writeApp(
+      manifest({
+        events: {
+          subscribes: [
+            { type: "billing.invoice.paid.v1", handler: "/events/invoice-paid" },
+            { type: "billing.invoice.void.v1", handler: "/events/billing/void" },
+            { type: "crm.lead.won.v1", handler: "/events/lead-won" },
+            { type: "crm.lead.lost.v1", handler: "/events/lead-lost" },
+          ],
+        },
+      }),
+    );
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    // served by an exact route, by a dynamic one, and by code that names the type; the last has nothing
+    put("apps/shop/app/events/invoice-paid/route.ts", `import "@/lib/x";\nexport function POST() {}`);
+    put("apps/shop/app/events/billing/[kind]/route.ts", `import "@/lib/x";\nexport function POST() {}`);
+    put("apps/shop/lib/consumer.ts", `on("crm.lead.won.v1", handle);`);
+    put("apps/shop/lib/consumer.test.ts", `on("crm.lead.lost.v1", handle);`);
+    expect(kinds()).toEqual(["event-handler-missing crm.lead.lost.v1"]);
   });
 
   it("is advisory unless --strict", () => {
