@@ -190,6 +190,11 @@ test("the Events page lists notes' published type with its schema", async () => 
   await expect(row).toHaveCount(0);
   await page.goto(`${ADMIN}/admin/events?app=${encodeURIComponent("<bad id>")}`);
   await expect(row).toBeVisible();
+  // The Apps page links each app to its filtered Events page.
+  await page.goto(`${ADMIN}/admin/apps`);
+  await page.getByRole("link", { name: "Events of Notes" }).click();
+  await expect(page).toHaveURL(/\/admin\/events\?app=notes$/);
+  await expect(row).toBeVisible();
 
   // P7.4 part 1: ?q= keyword search over types, app ids and schema text; question words are ignored.
   await page.goto(`${ADMIN}/admin/events?q=${encodeURIComponent("Which app emits something when a note is created?")}`);

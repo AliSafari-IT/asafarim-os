@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogEntry } from "../lib/core-api";
-import { MAX_QUERY_LENGTH, eventsQuery, queryTerms, schemaTexts, searchCatalog, stem, words } from "../lib/events";
+import {
+  MAX_QUERY_LENGTH,
+  eventsQuery,
+  fieldWords,
+  queryTerms,
+  schemaTexts,
+  searchCatalog,
+  stem,
+  words,
+} from "../lib/events";
 
 const entry = (over: Partial<CatalogEntry> & { type: string }): CatalogEntry => ({
   publisher: null,
@@ -78,6 +87,12 @@ describe("words and stems", () => {
     expect(stem("red")).toBe("red");
   });
 
+  it("keeps a field word as written next to its stem, once", () => {
+    expect(fieldWords(["speed", "notes", "bus"])).toEqual(["spe", "speed", "note", "notes", "bus"]);
+    expect(fieldWords(["shop.order.shipped.v1"])).toEqual(["shop", "order", "shipp", "shipped", "v1"]);
+    expect(fieldWords([])).toEqual([]);
+  });
+
   it("drops question words, unless the query has nothing else", () => {
     expect(queryTerms("Which app emits something when an order ships?")).toEqual(["order", "ship"]);
     expect(queryTerms("which event")).toEqual(["which", "event"]);
@@ -126,6 +141,26 @@ describe("searching the catalog", () => {
     expect(types("note create")).toEqual(["notes.note.created.v1"]);
     expect(types("creation")).toEqual(["notes.note.created.v1"]);
     expect(types("tracking")).toEqual(["shop.order.shipped.v1"]);
+  });
+
+  it("finds a word whose stem is only three letters, in any form", () => {
+    const speed = entry({
+      type: "fleet.truck.speed.v1",
+      publisher: { appId: "fleet", version: "1.0.0", state: "active" },
+      schemaStatus: "provided",
+      schema: { description: "A truck reported its speed.", properties: { named: { type: "string" } } },
+    });
+    const all = [...catalog, speed];
+    for (const q of ["speed", "speeds", "speeding", "speedy truck"])
+      expect(
+        searchCatalog(all, q).map((h) => h.entry.type),
+        q,
+      ).toEqual(["fleet.truck.speed.v1"]);
+    // "named" stems to "nam": "names" and "naming" find it as a property.
+    for (const q of ["names", "naming", "named"])
+      expect(searchCatalog(all, q)[0], q).toMatchObject({ entry: speed, matched: ["property"] });
+    // Unrelated words still miss.
+    expect(searchCatalog(all, "spending")).toEqual([]);
   });
 
   it("needs every word, and finds nothing for nothing", () => {
