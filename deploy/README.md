@@ -139,8 +139,10 @@ The **Deploy** workflow (`.github/workflows/deploy.yml`) runs `pnpm redeploy` fo
    runs `vps-deploy.sh --site-only` (all its checks, health waits and the edge publish, as by hand).
 4. It checks `https://asafarim.site/` answers. `docs.asafarim.site` only warns if it doesn't (DNS may not be set up yet).
 
-It deploys the landing page and Docs only. While identity runs in this stack, `--site-only` refuses, so the workflow fails
-safely and changes nothing; the full deploy is by hand.
+It never starts identity. Once identity runs in this stack, `deploy/redeploy.sh` sees it and does the **full** deploy
+instead (with the newest identity image, which must be published too), so a push to main keeps `id.asafarim.site` on the
+edge. To put identity live the first time, run `deploy/redeploy.sh --with-identity` on the VPS (after "Before the first
+deploy" below); add `--dry-run` first to see the shas it picks.
 
 **Deploy or roll back by hand:** Actions → Deploy → Run workflow. Leave the commit empty for the newest commit on main,
 or give an earlier full sha on main to roll back to it.

@@ -100,16 +100,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The Site image and Docs image workflows start with CI and may still be building. redeploy.sh exits 3 for "not
-      # published (yet)" only: that is waited out (up to 30 minutes); any other failure stops here.
-      - name: Wait for the site and docs images
+      # The Site, Docs and Identity image workflows start with CI and may still be building. redeploy.sh exits 3 for "not
+      # published (yet)" only: that is waited out (up to 30 minutes); any other failure stops here. --with-identity
+      # waits for the identity image too, which the VPS needs once identity runs there (it only checks, on the runner).
+      - name: Wait for the site, docs and identity images
         if: steps.pick.outputs.deploy == 'true'
         env:
           SHA: ${{ steps.pick.outputs.sha }}
         run: |
           set -uo pipefail
           for attempt in $(seq 1 60); do
-            out="$(deploy/redeploy.sh --dry-run "$SHA" 2>&1)"
+            out="$(deploy/redeploy.sh --with-identity --dry-run "$SHA" 2>&1)"
             code=$?
             if [[ $code -eq 0 ]]; then
               echo "$out"
@@ -124,7 +125,7 @@ jobs:
             sleep 30
           done
           echo "$out"
-          echo "::error::An image was still not published after 30 minutes. Check the Site image and Docs image runs. Nothing was deployed."
+          echo "::error::An image was still not published after 30 minutes. Check the Site image, Docs image and Identity image runs. Nothing was deployed."
           exit 1
 
       - name: Check the deploy secrets
