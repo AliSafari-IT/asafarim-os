@@ -8,6 +8,7 @@
  *                                      label and recorded in external-apps/<id>/ for `platform sync`
  *   platform app activate <id>
  *   platform app deactivate <id>
+ *   (remove, purge and retention: retention.ts, with the same adminEndpoint)
  *
  * CORE_API_URL (default http://localhost:4020) and CORE_API_ADMIN_TOKEN come
  * from the environment; locally they fall back to `.dev/core-api.env`, which
