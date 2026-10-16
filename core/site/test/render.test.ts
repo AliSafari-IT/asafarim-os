@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseProgress, type Progress } from "../src/progress.ts";
-import { DESCRIPTION, TITLE, escapeHtml, formatDate, renderPage } from "../src/render.ts";
+import { isAllowedLink, parseProgress, type Progress } from "../src/progress.ts";
+import { APP_LINKS, DESCRIPTION, TITLE, escapeHtml, formatDate, renderPage } from "../src/render.ts";
 
 const progress: Progress = parseProgress({
   updated: "2026-10-10",
@@ -43,10 +43,18 @@ describe("renderPage", () => {
   it("has no scripts, no inline styles and no third-party assets (the CSP allows none)", () => {
     expect(html).not.toMatch(/<script|\sstyle=|<style|\son[a-z]+=/i);
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
-      expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|asafarim\.site)\//);
+      expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|((docs|id)\.)?asafarim\.site)\//);
     }
     // Stylesheet and icon are this origin's own; only the canonical link names a full URL.
     expect(html).not.toMatch(/<link rel="(?!canonical")[^"]+" [^>]*href="https?:/);
+  });
+
+  it("has a top bar with the way to sign in and to the docs, on allowed hosts", () => {
+    const nav = /<nav class="topbar" aria-label="Main">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
+    expect(nav).toContain('<a href="https://docs.asafarim.site/">Docs</a>');
+    expect(nav).toContain('<a href="https://id.asafarim.site/login" class="btn btn-small">Sign in</a>');
+    for (const link of Object.values(APP_LINKS)) expect(isAllowedLink(link.href)).toBe(true);
+    expect(html).toMatch(/Request connection/);
   });
 
   it("frames the OS as a new base platform, not a migration", () => {

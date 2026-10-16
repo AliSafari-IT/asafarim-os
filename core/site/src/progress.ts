@@ -45,7 +45,13 @@ export interface Progress {
 }
 
 /** The only hosts the page links to. The smoke test checks the rendered page against the same list. */
-export const ALLOWED_LINK_HOSTS: readonly string[] = ["github.com", "asafarim.com"];
+export const ALLOWED_LINK_HOSTS: readonly string[] = [
+  "github.com",
+  "asafarim.com",
+  // The OS's own apps, linked from the top bar (render.ts, APP_LINKS).
+  "docs.asafarim.site",
+  "id.asafarim.site",
+];
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const SCREENSHOT_FILE = /^[a-z0-9][a-z0-9-]*\.png$/;
