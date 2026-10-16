@@ -159,10 +159,10 @@ async function call<T>(idToken: string, method: string, path: string, body?: obj
   } catch {
     throw new CoreApiError(0, "unreachable", "core-api isn't reachable right now.");
   }
-  const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+  const payload = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
   if (!res.ok)
-    throw new CoreApiError(res.status, body.error ?? "error", body.message ?? `core-api answered ${res.status}`);
-  return body as T;
+    throw new CoreApiError(res.status, payload.error ?? "error", payload.message ?? `core-api answered ${res.status}`);
+  return payload as T;
 }
 
 export function coreApi(idToken: string) {
