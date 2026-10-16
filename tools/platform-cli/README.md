@@ -115,8 +115,7 @@ findings, `--json` prints them as JSON, and naming ids reviews only those apps.
 Runtime source means the app folder without `test/`, `e2e/`, `fixtures/`, `events/`, `node_modules/`, `.next/`,
 `*.test.*`, `*.spec.*`, `*.d.ts` and the manifest itself. Auth.js's endpoints under `/api/auth/` and the SDK's
 session hand-off (`createSessionHandler`) are sign-in plumbing, not findings. A text match can't prove a check runs
-on every path, so `route-unguarded` reads "possibly". A fresh `app new` reports one finding: its placeholder
-`<id>.read` permission, which the template declares but doesn't check yet.
+on every path, so `route-unguarded` reads "possibly". A fresh `app new` reports no findings.
 
 ## Generators
 
