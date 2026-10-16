@@ -119,7 +119,8 @@ main() {
 
     # 3. Every variable the example lists must be filled. The failure names it; it never shows a value.
     log "Checking the environment (names only)..."
-    require_env_vars .env.identity core/identity/.env.production.example \
+    # Which names depends on IDENTITY_LOGIN_METHOD: hub needs the Hub hand-off, local its own database and SMTP.
+    require_identity_env .env.identity core/identity/.env.production.example \
       || fatal "fill the variables named above in core/identity/.env.production, re-encrypt it, commit the .age file, and deploy that commit."
 
     # 4. What this stack cannot create for itself.

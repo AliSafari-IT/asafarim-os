@@ -110,6 +110,74 @@ test("the real example lists the five required variables, and a filled file pass
   }
 });
 
+/** Run require_identity_env on an env file and the real identity example; returns { status, output }. */
+function identityCheck(envText) {
+  const dir = mkdtempSync(path.join(tmpdir(), "env-check-"));
+  try {
+    writeFileSync(path.join(dir, "env"), envText);
+    const run = spawnSync(
+      "bash",
+      [path.join(root, "deploy/test-fixtures/run-identity-env-check.sh"), path.join(dir, "env"), realExample],
+      { encoding: "utf8" },
+    );
+    return { status: run.status, output: `${run.stdout}${run.stderr}` };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const env = (names) => names.map((n) => `${n}=stand-in-${n}`).join("\n") + "\n";
+const HUB = [
+  "IDENTITY_ACCOUNTS_DATABASE_URL",
+  "IDENTITY_OIDC_JWKS",
+  "IDENTITY_COOKIE_KEYS",
+  "IDENTITY_HANDOFF_PRIVATE_JWK",
+  "IDENTITY_HUB_PUBLIC_JWK",
+];
+const LOCAL = ["IDENTITY_OIDC_JWKS", "IDENTITY_COOKIE_KEYS", "IDENTITY_DATABASE_URL", "IDENTITY_OTP_SECRET"];
+const SMTP = ["IDENTITY_SMTP_HOST", "IDENTITY_SMTP_FROM"];
+
+test("identity, hub (the default): the example's variables, as before", () => {
+  assert.equal(identityCheck(env(HUB)).status, 0);
+  assert.equal(identityCheck(`IDENTITY_LOGIN_METHOD=hub\n${env(HUB)}`).status, 0);
+  const missing = identityCheck(env(HUB.slice(1)));
+  assert.equal(missing.status, 1);
+  assert.match(missing.output, /IDENTITY_ACCOUNTS_DATABASE_URL/);
+});
+
+test("identity, local (email and passkeys): no Hub variables; its own database, the code secret and SMTP", () => {
+  const ok = identityCheck(`IDENTITY_LOGIN_METHOD=local\n${env([...LOCAL, ...SMTP])}`);
+  assert.equal(ok.status, 0, ok.output);
+  const empty = identityCheck("IDENTITY_LOGIN_METHOD=local\n");
+  assert.equal(empty.status, 1);
+  for (const name of [...LOCAL, ...SMTP]) assert.match(empty.output, new RegExp(name));
+  for (const name of ["IDENTITY_ACCOUNTS_DATABASE_URL", "IDENTITY_HANDOFF_PRIVATE_JWK", "IDENTITY_HUB_PUBLIC_JWK"])
+    assert.doesNotMatch(empty.output, new RegExp(name), `${name} is not needed with local`);
+});
+
+test("identity, local without email: SMTP is not needed; sms needs Twilio", () => {
+  const sms = identityCheck(`IDENTITY_LOGIN_METHOD=local\nIDENTITY_SIGN_IN_METHODS=sms,passkey\n${env(LOCAL)}`);
+  assert.equal(sms.status, 1);
+  assert.match(sms.output, /IDENTITY_TWILIO_ACCOUNT_SID/);
+  assert.doesNotMatch(sms.output, /IDENTITY_SMTP/);
+  const twilio = ["IDENTITY_TWILIO_ACCOUNT_SID", "IDENTITY_TWILIO_AUTH_TOKEN", "IDENTITY_TWILIO_FROM"];
+  const legacy = identityCheck(`IDENTITY_LOGIN_METHOD=sms\n${env([...LOCAL, ...twilio])}`);
+  assert.equal(legacy.status, 0, legacy.output);
+});
+
+test("identity: an unknown login method stops the check, naming the variable and never its value", () => {
+  const result = identityCheck(`IDENTITY_LOGIN_METHOD=s3cr3t-typo\n${env(HUB)}`);
+  assert.equal(result.status, 1);
+  assert.match(result.output, /IDENTITY_LOGIN_METHOD/);
+  assert.doesNotMatch(result.output, /s3cr3t/);
+});
+
+test("identity: a failure never prints a value", () => {
+  const result = identityCheck("IDENTITY_LOGIN_METHOD=local\nIDENTITY_OIDC_JWKS=s3cr3t-jwks\n");
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.output, /s3cr3t/);
+});
+
 test("the docs example requires AUTH_SECRET only, for now; the app's later secrets are listed commented out (#83)", () => {
   const text = readFileSync(docsExample, "utf8");
   assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), ["AUTH_SECRET"]);
@@ -137,7 +205,7 @@ test("the steps run in order: reset, decrypt, env check, networks, pull, up, rea
   const order = [
     "git reset --hard",
     "age -d -i .age/key.txt core/identity/.env.production.age",
-    "require_env_vars .env.identity core/identity/.env.production.example",
+    "require_identity_env .env.identity core/identity/.env.production.example",
     "docker network inspect identity_db",
     '"${compose[@]}" pull',
     '"${compose[@]}" up -d',
