@@ -409,3 +409,23 @@ test("identity and os-redis are never on os_core", () => {
   assert.ok(!networkNames(coreConfig.services.identity).includes("os_core"));
   assert.ok(!networkNames(coreConfig.services["os-redis"]).includes("os_core"));
 });
+
+test("the README's stop command renders: every image tag it needs is set, with and without the core profile", () => {
+  const readme = readFileSync(path.join(root, "deploy", "README.md"), "utf8");
+  const line = readme
+    .split("\n")
+    .find((l) => l.includes("docker compose -p asafarim-os") && l.trim().endsWith(" down"));
+  assert.ok(line, "the Rollback section's `down` command was not found");
+  const vars = Object.fromEntries([...line.matchAll(/\b([A-Z_]+)=(\S+)/g)].map((m) => [m[1], m[2]]));
+  for (const profiles of [vars.COMPOSE_PROFILES ?? "", ""]) {
+    const r = render({
+      IMAGE_TAG: "",
+      SITE_IMAGE_TAG: "",
+      DOCS_IMAGE_TAG: "",
+      CORE_API_IMAGE_TAG: "",
+      ...vars,
+      COMPOSE_PROFILES: profiles,
+    });
+    assert.equal(r.status, 0, `profiles '${profiles}': ${r.stderr}`);
+  }
+});

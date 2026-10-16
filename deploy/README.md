@@ -195,7 +195,7 @@ waits for it like the others.
    `core/core-api/.env.production.age`, on a branch, and merge it with a pull request. The automatic deploy (identity
    runs, so it is the full deploy) starts `os-postgres` and `os-core-api` and waits for `/readyz`.
 2. On the VPS, in `/var/repos/asafarim-os`: `deploy/core-api/admin.sh install docs`. It writes docs's one-time
-   credential to `.core-api-install-docs.env` (mode 600), never to the screen.
+   credential to `.env.core-api-install-docs` (mode 600), never to the screen.
 3. Copy that file's lines into `apps/docs/.env.production` (`pnpm env:decrypt:production` first), re-encrypt, and merge
    the `.age` file with a pull request. The deploy restarts docs with its credential.
 4. On the VPS: `deploy/core-api/admin.sh activate docs`. docs registers on its next start (it retries), which
@@ -299,10 +299,13 @@ Afterwards: `curl -fsS https://id.asafarim.site/.well-known/openid-configuration
    ```
 2. Stop the stack. The tag only has to be non-empty here; `down` does not pull anything:
    ```bash
-   IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml down
+   COMPOSE_PROFILES=core IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback CORE_API_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml down
    ```
-3. **The volumes stay** (do not add `-v`): Redis's data in `os_redis_data` is kept, and `.env.identity` and `.env.docs`
-   stay on disk (mode 600; delete them yourself if you want them gone).
+   `COMPOSE_PROFILES=core` also stops `os-core-api` and `os-postgres` when they run (it needs `.env.core-api` to exist,
+   which it does once core-api has been deployed; without core-api, leave `COMPOSE_PROFILES=core` out).
+3. **The volumes stay** (do not add `-v`): Redis's data in `os_redis_data`, the OS's Postgres in `os_pg_data` and
+   core-api's backups in `os_core_api_backups` are kept, and `.env.identity`, `.env.docs` and `.env.core-api` stay on
+   disk (mode 600; delete them yourself if you want them gone).
 
 To go back to an **earlier image** instead, run the deploy again with that image's commit as `<image-commit>`.
 To go forward again after a rollback, run the deploy again.

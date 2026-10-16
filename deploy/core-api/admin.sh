@@ -5,7 +5,7 @@
 # printed. Run from the repository folder (normally /var/repos/asafarim-os).
 #
 #   deploy/core-api/admin.sh install <app>       install apps/<app>/platform.app.json: writes the app's one-time
-#                                                credential to .core-api-install-<app>.env (mode 600), never to the screen
+#                                                credential to .env.core-api-install-<app> (mode 600), never to the screen
 #   deploy/core-api/admin.sh activate <app>      installed/inactive -> active
 #   deploy/core-api/admin.sh grant <role> <subject>    e.g. grant docs.owner <your account id from id.asafarim.site/account>
 #   deploy/core-api/admin.sh grants <subject>    the roles a subject holds
@@ -65,19 +65,20 @@ PY
     install)
       (($# == 2)) || fatal "$usage"
       app_id "$2"
-      local manifest="apps/$2/platform.app.json" out=".core-api-install-$2.env"
+      local manifest="apps/$2/platform.app.json" out=".env.core-api-install-$2"
       [[ -f "$manifest" ]] || fatal "${manifest} is not in this checkout."
       [[ ! -e "$out" ]] || fatal "${out} already exists: $2 was installed from here before. Use it, or remove it if it is stale."
       call POST "/admin/v1/apps/$2/install" "$manifest"
       ok
       # The credential and the database URL are shown once by core-api: keep them in a private file, not on screen.
-      ( umask 077 && python3 -c '
+      # noclobber: the redirect creates the file or fails if it exists (O_EXCL), in one step.
+      ( set -o noclobber && umask 077 && python3 -c '
 import json, sys
 d = json.loads(sys.stdin.read())
 print("ASAFARIM_REGISTRY_CREDENTIAL=" + d["credential"])
 if d.get("database") and d["database"].get("url"):
     print("DATABASE_URL=" + d["database"]["url"])
-' <<<"$RESPONSE_BODY" > "$out" )
+' <<<"$RESPONSE_BODY" > "$out" ) || fatal "could not write ${out}. core-api has installed $2: its credential was shown only once, so ask core-api to rotate it (remove and install again) if the file is lost."
       echo "Installed $2 (state: installed). Its one-time credential is in ${out} (mode 600)."
       echo "Next: copy those lines into apps/$2/.env.production (pnpm env:decrypt:production first), run"
       echo "pnpm env:encrypt:production, open a PR with apps/$2/.env.production.age, merge it, then:"
