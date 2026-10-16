@@ -1,6 +1,7 @@
 import { Launcher } from "@asafarim/app-sdk/react";
 import { signInAction, signOutAction } from "./actions";
 import { auth } from "@/lib/auth";
+import { describeAccess } from "@/lib/gate";
 import { getPlatform } from "@/lib/platform";
 
 export const dynamic = "force-dynamic";
@@ -27,9 +28,14 @@ export default async function Home() {
 
   // The apps this person can open (active, and they hold a role or it is public), decided by core-api.
   // A launcher that can't be loaded is left out: it must never break the page.
-  const apps = await getPlatform()
-    .access.launcher(subject)
-    .catch(() => []);
+  const [apps, access] = await Promise.all([
+    getPlatform()
+      .access.launcher(subject)
+      .catch(() => []),
+    describeAccess(subject),
+  ]);
+  // What the app shows is decided by the permission core-api grants, never by the sign-in alone.
+  const canRead = access.state === "active" && access.permissions.includes("{{id}}.read");
 
   return (
     <main>
@@ -48,6 +54,25 @@ export default async function Home() {
       </header>
 
       <Launcher apps={apps} current="{{id}}" label="Your apps" />
+
+      {!access.available ? (
+        <div className="card" data-testid="state">
+          Permissions can&apos;t be checked right now (core-api is unreachable).
+        </div>
+      ) : access.state !== "active" ? (
+        <div className="card" data-testid="state">
+          This app is <strong>{access.state}</strong>. An admin has to activate it.
+        </div>
+      ) : canRead ? (
+        <div className="card" data-testid="content">
+          <p>Welcome to {{name}}.</p>
+        </div>
+      ) : (
+        <div className="card" data-testid="no-read">
+          Opening {{name}} needs the permission <code>{{id}}.read</code>. Ask an admin for the <code>{{id}}.user</code>{" "}
+          role.
+        </div>
+      )}
     </main>
   );
 }

@@ -72,6 +72,8 @@ describe("scaffoldApp", () => {
       "app/page.tsx",
       "app/health/live/route.ts",
       "app/health/ready/route.ts",
+      "app/api/hello/route.ts",
+      "lib/gate.ts",
       "test/manifest.test.ts",
     ]) {
       expect(written).toContain(expected);
@@ -87,8 +89,16 @@ describe("scaffoldApp", () => {
     expect(read("app/page.tsx")).toContain('from "@asafarim/app-sdk/react"');
     expect(read("app/page.tsx")).toContain('current="demo-hello"');
     expect(read("instrumentation.ts")).toContain(
-      "registerTelemetry({ appId: manifest.id, version: manifest.version })",
+      "installShutdownFlush(registerTelemetry({ appId: manifest.id, version: manifest.version }))",
     );
+  });
+
+  it("gates its example route and its page on the app's own read permission", () => {
+    scaffoldApp(root, { id: "demo-hello" });
+    const read = (f: string) => readFileSync(path.join(root, "apps/demo-hello", f), "utf8");
+    expect(read("app/api/hello/route.ts")).toContain('gate("demo-hello.read")');
+    expect(read("app/page.tsx")).toContain('access.permissions.includes("demo-hello.read")');
+    expect(read("lib/gate.ts")).toContain("platform.access.require(session, permission, { token })");
   });
 
   it("leaves no placeholder behind in any file", () => {
