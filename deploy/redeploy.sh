@@ -32,6 +32,11 @@
 # .github/workflows/identity-image.yml), its image must be published too, and it hands over to
 # `deploy/vps-deploy.sh <commit> <identity-image-commit> <site-image-commit> <docs-image-commit>`. Without identity
 # running and without the flag it never starts identity: the first identity deploy is always the owner's decision.
+#
+# core-api: in the full deploy, once the commit has core/core-api/.env.production.age, <core-api-image-commit> is found
+# the same way (the paths of .github/workflows/core-api-image.yml), its image must be published too, and it is passed
+# as vps-deploy.sh's fifth sha (vps-deploy.sh then starts os-postgres and os-core-api). Without that file nothing
+# changes. A site-only deploy never involves core-api.
 # It holds no secret and prints none. Rollback: deploy/README.md.
 set -euo pipefail
 
@@ -41,6 +46,8 @@ SITE_IMAGE_PATHS=("core/site/**" "packages/app-manifest/schema/**" ".github/work
 DOCS_IMAGE_PATHS=("apps/docs/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/docs-image.yml")
 # The inputs of the identity image: the same list as `on.push.paths` in .github/workflows/identity-image.yml.
 IDENTITY_IMAGE_PATHS=("core/identity/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/identity-image.yml")
+# The inputs of the core-api image: the same list as `on.push.paths` in .github/workflows/core-api-image.yml.
+CORE_API_IMAGE_PATHS=("core/core-api/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/core-api-image.yml")
 IMAGE_REPO="${REDEPLOY_IMAGE_REPO:-ghcr.io/alisafari-it/asafarim-os}"
 
 # Everything lives in main(), called on ONE line at the very end: the reset in step 4 can replace this very file
@@ -115,15 +122,25 @@ main() {
     log "Newest identity image from: ${identity_commit}"
   fi
 
+  # core-api: part of the full deploy once its encrypted env is committed (vps-deploy.sh decides the same way).
+  local core_api_commit=""
+  if [[ "$full" == true ]] && git cat-file -e "${commit}:core/core-api/.env.production.age" 2>/dev/null; then
+    core_api_commit="$(git log -1 --format=%H "$commit" -- "${CORE_API_IMAGE_PATHS[@]}")"
+    [[ "$core_api_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "no commit on origin/main changed the core-api image's inputs."
+    log "core-api is part of this deploy. Newest core-api image from: ${core_api_commit}"
+  fi
+
   # 3. Never deploy an older image than the newest one, quietly.
   local image workflow sha
   local -a images=("${IMAGE_REPO}:site-${site_commit}" "${IMAGE_REPO}:docs-${docs_commit}")
   [[ "$full" == true ]] && images+=("${IMAGE_REPO}:identity-${identity_commit}")
+  [[ -n "$core_api_commit" ]] && images+=("${IMAGE_REPO}:core-api-${core_api_commit}")
   for image in "${images[@]}"; do
     sha="${image##*-}"
     workflow="Site image"
     [[ "${image##*:}" == docs-* ]] && workflow="Docs image"
     [[ "${image##*:}" == identity-* ]] && workflow="Identity image"
+    [[ "${image##*:}" == core-api-* ]] && workflow="Core API image"
     if ! docker manifest inspect "$image" >/dev/null 2>&1; then
       # Exit code 3, not 1: "not published (yet)" is the one failure the Deploy workflow waits out.
       echo "FATAL: ${image} is not published (yet). The '${workflow}' workflow may still be building it: check its run for ${sha:0:12} on GitHub, then run this again. If it failed there, fix that first. (If the build is done, the VPS may not be able to reach ghcr.io: run 'docker login ghcr.io' if the package is private.) Nothing changed." >&2
@@ -134,6 +151,7 @@ main() {
 
   local -a deploy_args=(--site-only "$commit" "$site_commit" "$docs_commit")
   [[ "$full" == true ]] && deploy_args=("$commit" "$identity_commit" "$site_commit" "$docs_commit")
+  [[ -n "$core_api_commit" ]] && deploy_args+=("$core_api_commit")
   if [[ "$dry_run" == true ]]; then
     log "Dry run. It would run: deploy/vps-deploy.sh ${deploy_args[*]}"
     exit 0

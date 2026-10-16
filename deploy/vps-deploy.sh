@@ -4,7 +4,7 @@
 # asafarim.site landing page (os-site, #70) and the Docs app (docs.asafarim.site, os-docs, #83).
 # Run by the OWNER, from the repository folder (normally /var/repos/asafarim-os). Nothing else runs it.
 #
-#   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>]
+#   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>]
 #   deploy/vps-deploy.sh --site-only <commit> [<site-image-commit>] [<docs-image-commit>]
 #
 #   <commit>        the repository state to deploy, as a full 40-character sha: this script, the
@@ -16,6 +16,8 @@
 #                   "Site image" workflow (#70): pass the sha of its latest run.
 #   <docs-image-commit>  the commit whose docs image to run (default: <commit>). Same rule, with the
 #                   "Docs image" workflow (#83).
+#   <core-api-image-commit>  the commit whose core-api image to run (default: <commit>), with the "Core API image"
+#                   workflow. Used only when core-api is part of the deploy (below).
 #   --site-only     the landing page and docs, without identity (#97, #83): steps 1, 2 and 3 for the docs env
 #                   only, 4 (edge_net and the edge script only), 5 and 6 for os-site and os-docs only, then
 #                   step 7 with sites/asafarim-os-site.caddy, and step 8: before the edge cutover, the same file
@@ -36,6 +38,11 @@
 #   7. publish sites/asafarim-os.caddy on the shared edge (validate -> swap -> reload -> verify).
 # Only step 7 makes id.asafarim.site, asafarim.site and docs.asafarim.site reachable, and only if every step before
 # it passed.
+#
+# core-api (full mode only): when the commit has core/core-api/.env.production.age, steps 2 and 3 also decrypt it into
+# .env.core-api and check core/core-api/.env.production.example's names; step 5 turns the compose profile "core" on,
+# which starts os-postgres and os-core-api (never on edge_net; the admin API on 127.0.0.1:4020 only); step 6 also waits
+# for os-core-api's /readyz. Without that file the deploy is exactly what it was before, and core-api is not started.
 # asafarim.site cutover: remove the asafarim.site and www.asafarim.site blocks from asafarim-com.caddy first
 # (deploy/README.md); until then step 7's validation refuses the duplicate host and keeps the old config.
 #
@@ -45,8 +52,8 @@ set -euo pipefail
 # Everything lives in main(), called on ONE line at the very end. Step 1 resets this checkout, which can
 # replace this very file while bash is still reading it; bash has parsed all of main() by then.
 main() {
-  local usage="usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] | --site-only <commit> [<site-image-commit>] [<docs-image-commit>]"
-  local site_only=false
+  local usage="usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] | --site-only <commit> [<site-image-commit>] [<docs-image-commit>]"
+  local site_only=false with_core_api=false
   if [[ "${1:-}" == "--site-only" ]]; then
     site_only=true
     shift
@@ -55,11 +62,12 @@ main() {
     # (it defaults to <commit> and is never pulled).
     set -- "${1:-}" "" "${2:-}" "${3:-}"
   fi
-  (($# <= 4)) || { echo "FATAL: ${usage}" >&2; exit 1; }
+  (($# <= 5)) || { echo "FATAL: ${usage}" >&2; exit 1; }
   local commit="${1:?$usage}"
   local image_commit="${2:-$commit}"
   local site_image_commit="${3:-$commit}"
   local docs_image_commit="${4:-$commit}"
+  local core_api_image_commit="${5:-$commit}"
 
   local repo_dir
   repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -74,6 +82,7 @@ main() {
   [[ "$image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<image-commit> must be a full 40-character sha, got '${image_commit}'."
   [[ "$site_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<site-image-commit> must be a full 40-character sha, got '${site_image_commit}'."
   [[ "$docs_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<docs-image-commit> must be a full 40-character sha, got '${docs_image_commit}'."
+  [[ "$core_api_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<core-api-image-commit> must be a full 40-character sha, got '${core_api_image_commit}'."
   # age in both modes: os-docs's env (AUTH_SECRET) is decrypted by a site-only deploy too.
   for tool in git age docker flock; do
     command -v "$tool" >/dev/null 2>&1 || fatal "'${tool}' is not installed on this host."
@@ -128,6 +137,21 @@ main() {
       || fatal "the identity_db network does not exist. Deploy the asafarim-com change first (it creates the network and puts postgres on it)."
     [[ -f deploy/identity/clients.json && ! -L deploy/identity/clients.json ]] \
       || fatal "deploy/identity/clients.json is missing. Create it from core/identity/clients.example.json (see deploy/README.md); Docker would otherwise create a directory there."
+
+    # core-api joins the deploy once its encrypted env is committed (core/core-api/.env.production.example says how).
+    if [[ -f core/core-api/.env.production.age ]]; then
+      with_core_api=true
+      log "Decrypting core/core-api/.env.production.age..."
+      ( umask 077 && age -d -i .age/key.txt core/core-api/.env.production.age > .env.core-api.tmp ) \
+        || { rm -f .env.core-api.tmp; fatal "age could not decrypt core/core-api/.env.production.age."; }
+      mv -f .env.core-api.tmp .env.core-api
+      chmod 600 .env.core-api
+      log "Checking the core-api environment (names only)..."
+      require_env_vars .env.core-api core/core-api/.env.production.example \
+        || fatal "fill the variables named above in core/core-api/.env.production (node deploy/core-api/new-env.mjs writes them all), re-encrypt it, commit the .age file, and deploy that commit."
+    else
+      log "No core/core-api/.env.production.age in this commit: core-api is not part of this deploy."
+    fi
   fi
   docker network inspect edge_net >/dev/null 2>&1 \
     || fatal "the edge_net network does not exist. The shared edge is not installed on this host."
@@ -138,6 +162,13 @@ main() {
   export IMAGE_TAG="$image_commit"
   export SITE_IMAGE_TAG="$site_image_commit"
   export DOCS_IMAGE_TAG="$docs_image_commit"
+  # Always set, so the compose file renders; the image is only pulled when the "core" profile is on.
+  export CORE_API_IMAGE_TAG="$core_api_image_commit"
+  if [[ "$with_core_api" == true ]]; then
+    export COMPOSE_PROFILES=core
+  else
+    unset COMPOSE_PROFILES
+  fi
   if [[ "$site_only" == true ]]; then
     # The site-only file has no id.asafarim.site: publishing it while identity runs would take identity off the edge.
     local identity_running
@@ -155,9 +186,9 @@ main() {
   else
     log "Checking the compose file..."
     "${compose[@]}" config -q
-    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}..."
+    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")..."
     if ! "${compose[@]}" pull; then
-      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image or ${DOCS_IMAGE_TAG} no docs image (see the 'Identity image', 'Site image' and 'Docs image' workflow runs)."
+      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image (see the 'Identity image', 'Site image', 'Docs image' and 'Core API image' workflow runs)."
     fi
     log "Starting the stack..."
     "${compose[@]}" up -d --remove-orphans
@@ -178,6 +209,23 @@ main() {
       fatal "identity did not become ready within 90s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 identity (logs hold names and codes, never secrets)."
     fi
     log "identity is ready."
+
+    if [[ "$with_core_api" == true ]]; then
+      # The first start initialises os-postgres (an empty volume) before core-api can migrate: allow two minutes.
+      log "Waiting for os-core-api's /readyz..."
+      local core_ready=false
+      for _ in $(seq 1 60); do
+        if "${compose[@]}" exec -T os-core-api wget -qO- http://127.0.0.1:4020/readyz >/dev/null 2>&1; then
+          core_ready=true
+          break
+        fi
+        sleep 2
+      done
+      if [[ "$core_ready" != true ]]; then
+        fatal "os-core-api did not become ready within 120s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 os-postgres os-core-api"
+      fi
+      log "os-core-api is ready."
+    fi
   fi
 
   # os-site (asafarim.site) is static files: ready as soon as nginx answers /healthz.

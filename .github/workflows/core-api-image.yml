@@ -131,7 +131,9 @@ jobs:
           set -euo pipefail
           docker network create smoke
           docker run -d --name smoke-db --network smoke -e POSTGRES_PASSWORD=smoke-provisioner postgres:16-alpine
-          for _ in $(seq 1 30); do docker exec smoke-db pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
+          # Over TCP: the image's first-start init runs a temporary server on the Unix socket only, then restarts it.
+          # A socket check can pass on that temporary server and the next command hits the restart.
+          for _ in $(seq 1 60); do docker exec smoke-db pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break; sleep 1; done
           docker exec smoke-db psql -U postgres -c "CREATE ROLE core_api LOGIN PASSWORD 'smoke-core'" -c "CREATE DATABASE core OWNER core_api"
           jwk="$(node -e 'const c=require("crypto");const j=c.generateKeyPairSync("ed25519").privateKey.export({format:"jwk"});j.kid="smoke";console.log(JSON.stringify(j))')"
           docker run -d --name smoke-api --network smoke --read-only --cap-drop ALL --security-opt no-new-privileges:true \

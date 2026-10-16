@@ -41,16 +41,28 @@ function siteBlock(address, text = activeSite) {
  * ../.env.identity and ../.env.docs (Compose refuses a missing env_file, and the real ones hold secrets: never read
  * or print them).
  */
-function render(env = { IMAGE_TAG: "testsha", SITE_IMAGE_TAG: "sitesha", DOCS_IMAGE_TAG: "docssha" }) {
+function render(
+  env = { IMAGE_TAG: "testsha", SITE_IMAGE_TAG: "sitesha", DOCS_IMAGE_TAG: "docssha", CORE_API_IMAGE_TAG: "coresha" },
+) {
   const dir = mkdtempSync(path.join(tmpdir(), "compose-prod-"));
   try {
     mkdirSync(path.join(dir, "deploy"));
     cpSync(path.join(root, "deploy", "compose.prod.yml"), path.join(dir, "deploy", "compose.prod.yml"));
     writeFileSync(path.join(dir, ".env.identity"), "");
     writeFileSync(path.join(dir, ".env.docs"), "");
+    writeFileSync(path.join(dir, ".env.core-api"), "");
+    mkdirSync(path.join(dir, "deploy", "core-api", "initdb"), { recursive: true });
     const run = spawnSync("docker", ["compose", "-f", "compose.prod.yml", "config", "--format", "json"], {
       cwd: path.join(dir, "deploy"),
-      env: { ...process.env, IMAGE_TAG: "", SITE_IMAGE_TAG: "", DOCS_IMAGE_TAG: "", ...env },
+      env: {
+        ...process.env,
+        IMAGE_TAG: "",
+        SITE_IMAGE_TAG: "",
+        DOCS_IMAGE_TAG: "",
+        CORE_API_IMAGE_TAG: "coresha",
+        COMPOSE_PROFILES: "",
+        ...env,
+      },
       encoding: "utf8",
     });
     return run;
@@ -140,16 +152,22 @@ test("os-docs reads its secrets from ../.env.docs only, and signs in through id.
   }
 });
 
-test("os-docs is on edge_net ONLY, under the unique alias os-docs", () => {
-  assert.deepEqual(networkNames(docs), ["edge_net"]);
+test("os-docs is on edge_net under the unique alias os-docs, and on os_core for core-api: never os_net (identity's Redis)", () => {
+  assert.deepEqual(networkNames(docs), ["edge_net", "os_core"]);
   assert.deepEqual(docs.networks.edge_net.aliases, ["os-docs"]);
+});
+
+test("os-docs finds core-api by its name on os_core; the credential stays in .env.docs", () => {
+  assert.equal(docs.environment.CORE_API_URL, "http://os-core-api:4020");
+  assert.ok(!("ASAFARIM_REGISTRY_CREDENTIAL" in docs.environment));
 });
 
 test("os-redis is on os_net ONLY: never on edge_net or identity_db", () => {
   assert.deepEqual(networkNames(redis), ["os_net"]);
 });
 
-test("nothing publishes a port", () => {
+test("without the core profile: core-api and its Postgres are not part of the stack, and nothing publishes a port", () => {
+  assert.ok(!("os-core-api" in config.services) && !("os-postgres" in config.services));
   for (const [name, service] of Object.entries(config.services)) {
     assert.ok(!service.ports || service.ports.length === 0, `${name} publishes a port`);
   }
@@ -296,5 +314,118 @@ test("the site-only file's landing and docs blocks are identical to the full sit
       siteBlock(address),
       `${address} differs between the two site files`,
     );
+  }
+});
+
+// ---- core-api and its Postgres: the "core" profile, which vps-deploy.sh turns on once core-api's env is committed.
+const coreRendered = render({
+  IMAGE_TAG: "testsha",
+  SITE_IMAGE_TAG: "sitesha",
+  DOCS_IMAGE_TAG: "docssha",
+  CORE_API_IMAGE_TAG: "coresha",
+  COMPOSE_PROFILES: "core",
+});
+assert.equal(coreRendered.status, 0, coreRendered.stderr);
+const coreConfig = JSON.parse(coreRendered.stdout);
+const { "os-core-api": coreApi, "os-postgres": postgres } = coreConfig.services;
+
+test("the core profile adds exactly os-core-api and os-postgres", () => {
+  assert.deepEqual(Object.keys(coreConfig.services).sort(), [
+    "identity",
+    "os-core-api",
+    "os-docs",
+    "os-postgres",
+    "os-redis",
+    "os-site",
+  ]);
+  assert.deepEqual(coreApi.profiles, ["core"]);
+  assert.deepEqual(postgres.profiles, ["core"]);
+});
+
+test("core-api's image tag comes from CORE_API_IMAGE_TAG, and there is no default", () => {
+  assert.equal(coreApi.image, "ghcr.io/alisafari-it/asafarim-os:core-api-coresha");
+  const unset = render({ IMAGE_TAG: "t", SITE_IMAGE_TAG: "s", DOCS_IMAGE_TAG: "d", CORE_API_IMAGE_TAG: "" });
+  assert.notEqual(unset.status, 0, "a deploy without CORE_API_IMAGE_TAG must fail, not pull core-api-");
+  assert.match(unset.stderr, /CORE_API_IMAGE_TAG/);
+});
+
+test("os-postgres is Postgres 16 (core-api's pg_dump is 16), on os_core ONLY, persisted, with its init script", () => {
+  assert.match(postgres.image, /^postgres:16(\.|-)/);
+  assert.deepEqual(networkNames(postgres), ["os_core"]);
+  assert.ok(!postgres.ports || postgres.ports.length === 0, "os-postgres publishes no port");
+  const mounts = postgres.volumes.map((v) => `${v.source}:${v.target}`);
+  assert.ok(
+    mounts.some((m) => m.endsWith(":/var/lib/postgresql/data") && m.startsWith("os_pg_data")),
+    mounts.join(),
+  );
+  assert.ok(postgres.volumes.some((v) => v.target === "/docker-entrypoint-initdb.d" && v.read_only));
+  assert.ok(postgres.healthcheck?.test?.includes("pg_isready"));
+  // TCP, not the socket: the first-start init's temporary server listens on the socket only.
+  assert.deepEqual(
+    postgres.healthcheck.test.slice(
+      postgres.healthcheck.test.indexOf("-h"),
+      postgres.healthcheck.test.indexOf("-h") + 2,
+    ),
+    ["-h", "127.0.0.1"],
+  );
+  assert.match(composeText, /os-postgres:[\s\S]*?env_file:\n\s+- \.\.\/\.env\.core-api\n/);
+});
+
+test("os-core-api is hardened, on os_core ONLY, and its admin API is on the VPS's loopback only", () => {
+  assert.equal(coreApi.read_only, true);
+  assert.deepEqual(coreApi.cap_drop, ["ALL"]);
+  assert.ok(coreApi.security_opt.includes("no-new-privileges:true"));
+  assert.ok(Number(coreApi.mem_limit) > 0 && coreApi.cpus > 0);
+  assert.deepEqual(networkNames(coreApi), ["os_core"]);
+  assert.deepEqual(coreApi.networks.os_core.aliases, ["os-core-api"]);
+  assert.equal(coreApi.ports.length, 1);
+  assert.equal(coreApi.ports[0].host_ip, "127.0.0.1", "never 0.0.0.0: the admin API is not public");
+  assert.equal(String(coreApi.ports[0].published), "4020");
+  assert.equal(coreApi.ports[0].target, 4020);
+  assert.equal(coreApi.depends_on["os-postgres"].condition, "service_healthy");
+  assert.ok(
+    coreApi.volumes.some((v) => v.source === "os_core_api_backups" && v.target === "/var/lib/core-api/backups"),
+  );
+  assert.equal(coreApi.environment.CORE_API_APP_DB_HOST, "os-postgres");
+  assert.equal(coreApi.environment.OS_APP_DOCS_UPSTREAM, "os-docs:3000");
+  for (const name of [
+    "CORE_API_ADMIN_TOKEN",
+    "CORE_API_DATABASE_URL",
+    "CORE_API_PROVISIONER_URL",
+    "CORE_API_TOKEN_SIGNING_JWK",
+  ]) {
+    assert.ok(!(name in coreApi.environment), `${name} is a secret: it belongs in .env.core-api`);
+  }
+});
+
+test("in the core profile, only os-core-api publishes a port, and only on 127.0.0.1", () => {
+  for (const [name, service] of Object.entries(coreConfig.services)) {
+    if (name === "os-core-api") continue;
+    assert.ok(!service.ports || service.ports.length === 0, `${name} publishes a port`);
+  }
+});
+
+test("identity and os-redis are never on os_core", () => {
+  assert.ok(!networkNames(coreConfig.services.identity).includes("os_core"));
+  assert.ok(!networkNames(coreConfig.services["os-redis"]).includes("os_core"));
+});
+
+test("the README's stop command renders: every image tag it needs is set, with and without the core profile", () => {
+  const readme = readFileSync(path.join(root, "deploy", "README.md"), "utf8");
+  const line = readme
+    .split("\n")
+    .find((l) => l.includes("docker compose -p asafarim-os") && l.trim().endsWith(" down"));
+  assert.ok(line, "the Rollback section's `down` command was not found");
+  const vars = Object.fromEntries([...line.matchAll(/\b([A-Z_]+)=(\S+)/g)].map((m) => [m[1], m[2]]));
+  for (const profiles of [vars.COMPOSE_PROFILES ?? "", ""]) {
+    const r = render({
+      IMAGE_TAG: "",
+      SITE_IMAGE_TAG: "",
+      DOCS_IMAGE_TAG: "",
+      CORE_API_IMAGE_TAG: "",
+      ...vars,
+      COMPOSE_PROFILES: profiles,
+    });
+    assert.equal(r.status, 0, `profiles '${profiles}': ${r.stderr}`);
   }
 });

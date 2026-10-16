@@ -181,14 +181,43 @@ before each deploy, add a protection rule to the `production` environment (Setti
 
 **To turn it off:** disable the Deploy workflow in Actions, or remove the key's line from `authorized_keys`.
 
+## core-api (permissions for docs and the other apps)
+
+`os-core-api` (the control plane, `core/core-api`) and `os-postgres` (the OS's own Postgres 16, never the platform's)
+are the compose profile `core`. The full deploy starts them **once the commit has `core/core-api/.env.production.age`**;
+without that file a deploy is what it was before. `deploy/redeploy.sh` then also picks the newest "Core API image" and
+waits for it like the others.
+
+**First time (the owner):**
+
+1. On your PC, in the repository: `node deploy/core-api/new-env.mjs` writes `core/core-api/.env.production` with every
+   value generated (it never prints one), then `pnpm env:encrypt:production`. Commit **only**
+   `core/core-api/.env.production.age`, on a branch, and merge it with a pull request. The automatic deploy (identity
+   runs, so it is the full deploy) starts `os-postgres` and `os-core-api` and waits for `/readyz`.
+2. On the VPS, in `/var/repos/asafarim-os`: `deploy/core-api/admin.sh install docs`. It writes docs's one-time
+   credential to `.env.core-api-install-docs` (mode 600), never to the screen.
+3. Copy that file's lines into `apps/docs/.env.production` (`pnpm env:decrypt:production` first), re-encrypt, and merge
+   the `.age` file with a pull request. The deploy restarts docs with its credential.
+4. On the VPS: `deploy/core-api/admin.sh activate docs`. docs registers on its next start (it retries), which
+   creates its roles. Then, with your account id from <https://id.asafarim.site/account>:
+   `deploy/core-api/admin.sh grant docs.owner <account id>`. Permissions are cached for up to 60 seconds.
+
+`deploy/core-api/admin.sh apps` and `grants <account id>` show the state. The admin token is read from `.env.core-api`
+and never printed.
+
 ## Networks: who can reach what
 
 - **`edge_net`** (shared by every stack): `identity` under the unique alias **`os-identity`**, `os-site` (alias
-  **`os-site`**, on no other network) and `os-docs` (alias **`os-docs`**, on no other network). The edge's Caddy reaches them there. Redis is never on it.
+  **`os-site`**, on no other network) and `os-docs` (alias **`os-docs`**). The edge's Caddy reaches them there. Redis,
+  core-api and its Postgres are never on it.
+- **`os_core`**: `os-core-api`, `os-postgres` and `os-docs` (the apps core-api serves). identity and `os-redis` are not
+  on it.
 - **`identity_db`**: `identity` and the platform's Postgres (alias `platform-postgres`), nothing else. Identity reads
   the platform database as the read-only `identity_ro` role. asafarim-platform's deploy creates this network.
 - **`os_net`**: this stack's own private network, for `identity` and `os-redis`.
-- Nothing publishes a port. `deploy/compose.prod.test.mjs` fails if Redis lands on `edge_net` or any port is published.
+- Nothing publishes a port, except `os-core-api`'s admin API on the VPS's **loopback** (`127.0.0.1:4020`), for
+  `deploy/core-api/admin.sh`. `deploy/compose.prod.test.mjs` fails if Redis lands on `edge_net`, or anything else
+  publishes a port.
 
 One thing to know: on `edge_net` the service name `identity` resolves too, not only the alias. Nothing else on
 `edge_net` uses that name today; if another stack ever does, rename the service.
@@ -270,10 +299,13 @@ Afterwards: `curl -fsS https://id.asafarim.site/.well-known/openid-configuration
    ```
 2. Stop the stack. The tag only has to be non-empty here; `down` does not pull anything:
    ```bash
-   IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml down
+   COMPOSE_PROFILES=core IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback CORE_API_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml down
    ```
-3. **The volumes stay** (do not add `-v`): Redis's data in `os_redis_data` is kept, and `.env.identity` and `.env.docs`
-   stay on disk (mode 600; delete them yourself if you want them gone).
+   `COMPOSE_PROFILES=core` also stops `os-core-api` and `os-postgres` when they run (it needs `.env.core-api` to exist,
+   which it does once core-api has been deployed; without core-api, leave `COMPOSE_PROFILES=core` out).
+3. **The volumes stay** (do not add `-v`): Redis's data in `os_redis_data`, the OS's Postgres in `os_pg_data` and
+   core-api's backups in `os_core_api_backups` are kept, and `.env.identity`, `.env.docs` and `.env.core-api` stay on
+   disk (mode 600; delete them yourself if you want them gone).
 
 To go back to an **earlier image** instead, run the deploy again with that image's commit as `<image-commit>`.
 To go forward again after a rollback, run the deploy again.

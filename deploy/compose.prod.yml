@@ -121,11 +121,87 @@ services:
       ASAFARIM_APP_ID: docs
       # Sign-in goes through this stack's identity, at its public URL.
       OIDC_ISSUER: https://id.asafarim.site
+      # Permission checks and self-registration: this stack's core-api, on os_core. The app only uses it once
+      # ASAFARIM_REGISTRY_CREDENTIAL (from `deploy/core-api/admin.sh install docs`) is in .env.docs as well;
+      # without it the SDK treats docs as not installed and the gate answers 503.
+      CORE_API_URL: http://os-core-api:4020
     networks:
       edge_net:
         # Unique on the shared edge_net; sites/asafarim-os.caddy proxies docs.asafarim.site to it.
         aliases:
           - os-docs
+      # core-api and the app's own database (os-postgres). Not os_net: docs never reaches identity's Redis.
+      os_core:
+
+  # ---- core-api (the control plane) and its Postgres -----------------------------------------------------------
+  # Started only when the deployed commit has core/core-api/.env.production.age: deploy/vps-deploy.sh then turns
+  # the "core" profile on. Neither joins edge_net; nothing outside this host reaches them.
+
+  os-postgres:
+    # The OS's OWN Postgres (never the platform's): the core database, and one database per installed app
+    # (core-api's provisioner creates them). Major version 16: core-api's pg_dump is 16 too.
+    image: postgres:16-alpine
+    profiles: [core]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.5
+    # POSTGRES_PASSWORD (the superuser: core-api's provisioner) and CORE_API_DB_PASSWORD (core-api's own role),
+    # decrypted from core/core-api/.env.production.age by deploy/vps-deploy.sh.
+    env_file:
+      - ../.env.core-api
+    volumes:
+      - os_pg_data:/var/lib/postgresql/data
+      # First start only (an empty volume): the core_api role and the core database it owns.
+      - ./core-api/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Over TCP: on the first start the image's init runs a temporary server on the Unix socket only (while
+      # 10-core.sh runs), then restarts. Only the real server answers on 127.0.0.1.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "core"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - os_core
+
+  os-core-api:
+    # Published by .github/workflows/core-api-image.yml. CORE_API_IMAGE_TAG is the full commit sha of that build;
+    # deploy/vps-deploy.sh always sets it (no default, like the others).
+    image: ghcr.io/alisafari-it/asafarim-os:core-api-${CORE_API_IMAGE_TAG:?set CORE_API_IMAGE_TAG to the core-api image's commit sha}
+    profiles: [core]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 256m
+    cpus: 0.5
+    depends_on:
+      os-postgres:
+        condition: service_healthy
+    env_file:
+      - ../.env.core-api
+    environment:
+      # The Admin console's people are verified against this stack's identity (when the console goes live).
+      CORE_API_IDENTITY_ISSUER: https://id.asafarim.site
+      # An installed app's DATABASE_URL points at os-postgres, by its name on os_core.
+      CORE_API_APP_DB_HOST: os-postgres
+      CORE_API_APP_DB_PORT: "5432"
+      # Health polling (P6.1): where each app runs, on os_core.
+      OS_APP_DOCS_UPSTREAM: os-docs:3000
+    volumes:
+      # Remove's database backups (CORE_API_BACKUP_DIR in the image), kept across restarts.
+      - os_core_api_backups:/var/lib/core-api/backups
+    # The admin API for the owner on the VPS itself (deploy/core-api/admin.sh): loopback only, never public.
+    ports:
+      - "127.0.0.1:4020:4020"
+    networks:
+      os_core:
+        aliases:
+          - os-core-api
 
 networks:
   # The shared edge's network, created with the edge. identity joins it to be reachable by the edge's Caddy.
@@ -138,6 +214,10 @@ networks:
     external: true
     name: identity_db
   os_net:
+  # core-api, its Postgres and the apps it serves (os-docs). identity and os-redis are not on it.
+  os_core:
 
 volumes:
   os_redis_data:
+  os_pg_data:
+  os_core_api_backups:
