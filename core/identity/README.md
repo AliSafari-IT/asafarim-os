@@ -1,22 +1,25 @@
 # core/identity
 
-The ASafariM OS identity service: the **OpenID Connect provider** for `id.asafarim.site`. Apps on their own domains (first: Testora on `testora.cloud`) sign people in through it. **Login itself stays in Hub**: the provider hands the browser to Hub with a signed ticket, and Hub posts back a signed assertion. Design: ADR 0002 and its Addendum A (private docs, `ventures/asafarim-os/adr/0002-…`).
+The ASafariM OS identity service: the **OpenID Connect provider** for `id.asafarim.site`. Apps on their own domains (first: Testora on `testora.cloud`) sign people in through it. How a person proves who they are is a **login method**, chosen by `IDENTITY_LOGIN_METHOD`:
+
+- **`hub`** (the default): login stays in Hub. The provider hands the browser to Hub with a signed ticket, and Hub posts back a signed assertion ([Login hand-off](#login-hand-off-adr-0002-a2)). Design: ADR 0002 and its Addendum A (private docs, `ventures/asafarim-os/adr/0002-…`).
+- **`sms`**: the service's own sign-in by SMS code, with access granted by an admin ([SMS sign-in](#sms-sign-in)).
 
 It runs [`oidc-provider`](https://github.com/panva/node-oidc-provider) (major version 9) on Node 24, which runs the TypeScript directly (no build step).
 
 ## What it enforces
 
-| Policy            | Value                                                                                                     |
-| ----------------- | --------------------------------------------------------------------------------------------------------- |
-| Flows             | authorization code only (no implicit, no hybrid)                                                          |
-| PKCE              | required for every client, `S256` only                                                                    |
-| ID token          | `ES256`                                                                                                   |
-| Access token      | 10 min                                                                                                    |
-| Refresh token     | only with `offline_access` (which needs `prompt=consent`), rotated on every use; reusing an old one fails |
-| Logout            | RP-initiated logout, plus back-channel logout to every client in the session                              |
-| Consent           | none shown: every client is a first-party ASafariM app; the grant covers exactly the scopes requested     |
-| Accounts          | from the platform's `identity_accounts_v` view, read-only; an inactive or unknown account gets no tokens  |
-| Outbound requests | oidc-provider's SSRF guard stays on: back-channel logout never calls loopback or private addresses        |
+| Policy            | Value                                                                                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Flows             | authorization code only (no implicit, no hybrid)                                                                                                                                                       |
+| PKCE              | required for every client, `S256` only                                                                                                                                                                 |
+| ID token          | `ES256`                                                                                                                                                                                                |
+| Access token      | 10 min                                                                                                                                                                                                 |
+| Refresh token     | only with `offline_access` (which needs `prompt=consent`), rotated on every use; reusing an old one fails                                                                                              |
+| Logout            | RP-initiated logout, plus back-channel logout to every client in the session                                                                                                                           |
+| Consent           | none shown: every client is a first-party ASafariM app; the grant covers exactly the scopes requested                                                                                                  |
+| Accounts          | `hub`: the platform's `identity_accounts_v` view, read-only. `sms`: a principal with an **active connection** in the service's own database. Either way, an inactive or unknown account gets no tokens |
+| Outbound requests | oidc-provider's SSRF guard stays on: back-channel logout never calls loopback or private addresses                                                                                                     |
 
 Endpoints: discovery (`/.well-known/openid-configuration`), `/jwks`, `/auth`, `/token`, `/me` (userinfo), `/session/end`, `/token/revocation`, plus `/healthz` (live) and `/readyz` (Redis and accounts DB).
 
@@ -32,6 +35,66 @@ Endpoints: discovery (`/.well-known/openid-configuration`), `/jwks`, `/auth`, `/
 **Why both cookies:** if someone else's signed-in browser opens your continue link, it can post an assertion for _their_ account, but it doesn't hold your interaction cookie, so it can't finish your sign-in. Your browser holds the interaction cookie but never received the completion cookie, so it can't finish with their account either. Without this step, an interaction could be completed with a different person's account (asafarim-platform#723, review of #23).
 
 Any failure shows a styled error page with a short code (`assertion_replayed`, `account_inactive`, `browser_mismatch`, …) and logs nothing that identifies the person; there is no partial login.
+
+## SMS sign-in
+
+`IDENTITY_LOGIN_METHOD=sms`. The flow:
+
+**QR code or link → `/connect` → `/login` → mobile number → SMS code → verify → connected? → the app (or `IDENTITY_HOME_URL`)**. If the number isn't connected: **"Request connection" → an admin approves → sign in again**.
+
+### Authentication and authorization are separate
+
+- **Authentication**: the SMS code proves the person holds the number. It creates (on first proof) a _principal_ and an `identities` row (`method = 'phone'`). It grants nothing on its own.
+- **Authorization**: the principal has an **active connection** (`connections`). It is read from the database on every use: when a sign-in finishes, in `findAccount` (so no code, token, refresh or userinfo for anyone not connected), and on every admin page. The browser is never trusted with it.
+- **Other methods later** (email, passkeys, …) add rows to `identities` and their own routes. Connections, requests, the admin and the OIDC side don't change.
+
+### The QR code
+
+It is a plain URL, `https://id.asafarim.site/connect`, which is not secret and holds no credential. `/connect` only starts a sign-in. Make it with any QR generator. Different QR codes per place or device can later carry a signed, short-lived parameter without changing the flow.
+
+### Codes and limits
+
+| What               | Rule                                                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Code               | 6 random digits, valid 5 minutes, single use                                                                                         |
+| Storage            | Redis holds an HMAC of (challenge, number, code) under `IDENTITY_OTP_SECRET`, never the code                                         |
+| Wrong tries        | 5 per code, then the code is gone (checked, counted and deleted in one Redis step)                                                   |
+| Sending            | 1 per number per minute; 3 per number per 15 min and 10 per day; 10 per IP per hour; `IDENTITY_SMS_DAILY_LIMIT` in all per day       |
+| Verifying          | 30 per IP and 15 per number per hour                                                                                                 |
+| Countries          | only numbers starting with `IDENTITY_SMS_ALLOWED_PREFIXES` (default `+32`) get an SMS                                                |
+| No account probing | until the code is proved, every answer is the same whether the number is unknown, waiting or connected                               |
+| Sessions           | after a correct code, a random cookie (`identity_auth`, HttpOnly, SameSite=Lax, Secure on https), 12 h; Redis keeps only its SHA-256 |
+| Forms              | a CSRF token in every form; pages send `form-action 'self'`, `frame-ancestors 'none'`, no script                                     |
+
+The client IP for limits is the **last** `X-Forwarded-For` entry (the one the edge Caddy adds). Rate-limit keys and audit entries use HMACs of numbers and IPs, never the values.
+
+### Admin (`/admin`)
+
+For a connected principal with `is_admin`, signed in by SMS (`/login?next=admin`):
+
+- approve or reject pending requests (a request stays pending until someone decides);
+- connect a number directly;
+- revoke a connection, or reconnect a revoked one.
+
+**Revoking takes effect at once**: the person's SMS sessions are deleted, their provider sessions end and their grants are revoked (codes, access and refresh tokens). Anything an app still holds is refused at its next token, refresh or userinfo call. An admin can't revoke themselves.
+
+**The first admin** comes from `IDENTITY_BOOTSTRAP_ADMIN_PHONE`, in the encrypted env, never in git. At start, and only while **no admin has an active connection**, that number is made an admin with an active connection. Otherwise the variable does nothing, which also makes it the recovery path.
+
+### Audit trail
+
+`audit_log` is append-only: a trigger refuses `UPDATE`, `DELETE` and `TRUNCATE`. It records:
+
+- codes sent, refused and failed;
+- verifications and their failures;
+- sign-ins granted and refused;
+- connection requests;
+- approvals, rejections, connections and revocations, each with the acting admin.
+
+The admin page shows the latest 50 entries.
+
+### Its database
+
+`IDENTITY_DATABASE_URL` is a Postgres database the service owns. `migrations/*.sql` are applied at start, one at a time across replicas (advisory lock). It is a separate database from the platform's, so it isn't the read-only `identity_ro` login.
 
 ## Configuration (env)
 
@@ -49,6 +112,22 @@ Any failure shows a styled error page with a short code (`assertion_replayed`, `
 | `IDENTITY_CLIENTS_FILE`          | path to the client config (below)                                                                                          |
 | `IDENTITY_CLIENT_SECRET_<APP>`   | each confidential client's secret (≥ 32 characters), named by the client config                                            |
 | `IDENTITY_TRUST_PROXY`           | `true` by default (behind the edge Caddy); `false` when exposed directly                                                   |
+| `IDENTITY_LOGIN_METHOD`          | `hub` (default) or `sms`. With `sms`, the Hub variables and `IDENTITY_ACCOUNTS_DATABASE_URL` aren't needed                 |
+
+With `IDENTITY_LOGIN_METHOD=sms`:
+
+| Variable                         | What                                                                                                                   |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `IDENTITY_DATABASE_URL`          | the service's own Postgres database (owner role); migrated at start                                                    |
+| `IDENTITY_OTP_SECRET`            | ≥ 32 characters: the HMAC key for codes, rate-limit keys and audit handles. Changing it voids codes in flight only     |
+| `IDENTITY_SMS_PROVIDER`          | `twilio` (default). `dev-log` writes codes to the service's stderr, and only with `NODE_ENV=development` on localhost  |
+| `IDENTITY_TWILIO_ACCOUNT_SID`    | `AC…`                                                                                                                  |
+| `IDENTITY_TWILIO_AUTH_TOKEN`     | the account's auth token (or an API key secret)                                                                        |
+| `IDENTITY_TWILIO_FROM`           | a sender number (E.164), an alphanumeric sender id, or a Messaging Service SID (`MG…`)                                 |
+| `IDENTITY_SMS_ALLOWED_PREFIXES`  | comma-separated, default `+32`                                                                                         |
+| `IDENTITY_SMS_DAILY_LIMIT`       | default `200`: SMS per 24 h, all numbers together (a cost cap)                                                         |
+| `IDENTITY_HOME_URL`              | where a sign-in that didn't come from an app goes (the QR code's destination); https, default `https://asafarim.site/` |
+| `IDENTITY_BOOTSTRAP_ADMIN_PHONE` | optional: the first admin's number, used only while no admin is connected (above)                                      |
 
 All of these live in the deployment's **encrypted** env file. A missing or malformed variable stops the service at startup with the variable's name (never its value).
 
@@ -133,6 +212,8 @@ pnpm --filter @asafarim/identity test
 ```
 
 - **Unit:** the hand-off verifiers (wrong audience, expired, replayed `jti`, wrong `uid`, bad signature, wrong issuer, an over-long lifetime), the client config rules, the key checks, the account mapping and log redaction.
+- **SMS sign-in (`test/sms-login.test.ts`, `test/sms.test.ts`):** every route with in-memory storage: same answers for known and unknown numbers, single-use codes and the try limit, rate limits, CSRF, requests, approve and reject, revoke, the admin's access rules, no number or code in logs; plus numbers, code hashing, the Twilio sender, config and page escaping.
+- **SMS integration (`test/sms.integration.test.ts`):** the Redis pieces (logical DB 14, flushed), the Postgres store in a throwaway database (`IDENTITY_TEST_DATABASE_URL`, a login that may `CREATE DATABASE`), and the OIDC round trip with the SMS method, including revocation.
 - **Integration (`test/flow.integration.test.ts`):** the real provider over HTTP with a stub Hub and a stub client, against a test Redis. It runs only when `IDENTITY_TEST_REDIS_URL` is set, and flushes that DB. It covers:
   - code + PKCE → tokens;
   - no PKCE or `plain` → refused;

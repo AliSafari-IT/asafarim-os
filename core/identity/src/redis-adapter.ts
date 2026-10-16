@@ -122,3 +122,41 @@ export class RedisReplayGuard implements ReplayGuard {
     return ok === "OK";
   }
 }
+
+/**
+ * Ends every provider session of one account and revokes the grants they hold (with the codes,
+ * access and refresh tokens issued under them). Used when a connection is revoked, so the person
+ * is signed out of the provider at once instead of when the session expires. Sessions aren't
+ * indexed by account, so this scans `oidc:Session:*`: fine at this service's scale.
+ * Returns how many sessions were ended.
+ */
+export async function endSessionsOfAccount(client: Redis, accountId: string): Promise<number> {
+  let cursor = "0";
+  let ended = 0;
+  do {
+    const [next, keys] = await client.scan(cursor, "MATCH", `${KEY_PREFIX}Session:*`, "COUNT", 200);
+    cursor = next;
+    for (const key of keys) {
+      const raw = await client.get(key);
+      if (!raw) continue;
+      let session: { accountId?: string; authorizations?: Record<string, { grantId?: string }> };
+      try {
+        session = JSON.parse(raw) as typeof session;
+      } catch {
+        continue;
+      }
+      if (session.accountId !== accountId) continue;
+      const multi = client.multi();
+      for (const { grantId } of Object.values(session.authorizations ?? {})) {
+        if (!grantId) continue;
+        for (const member of await client.lrange(grantKey(grantId), 0, -1)) multi.del(member);
+        multi.del(grantKey(grantId));
+        multi.del(`${KEY_PREFIX}Grant:${grantId}`);
+      }
+      multi.del(key);
+      await multi.exec();
+      ended += 1;
+    }
+  } while (cursor !== "0");
+  return ended;
+}
