@@ -17,7 +17,8 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # A throwaway Redis for core/identity's integration tests (flushed by them).
+    # A throwaway Redis and Postgres for core/identity's integration tests (they flush the Redis DBs
+    # they use, and create and drop their own database).
     services:
       redis:
         image: redis:7-alpine
@@ -28,8 +29,20 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     env:
       IDENTITY_TEST_REDIS_URL: redis://localhost:6379/15
+      IDENTITY_TEST_DATABASE_URL: postgres://postgres:postgres-ci-only@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v7
         with:

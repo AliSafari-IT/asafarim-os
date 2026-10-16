@@ -1,6 +1,13 @@
 /**
- * The OIDC provider (panva/oidc-provider) for id.asafarim.site, with login
- * delegated to Hub (ADR 0002, Addendum A).
+ * The OIDC provider (panva/oidc-provider) for id.asafarim.site. How a person
+ * signs in is a login method chosen by config (IDENTITY_LOGIN_METHOD):
+ *
+ * - `hub`: login delegated to Hub (ADR 0002, Addendum A);
+ * - `sms`: the service's own SMS sign-in, with connections approved by an
+ *   admin (sms-login.ts).
+ *
+ * Whatever the method, an interaction is finished only for an account that
+ * `findAccount` accepts, and tokens are issued only for such an account.
  *
  * Policy: authorization code flow only, PKCE (S256) required for every client,
  * ID tokens ES256, access tokens 10 min, refresh tokens only with
@@ -12,9 +19,11 @@ import type { CryptoKey, JWK, KeyObject } from "jose";
 import type { AccountStore } from "./accounts.ts";
 import type { OidcClient } from "./clients.ts";
 import { HandoffError, issueTicket, verifyAssertion, type ReplayGuard } from "./handoff.ts";
+import { type HttpContext, readForm, sendHtml } from "./http.ts";
 import type { Logger } from "./log.ts";
 import { CONTINUE_PAGE_CSP, continuePage, errorPage, loggedOutPage, logoutPage } from "./pages.ts";
 import { PENDING_TTL_SECONDS, hashSecret, type PendingLogins } from "./pending.ts";
+import type { SmsLogin } from "./sms-login.ts";
 
 export const ACCESS_TOKEN_TTL = 600;
 export const SCOPES = ["openid", "offline_access", "email", "profile", "roles"];
@@ -24,16 +33,22 @@ export interface ProviderDeps {
   jwks: { keys: JWK[] };
   cookieKeys: string[];
   clients: OidcClient[];
-  handoffPrivateKey: CryptoKey | KeyObject;
-  hubPublicKey: CryptoKey | KeyObject;
-  hubContinueUrl: string;
+  /** Default `hub`. */
+  loginMethod?: "hub" | "sms";
+  /** `hub` only: the hand-off keys and Hub's continue URL. */
+  handoffPrivateKey?: CryptoKey | KeyObject;
+  hubPublicKey?: CryptoKey | KeyObject;
+  hubContinueUrl?: string;
+  /** `sms` only: the SMS sign-in and the connections admin. */
+  sms?: SmsLogin;
   trustProxy: boolean;
   // oidc-provider's adapter contract is a constructor taking the model name.
   adapter: Configuration["adapter"];
   accounts: AccountStore;
-  replay: ReplayGuard;
-  /** Verified logins waiting for /interaction/:uid/complete in the starting browser. */
-  pending: PendingLogins;
+  /** `hub` only. */
+  replay?: ReplayGuard;
+  /** `hub` only: verified logins waiting for /interaction/:uid/complete in the starting browser. */
+  pending?: PendingLogins;
   /** Readiness probes for /readyz (Redis, accounts DB). */
   readiness: () => Promise<Record<string, boolean>>;
   log: Logger;
@@ -45,43 +60,42 @@ export interface ProviderDeps {
   testOnlyFetch?: Configuration["fetch"];
 }
 
-const MAX_FORM_BYTES = 16 * 1024;
-
 /** The completion cookie, scoped to one interaction's /complete path. */
 const COMPLETION_COOKIE = "identity_complete";
 const completePath = (uid: string) => `/interaction/${uid}/complete`;
 
-/** The slice of a Koa context the helpers below use. */
-interface HttpContext {
-  status: number;
-  type: string;
-  body: unknown;
-  req: AsyncIterable<unknown>;
-  is(type: string): string | false | null;
-  set(field: string, value: string): void;
+interface HubLogin {
+  handoffPrivateKey: CryptoKey | KeyObject;
+  hubPublicKey: CryptoKey | KeyObject;
+  hubContinueUrl: string;
+  replay: ReplayGuard;
+  pending: PendingLogins;
 }
 
-async function readForm(ctx: HttpContext): Promise<URLSearchParams | null> {
-  if (!ctx.is("application/x-www-form-urlencoded")) return null;
-  let size = 0;
-  const chunks: Buffer[] = [];
-  for await (const chunk of ctx.req) {
-    size += (chunk as Buffer).length;
-    if (size > MAX_FORM_BYTES) return null;
-    chunks.push(chunk as Buffer);
+/** The login method's own dependencies, checked once: a misconfiguration fails at startup, not at a sign-in. */
+function loginMethodOf(deps: ProviderDeps): { method: "hub"; hub: HubLogin } | { method: "sms"; sms: SmsLogin } {
+  if ((deps.loginMethod ?? "hub") === "sms") {
+    if (!deps.sms) throw new Error("the sms login method needs its SmsLogin");
+    return { method: "sms", sms: deps.sms };
   }
-  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+  const { handoffPrivateKey, hubPublicKey, hubContinueUrl, replay, pending } = deps;
+  if (!handoffPrivateKey || !hubPublicKey || !hubContinueUrl || !replay || !pending) {
+    throw new Error(
+      "the hub login method needs the hand-off keys, Hub's continue URL, a replay guard and pending logins",
+    );
+  }
+  return { method: "hub", hub: { handoffPrivateKey, hubPublicKey, hubContinueUrl, replay, pending } };
 }
 
-function sendHtml(ctx: HttpContext, status: number, html: string) {
-  ctx.status = status;
-  ctx.type = "html";
-  ctx.set("Cache-Control", "no-store");
-  ctx.body = html;
-}
+/**
+ * `prompt=login` asks for a NEW sign-in: with the SMS method, only an auth session proved this
+ * recently satisfies it (the person was just sent through the code step for this very request).
+ */
+const FRESH_LOGIN_SLACK_SECONDS = 120;
 
 export function createProvider(deps: ProviderDeps): Provider {
   const { log } = deps;
+  const login = loginMethodOf(deps);
 
   const configuration: Configuration = {
     adapter: deps.adapter,
@@ -265,8 +279,38 @@ export function createProvider(deps: ProviderDeps): Provider {
         );
         return;
       }
-      const ticket = await issueTicket(uid, deps.handoffPrivateKey);
-      const target = new URL(deps.hubContinueUrl);
+      if (login.method === "sms") {
+        // Finish the login if this browser has an SMS auth session whose principal is connected
+        // (and, when the app asked for a new sign-in, a recent one); otherwise send it to the SMS
+        // sign-in, which comes back to this URL when done.
+        const sms = login.sms;
+        const reasons: string[] = details.prompt.reasons ?? [];
+        const maxAge = Number(details.params.max_age);
+        const authorized = await sms.authorizedPrincipal(ctx as unknown as HttpContext);
+        const age = authorized ? Math.floor(Date.now() / 1000) - authorized.authTime : Infinity;
+        const fresh =
+          (!reasons.includes("login_prompt") || age <= FRESH_LOGIN_SLACK_SECONDS) &&
+          (!reasons.includes("max_age") || (Number.isFinite(maxAge) && age <= maxAge));
+        if (!authorized || !fresh) {
+          log.info("interaction.sms_login", { uid, reason: authorized ? "fresh_login" : "no_session" });
+          ctx.set("Cache-Control", "no-store");
+          ctx.redirect(sms.loginUrl(uid, Boolean(authorized)));
+          return;
+        }
+        const clientId = String(details.params.client_id ?? "");
+        await sms.auditInteractionLogin(ctx as unknown as HttpContext, authorized.principalId, clientId);
+        log.info("interaction.login", { uid, clientId });
+        await provider.interactionFinished(
+          ctx.req,
+          ctx.res,
+          { login: { accountId: authorized.principalId, ts: authorized.authTime } },
+          { mergeWithLastSubmission: false },
+        );
+        ctx.respond = false;
+        return;
+      }
+      const ticket = await issueTicket(uid, login.hub.handoffPrivateKey);
+      const target = new URL(login.hub.hubContinueUrl);
       target.searchParams.set("ticket", ticket);
       log.info("interaction.handoff", { uid, clientId: String(details.params.client_id ?? "") });
       ctx.set("Cache-Control", "no-store");
@@ -276,7 +320,7 @@ export function createProvider(deps: ProviderDeps): Provider {
 
     // POST /interaction/:uid/hub — Hub's signed assertion comes back.
     const back = /^\/interaction\/([\w-]+)\/hub$/.exec(path);
-    if (back && ctx.method === "POST") {
+    if (back && ctx.method === "POST" && login.method === "hub") {
       const uid = back[1]!;
       // This is a cross-site POST (hub.asafarim.com → id.asafarim.site), so the
       // SameSite=Lax interaction cookie isn't sent and the posting browser can't
@@ -296,7 +340,11 @@ export function createProvider(deps: ProviderDeps): Provider {
       }
       let sub: string;
       try {
-        ({ sub } = await verifyAssertion(assertion, { hubPublicKey: deps.hubPublicKey, uid, replay: deps.replay }));
+        ({ sub } = await verifyAssertion(assertion, {
+          hubPublicKey: login.hub.hubPublicKey,
+          uid,
+          replay: login.hub.replay,
+        }));
       } catch (err) {
         const code = err instanceof HandoffError ? err.code : "invalid";
         log.warn("interaction.assertion_refused", { uid, reason: code });
@@ -314,7 +362,7 @@ export function createProvider(deps: ProviderDeps): Provider {
       // browser a completion secret; /complete finishes only where both the
       // provider's interaction cookie and this secret are present.
       const secret = randomBytes(32).toString("base64url");
-      await deps.pending.put(uid, { sub, completionHash: hashSecret(secret) }, PENDING_TTL_SECONDS);
+      await login.hub.pending.put(uid, { sub, completionHash: hashSecret(secret) }, PENDING_TTL_SECONDS);
       ctx.cookies.set(COMPLETION_COOKIE, secret, {
         path: completePath(uid),
         httpOnly: true,
@@ -341,14 +389,14 @@ export function createProvider(deps: ProviderDeps): Provider {
     // GET /interaction/:uid/complete — finish only in the browser that started
     // the interaction AND posted the assertion.
     const complete = /^\/interaction\/([\w-]+)\/complete$/.exec(path);
-    if (complete && ctx.method === "GET") {
+    if (complete && ctx.method === "GET" && login.method === "hub") {
       const uid = complete[1]!;
       ctx.set("Cache-Control", "no-store");
       const secret = ctx.cookies.get(COMPLETION_COOKIE, { signed: false });
       ctx.cookies.set(COMPLETION_COOKIE, null, { path: completePath(uid), signed: false });
       // Consumed only when this browser holds the matching secret (atomic
       // compare-and-delete); a request without it can't burn the login.
-      const pending = secret ? await deps.pending.takeIfSecret(uid, secret) : null;
+      const pending = secret ? await login.hub.pending.takeIfSecret(uid, secret) : null;
       if (!pending) {
         log.warn("interaction.completion_refused", {
           uid,
@@ -386,6 +434,9 @@ export function createProvider(deps: ProviderDeps): Provider {
       ctx.respond = false;
       return;
     }
+
+    // The SMS sign-in's own pages: /connect, /login…, /logout and /admin….
+    if (login.method === "sms" && (await login.sms.handle(ctx as unknown as HttpContext))) return;
 
     await next();
   });

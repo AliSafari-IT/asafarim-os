@@ -6,20 +6,41 @@
 import { readFileSync } from "node:fs";
 import { importJWK, type CryptoKey, type JWK, type KeyObject } from "jose";
 import { loadClients, type ClientConfigFile, type OidcClient } from "./clients.ts";
+import { isE164, normalizePhone, parsePrefixes } from "./phone.ts";
+import type { TwilioConfig } from "./sms.ts";
+
+/** IDENTITY_LOGIN_METHOD=hub (the default): login delegated to Hub (ADR 0002, Addendum A). */
+export interface HubLoginConfig {
+  method: "hub";
+  accountsDatabaseUrl: string;
+  handoffPrivateKey: CryptoKey | KeyObject;
+  hubPublicKey: CryptoKey | KeyObject;
+  hubContinueUrl: string;
+}
+
+/** IDENTITY_LOGIN_METHOD=sms: the service's own SMS sign-in, connections in its own database. */
+export interface SmsLoginConfig {
+  method: "sms";
+  databaseUrl: string;
+  otpSecret: string;
+  allowedPrefixes: string[];
+  dailySmsLimit: number;
+  homeUrl: string;
+  /** The first admin's number (E.164), connected only while no admin is. Null when unset. */
+  bootstrapAdminPhone: string | null;
+  sender: { provider: "twilio"; twilio: TwilioConfig } | { provider: "dev-log" };
+}
 
 export interface IdentityConfig {
   issuer: string;
   port: number;
   redisUrl: string;
-  accountsDatabaseUrl: string;
   /** Private OIDC signing keys (EC P-256, ES256). The first one signs; the rest stay in JWKS for rotation. */
   jwks: { keys: JWK[] };
   cookieKeys: string[];
-  handoffPrivateKey: CryptoKey | KeyObject;
-  hubPublicKey: CryptoKey | KeyObject;
-  hubContinueUrl: string;
   clients: OidcClient[];
   trustProxy: boolean;
+  login: HubLoginConfig | SmsLoginConfig;
 }
 
 export class ConfigError extends Error {
@@ -111,10 +132,14 @@ export async function loadConfig(env: Env = process.env): Promise<IdentityConfig
     throw new ConfigError("IDENTITY_COOKIE_KEYS must be comma-separated keys of at least 32 characters");
   }
 
-  const hubContinueUrl = required(env, "IDENTITY_HUB_CONTINUE_URL");
-  if (new URL(hubContinueUrl).protocol !== "https:" && !local)
-    throw new ConfigError("IDENTITY_HUB_CONTINUE_URL must be https");
-  refuseLoopbackOutsideDevelopment(env, { IDENTITY_HUB_CONTINUE_URL: hubContinueUrl, IDENTITY_ISSUER: issuer });
+  const method = env.IDENTITY_LOGIN_METHOD ?? "hub";
+  if (method !== "hub" && method !== "sms") throw new ConfigError("IDENTITY_LOGIN_METHOD must be hub or sms");
+  const login = method === "sms" ? parseSmsLogin(env, { local }) : await parseHubLogin(env, { local });
+  refuseLoopbackOutsideDevelopment(env, {
+    IDENTITY_ISSUER: issuer,
+    ...(login.method === "hub" ? { IDENTITY_HUB_CONTINUE_URL: login.hubContinueUrl } : {}),
+    ...(login.method === "sms" ? { IDENTITY_HOME_URL: login.homeUrl } : {}),
+  });
 
   const clientsFile = required(env, "IDENTITY_CLIENTS_FILE");
   let clientConfig: ClientConfigFile;
@@ -128,13 +153,95 @@ export async function loadConfig(env: Env = process.env): Promise<IdentityConfig
     issuer,
     port: Number(env.PORT ?? 3000),
     redisUrl: required(env, "IDENTITY_REDIS_URL"),
-    accountsDatabaseUrl: required(env, "IDENTITY_ACCOUNTS_DATABASE_URL"),
     jwks: parseSigningJwks(env),
     cookieKeys,
+    clients: loadClients(clientConfig, env, { allowLocalhost: local }),
+    trustProxy: env.IDENTITY_TRUST_PROXY !== "false",
+    login,
+  };
+}
+
+async function parseHubLogin(env: Env, opts: { local: boolean }): Promise<HubLoginConfig> {
+  const hubContinueUrl = required(env, "IDENTITY_HUB_CONTINUE_URL");
+  if (new URL(hubContinueUrl).protocol !== "https:" && !opts.local)
+    throw new ConfigError("IDENTITY_HUB_CONTINUE_URL must be https");
+  return {
+    method: "hub",
+    accountsDatabaseUrl: required(env, "IDENTITY_ACCOUNTS_DATABASE_URL"),
     handoffPrivateKey: await ed25519(env, "IDENTITY_HANDOFF_PRIVATE_JWK", "private"),
     hubPublicKey: await ed25519(env, "IDENTITY_HUB_PUBLIC_JWK", "public"),
     hubContinueUrl,
-    clients: loadClients(clientConfig, env, { allowLocalhost: local }),
-    trustProxy: env.IDENTITY_TRUST_PROXY !== "false",
+  };
+}
+
+function integerIn(env: Env, name: string, fallback: number, min: number, max: number): number {
+  const raw = env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max)
+    throw new ConfigError(`${name} must be an integer from ${min} to ${max}`);
+  return n;
+}
+
+/** The SMS login method's settings. Exported for tests; `local` = the issuer is on localhost. */
+export function parseSmsLogin(env: Env, opts: { local: boolean }): SmsLoginConfig {
+  const otpSecret = required(env, "IDENTITY_OTP_SECRET");
+  if (otpSecret.length < 32) throw new ConfigError("IDENTITY_OTP_SECRET must be at least 32 characters");
+
+  let allowedPrefixes: string[];
+  try {
+    allowedPrefixes = parsePrefixes(env.IDENTITY_SMS_ALLOWED_PREFIXES ?? "+32");
+  } catch {
+    throw new ConfigError("IDENTITY_SMS_ALLOWED_PREFIXES must be a comma-separated list like +32,+31");
+  }
+
+  const homeUrl = env.IDENTITY_HOME_URL ?? "https://asafarim.site/";
+  let home: URL;
+  try {
+    home = new URL(homeUrl);
+  } catch {
+    throw new ConfigError("IDENTITY_HOME_URL must be a URL");
+  }
+  if (home.protocol !== "https:" && !(opts.local && isLoopbackHost(home.hostname)))
+    throw new ConfigError("IDENTITY_HOME_URL must be https");
+
+  let bootstrapAdminPhone: string | null = null;
+  if (env.IDENTITY_BOOTSTRAP_ADMIN_PHONE) {
+    bootstrapAdminPhone = normalizePhone(env.IDENTITY_BOOTSTRAP_ADMIN_PHONE);
+    if (!bootstrapAdminPhone || !isE164(bootstrapAdminPhone))
+      throw new ConfigError("IDENTITY_BOOTSTRAP_ADMIN_PHONE must be a full international number (+32…)");
+  }
+
+  const provider = env.IDENTITY_SMS_PROVIDER ?? "twilio";
+  let sender: SmsLoginConfig["sender"];
+  if (provider === "twilio") {
+    const accountSid = required(env, "IDENTITY_TWILIO_ACCOUNT_SID");
+    if (!/^AC[0-9a-f]{32}$/i.test(accountSid)) throw new ConfigError("IDENTITY_TWILIO_ACCOUNT_SID must look like AC…");
+    sender = {
+      provider: "twilio",
+      twilio: {
+        accountSid,
+        authToken: required(env, "IDENTITY_TWILIO_AUTH_TOKEN"),
+        from: required(env, "IDENTITY_TWILIO_FROM"),
+      },
+    };
+  } else if (provider === "dev-log") {
+    // Codes in the service's own output: development only, never where real people sign in.
+    if (env.NODE_ENV !== "development" || !opts.local)
+      throw new ConfigError("IDENTITY_SMS_PROVIDER=dev-log is only allowed with NODE_ENV=development on localhost");
+    sender = { provider: "dev-log" };
+  } else {
+    throw new ConfigError("IDENTITY_SMS_PROVIDER must be twilio or dev-log");
+  }
+
+  return {
+    method: "sms",
+    databaseUrl: required(env, "IDENTITY_DATABASE_URL"),
+    otpSecret,
+    allowedPrefixes,
+    dailySmsLimit: integerIn(env, "IDENTITY_SMS_DAILY_LIMIT", 200, 1, 100_000),
+    homeUrl: home.href,
+    bootstrapAdminPhone,
+    sender,
   };
 }
