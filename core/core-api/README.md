@@ -32,6 +32,9 @@ node --env-file=../../.dev/core-api.env src/server.ts
 | `CORE_API_HEALTH_INTERVAL_SECONDS`  | P6.1: how often each active app's manifest `live`/`ready` are polled; 5 to 3600, default 30 (`GET /admin/v1/status`)      |
 | `CORE_API_HEALTH_TIMEOUT_MS`        | per health request; 100 to 10000, default 2000                                                                            |
 | `OS_APP_<ID>_UPSTREAM`              | where an app runs (`host:port`), the same variable the gateway uses; health is polled only at this plus the manifest path |
+| `CORE_API_BACKUP_DIR`               | where Remove writes an app's database backup; default the repository's git-ignored `.dev/backups/`. Set it in production  |
+| `CORE_API_PG_DUMP`                  | the `pg_dump` binary (default: `pg_dump` from `PATH`); at least the Postgres server's major version (16)                  |
+| `CORE_API_RETENTION_DAYS`           | 0 to 3650, default 30: how long a removed app's database is kept before it may be purged                                  |
 
 ## Install (admin)
 
@@ -287,6 +290,7 @@ More endpoints, for the console (all read-only except where noted; every write i
 | `GET /admin/v1/subjects/<sub>/grants`              | what a person holds, across apps                                                                                                                   |
 | `GET /admin/v1/audit[?app=&actor=&limit=&before=]` | the audit log, newest first (`actor` is a case-insensitive part; `next` pages)                                                                     |
 | `GET /admin/v1/events`                             | the event catalog (P4.2): publisher, schema, subscribers, dangling subscriptions (see above)                                                       |
+| `GET /admin/v1/retention[?eligible=true]`          | removed apps with their backup, `purgeAfter` and whether a purge is due now (`eligible`); see [Remove and purge](#remove-and-purge)                |
 
 ### The CLI token: bootstrap, rotation, switching off
 
@@ -311,6 +315,46 @@ The tiles come from `launcherEntries` in `@asafarim/app-manifest`, **the same pr
 
 `POST /admin/v1/apps/<id>/activate` (from `installed` or `inactive`) and `…/deactivate` (from `active`). Each writes an audit event, and **the gateway follows at once** (see below): activating makes the app's host proxy, deactivating makes it serve the "unavailable" page, with no restart and no reload. `GET /admin/v1/apps/<id>` shows the app, its permissions and its roles.
 
+## Remove and purge
+
+ADR 0001 §3, step 6 of the runtime loop. Both need `core.admin`; the console asks for the app id, typed, before either.
+
+### `POST /admin/v1/apps/<id>/remove`
+
+From `installed` or `inactive` (deactivate an active app first); never `core`. In one transaction, under the event plumbing lock:
+
+1. **The backup**, if the app has a database: its login role is set `NOLOGIN` and its open sessions are ended, so nothing changes the data after the dump; then `pg_dump --format=custom`, as the provisioner role, writes `<CORE_API_BACKUP_DIR>/<id>-<UTC time>-<random>.dump` (mode 0600; written as `….partial` and renamed only when pg_dump succeeds), hashed with sha256 on the way. The password goes to pg_dump in its environment, never on its command line.
+2. **The bus**: its consumers, its subscribers' consumers and its stream (as before).
+3. **The writes**: a row in `app_backups` (app, database, path, size, sha256, time), and on the app `removed_at`, `backup_id` and `purge_after` = `removed_at` + `CORE_API_RETENTION_DAYS`; then the credentials, grants, roles, permissions and subscriptions, as before. Audited as `app.removed`, with the backup and the purge date.
+
+If the backup fails, Remove answers **`503 backup_failed`** and **nothing changes**, exactly like a bus failure (`503 bus_unavailable`): the transaction rolls back, a backup file already written is deleted, and the role may log in again. An app with no database (`engine: "none"`) has nothing to back up and no purge date. A dump holds the plumbing lock, so an install or registration that arrives during a long one waits up to 10 s and then gets `503 registry_busy` (and retries).
+
+The response adds `removedAt`, `purgeAfter` and `backup` (`{ id, database, path, sizeBytes, sha256, createdAt }`, or `null`).
+
+### `POST /admin/v1/apps/<id>/purge`
+
+Drops the removed app's **database and its login role** (`DROP DATABASE … WITH (FORCE)`, then `DROP ROLE`). Body: empty, or `{ "force": true, "confirm": "<id>" }`. It is refused with **`409 purge_refused`** and changes nothing unless all of these hold (`details.reason` names the first that doesn't):
+
+| `reason`          | The check                                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------------------------- |
+| `retention`       | `purge_after` has passed, or `force` is `true` **and** `confirm` is the app id (else `400 bad_request`) |
+| `no_backup`       | Remove recorded a backup for it                                                                         |
+| `backup_missing`  | the backup file is still at its recorded path                                                           |
+| `backup_mismatch` | the file's sha256 is still the recorded one                                                             |
+
+Only a removed app that has a database and hasn't been purged yet (`409 invalid_state` otherwise). The drop is idempotent (what is already gone is `absent`), so a purge that failed halfway can be run again. It sets `purged_at` and is audited as **`app.purged`** with the database and role outcome, the backup, the dates and `forced` (purged before `purge_after`). The backup file and its row are kept: they are the only copy of the data afterwards. Restore with `pg_restore --create --dbname=postgres <file>`.
+
+**Nothing purges on its own**: core-api has no scheduler. `GET /admin/v1/retention?eligible=true` lists the apps a purge would accept now, and an administrator purges them.
+
+### Reinstall
+
+Installing a removed app again **before its purge keeps its database**: install finds the database and the role (`db: "exists"` in its audit entry), gives the role a new password and lets it log in again, and clears `removed_at`, `purge_after` and `backup_id`. Its data is there when it registers; the backup file and its row stay as history. After a purge, a reinstall creates a new, empty database. (Refusing the reinstall until a purge would force either a wait of the whole retention window or a purge, which deletes the data an admin who reinstalls most likely wants back.)
+
+### Restrictions
+
+- pg_dump runs as the provisioner role, which therefore has to be able to read the app's database and end its sessions: a superuser in dev, or a role with the privileges of the app roles.
+- Backups are files on core-api's host, unencrypted (mode 0600 in a 0700 directory). Copying them off the host, encrypting them and pruning old ones are deploy-level steps that aren't built.
+
 ## Errors
 
 Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"?: … }`:
@@ -327,13 +371,15 @@ Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"
 | `invalid_manifest`          | 422       | fails manifest validation (`details`: path + message per problem)                                          |
 | `namespace_violation`       | 422       | declares something outside `<id>.*`                                                                        |
 | `already_installed`         | 409       | install of an installed app                                                                                |
-| `invalid_state`             | 409       | a lifecycle change not allowed from the current state                                                      |
+| `invalid_state`             | 409       | a lifecycle change not allowed from the current state (remove, purge included)                             |
 | `role_not_found`            | 404       | a grant or revoke names a role that doesn't exist (or is deprecated, for a grant)                          |
 | `app_inactive`              | 503       | an access token was asked for an app that isn't `active`                                                   |
 | `bus_unavailable`           | 503       | install or registration, and the app's stream or consumers couldn't be set up (P4.1)                       |
 | `invalid_event_schemas`     | 400       | an event-schema upload whose types don't match `events.publishes`, or a schema that doesn't compile (P4.2) |
 | `payload_too_large`         | 413       | an event-schema upload over 512 KiB, or one schema over 64 KiB (P4.2)                                      |
 | `registry_busy`             | 503       | install or registration waited too long for another one's event plumbing; retry                            |
+| `backup_failed`             | 503       | remove, and the app's database couldn't be backed up: nothing was removed                                  |
+| `purge_refused`             | 409       | purge before `purge_after` without `force`, or with no backup, a missing one or one whose sha256 changed   |
 | `forbidden`                 | 403       | signed in to the admin API, but without the role `core.admin`                                              |
 | `not_found` / `bad_request` | 404 / 400 | —                                                                                                          |
 
@@ -343,4 +389,4 @@ Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"
 pnpm --filter @asafarim/core-api test
 ```
 
-The integration suite runs only with `CORE_API_TEST_ADMIN_URL`, a superuser URL on a **dev** Postgres such as `postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres` from `pnpm dev`. It creates a throwaway core database and uniquely named app databases, and drops them all afterwards. The stream and consumer tests (`test/events.integration.test.ts`) also need `CORE_API_TEST_NATS_URL` (`nats://127.0.0.1:54222` from `pnpm dev`) and `NATS_CORE_PASSWORD` (from `.dev/nats.env`; the bus refuses anonymous clients). The bus identity tests (`test/nats-auth.integration.test.ts`) additionally need `CORE_API_NATS_ISSUER_SEED` (from `.dev/core-api.env`). CI's `dev-env` job runs them with `CORE_API_TEST_REQUIRED=1`, so they fail rather than skip.
+The integration suite runs only with `CORE_API_TEST_ADMIN_URL`, a superuser URL on a **dev** Postgres such as `postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres` from `pnpm dev`. It creates a throwaway core database and uniquely named app databases, and drops them all afterwards. The stream and consumer tests (`test/events.integration.test.ts`) also need `CORE_API_TEST_NATS_URL` (`nats://127.0.0.1:54222` from `pnpm dev`) and `NATS_CORE_PASSWORD` (from `.dev/nats.env`; the bus refuses anonymous clients). The bus identity tests (`test/nats-auth.integration.test.ts`) additionally need `CORE_API_NATS_ISSUER_SEED` (from `.dev/core-api.env`). The Remove backup and purge tests (`test/retention.integration.test.ts`) also need a `pg_dump` of at least the server's major version (16): from `PATH`, or `CORE_API_TEST_PG_DUMP`. CI's `dev-env` job runs them with `CORE_API_TEST_REQUIRED=1`, so they fail rather than skip.

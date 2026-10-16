@@ -8,7 +8,7 @@
 import { redirect } from "next/navigation";
 import { CoreApiError, coreApi } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
-import { confirmsRemoval, isAppId, isRoleKey, isSubject, safeAdminPath, withMessage } from "@/lib/util";
+import { confirmsRemoval, formatTime, isAppId, isRoleKey, isSubject, safeAdminPath, withMessage } from "@/lib/util";
 
 /** Run `work`, then go back to `next` with the outcome. redirect() throws, so it stays outside the try. */
 async function perform(formData: FormData, work: (api: ReturnType<typeof coreApi>) => Promise<string>) {
@@ -56,7 +56,26 @@ export async function removeApp(formData: FormData) {
     return (
       `${app} is removed: its credentials are revoked and ${grants} grant${grants === 1 ? "" : "s"} deleted.` +
       (waiting ? ` ${waiting} app${waiting === 1 ? "" : "s"} now wait for a publisher of its events.` : "") +
+      (out.backup && out.purgeAfter
+        ? ` Its database is backed up and kept; it can be purged from ${formatTime(out.purgeAfter)}.`
+        : "") +
       " Install it again with the CLI to bring it back."
+    );
+  });
+}
+
+export async function purgeApp(formData: FormData) {
+  const app = formData.get("app");
+  await perform(formData, async (api) => {
+    if (!isAppId(app)) throw new CoreApiError(400, "bad_request", "That isn't an app id.");
+    const confirm = formData.get("confirm");
+    if (!confirmsRemoval(app, confirm))
+      throw new CoreApiError(400, "bad_request", `Type ${app} to confirm the purge. Nothing was changed.`);
+    // Before the retention window is over the page sends force: core-api still wants the typed id.
+    const out = await api.purge(app, { force: formData.get("force") === "true", confirm: app });
+    return (
+      `${app}'s database ${out.database.name} and its role are dropped${out.forced ? " before the retention window was over" : ""}.` +
+      ` The backup ${out.backup.path} is the only copy of its data now.`
     );
   });
 }

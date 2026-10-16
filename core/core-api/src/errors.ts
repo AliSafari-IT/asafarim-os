@@ -23,6 +23,8 @@ export const ERRORS = {
   invalid_event_schemas: 400, //  an event-schema upload whose types don't match the manifest's events.publishes, or a schema that doesn't compile (P4.2)
   payload_too_large: 413, //      an event-schema upload over 512 KiB, or one schema over 64 KiB (P4.2)
   registry_busy: 503, //          install or registration waited longer than plumbingLockTimeoutMs for another one's event plumbing: retry
+  backup_failed: 503, //          remove: the app's database couldn't be backed up, so nothing was removed (ADR 0001 §3 step 6)
+  purge_refused: 409, //          purge: the retention window isn't over, or the backup is missing or doesn't match (details.reason)
 } as const;
 
 export type ErrorCode = keyof typeof ERRORS;

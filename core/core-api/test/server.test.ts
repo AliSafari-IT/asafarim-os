@@ -5,6 +5,7 @@ import {
   decodeSubject,
   parseBusConfig,
   parseTokenKey,
+  parsePurgeBody,
   parseTokenTtl,
 } from "../src/server.ts";
 
@@ -115,5 +116,17 @@ describe("the bus settings (P4.1 PR 4)", () => {
       }),
     ).toThrow(/account nkey seed/);
     expect(() => parseBusConfig({ ...base, CORE_API_NATS_ISSUER_SEED: SEED })).toThrow(/own bus identity/);
+  });
+});
+
+describe("the purge body (ADR 0001 §3 step 6)", () => {
+  it("empty means no force; force needs a boolean and confirm a string", () => {
+    expect(parsePurgeBody("")).toEqual({ force: false });
+    expect(parsePurgeBody("  ")).toEqual({ force: false });
+    expect(parsePurgeBody("{}")).toEqual({ force: false });
+    expect(parsePurgeBody('{"force":true,"confirm":"notes"}')).toEqual({ force: true, confirm: "notes" });
+    for (const bad of ["nope", "[]", "null", '{"force":"yes"}', '{"force":1}', '{"confirm":7}']) {
+      expect(() => parsePurgeBody(bad), bad).toThrow();
+    }
   });
 });

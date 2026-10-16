@@ -223,6 +223,11 @@ jobs:
             echo "${key}=${value}" >> "$GITHUB_ENV"
           done
 
+      # ADR 0001 §3 step 6: Remove backs up an app's database with pg_dump (the runner's Postgres
+      # client, which must be at least the dev server's 16); retention.integration.test.ts runs it.
+      - name: pg_dump for the Remove backup tests
+        run: pg_dump --version
+
       # core-api (P3.1) against the dev Postgres and NATS the smoke test left running.
       - name: core-api integration tests
         env:

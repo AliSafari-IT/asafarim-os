@@ -4,7 +4,7 @@ import { Flash } from "@/components/Flash";
 import { coreApi, type AdminApp } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
 import { formatTime } from "@/lib/util";
-import { activateApp, deactivateApp, removeApp } from "../actions";
+import { activateApp, deactivateApp, purgeApp, removeApp } from "../actions";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Apps · Admin · ASafariM OS" };
@@ -14,6 +14,75 @@ function installStatus(app: AdminApp): string {
   if (app.state === "removed") return "Removed · install it again with the CLI";
   if (app.registered_at) return `Installed · registered ${formatTime(app.registered_at)}`;
   return "Installed · waiting for the app to register";
+}
+
+/** 12.3 MB */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(1)} ${units[i]}`;
+}
+
+/** A removed app's database: its backup, and when it may be (or was) purged. */
+function RetentionInfo({ app }: { app: AdminApp }) {
+  const r = app.retention;
+  if (app.state !== "removed" || !r) return null;
+  if (!r.database) return <div className="muted">No database: nothing to back up or purge.</div>;
+  return (
+    <div className="muted" data-testid={`retention-${app.id}`}>
+      {r.backup ? (
+        <div>
+          Backup {formatBytes(r.backup.sizeBytes)}, {formatTime(r.backup.createdAt)}:{" "}
+          <span className="mono">{r.backup.path}</span>
+          <div className="mono" title="sha256">
+            sha256 {r.backup.sha256.slice(0, 16)}…
+          </div>
+        </div>
+      ) : (
+        <div>No backup recorded: the database is kept and can&apos;t be purged.</div>
+      )}
+      {r.purgedAt ? (
+        <div>Database purged {formatTime(r.purgedAt)}</div>
+      ) : r.purgeAfter ? (
+        <div>
+          {r.eligible ? "Can be purged since" : "Database kept until"} {formatTime(r.purgeAfter)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** The Purge button: a removed app whose database is kept and backed up. Before purge_after it forces. */
+function PurgeAction({ app }: { app: AdminApp }) {
+  const r = app.retention;
+  if (!r || !r.database || !r.backup || r.purgedAt) return <span className="muted">None</span>;
+  const early = !r.eligible;
+  return (
+    <ConfirmDialog
+      triggerLabel={early ? "Purge early" : "Purge"}
+      triggerAriaLabel={`Purge ${app.name}`}
+      title={`Purge ${app.name}'s database?`}
+      description={
+        `The database ${r.database} and its login role are dropped. core-api first checks that the backup ` +
+        `${r.backup.path} is still there and unchanged; after the purge, that file is the only copy of the data. ` +
+        (early && r.purgeAfter
+          ? `Its retention window isn't over (it ends ${formatTime(r.purgeAfter)}): this purges it early. `
+          : "") +
+        "This can't be undone."
+      }
+      confirmLabel="Purge"
+      danger
+      typeToConfirm={app.id}
+      action={purgeApp}
+      fields={{ app: app.id, next: "/admin/apps", ...(early ? { force: "true" } : {}) }}
+    />
+  );
 }
 
 export default async function AppsPage({
@@ -30,8 +99,9 @@ export default async function AppsPage({
       <h2>Apps</h2>
       <p className="muted">
         Activating an app serves it at its address and puts it in launchers; deactivating shows the &quot;temporarily
-        unavailable&quot; page instead. Data is kept either way. Removing an installed or inactive app revokes its
-        credentials and grants and deletes its event stream and consumers; its database is kept.
+        unavailable&quot; page instead. Data is kept either way. Removing an installed or inactive app first backs up
+        its database, then revokes its credentials and grants and deletes its event stream and consumers; the database
+        is kept until it is purged, after the retention window.
       </p>
       <Flash notice={notice} error={error} />
       <div className="table-wrap">
@@ -62,6 +132,7 @@ export default async function AppsPage({
                 </td>
                 <td>
                   {installStatus(app)}
+                  <RetentionInfo app={app} />
                   <EventsWarning appId={app.id} types={app.waitingForPublisher ?? []} />
                 </td>
                 <td className="muted">
@@ -72,7 +143,7 @@ export default async function AppsPage({
                   {app.system ? (
                     <span className="muted">Always active</span>
                   ) : app.state === "removed" ? (
-                    <span className="muted">None</span>
+                    <PurgeAction app={app} />
                   ) : app.state === "active" ? (
                     <ConfirmDialog
                       triggerLabel="Deactivate"
@@ -99,7 +170,7 @@ export default async function AppsPage({
                         triggerLabel="Remove"
                         triggerAriaLabel={`Remove ${app.name}`}
                         title={`Remove ${app.name}?`}
-                        description={`${app.name} can no longer register, get tokens or use the event bus: its credentials are revoked, every grant of its roles is deleted, and its event stream (with any events not yet delivered) and its consumers are deleted. Apps subscribed to its events wait for a publisher again. Its database is kept. This can't be undone; installing it again starts clean.`}
+                        description={`${app.name} can no longer register, get tokens or use the event bus: its credentials are revoked, every grant of its roles is deleted, and its event stream (with any events not yet delivered) and its consumers are deleted. Apps subscribed to its events wait for a publisher again. Its database is backed up first (if that fails, nothing is removed) and kept until it is purged after the retention window; installing it again before then keeps its data. This can't be undone.`}
                         confirmLabel="Remove"
                         danger
                         typeToConfirm={app.id}

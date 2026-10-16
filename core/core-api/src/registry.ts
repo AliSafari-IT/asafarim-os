@@ -34,8 +34,16 @@ import {
   type InstalledApp,
   type RemovalPlan,
 } from "./event-plumbing.ts";
+import { DEFAULT_RETENTION_DAYS, purgeAfter, type BackupFile, type DatabaseBackups } from "./backup.ts";
 import { launcherFor, type LauncherApp } from "./launcher.ts";
-import { appDatabaseNames, ensureDatabase, ensureRole } from "./provision.ts";
+import {
+  appDatabaseNames,
+  dropDatabaseAndRole,
+  ensureDatabase,
+  ensureRole,
+  setRoleLogin,
+  terminateConnections,
+} from "./provision.ts";
 
 export type AppState = "installed" | "active" | "inactive" | "removed";
 
@@ -74,6 +82,14 @@ export interface RegistryDeps {
    * no bus configured: recorded as `no_bus`, nothing is created, and the app's events wait in its outbox.
    */
   bus?: EventBus;
+  /**
+   * Remove backs up the app's database here before anything is torn down (ADR 0001 §3 step 6), and a
+   * purge checks that backup before it drops the database. Unset = an app with a database can't be
+   * removed (`backup_failed`): its data would otherwise be kept with no backup to purge against.
+   */
+  backups?: DatabaseBackups;
+  /** Days a removed app's database is kept before it may be purged (default 30, CORE_API_RETENTION_DAYS). */
+  retentionDays?: number;
 }
 
 /** What the registry needs from the bus (`createStreamAdmin` from @asafarim/events). Idempotent. */
@@ -358,11 +374,14 @@ export function createRegistry(deps: RegistryDeps) {
       const plan = planEventPlumbing({ appId, manifest, installed });
       const events = await runEventPlumbing(deps.bus, appId, plan, waitingForPublisher(appId, manifest, installed));
 
-      // A reinstall (after removal) waits for the app to register again, like a first install.
+      // A reinstall (after removal) waits for the app to register again, like a first install. Before a
+      // purge it keeps the app's database (ensureDatabase above found it: `db: "exists"`), so the
+      // retention clock stops; after one, the database is a new, empty one.
       await c.query(
         `INSERT INTO apps (id, version, manifest, state, database_name) VALUES ($1, $2, $3, 'installed', $4)
          ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, manifest = EXCLUDED.manifest, state = 'installed',
-           database_name = EXCLUDED.database_name, installed_at = now(), registered_at = NULL, updated_at = now()`,
+           database_name = EXCLUDED.database_name, installed_at = now(), registered_at = NULL, updated_at = now(),
+           removed_at = NULL, purge_after = NULL, purged_at = NULL, backup_id = NULL`,
         [appId, manifest.version, manifest, wantsDatabase ? database : null],
       );
       await c.query("UPDATE app_credentials SET revoked_at = now() WHERE app_id = $1 AND revoked_at IS NULL", [appId]);
@@ -627,25 +646,97 @@ export function createRegistry(deps: RegistryDeps) {
     return out;
   }
 
+  /** A backup as the API and the audit log show it. */
+  const backupSummary = (id: number, database: string, f: BackupFile, createdAt: Date) => ({
+    id,
+    database,
+    path: f.path,
+    sizeBytes: f.sizeBytes,
+    sha256: f.sha256,
+    createdAt: createdAt.toISOString(),
+  });
+
+  /** Let a role log in again after a Remove that didn't go through. Best effort: the error being reported matters more. */
+  async function unlockRole(role: string) {
+    try {
+      const prov = await deps.provisioner();
+      try {
+        await setRoleLogin(prov, role, true);
+      } finally {
+        await prov.end();
+      }
+    } catch {
+      // The Remove's own error is what the admin sees; a retry locks and unlocks the role again.
+    }
+  }
+
+  /**
+   * Remove's backup of the app's database: stop its role logging in and end its sessions (so nothing
+   * changes the data after the dump, and the backup is the database's final state), then dump it.
+   * `undo` records what to put back if the Remove doesn't go through. Any failure → `backup_failed`.
+   */
+  async function backupForRemoval(
+    appId: string,
+    database: string,
+    undo: { role?: string; file?: string },
+  ): Promise<BackupFile> {
+    const why = (err: unknown) =>
+      new ApiError(
+        "backup_failed",
+        `${appId}'s database couldn't be backed up, so nothing was removed: ${(err as Error).message}`,
+      );
+    if (!deps.backups) throw why(new Error("no backup location is configured"));
+    const { role } = appDatabaseNames(appId);
+    try {
+      const prov = await deps.provisioner();
+      try {
+        await setRoleLogin(prov, role, false);
+        undo.role = role;
+        await terminateConnections(prov, database);
+      } finally {
+        await prov.end();
+      }
+    } catch (err) {
+      throw why(err);
+    }
+    try {
+      const file = await deps.backups.dump(appId, database);
+      undo.file = file.path;
+      return file;
+    } catch (err) {
+      throw why(err);
+    }
+  }
+
   /**
    * Admin: remove an app (ADR 0001 §3 step 6). Only from `installed` or `inactive` (deactivate an
-   * active one first); never the built-in app. Like install: the plumbing lock, the plan, the bus
-   * FIRST (its own consumers, the other apps' consumers on its stream, its stream), then the writes,
-   * all in one transaction, so a bus failure (`bus_unavailable`) leaves everything as it was.
+   * active one first); never the built-in app. Like install: the plumbing lock, the plan, then
+   * the steps outside the core database, then the writes, all in one transaction:
    *
-   * The writes: state `removed`; every credential revoked (it can't register, upload schemas, get a
-   * token or connect to the bus); its event subscriptions and schemas deleted; the grants of its
-   * roles deleted, its roles and permissions deprecated (the rows stay for their foreign keys; a
-   * reinstall + registration restores them, as an upgrade does, with no grant carried over).
-   * Its database and OIDC client are not touched here.
+   *  1. the app's database, if it has one, is backed up (`backupForRemoval`: its role stops logging in,
+   *     its sessions end, `pg_dump`); a failure → `backup_failed`;
+   *  2. the bus (its own consumers, the other apps' consumers on its stream, its stream); a failure →
+   *     `bus_unavailable`.
+   *
+   * Either failure leaves everything as it was: the transaction rolls back, the backup file is
+   * deleted and the role may log in again. The dump runs under the plumbing lock, so an install or
+   * registration that arrives meanwhile waits (at most `plumbingLockTimeoutMs`, then `registry_busy`).
+   *
+   * The writes: state `removed`, `removed_at`, and with a backup its row in `app_backups`, `backup_id`
+   * and `purge_after` (removed_at + `retentionDays`); every credential revoked (it can't register,
+   * upload schemas, get a token or connect to the bus); its event subscriptions and schemas deleted;
+   * the grants of its roles deleted, its roles and permissions deprecated (the rows stay for their
+   * foreign keys; a reinstall + registration restores them, as an upgrade does, with no grant carried
+   * over). The database itself is kept until `purge`. Its OIDC client is not touched here.
    */
   async function remove(appId: string, actor: string) {
     if (appId === BUILT_IN_APP) throw new ApiError("invalid_state", `"${appId}" is built in and can't be removed`);
+    const undo: { role?: string; file?: string } = {};
     const out = await inTx(async (c) => {
       const installed = await lockAndReadInstalled(c, appId, lockTimeoutMs);
       const row = (
-        await c.query<{ state: AppState; manifest: AppManifest | null }>(
-          "SELECT state, manifest FROM apps WHERE id = $1 FOR UPDATE",
+        await c.query<{ state: AppState; manifest: AppManifest | null; database_name: string | null }>(
+          "SELECT state, manifest, database_name FROM apps WHERE id = $1 FOR UPDATE",
           [appId],
         )
       ).rows[0];
@@ -658,9 +749,27 @@ export function createRegistry(deps: RegistryDeps) {
             : `can't remove an app that is ${row.state}`,
         );
       }
+      const file = row.database_name ? await backupForRemoval(appId, row.database_name, undo) : null;
       const events = await runRemoval(deps.bus, appId, planRemoval({ appId, manifest: row.manifest, installed }));
 
-      await c.query("UPDATE apps SET state = 'removed', updated_at = now() WHERE id = $1", [appId]);
+      const removedAt = now();
+      let backup: ReturnType<typeof backupSummary> | null = null;
+      if (file && row.database_name) {
+        const id = (
+          await c.query<{ id: string }>(
+            `INSERT INTO app_backups (app_id, database_name, path, size_bytes, sha256, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+            [appId, row.database_name, file.path, file.sizeBytes, file.sha256, removedAt],
+          )
+        ).rows[0]!.id;
+        backup = backupSummary(Number(id), row.database_name, file, removedAt);
+      }
+      const purgeAt = backup ? purgeAfter(removedAt, deps.retentionDays ?? DEFAULT_RETENTION_DAYS) : null;
+      await c.query(
+        `UPDATE apps SET state = 'removed', removed_at = $2, purge_after = $3, purged_at = NULL, backup_id = $4,
+             updated_at = now() WHERE id = $1`,
+        [appId, removedAt, purgeAt, backup?.id ?? null],
+      );
       const credentials = await c.query(
         "UPDATE app_credentials SET revoked_at = now() WHERE app_id = $1 AND revoked_at IS NULL",
         [appId],
@@ -672,7 +781,7 @@ export function createRegistry(deps: RegistryDeps) {
       );
       const grants = await c.query<{ role_key: string; subject: string }>(
         `DELETE FROM role_grants g USING roles r WHERE r.key = g.role_key AND r.app_id = $1
-         RETURNING g.role_key, g.subject`,
+           RETURNING g.role_key, g.subject`,
         [appId],
       );
       await c.query(
@@ -690,13 +799,122 @@ export function createRegistry(deps: RegistryDeps) {
           .map((g) => ({ role: g.role_key, subject: g.subject }))
           .sort((a, b) => a.role.localeCompare(b.role) || a.subject.localeCompare(b.subject)),
         removedEventSchemas: schemas.rows.map((x) => x.event_type).sort(),
+        removedAt: removedAt.toISOString(),
+        backup,
+        purgeAfter: purgeAt?.toISOString() ?? null,
         ...events,
       };
       await audit(c, actor, "app.removed", appId, detail);
       return { appId, state: "removed" as AppState, previous: row.state, ...detail };
+    }).catch(async (err: unknown) => {
+      // Nothing was removed: no backup file without its row, and the app's role logs in again.
+      if (undo.file) await deps.backups?.discard(undo.file);
+      if (undo.role) await unlockRole(undo.role);
+      throw err;
     });
     deps.onLifecycleChange?.(); // the gateway stops serving it from this moment
     return out;
+  }
+
+  /**
+   * Admin: purge a removed app (ADR 0001 §3 step 6): drop its database and its login role. Refused
+   * (`purge_refused`, `details.reason`) unless
+   *
+   *  - the retention window is over (`purge_after` has passed: `retention`), or `force` is set with
+   *    `confirm` = the app id typed (the same typed-id check as the console's Remove);
+   *  - the backup Remove took is recorded (`no_backup`);
+   *  - its file is still there (`backup_missing`) with the recorded sha256 (`backup_mismatch`).
+   *
+   * Only a removed app that has a database and hasn't been purged (`invalid_state` otherwise). The
+   * drop is idempotent (`absent`), so a purge that failed halfway can be run again. Audited as
+   * `app.purged`. The backup file and its row are kept: they are the only copy of the data now.
+   */
+  async function purge(appId: string, actor: string, opts: { force?: boolean; confirm?: unknown } = {}) {
+    if (appId === BUILT_IN_APP) throw new ApiError("invalid_state", `"${appId}" is built in and can't be purged`);
+    if (opts.force && opts.confirm !== appId) {
+      throw new ApiError("bad_request", `a forced purge needs "confirm": "${appId}" (the app id, typed)`);
+    }
+    return inTx(async (c) => {
+      const row = (
+        await c.query<{
+          state: AppState;
+          database_name: string | null;
+          removed_at: Date | null;
+          purge_after: Date | null;
+          purged_at: Date | null;
+          backup_id: string | null;
+        }>(
+          "SELECT state, database_name, removed_at, purge_after, purged_at, backup_id FROM apps WHERE id = $1 FOR UPDATE",
+          [appId],
+        )
+      ).rows[0];
+      if (!row) throw new ApiError("not_found", `no app "${appId}"`);
+      if (row.state !== "removed")
+        throw new ApiError("invalid_state", `can't purge an app that is ${row.state}: remove it first`);
+      if (row.purged_at) throw new ApiError("invalid_state", `${appId} was already purged`);
+      if (!row.database_name) throw new ApiError("invalid_state", `${appId} has no database to purge`);
+      const database = row.database_name;
+
+      const b = row.backup_id
+        ? (
+            await c.query<{ id: string; path: string; size_bytes: string; sha256: string; created_at: Date }>(
+              "SELECT id, path, size_bytes, sha256, created_at FROM app_backups WHERE id = $1 AND app_id = $2",
+              [row.backup_id, appId],
+            )
+          ).rows[0]
+        : undefined;
+      if (!b) {
+        throw new ApiError("purge_refused", `${appId} has no recorded backup: its database is kept`, {
+          reason: "no_backup",
+        });
+      }
+      const at = now();
+      const due = row.purge_after !== null && at.getTime() >= row.purge_after.getTime();
+      if (!due && !opts.force) {
+        throw new ApiError(
+          "purge_refused",
+          `${appId}'s retention window isn't over: it may be purged from ${row.purge_after?.toISOString() ?? "(never set)"}`,
+          { reason: "retention", purgeAfter: row.purge_after?.toISOString() ?? null },
+        );
+      }
+      const backup = backupSummary(
+        Number(b.id),
+        database,
+        { path: b.path, sizeBytes: Number(b.size_bytes), sha256: b.sha256 },
+        new Date(b.created_at),
+      );
+      const check = deps.backups ? await deps.backups.check(b.path, b.sha256) : "missing";
+      if (check !== "ok") {
+        throw new ApiError(
+          "purge_refused",
+          check === "missing"
+            ? `${appId}'s backup ${b.path} isn't there any more: its database is kept`
+            : `${appId}'s backup ${b.path} doesn't match its recorded sha256: its database is kept`,
+          { reason: check === "missing" ? "backup_missing" : "backup_mismatch", backup },
+        );
+      }
+
+      const { role } = appDatabaseNames(appId);
+      const prov = await deps.provisioner();
+      let dropped: Awaited<ReturnType<typeof dropDatabaseAndRole>>;
+      try {
+        dropped = await dropDatabaseAndRole(prov, database, role);
+      } finally {
+        await prov.end();
+      }
+      await c.query("UPDATE apps SET purged_at = $2, updated_at = now() WHERE id = $1", [appId, at]);
+      const detail = {
+        database: { name: database, result: dropped.database },
+        role: { name: role, result: dropped.role },
+        backup,
+        removedAt: row.removed_at?.toISOString() ?? null,
+        purgeAfter: row.purge_after?.toISOString() ?? null,
+        purgedAt: at.toISOString(),
+        forced: !due,
+      };
+      await audit(c, actor, "app.purged", appId, detail);
+      return { appId, state: "removed" as AppState, ...detail };
+    });
   }
 
   /**
@@ -840,6 +1058,7 @@ export function createRegistry(deps: RegistryDeps) {
     uploadEventSchemas,
     transition,
     remove,
+    purge,
     get,
     pruneNonces,
     subjectAccess,

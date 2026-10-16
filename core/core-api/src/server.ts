@@ -7,7 +7,8 @@
  *   PUT  /registry/v1/apps/:id/event-schemas   the JSON Schemas of what it publishes (the app, signed; P4.2)
  *   POST /admin/v1/apps/:id/install            body: the manifest JSON (admin)
  *   POST /admin/v1/apps/:id/activate|deactivate                         (admin)
- *   POST /admin/v1/apps/:id/remove     from installed/inactive: bus teardown, credentials, grants (admin)
+ *   POST /admin/v1/apps/:id/remove     from installed/inactive: database backup, bus teardown, credentials, grants (admin)
+ *   POST /admin/v1/apps/:id/purge      a removed app's database and role dropped, after its retention window (admin)
  *   GET  /admin/v1/apps/:id                                             (admin)
  *   POST /registry/v1/apps/:id/subjects/:sub/token   a short-lived access token (the app, signed)
  *   GET  /.well-known/jwks.json                      the keys that verify those tokens
@@ -26,6 +27,7 @@
  *   GET  /admin/v1/subjects/<sub>/grants         what a person holds
  *   GET  /admin/v1/audit[?app=&actor=&limit=&before=]   the audit log, newest first
  *   GET  /admin/v1/status                        each app's live/ready, as last polled (P6.1, health.ts)
+ *   GET  /admin/v1/retention[?eligible=true]     removed apps: their backup, purge date, whether purge is due
  *   GET  /registry/v1/apps/:id/launcher/:sub     the apps a person can open (the app, signed)
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -33,6 +35,7 @@ import path from "node:path";
 import pg from "pg";
 import { createStreamAdmin } from "@asafarim/events";
 import { createAdminQueries } from "./admin.ts";
+import { createPgDumpBackups, parseRetentionDays } from "./backup.ts";
 import {
   CORE_ADMIN_ROLE,
   bearerMatches,
@@ -50,6 +53,8 @@ import { createRegistry, type Registry } from "./registry.ts";
 import { SIGNATURE_HEADERS, jwksOf, verificationKeyOf, type SigningKey } from "@asafarim/registry-protocol";
 
 const MAX_BODY = 256 * 1024;
+/** CORE_API_BACKUP_DIR when unset: the repository's git-ignored `.dev/backups/` (local development). */
+export const DEFAULT_BACKUP_DIR = path.resolve(import.meta.dirname, "../../../.dev/backups");
 const APP_ID = "([a-z][a-z0-9-]{1,31})";
 
 /** Read the body; over `limit` bytes → `bad_request` (or `tooLarge`, e.g. 413 for an event-schema upload). */
@@ -121,7 +126,7 @@ export function createHandler(opts: {
   const snapshot = opts.snapshot ?? createAppSnapshot(() => loadGatewayApps(opts.pool));
   const keys = opts.tokenKey ? [verificationKeyOf(opts.tokenKey)] : [];
   const gateway = createGateway({ apps: snapshot.apps, keys: () => keys, now: opts.now });
-  const queries = createAdminQueries(opts.pool);
+  const queries = createAdminQueries(opts.pool, opts.now);
   const authorizeAdmin = createAdminAuth({
     staticToken: opts.adminToken,
     identity: opts.identity,
@@ -251,6 +256,13 @@ export function createHandler(opts: {
           if (who !== undefined && who.length > 128) throw new ApiError("bad_request", "actor is too long");
           return json(res, 200, await queries.audit({ app, actor: who, limit: num("limit"), before: num("before") }));
         }
+        if (req.method === "GET" && p === "/admin/v1/retention") {
+          const eligible = url.searchParams.get("eligible");
+          if (eligible !== null && eligible !== "true" && eligible !== "false") {
+            throw new ApiError("bad_request", "eligible must be true or false");
+          }
+          return json(res, 200, { apps: await queries.listRetention({ eligibleOnly: eligible === "true" }) });
+        }
         if (req.method === "GET" && p === "/admin/v1/status") {
           return json(res, 200, opts.health?.status() ?? { checkedAt: null, intervalMs: null, apps: [] });
         }
@@ -303,6 +315,12 @@ export function createHandler(opts: {
           log({ msg: "app.removed", appId: m[1], actor });
           return json(res, 200, out);
         }
+        m = new RegExp(`^/admin/v1/apps/${APP_ID}/purge$`).exec(p);
+        if (m && req.method === "POST") {
+          const out = await opts.registry.purge(m[1]!, actor, parsePurgeBody(await readBody(req)));
+          log({ msg: "app.purged", appId: m[1], actor, forced: out.forced });
+          return json(res, 200, out);
+        }
         m = new RegExp(`^/admin/v1/apps/${APP_ID}$`).exec(p);
         if (m && req.method === "GET") return json(res, 200, await opts.registry.get(m[1]!));
       }
@@ -320,6 +338,28 @@ export function createHandler(opts: {
       return json(res, 500, { error: "internal" });
     }
   };
+}
+
+/**
+ * The body of `POST /admin/v1/apps/<id>/purge`: empty, or `{ "force": true, "confirm": "<id>" }` to
+ * purge before the retention window is over (the registry checks that `confirm` is the app id).
+ */
+export function parsePurgeBody(raw: string): { force: boolean; confirm?: string } {
+  if (raw.trim() === "") return { force: false };
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    throw new ApiError("bad_request", "the body must be JSON: {} or { force, confirm }");
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new ApiError("bad_request", "the body must be a JSON object");
+  }
+  const { force, confirm } = body as { force?: unknown; confirm?: unknown };
+  if (force !== undefined && typeof force !== "boolean") throw new ApiError("bad_request", "force must be a boolean");
+  if (confirm !== undefined && typeof confirm !== "string")
+    throw new ApiError("bad_request", "confirm must be a string");
+  return { force: force === true, ...(confirm !== undefined ? { confirm } : {}) };
 }
 
 /** Every app the gateway might be asked about (removed ones are gone). */
@@ -464,9 +504,18 @@ async function main() {
         `${JSON.stringify({ service: "core-api", msg: "events.deadletter_unavailable", error: err.message })}\n`,
       ),
   );
+  // ADR 0001 §3 step 6: Remove backs up an app's database (pg_dump, as the provisioner) into
+  // CORE_API_BACKUP_DIR; a purge may drop it CORE_API_RETENTION_DAYS later.
+  const backups = createPgDumpBackups({
+    dir: process.env.CORE_API_BACKUP_DIR || DEFAULT_BACKUP_DIR,
+    connection: provisionerUrl,
+    pgDump: process.env.CORE_API_PG_DUMP || undefined,
+  });
   const registry = createRegistry({
     bus,
     pool,
+    backups,
+    retentionDays: parseRetentionDays(process.env.CORE_API_RETENTION_DAYS),
     tokenKey,
     accessTokenTtlSeconds: parseTokenTtl(process.env.CORE_API_ACCESS_TOKEN_TTL_SECONDS),
     appUrlTemplate: process.env.CORE_API_APP_URL_TEMPLATE || undefined,
