@@ -35,6 +35,7 @@ node --env-file=../../.dev/core-api.env src/server.ts
 | `CORE_API_BACKUP_DIR`               | where Remove writes an app's database backup; default the repository's git-ignored `.dev/backups/`. Set it in production  |
 | `CORE_API_PG_DUMP`                  | the `pg_dump` binary (default: `pg_dump` from `PATH`); at least the Postgres server's major version (16)                  |
 | `CORE_API_RETENTION_DAYS`           | 0 to 3650, default 30: how long a removed app's database is kept before it may be purged                                  |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`       | P6.2: traces (one SERVER span per request, `/authz/check` too) and request metrics over OTLP. Unset = off                 |
 
 ## Install (admin)
 
