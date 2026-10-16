@@ -5,7 +5,8 @@
  *   docs active, docs.owner granted to dev-member → the roadmap fixture renders (table, task list,
  *   highlighted code, a drawn Mermaid chart, the image through /api/files, links inside the listing,
  *   a dead link as text) → "On this page", the filter, ⌘K search and a relative link all open the
- *   right place → on a phone the documents are a drawer → Lighthouse accessibility ≥ 95, light and dark.
+ *   right place → on a phone the documents are a drawer → the home page's cards and previous / next →
+ *   Lighthouse accessibility ≥ 95, light and dark, on the roadmap and on the home page.
  *
  * Screenshots go to test-results/screens/ and the Lighthouse scores to test-results/lighthouse.json
  * (both uploaded by CI).
@@ -106,11 +107,44 @@ test("on a phone the documents are a drawer", async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/docs-phone.png`, fullPage: true });
 });
 
+test("the home page: a start card, one card per section, and previous / next under a document", async ({ page }) => {
+  await signIn(page);
+  await page.goto("/");
+  const home = page.getByTestId("home");
+  await expect(home.getByRole("heading", { level: 1 })).toHaveText("Welcome");
+  await expect(home.getByTestId("home-start")).toContainText("Start here");
+  // The fixtures' two folders with documents; the images folder has none, so it gets no card.
+  const sections = home.getByTestId("home-sections");
+  await expect(sections.getByRole("heading", { level: 2 })).toHaveText([/^Guides/, /^Ventures/]);
+  mkdirSync(SHOTS, { recursive: true });
+  await page.screenshot({ path: `${SHOTS}/docs-home-light.png`, fullPage: true });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.screenshot({ path: `${SHOTS}/docs-home-dark.png`, fullPage: true });
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // The roadmap, from its card: then "Next" follows the sidebar's order.
+  await sections.getByRole("link", { name: /Roadmap$/ }).click();
+  await expect(page.getByTestId("doc-title")).toHaveText("Demo app roadmap");
+  await expect(page.getByTestId("pager-prev")).toContainText("Previous");
+  await expect(page.getByTestId("pager-next")).toContainText("Overview");
+  await page.getByTestId("pager-next").click();
+  await expect(page.getByTestId("doc-title")).toHaveText("Demo app overview");
+});
+
 test("Lighthouse accessibility is at least 95, light and dark", async () => {
   const results = [await accessibilityScore("light"), await accessibilityScore("dark")];
   mkdirSync("test-results", { recursive: true });
   writeFileSync("test-results/lighthouse.json", `${JSON.stringify(results, null, 2)}\n`);
   for (const r of results)
     console.log(`Lighthouse accessibility (${r.scheme}): ${Math.round(r.score * 100)}`, r.failing);
+  for (const r of results) expect(r.score, `${r.scheme}: ${r.failing.join("; ")}`).toBeGreaterThanOrEqual(MIN_A11Y);
+});
+
+test("Lighthouse accessibility is at least 95 on the home page, light and dark", async () => {
+  const results = [await accessibilityScore("light", "/"), await accessibilityScore("dark", "/")];
+  mkdirSync("test-results", { recursive: true });
+  writeFileSync("test-results/lighthouse-home.json", `${JSON.stringify(results, null, 2)}\n`);
+  for (const r of results)
+    console.log(`Lighthouse accessibility, home (${r.scheme}): ${Math.round(r.score * 100)}`, r.failing);
   for (const r of results) expect(r.score, `${r.scheme}: ${r.failing.join("; ")}`).toBeGreaterThanOrEqual(MIN_A11Y);
 });

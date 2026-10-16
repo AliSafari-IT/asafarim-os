@@ -37,7 +37,9 @@ A document is rendered **on the server** (`components/Markdown.tsx`): GitHub-fla
 
 Around it: the documents with readable names and a filter (a drawer on a phone), a breadcrumb, the owner badge, reading time and word count, "On this page" (h2 and h3, the current section marked) and ⌘K / Ctrl+K search over every title and heading (`GET /api/search`, gated; never the body). Titles, headings, reading time and issue links come from `@asafarim/markdown-utils` (`lib/outline.ts`), with heading ids that match the rendered ones.
 
-The browser check is `e2e/docs.spec.ts`, run by `pnpm e2e` after notes and admin: the roadmap fixture renders, every navigation lands in the right place, the drawer works, and Lighthouse accessibility is at least 95 in light and dark (`test-results/lighthouse.json`, with screenshots in `test-results/screens/`).
+With nothing open, the **home page** (`lib/home.ts`) shows a "Start here" card for the root `index.md` (else `README.md`), one card per top-level folder (its document count, its first four documents, "and N more"), and the other root documents; a document's folder is named next to it when two would read alike. Under every document, **Previous** and **Next** follow the sidebar's order. Both come from the listing alone: nothing more is fetched. Signed out, or without access, is a centred card that says nothing about the documents.
+
+The browser check is `e2e/docs.spec.ts`, run by `pnpm e2e` after notes and admin: the roadmap fixture renders, every navigation lands in the right place, the drawer works, the home page's cards and Previous / Next open the right documents, and Lighthouse accessibility is at least 95 in light and dark, on the roadmap and on the home page (`test-results/lighthouse.json` and `lighthouse-home.json`, with screenshots in `test-results/screens/`).
 
 ## Study notes (#81)
 
