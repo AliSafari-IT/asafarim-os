@@ -27,11 +27,18 @@
  *   GET  /admin/v1/audit[?app=&actor=&limit=&before=]   the audit log, newest first
  *   GET  /admin/v1/status                        each app's live/ready, as last polled (P6.1, health.ts)
  *   GET  /registry/v1/apps/:id/launcher/:sub     the apps a person can open (the app, signed)
+ *
+ * Traces (P6 part 2c): with OTEL_EXPORTER_OTLP_ENDPOINT set, every request runs in a SERVER span
+ * named `METHOD /route/pattern` (see `routePattern`) that continues the caller's `traceparent`, so
+ * the gateway's `/authz/check` shows up in the trace of the request it lets through. The span
+ * carries the method, the route pattern and the status, nothing else (`traceHttpHandler`).
  */
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import pg from "pg";
 import { createStreamAdmin } from "@asafarim/events";
+import { registerTelemetry, traceHttpHandler, type Telemetry } from "@asafarim/telemetry";
 import { createAdminQueries } from "./admin.ts";
 import {
   CORE_ADMIN_ROLE,
@@ -95,6 +102,62 @@ export function appDatabasePort(override: string | undefined, provisioner: URL):
   return Number(override || provisioner.port || 5432);
 }
 
+const SUB = "[^/]{1,400}";
+const ROLE = "[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+";
+
+/**
+ * The route patterns a span is named after, in the handler's own terms (`:id` an app id, `:sub` a
+ * subject, `:role` a role key). Matched on the path alone, so a wrong method still gets its route.
+ */
+const ROUTES: readonly [RegExp, string][] = (
+  [
+    ["/healthz", "/healthz"],
+    ["/readyz", "/readyz"],
+    ["/\\.well-known/jwks\\.json", "/.well-known/jwks.json"],
+    ["/authz/check", "/authz/check"],
+    [`/registry/v1/apps/${APP_ID}`, "/registry/v1/apps/:id"],
+    [`/registry/v1/apps/${APP_ID}/event-schemas`, "/registry/v1/apps/:id/event-schemas"],
+    [`/registry/v1/apps/${APP_ID}/subjects/${SUB}`, "/registry/v1/apps/:id/subjects/:sub"],
+    [`/registry/v1/apps/${APP_ID}/subjects/${SUB}/token`, "/registry/v1/apps/:id/subjects/:sub/token"],
+    [`/registry/v1/apps/${APP_ID}/launcher/${SUB}`, "/registry/v1/apps/:id/launcher/:sub"],
+    ["/admin/v1/session", "/admin/v1/session"],
+    ["/admin/v1/apps", "/admin/v1/apps"],
+    ["/admin/v1/events", "/admin/v1/events"],
+    ["/admin/v1/roles", "/admin/v1/roles"],
+    [`/admin/v1/roles/${ROLE}/grants`, "/admin/v1/roles/:role/grants"],
+    [`/admin/v1/roles/${ROLE}/grants/${SUB}`, "/admin/v1/roles/:role/grants/:sub"],
+    [`/admin/v1/subjects/${SUB}/grants`, "/admin/v1/subjects/:sub/grants"],
+    ["/admin/v1/audit", "/admin/v1/audit"],
+    ["/admin/v1/status", "/admin/v1/status"],
+    ["/admin/v1/gateway/apps", "/admin/v1/gateway/apps"],
+    [`/admin/v1/apps/${APP_ID}`, "/admin/v1/apps/:id"],
+    [`/admin/v1/apps/${APP_ID}/install`, "/admin/v1/apps/:id/install"],
+    [`/admin/v1/apps/${APP_ID}/activate`, "/admin/v1/apps/:id/activate"],
+    [`/admin/v1/apps/${APP_ID}/deactivate`, "/admin/v1/apps/:id/deactivate"],
+    [`/admin/v1/apps/${APP_ID}/remove`, "/admin/v1/apps/:id/remove"],
+  ] as const
+).map(([source, pattern]): [RegExp, string] => [new RegExp(`^${source}$`), pattern]);
+
+/** The route pattern of a request path (`/admin/v1/apps/:id`), or undefined when no route has that shape. */
+export function routePattern(pathname: string): string | undefined {
+  return ROUTES.find(([re]) => re.test(pathname))?.[1];
+}
+
+/** core-api's version, from its package.json (core-api has no manifest). */
+function packageVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+/** Traces and request metrics over OTLP (P6.2); off, and nothing registered, unless OTEL_EXPORTER_OTLP_ENDPOINT is set. */
+export function startTelemetry(env: Record<string, string | undefined> = process.env): Telemetry {
+  return registerTelemetry({ appId: "core-api", version: packageVersion(), env });
+}
+
 const header = (req: IncomingMessage, name: string) => {
   const v = req.headers[name];
   return Array.isArray(v) ? v[0] : v;
@@ -128,7 +191,7 @@ export function createHandler(opts: {
     holdsRole: queries.holdsRole,
     log,
   });
-  return async (req: IncomingMessage, res: ServerResponse) => {
+  const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://core-api");
     const p = url.pathname;
     try {
@@ -320,6 +383,17 @@ export function createHandler(opts: {
       return json(res, 500, { error: "internal" });
     }
   };
+  // One SERVER span per request, continuing the caller's trace; a no-op with telemetry off.
+  return traceHttpHandler(handle, {
+    route: (req) => {
+      try {
+        return routePattern(new URL(req.url ?? "/", "http://core-api").pathname);
+      } catch {
+        return undefined;
+      }
+    },
+    tracerName: "core-api",
+  });
 }
 
 /** Every app the gateway might be asked about (removed ones are gone). */
@@ -408,6 +482,8 @@ export function parseAdminToken(env: Record<string, string | undefined>): string
 }
 
 async function main() {
+  // First, so everything after is traced (P6.2). Off unless OTEL_EXPORTER_OTLP_ENDPOINT is set.
+  startTelemetry();
   const adminToken = parseAdminToken(process.env);
   // People sign in to the Admin console through core/identity; core-api verifies their ID token.
   const identityIssuer = process.env.CORE_API_IDENTITY_ISSUER;

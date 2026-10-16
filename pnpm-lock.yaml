@@ -375,6 +375,9 @@ importers:
       '@asafarim/registry-protocol':
         specifier: workspace:*
         version: link:../../packages/registry-protocol
+      '@asafarim/telemetry':
+        specifier: workspace:*
+        version: link:../../packages/telemetry
       '@nats-io/nats-core':
         specifier: ^3.4.0
         version: 3.4.0

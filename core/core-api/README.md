@@ -32,6 +32,7 @@ node --env-file=../../.dev/core-api.env src/server.ts
 | `CORE_API_HEALTH_INTERVAL_SECONDS`  | P6.1: how often each active app's manifest `live`/`ready` are polled; 5 to 3600, default 30 (`GET /admin/v1/status`)      |
 | `CORE_API_HEALTH_TIMEOUT_MS`        | per health request; 100 to 10000, default 2000                                                                            |
 | `OS_APP_<ID>_UPSTREAM`              | where an app runs (`host:port`), the same variable the gateway uses; health is polled only at this plus the manifest path |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`       | P6.2: traces (one SERVER span per request, `/authz/check` too) and request metrics over OTLP. Unset = off                 |
 
 ## Install (admin)
 
