@@ -12,7 +12,7 @@
  * only over TLS. Every step has a deadline. Nothing it logs or throws
  * contains the address, the code or the password.
  */
-import { Socket, connect as netConnect } from "node:net";
+import { type Socket, connect as netConnect } from "node:net";
 import { type TLSSocket, connect as tlsConnect } from "node:tls";
 
 export type SmtpSecurity = "tls" | "starttls" | "none";
