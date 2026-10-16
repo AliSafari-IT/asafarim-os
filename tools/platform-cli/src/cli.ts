@@ -12,6 +12,9 @@
  *                                            one per line (# comments allowed); listed, not drift
  *   pnpm platform manifest validate <file>   check one manifest (.json, or a .ts default export)
  *   pnpm platform manifest compile <file>    validate and write platform.app.json beside it
+ *   pnpm platform manifest review [<id>…] [--json] [--strict] [--root <dir>]
+ *                                            compare apps' manifests with their code (P7.2); advisory,
+ *                                            exits 0 unless --strict. Reads files only, never runs app code
  *   pnpm platform boundaries                 fail if core/ or packages/ import from apps/
  *   pnpm platform app new <id> [--name "<Display name>"] [--root <dir>]
  *                                            write a minimal app to <dir>/apps/<id>/ (P7.1); installs nothing
@@ -22,6 +25,12 @@
  *                                            install an app from another repository from its image (#87):
  *                                            the manifest comes from its org.asafarim.app.manifest label
  *   pnpm platform app activate|deactivate <id>          change its lifecycle state
+ *   pnpm platform app remove <id> [--confirm <id>] [--yes]
+ *                                            back up its database and remove it (ADR 0001 §3 step 6)
+ *   pnpm platform app purge <id> [--force] [--confirm <id>] [--yes]
+ *                                            drop a removed app's database and role after its retention window
+ *   pnpm platform app retention [--eligible] removed apps, their backup and purge date
+ *                                            remove and purge take the id twice: typed at the prompt, or --confirm <id>
  *   pnpm platform role grant|revoke <role> <subject>    an admin (un)grants an app's declared role
  */
 import path from "node:path";
@@ -31,6 +40,8 @@ import { loadPlatformWiring, readSiteList } from "./against/load.ts";
 import { boundariesCommand } from "./boundaries.ts";
 import { compileCommand, validateCommand } from "./manifest.ts";
 import { composeCommand } from "./compose.ts";
+import { retentionCommand } from "./retention.ts";
+import { reviewCommand } from "./review.ts";
 import { newAppCommand } from "./scaffold.ts";
 import { findRepoRoot, sync } from "./sync.ts";
 
@@ -40,6 +51,7 @@ const USAGE = [
   "  platform sync --check --against <dir> [--other-stack-sites <file>]",
   "  platform manifest validate <file>",
   "  platform manifest compile <file>",
+  "  platform manifest review [<id>…] [--json] [--strict] [--root <dir>]   advisory; --strict fails on findings",
   "  platform boundaries",
   '  platform app new <id> [--name "<Display name>"] [--root <dir>]   write a minimal app to apps/<id>',
   "  platform app compose <id|image-ref> --env prod|staging --out <file>   (--help for the options)",
@@ -48,6 +60,13 @@ const USAGE = [
   "      (the explicit --image flag tells the two apart; the manifest is read from the image's",
   "      org.asafarim.app.manifest label, pulling it first if needed, and never by running it)",
   "  platform app activate|deactivate <id>",
+  "  platform app remove <id> [--confirm <id>] [--yes]   back up its database, then remove it",
+  "  platform app purge <id> [--force] [--confirm <id>] [--yes]",
+  "                                                      drop a removed app's database and role",
+  "  platform app retention [--eligible]                 removed apps, their backup and purge date",
+  "      (remove and purge need the id twice: typed at the prompt, or --confirm <id> when stdin",
+  "      isn't a terminal; --yes is accepted only with --confirm <id>; --force purges before the",
+  "      purge date)",
   "  platform role grant|revoke <role> <subject>",
 ].join("\n");
 
@@ -85,12 +104,16 @@ async function main(argv: string[]): Promise<number> {
   if (command === "sync") result = await syncCommand(rest);
   else if (command === "manifest" && (rest[0] === "validate" || rest[0] === "compile") && rest.length === 2) {
     result = rest[0] === "validate" ? await validateCommand(rest[1]!, cwd) : await compileCommand(rest[1]!, cwd);
+  } else if (command === "manifest" && rest[0] === "review") {
+    result = reviewCommand(rest.slice(1), cwd, () => findRepoRoot(cwd));
   } else if (command === "boundaries" && rest.length === 0) {
     result = boundariesCommand(findRepoRoot(cwd));
   } else if (command === "role") {
     result = await roleCommand(rest, findRepoRoot(cwd));
   } else if (command === "app" && rest[0] === "compose") {
     result = await composeCommand(rest.slice(1), findRepoRoot(cwd), cwd);
+  } else if (command === "app" && (rest[0] === "remove" || rest[0] === "purge" || rest[0] === "retention")) {
+    result = await retentionCommand(rest, findRepoRoot(cwd));
   } else if (command === "app" && rest[0] === "new") {
     result = newAppCommand(rest.slice(1), cwd, () => findRepoRoot(cwd));
   } else if (command === "app") {
