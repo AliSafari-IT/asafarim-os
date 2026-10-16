@@ -138,7 +138,7 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
     u.pathname = `/${dbName}`;
     dbUrl = u.href;
     store = new PgIdentityStore(dbUrl);
-    expect(await store.migrate()).toEqual(["001_sms_login.sql", "002_email_passkeys.sql"]);
+    expect(await store.migrate()).toEqual(["001_sms_login.sql", "002_email_passkeys.sql", "003_passkey_id_check.sql"]);
     expect(await store.migrate()).toEqual([]);
   });
 
@@ -210,6 +210,14 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
     expect((await store.passkey(credentialId))!.signCount).toBe(7);
     expect(await store.removePasskey(id, credentialId)).toBe(true);
     expect(await store.passkey(credentialId)).toBeNull();
+
+    // 003: the credential id's shape is still enforced, up to the 1400 characters 002 meant.
+    const key = { publicKey: { kty: "OKP", crv: "Ed25519", x: "B".repeat(43) }, alg: -8, signCount: 0, transports: [] };
+    await store.addPasskey(id, { ...key, credentialId: "C".repeat(1400), name: "Long" });
+    for (const bad of ["A".repeat(15), "A".repeat(1401), `${"A".repeat(20)}+/`])
+      await expect(store.addPasskey(id, { ...key, credentialId: bad, name: "Bad" }), bad.slice(-3)).rejects.toThrow(
+        /passkeys_credential_id_check/,
+      );
   });
 
   it("keeps the audit trail append-only and numbers in E.164", async () => {
