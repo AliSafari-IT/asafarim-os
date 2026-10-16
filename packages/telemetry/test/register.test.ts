@@ -39,6 +39,9 @@ describe("registerTelemetry", () => {
       .startSpan("GET /api/notes", { kind: SpanKind.SERVER, attributes: { "next.route": "/api/notes" } });
     expect(span.isRecording()).toBe(true);
     span.end();
-    await expect(telemetry.shutdown()).resolves.toBeUndefined();
+    // The pending span is flushed to a collector that isn't there: shutdown still resolves, once.
+    const shutdown = telemetry.shutdown();
+    expect(telemetry.shutdown()).toBe(shutdown);
+    await expect(shutdown).resolves.toBeUndefined();
   });
 });
