@@ -250,6 +250,8 @@ describe("platform manifest review", () => {
 
   it("rejects unknown flags", () => {
     expect(reviewCommand(["--fix"], root, () => root)).toBeNull();
+    expect(reviewCommand(["--root"], root, () => root)).toBeNull();
+    expect(reviewCommand(["--root", "--json"], root, () => root)).toBeNull();
   });
 
   it("in a freshly scaffolded app, finds only the placeholder permission the template never checks", () => {

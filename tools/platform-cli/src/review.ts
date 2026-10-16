@@ -314,7 +314,7 @@ export function parseReviewArgs(args: string[]): ReviewOptions | null {
     const a = args[i]!;
     if (a === "--json") opts.json = true;
     else if (a === "--strict") opts.strict = true;
-    else if (a === "--root" && args[i + 1]) opts.root = args[++i];
+    else if (a === "--root" && args[i + 1] && !args[i + 1]!.startsWith("-")) opts.root = args[++i];
     else if (a.startsWith("-")) return null;
     else opts.ids.push(a);
   }
