@@ -7,15 +7,18 @@ import { signOutAction } from "./actions";
 export default function Forbidden() {
   return (
     <div className="signin" data-testid="forbidden">
-      <h1>You don&apos;t have access</h1>
-      <p className="muted">
-        Reading needs the permission <span className="mono">docs.read</span>.
-      </p>
-      <form action={signOutAction}>
-        <button type="submit" className="secondary">
-          Sign out
-        </button>
-      </form>
+      <div className="signin-card">
+        <h1>You don&apos;t have access</h1>
+        <p className="muted">
+          Reading needs the permission <span className="mono">docs.read</span>. Ask an admin for the{" "}
+          <span className="mono">docs.owner</span> role.
+        </p>
+        <form action={signOutAction}>
+          <button type="submit" className="secondary">
+            Sign out
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

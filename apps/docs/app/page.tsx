@@ -1,4 +1,5 @@
 import { Launcher } from "@asafarim/app-sdk/react";
+import Link from "next/link";
 import { forbidden, unauthorized } from "next/navigation";
 import { refreshAction, signOutAction } from "./actions";
 import { Markdown } from "@/components/Markdown";
@@ -10,7 +11,9 @@ import { Toc } from "@/components/Toc";
 import { auth } from "@/lib/auth";
 import { anchorNote, sectionsOf } from "@/lib/anchor";
 import { gate } from "@/lib/gate";
+import { homeOf, neighboursOf } from "@/lib/home";
 import { issuesConfigured } from "@/lib/issue-api";
+import { docHref } from "@/lib/links";
 import { getNotes } from "@/lib/notes";
 import { readableName, tocOf } from "@/lib/outline";
 import { getPlatform } from "@/lib/platform";
@@ -78,6 +81,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
     sourceRepo: repo,
   });
   const doc = view.status === "ok" ? view.doc : undefined;
+  // Nothing open: the home page. A document: the ones before and after it in the sidebar.
+  const home = view.status === "ok" && !selected ? homeOf(view.tree) : undefined;
+  const pager: ReturnType<typeof neighboursOf> =
+    view.status === "ok" && doc && !doc.missing ? neighboursOf(view.tree, doc.path) : {};
 
   // Study notes (#81): the caller's own, each placed where its quote is in this version of the document.
   const store = getNotes();
@@ -180,7 +187,13 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
       <ReaderShell
         nodes={view.status === "ok" ? toNav(view.tree) : []}
         selected={selected}
-        toc={doc && !doc.missing ? <Toc items={tocOf(doc.headings)} /> : <p className="muted">Nothing open.</p>}
+        toc={
+          doc && !doc.missing ? (
+            <Toc items={tocOf(doc.headings)} />
+          ) : (
+            <p className="muted">{home ? "Open a document to see its sections here." : "Nothing open."}</p>
+          )
+        }
       >
         <main id="document" className="document" tabIndex={-1}>
           <article>
@@ -226,7 +239,92 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
                     images={view.paths.images}
                   />
                 </Notes>
+                {pager.prev || pager.next ? (
+                  <nav className="pager" aria-label="Previous and next document" data-testid="pager">
+                    {pager.prev ? (
+                      <Link className="prev" href={docHref(pager.prev.path)} data-testid="pager-prev">
+                        <span className="dir">Previous</span>
+                        <span className="title">
+                          {pager.prev.where ? <span className="where">{pager.prev.where} · </span> : null}
+                          {pager.prev.label}
+                        </span>
+                      </Link>
+                    ) : (
+                      <span />
+                    )}
+                    {pager.next ? (
+                      <Link className="next" href={docHref(pager.next.path)} data-testid="pager-next">
+                        <span className="dir">Next</span>
+                        <span className="title">
+                          {pager.next.where ? <span className="where">{pager.next.where} · </span> : null}
+                          {pager.next.label}
+                        </span>
+                      </Link>
+                    ) : null}
+                  </nav>
+                ) : null}
               </>
+            ) : home && view.status === "ok" ? (
+              <div className="home" data-testid="home">
+                <header className="home-hero">
+                  <p className="eyebrow">Documentation</p>
+                  <h1>{home.start ? "Welcome" : "Documents"}</h1>
+                  <p className="lead">
+                    {view.docCount.toLocaleString("en")} {view.docCount === 1 ? "document" : "documents"} from{" "}
+                    <span className="mono">{repo}</span>, read live from the repository. Search with <kbd>⌘K</kbd> or{" "}
+                    <kbd>Ctrl K</kbd>.
+                  </p>
+                </header>
+                {home.start ? (
+                  <Link className="card start" href={docHref(home.start.path)} data-testid="home-start">
+                    <span className="eyebrow">Start here</span>
+                    <span className="card-title">{home.start.label}</span>
+                    <span className="muted">The overview of this documentation.</span>
+                  </Link>
+                ) : null}
+                {home.sections.length ? (
+                  <ul className="cards" aria-label="Sections" data-testid="home-sections">
+                    {home.sections.map((section) => (
+                      <li key={section.label} className="card section">
+                        <h2>
+                          {section.label}
+                          <span className="count">
+                            {section.count} {section.count === 1 ? "doc" : "docs"}
+                          </span>
+                        </h2>
+                        <ul>
+                          {section.docs.map((d) => (
+                            <li key={d.path}>
+                              <Link href={docHref(d.path)}>
+                                {d.where ? <span className="where">{d.where}</span> : null}
+                                <span>{d.label}</span>
+                              </Link>
+                            </li>
+                          ))}
+                        </ul>
+                        {section.more ? <p className="muted more">and {section.more} more in the sidebar</p> : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {home.loose.length ? (
+                  <section className="loose" aria-labelledby="loose-title">
+                    <h2 id="loose-title">Also at the top level</h2>
+                    <ul>
+                      {home.loose.map((d) => (
+                        <li key={d.path}>
+                          <Link href={docHref(d.path)}>{d.label}</Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
+                {view.docCount === 0 ? (
+                  <p className="lead" data-testid="home-empty">
+                    There are no documents in <span className="mono">{repo}</span> yet.
+                  </p>
+                ) : null}
+              </div>
             ) : (
               <>
                 <h1>Nothing open</h1>
