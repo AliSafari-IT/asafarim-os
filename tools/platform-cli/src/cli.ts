@@ -12,6 +12,9 @@
  *                                            one per line (# comments allowed); listed, not drift
  *   pnpm platform manifest validate <file>   check one manifest (.json, or a .ts default export)
  *   pnpm platform manifest compile <file>    validate and write platform.app.json beside it
+ *   pnpm platform manifest review [<id>…] [--json] [--strict] [--root <dir>]
+ *                                            compare apps' manifests with their code (P7.2); advisory,
+ *                                            exits 0 unless --strict. Reads files only, never runs app code
  *   pnpm platform boundaries                 fail if core/ or packages/ import from apps/
  *   pnpm platform app new <id> [--name "<Display name>"] [--root <dir>]
  *                                            write a minimal app to <dir>/apps/<id>/ (P7.1); installs nothing
@@ -38,6 +41,7 @@ import { boundariesCommand } from "./boundaries.ts";
 import { compileCommand, validateCommand } from "./manifest.ts";
 import { composeCommand } from "./compose.ts";
 import { retentionCommand } from "./retention.ts";
+import { reviewCommand } from "./review.ts";
 import { newAppCommand } from "./scaffold.ts";
 import { findRepoRoot, sync } from "./sync.ts";
 
@@ -47,6 +51,7 @@ const USAGE = [
   "  platform sync --check --against <dir> [--other-stack-sites <file>]",
   "  platform manifest validate <file>",
   "  platform manifest compile <file>",
+  "  platform manifest review [<id>…] [--json] [--strict] [--root <dir>]   advisory; --strict fails on findings",
   "  platform boundaries",
   '  platform app new <id> [--name "<Display name>"] [--root <dir>]   write a minimal app to apps/<id>',
   "  platform app compose <id|image-ref> --env prod|staging --out <file>   (--help for the options)",
@@ -99,6 +104,8 @@ async function main(argv: string[]): Promise<number> {
   if (command === "sync") result = await syncCommand(rest);
   else if (command === "manifest" && (rest[0] === "validate" || rest[0] === "compile") && rest.length === 2) {
     result = rest[0] === "validate" ? await validateCommand(rest[1]!, cwd) : await compileCommand(rest[1]!, cwd);
+  } else if (command === "manifest" && rest[0] === "review") {
+    result = reviewCommand(rest.slice(1), cwd, () => findRepoRoot(cwd));
   } else if (command === "boundaries" && rest.length === 0) {
     result = boundariesCommand(findRepoRoot(cwd));
   } else if (command === "role") {
