@@ -20,6 +20,7 @@ const code = script
   .join("\n");
 const realExample = path.join(root, "core", "identity", ".env.production.example");
 const docsExample = path.join(root, "apps", "docs", ".env.production.example");
+const coreApiExample = path.join(root, "core", "core-api", ".env.production.example");
 
 /** Run require_env_vars on two fixture files; returns { status, output } with stdout and stderr together. */
 function check(envText, exampleText) {
@@ -303,6 +304,8 @@ function runDeploy(
     prevLive = null,
     docsEnv = true,
     docsEnvEmpty = false,
+    coreApiEnv = false,
+    coreApiEnvEmpty = false,
   } = {},
 ) {
   const dir = mkdtempSync(path.join(tmpdir(), "vps-deploy-"));
@@ -322,6 +325,7 @@ function runDeploy(
       "sites/asafarim-os-site.caddy",
       "core/identity/.env.production.example",
       "apps/docs/.env.production.example",
+      "core/core-api/.env.production.example",
     ]) {
       cpSync(path.join(root, file), path.join(repo, file), { recursive: true });
     }
@@ -334,6 +338,7 @@ function runDeploy(
       mkdirSync(path.join(repo, "deploy/identity"));
       writeFileSync(path.join(repo, "deploy/identity/clients.json"), "{}\n");
     }
+    if (coreApiEnv) writeFileSync(path.join(repo, "core/core-api/.env.production.age"), "stand-in ciphertext\n");
     const fill = (example) =>
       readFileSync(example, "utf8")
         .match(/^[A-Z][A-Z0-9_]*(?==)/gm)
@@ -344,6 +349,9 @@ function runDeploy(
       `if [[ "$*" == *apps/docs/* ]]; then`,
       `  [[ -n "$DOCS_ENV_EMPTY" ]] && exit 0`,
       fill(docsExample),
+      `elif [[ "$*" == *core/core-api/* ]]; then`,
+      `  [[ -n "$CORE_API_ENV_EMPTY" ]] && exit 0`,
+      fill(coreApiExample),
       `else`,
       fill(realExample),
       `fi`,
@@ -356,6 +364,7 @@ function runDeploy(
       docker: STUB(
         "docker",
         [
+          `[[ "$1" == compose && -n "$COMPOSE_PROFILES" ]] && echo "profiles=$COMPOSE_PROFILES $*" >> "$CALLS"`,
           `case "$*" in`,
           `  *"ps -q identity"*) printf '%s' "$IDENTITY_RUNNING" ;;`,
           `  "ps -q --filter label=com.docker.compose.project=asafarim-com"*) printf '%s\\n' "$LIVE_ID" ;;`,
@@ -391,6 +400,7 @@ function runDeploy(
         LIVE_RELOAD: String(live?.reload ?? 0),
         EDGE_ID: edgeId,
         DOCS_ENV_EMPTY: docsEnvEmpty ? "1" : "",
+        CORE_API_ENV_EMPTY: coreApiEnvEmpty ? "1" : "",
       },
     });
     return {
@@ -399,6 +409,7 @@ function runDeploy(
       calls: readFileSync(calls, "utf8").trim().split("\n").filter(Boolean),
       envIdentityWritten: existsSync(path.join(repo, ".env.identity")),
       envDocsWritten: existsSync(path.join(repo, ".env.docs")),
+      envCoreApiWritten: existsSync(path.join(repo, ".env.core-api")),
       liveSite: existsSync(liveSite) ? readFileSync(liveSite, "utf8") : null,
       repo,
     };
@@ -463,7 +474,11 @@ test("--site-only takes at most three shas, each a full sha", () => {
     runDeploy(["--site-only", SHA, SITE_SHA, "abc"]).stderr,
     /<docs-image-commit> must be a full 40-character sha/,
   );
-  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA], { full: true }).stderr, /usage:/);
+  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA], { full: true }).stderr, /usage:/);
+  assert.match(
+    runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, "abc"], { full: true }).stderr,
+    /<core-api-image-commit> must be a full 40-character sha/,
+  );
   assert.match(runDeploy(["--site-only"]).stderr, /usage:/);
 });
 
@@ -564,4 +579,90 @@ test("--site-only with neither Caddy running fails: nothing serves 443", () => {
   const r = runDeploy(["--site-only", SHA], { live: null, edgeId: "" });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /nothing serves 443/);
+});
+
+// core-api: part of the full deploy once core/core-api/.env.production.age is committed, and only then.
+const CORE_SHA = "d".repeat(40);
+
+test("full mode without core/core-api/.env.production.age: exactly the deploy as before, no core profile", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], { full: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!r.calls.some((c) => c.includes("core/core-api")), "the core-api env is not decrypted");
+  assert.equal(r.envCoreApiWritten, false);
+  assert.ok(!r.calls.some((c) => c.startsWith("profiles=")), "the core profile is off");
+  assert.ok(!r.calls.some((c) => c.includes("os-core-api")), "core-api is not waited for");
+});
+
+test("full mode with core/core-api/.env.production.age: decrypts and checks it, starts the core profile, waits for core-api before publishing", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], { full: true, coreApiEnv: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.calls.includes("age -d -i .age/key.txt core/core-api/.env.production.age"));
+  assert.equal(r.envCoreApiWritten, true, ".env.core-api is os-postgres's and os-core-api's env_file");
+  const profiled = r.calls.filter((c) => c.startsWith("profiles=core ")).map((c) => c.slice("profiles=core ".length));
+  assert.deepEqual(
+    profiled.map((c) => c.replace(`${compose.slice("docker ".length)} `, "")),
+    [
+      "config -q",
+      "pull",
+      "up -d --remove-orphans",
+      "exec -T identity wget -qO- http://127.0.0.1:3000/readyz",
+      "exec -T os-core-api wget -qO- http://127.0.0.1:4020/readyz",
+      "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+      "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
+    ],
+  );
+  const coreReadyAt = r.calls.findIndex((c) =>
+    c.endsWith("exec -T os-core-api wget -qO- http://127.0.0.1:4020/readyz"),
+  );
+  const edgeAt = r.calls.findIndex((c) => c.startsWith("edge-deploy-site.sh"));
+  assert.ok(coreReadyAt >= 0 && edgeAt > coreReadyAt, r.calls.join("\n"));
+});
+
+test("a core-api env with a variable missing stops the deploy before pulling, naming it and never a value", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], {
+    full: true,
+    coreApiEnv: true,
+    coreApiEnvEmpty: true,
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /missing or empty in \.env\.core-api: POSTGRES_PASSWORD/);
+  assert.match(r.stderr, /node deploy\/core-api\/new-env\.mjs/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c)), r.calls.join("\n"));
+});
+
+test("--site-only never touches core-api, even when its env is committed", () => {
+  const r = runDeploy(["--site-only", SHA], { coreApiEnv: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!r.calls.some((c) => c.includes("core/core-api") || c.startsWith("profiles=")), r.calls.join("\n"));
+  assert.equal(r.envCoreApiWritten, false);
+});
+
+test("the core-api example lists the six variables new-env.mjs writes, and its output fills them all", async () => {
+  const names = readFileSync(coreApiExample, "utf8").match(/^[A-Z][A-Z0-9_]*(?==)/gm);
+  assert.deepEqual(names, [
+    "POSTGRES_PASSWORD",
+    "CORE_API_DB_PASSWORD",
+    "CORE_API_DATABASE_URL",
+    "CORE_API_PROVISIONER_URL",
+    "CORE_API_ADMIN_TOKEN",
+    "CORE_API_TOKEN_SIGNING_JWK",
+  ]);
+  const { newEnv } = await import("./core-api/new-env.mjs");
+  const text = newEnv();
+  assert.equal(check(text, readFileSync(coreApiExample, "utf8")).status, 0);
+  const env = Object.fromEntries(
+    text
+      .trim()
+      .split("\n")
+      .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
+  );
+  assert.equal(new URL(env.CORE_API_DATABASE_URL).password, env.CORE_API_DB_PASSWORD);
+  assert.equal(new URL(env.CORE_API_DATABASE_URL).host, "os-postgres:5432");
+  assert.equal(new URL(env.CORE_API_PROVISIONER_URL).password, env.POSTGRES_PASSWORD);
+  assert.ok(env.CORE_API_ADMIN_TOKEN.length >= 32);
+  const jwk = JSON.parse(env.CORE_API_TOKEN_SIGNING_JWK);
+  assert.equal(jwk.kty, "OKP");
+  assert.equal(jwk.crv, "Ed25519");
+  assert.ok(jwk.d && jwk.x && jwk.kid);
+  assert.notEqual(newEnv(), text, "every run is new");
 });

@@ -647,6 +647,7 @@ export function createSignIn(d: SignInDeps): SignIn {
       200,
       accountPage({
         csrf: me.session.csrf,
+        accountId: me.principal.id,
         label: me.principal.label,
         connected: me.principal.connection === "active",
         isAdmin: me.principal.isAdmin && me.principal.connection === "active",

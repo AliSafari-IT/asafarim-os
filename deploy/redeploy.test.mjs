@@ -279,6 +279,53 @@ test("if it cannot tell whether identity runs, it stops and changes nothing (nev
     assert.ok(!r.calls.some((c) => c.startsWith("vps-deploy")));
   }));
 
+/** c5 adds core-api's encrypted env and c6 changes core-api, on top of c4: main's head is c6. */
+function withCoreApi(env) {
+  git(env.src, "checkout", "-q", "identity");
+  const c5 = commit(env.src, "core-api env", { "core/core-api/.env.production.age": "stand-in ciphertext" });
+  const c6 = commit(env.src, "core-api", { "core/core-api/src/x.ts": "k1" });
+  git(env.src, "push", "-q", "--force", env.origin, `${c6}:refs/heads/main`);
+  return { ...env, c5, c6, published: `site-${env.c1} docs-${env.c2} identity-${env.c4} core-api-${c6}` };
+}
+
+test("core-api's env committed and identity running: the full deploy with the newest core-api image as the fifth sha", () =>
+  withSetup((env) => {
+    const e = { ...withCoreApi(env), identityRunning: "abc123" };
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.match(r.output, new RegExp(`Newest core-api image from: ${e.c6}`));
+    assert.ok(r.calls.includes(`docker manifest inspect ghcr.io/alisafari-it/asafarim-os:core-api-${e.c6}`));
+    assert.equal(r.calls.at(-1), `vps-deploy ${e.c6} ${env.c4} ${env.c1} ${env.c2} ${e.c6} (HEAD ${e.c6})`);
+  }));
+
+test("core-api's newest image not published yet: exit code 3, naming the 'Core API image' workflow, nothing changed", () =>
+  withSetup((env) => {
+    const base = withCoreApi(env);
+    const e = { ...base, identityRunning: "abc123", published: `site-${env.c1} docs-${env.c2} identity-${env.c4}` };
+    const r = run(e);
+    assert.equal(r.status, 3, r.output);
+    assert.match(r.output, new RegExp(`core-api-${base.c6} is not published \\(yet\\)`));
+    assert.match(r.output, /'Core API image' workflow/);
+    assert.equal(r.head, env.c0);
+  }));
+
+test("site-only (identity not running): core-api is never looked up, even with its env committed", () =>
+  withSetup((env) => {
+    const e = withCoreApi(env);
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.match(r.calls.at(-1), /^vps-deploy --site-only /);
+    assert.ok(!r.calls.some((c) => c.includes(":core-api-")));
+  }));
+
+test("identity running, no core-api env in the commit: four shas, as before", () =>
+  withSetup((env) => {
+    const r = run({ ...withIdentityCommit(env), identityRunning: "abc123" });
+    assert.equal(r.status, 0, r.output);
+    assert.equal(r.calls.at(-1), `vps-deploy ${env.c4} ${env.c4} ${env.c1} ${env.c2} (HEAD ${env.c4})`);
+    assert.ok(!r.calls.some((c) => c.includes(":core-api-")));
+  }));
+
 test("it is valid bash, runs main() on one last line, and never prints a secret", () => {
   const r = spawnSync("bash", ["-n", path.join(root, "deploy", "redeploy.sh")], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
@@ -291,6 +338,7 @@ for (const [name, variable] of [
   ["site", "SITE_IMAGE_PATHS"],
   ["docs", "DOCS_IMAGE_PATHS"],
   ["identity", "IDENTITY_IMAGE_PATHS"],
+  ["core-api", "CORE_API_IMAGE_PATHS"],
 ]) {
   test(`its list of the ${name} image's inputs is the one in .github/workflows/${name}-image.yml`, () => {
     const workflow = readFileSync(path.join(root, ".github", "workflows", `${name}-image.yml`), "utf8");

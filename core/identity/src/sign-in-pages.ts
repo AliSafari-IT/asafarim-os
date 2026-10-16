@@ -100,6 +100,8 @@ ${csrfField(opts.csrf)}
 
 export function accountPage(opts: {
   csrf: string;
+  /** The principal id: the `sub` every app sees, and what an admin grants an app's role to. */
+  accountId: string;
   label: string | null;
   connected: boolean;
   isAdmin: boolean;
@@ -120,6 +122,7 @@ export function accountPage(opts: {
     `<h1>Your account</h1>
 ${opts.notice ? `<p class="notice">${escapeHtml(opts.notice)}</p>` : ""}
 <p>Signed in as <strong>${escapeHtml(opts.label ?? "—")}</strong>${opts.connected ? "" : " (not connected yet)"}.</p>
+<p class="small">Account id: <code data-account-id>${escapeHtml(opts.accountId)}</code>. An admin uses it to give you access to an app.</p>
 <h2>Passkeys</h2>
 <p class="small">A passkey lets you sign in with your fingerprint, face or device PIN instead of a code.</p>
 ${list}

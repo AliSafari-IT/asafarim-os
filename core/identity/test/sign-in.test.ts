@@ -105,6 +105,15 @@ describe("local sign-in", () => {
     expect(b.cookies.size).toBe(0);
   });
 
+  it("the account page shows the account id: the principal id apps see as sub, for an admin's grants", async () => {
+    const b = new Browser();
+    await emailSignIn(b, ADMIN);
+    const page = (await go(b, "GET", "/account")).body;
+    const id = /<code data-account-id>([^<]+)<\/code>/.exec(page)?.[1];
+    expect(id).toBeTruthy();
+    expect((await store.principal(id!))?.id).toBe(id);
+  });
+
   it("the QR code's /connect only starts a sign-in", async () => {
     const b = new Browser();
     const res = await go(b, "GET", "/connect");
