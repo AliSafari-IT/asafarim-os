@@ -4,7 +4,7 @@ OpenTelemetry traces, per-route request metrics (`http.server.request.duration`)
 
 ```ts
 // instrumentation.ts, first thing
-registerTelemetry({ appId: manifest.id, version: manifest.version });
+installShutdownFlush(registerTelemetry({ appId: manifest.id, version: manifest.version })); // flush on SIGTERM (below)
 const log = createLogger({ app: "notes" }); // lines carry trace_id / span_id inside a request
 ```
 
@@ -18,6 +18,14 @@ A request reaches an app as browser or edge → dev gateway (Caddy) → `forward
 - **What isn't traced yet:**
   - The gateway records no span: Caddy's `tracing` directive is off because it needs an exporter, which is a VPS and Grafana decision.
   - So the check and the app request share a trace only when the browser or the edge sends a `traceparent`. Without one, the check and the app request each start their own trace.
+
+## Shutdown
+
+Spans wait in the batch processor and metrics are exported every 15 s, so a process that stops without flushing loses the last few seconds of both. `registerTelemetry` returns a handle whose `shutdown()` force-flushes, then shuts down, the tracer and meter providers. It resolves within `shutdownTimeoutMs` (default 2 s, the export timeout) however the collector behaves, returns the same promise on every call, never rejects (a failure is logged as `telemetry.flush_failed` / `telemetry.shutdown_failed` with the error's name only, a timeout as `telemetry.shutdown_timeout`), and is a no-op with telemetry off.
+
+- **A service that owns its signals awaits it before exiting.** core-api, on SIGTERM or SIGINT: stop accepting connections, stop the bus's auth callout, `await telemetry.shutdown()`, `process.exit(0)` (`createShutdown` in `core/core-api/src/server.ts`).
+- **A Next.js app leaves the signals to Next.** `instrumentation.ts` calls `installShutdownFlush(registerTelemetry(…))`: one `process.once` listener per signal (SIGTERM, SIGINT; none with telemetry off, never two) that starts `shutdown()` and never calls `process.exit`, so Next's own handling goes on as before. If nothing else listens for the signal, the listener raises it again once the flush is done, so the process still stops.
+- **Limitation (Next.js): the flush is best effort.** Next's server handles SIGTERM and SIGINT itself and calls `process.exit` once its HTTP server has closed. The flush runs alongside that and isn't awaited by it: when the server closes before the OTLP export completes (an idle server closes almost at once), the process exits mid-export and that last batch is lost. We don't work around it (taking the signals from Next with `NEXT_MANUAL_SIG_HANDLE` would mean owning its graceful close too). core-api's flush is awaited, so it isn't affected.
 
 ## A plain Node HTTP service
 

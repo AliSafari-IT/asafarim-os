@@ -11,6 +11,8 @@ import { resourceFromAttributes } from "@opentelemetry/resources";
 import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { createLogger } from "./logger.ts";
+import { flushThenShutdown } from "./shutdown.ts";
 import { RedactingSpanExporter, RouteMetricsProcessor } from "./spans.ts";
 
 export interface TelemetryOptions {
@@ -22,11 +24,17 @@ export interface TelemetryOptions {
   env?: Record<string, string | undefined>;
   /** How often metrics are exported, in ms (default 15 000). */
   metricIntervalMs?: number;
+  /** The most `shutdown()` may take, in ms (default 2 000, the export timeout). */
+  shutdownTimeoutMs?: number;
 }
 
 export interface Telemetry {
   enabled: boolean;
-  /** Flushes and stops exporting; never throws. */
+  /**
+   * Force-flushes the pending spans and metrics, then stops exporting. Resolves within
+   * `shutdownTimeoutMs` even if the collector hangs, returns the same promise on every call, never
+   * rejects (a failure is logged by error name), and is a no-op with telemetry off.
+   */
   shutdown(): Promise<void>;
 }
 
@@ -46,6 +54,7 @@ export function registerTelemetry({
   version,
   env = process.env,
   metricIntervalMs = 15_000,
+  shutdownTimeoutMs = EXPORT_TIMEOUT_MS,
 }: TelemetryOptions): Telemetry {
   if (current) return current;
   const endpoint = withoutTrailingSlashes(env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() ?? "");
@@ -87,9 +96,10 @@ export function registerTelemetry({
 
   current = {
     enabled: true,
-    shutdown: async () => {
-      await Promise.allSettled([tracerProvider.shutdown(), meterProvider.shutdown()]);
-    },
+    shutdown: flushThenShutdown([tracerProvider, meterProvider], {
+      timeoutMs: shutdownTimeoutMs,
+      log: createLogger({ app: appId }),
+    }),
   };
   return current;
 }

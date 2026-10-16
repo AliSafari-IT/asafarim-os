@@ -13,7 +13,7 @@ import { SpanKind, registerTestTelemetry, type TestTelemetry } from "@asafarim/t
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAppSnapshot, type GatewayApp } from "../src/gateway.ts";
 import type { Registry } from "../src/registry.ts";
-import { createHandler, routePattern, startTelemetry } from "../src/server.ts";
+import { createHandler, createShutdown, routePattern, startTelemetry } from "../src/server.ts";
 
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const PARENT_SPAN_ID = "00f067aa0ba902b7";
@@ -171,6 +171,52 @@ describe("with telemetry off", () => {
     // No provider, no propagator: nothing is recorded, nothing is sent back.
     expect(allowed.headers.get("traceparent")).toBeNull();
     expect(refused.headers.get("traceparent")).toBeNull();
+  });
+});
+
+describe("on SIGTERM", () => {
+  it("stops accepting, stops the callout, flushes telemetry, and only then exits", async () => {
+    const steps: string[] = [];
+    let flushed!: () => void;
+    const shutdown = createShutdown({
+      server: { close: () => steps.push("server.close") },
+      callout: { stop: async () => void steps.push("callout.stop") },
+      telemetry: {
+        shutdown: () => {
+          steps.push("telemetry.shutdown");
+          return new Promise<void>((resolve) => (flushed = resolve));
+        },
+      },
+      log: (l) => void steps.push(`log ${String(l.msg)} ${String(l.reason)}`),
+      exit: (code) => void steps.push(`exit ${code}`),
+    });
+
+    const done = shutdown("SIGTERM");
+    await vi.waitFor(() => expect(steps).toContain("telemetry.shutdown"));
+    // Nothing exits while the flush runs (it is bounded by the telemetry's own timeout).
+    expect(steps).not.toContain("exit 0");
+    expect(shutdown("SIGINT")).toBe(done);
+
+    flushed();
+    await done;
+    expect(steps).toEqual([
+      "log core-api.shutdown SIGTERM",
+      "server.close",
+      "callout.stop",
+      "telemetry.shutdown",
+      "exit 0",
+    ]);
+  });
+
+  it("still flushes and exits when the callout fails to stop, or there is none", async () => {
+    for (const callout of [{ stop: () => Promise.reject(new Error("bus gone")) }, undefined]) {
+      const telemetry = { shutdown: vi.fn(async () => {}) };
+      const exit = vi.fn();
+      await createShutdown({ server: { close: () => undefined }, callout, telemetry, log: () => {}, exit })("SIGTERM");
+      expect(telemetry.shutdown).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(0);
+      expect(telemetry.shutdown.mock.invocationCallOrder[0]).toBeLessThan(exit.mock.invocationCallOrder[0] ?? 0);
+    }
   });
 });
 

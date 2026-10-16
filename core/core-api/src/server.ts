@@ -165,6 +165,37 @@ export function startTelemetry(env: Record<string, string | undefined> = process
   return registerTelemetry({ appId: "core-api", version: packageVersion(), env });
 }
 
+/**
+ * What SIGTERM and SIGINT do, in order: stop accepting connections (requests in flight end with
+ * the process, as before), stop answering the bus's auth callout, flush the last traces and
+ * metrics (bounded by the telemetry's own timeout, 2 s), then exit 0. A second signal while this
+ * runs changes nothing.
+ */
+export function createShutdown({
+  server,
+  callout,
+  telemetry,
+  log,
+  exit = (code) => process.exit(code),
+}: {
+  /** The HTTP server: `close()` stops it accepting connections. */
+  server: { close(): unknown };
+  callout?: { stop(): Promise<void> };
+  telemetry: Pick<Telemetry, "shutdown">;
+  log: (line: Record<string, unknown>) => void;
+  exit?: (code: number) => void;
+}): (signal: NodeJS.Signals) => Promise<void> {
+  let running: Promise<void> | undefined;
+  return (signal) =>
+    (running ??= (async () => {
+      log({ msg: "core-api.shutdown", reason: signal });
+      server.close();
+      await callout?.stop().catch(() => undefined);
+      await telemetry.shutdown();
+      exit(0);
+    })());
+}
+
 const header = (req: IncomingMessage, name: string) => {
   const v = req.headers[name];
   return Array.isArray(v) ? v[0] : v;
@@ -525,7 +556,7 @@ export function parseAdminToken(env: Record<string, string | undefined>): string
 
 async function main() {
   // First, so everything after is traced (P6.2). Off unless OTEL_EXPORTER_OTLP_ENDPOINT is set.
-  startTelemetry();
+  const telemetry = startTelemetry();
   const adminToken = parseAdminToken(process.env);
   // People sign in to the Admin console through core/identity; core-api verifies their ID token.
   const identityIssuer = process.env.CORE_API_IDENTITY_ISSUER;
@@ -566,12 +597,6 @@ async function main() {
           log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
         })
       : undefined;
-  // Stop answering the bus on shutdown (the HTTP server just exits with the process).
-  if (callout) {
-    for (const signal of ["SIGTERM", "SIGINT"] as const) {
-      process.once(signal, () => void callout.stop().finally(() => process.exit(0)));
-    }
-  }
   // The shared DEADLETTER stream: ensured at boot, and again before any consumer is created, so a
   // bus that is down now doesn't stop core-api from starting.
   void bus?.ensureDeadLetterStream().then(
@@ -626,11 +651,20 @@ async function main() {
   // Forget expired registration nonces even when nobody registers.
   setInterval(() => void registry.pruneNonces().catch(() => undefined), 60_000).unref();
   const port = Number(process.env.PORT ?? 4020);
-  createServer(createHandler({ registry, pool, adminToken, identity, tokenKey, snapshot, health })).listen(port, () =>
+  const server = createServer(createHandler({ registry, pool, adminToken, identity, tokenKey, snapshot, health }));
+  server.listen(port, () =>
     process.stdout.write(
       `${JSON.stringify({ service: "core-api", msg: "core-api.started", port, migrations: applied })}\n`,
     ),
   );
+  // On shutdown: stop accepting, stop answering the bus, flush telemetry (bounded), exit.
+  const shutdown = createShutdown({
+    server,
+    callout,
+    telemetry,
+    log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
+  });
+  for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, (s) => void shutdown(s));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
