@@ -11,10 +11,11 @@
 #   1. fetches origin/main and refuses a sha that is not on it;
 #   2. brings this checkout to <sha> under the deploy lock, so the scripts of that commit run;
 #   3. hands over to `deploy/redeploy.sh <sha>`: the landing page and docs, with the newest images as of <sha> (it stops,
-#      changing nothing, if one isn't published), via `vps-deploy.sh --site-only`.
+#      changing nothing, if one isn't published), via `vps-deploy.sh --site-only` (or the full deploy once identity runs).
 # Run by hand (no SSH_ORIGINAL_COMMAND), it takes the same words as arguments: deploy/ci-deploy.sh deploy <sha>.
 #
-# It never deploys identity: the full deploy stays manual (deploy/README.md). It holds no secret and prints none.
+# It never starts identity: once identity runs, redeploy.sh does the full deploy so it stays live; the first identity
+# deploy is the owner's (`deploy/redeploy.sh --with-identity`, deploy/README.md). It holds no secret and prints none.
 set -euo pipefail
 
 # Everything lives in main(), called on ONE line at the very end: step 2 can replace this very file while bash is still

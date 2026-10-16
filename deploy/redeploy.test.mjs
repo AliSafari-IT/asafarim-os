@@ -68,6 +68,11 @@ function setup() {
   const c1 = commit(src, "site", { "core/site/deep/page.html": "v1" });
   const c2 = commit(src, "docs", { "apps/docs/app/page.tsx": "d1" });
   const c3 = commit(src, "readme", { "README.md": "r1" });
+  // c4 changes identity: the newest commit the identity image is built from, and the newest on main.
+  const c4 = commit(src, "identity", { "core/identity/src/x.ts": "i1" });
+  // The other tests deploy as of c3, before identity changed: so main's head is c3 there, and c4 sits on a branch.
+  git(src, "branch", "-q", "identity", c4);
+  git(src, "reset", "-q", "--hard", c3);
   git(dir, "clone", "-q", "--bare", src, origin);
   git(dir, "clone", "-q", origin, vps);
   git(vps, "reset", "-q", "--hard", c0);
@@ -75,11 +80,17 @@ function setup() {
   mkdirSync(bin);
   writeFileSync(
     path.join(bin, "docker"),
-    '#!/usr/bin/env bash\necho "docker $*" >> "$CALLS"\n[[ "$1 $2" == "manifest inspect" ]] && [[ " $PUBLISHED " == *" ${3##*:} "* ]]\n',
+    [
+      "#!/usr/bin/env bash",
+      'if [[ "$1" == ps ]]; then printf \'%s\' "$IDENTITY_RUNNING"; exit "${DOCKER_PS_STATUS:-0}"; fi',
+      'echo "docker $*" >> "$CALLS"',
+      '[[ "$1 $2" == "manifest inspect" ]] && [[ " $PUBLISHED " == *" ${3##*:} "* ]]',
+      "",
+    ].join("\n"),
     { mode: 0o755 },
   );
   writeFileSync(path.join(dir, "calls.log"), "");
-  return { dir, vps, bin, c0, c1, c2, c3, calls: path.join(dir, "calls.log") };
+  return { dir, src, origin, vps, bin, c0, c1, c2, c3, c4, calls: path.join(dir, "calls.log") };
 }
 
 function run(env, args = []) {
@@ -91,6 +102,8 @@ function run(env, args = []) {
       PATH: `${env.bin}:${process.env.PATH}`,
       CALLS: env.calls,
       PUBLISHED: env.published ?? `site-${env.c1} docs-${env.c2}`,
+      IDENTITY_RUNNING: env.identityRunning ?? "",
+      DOCKER_PS_STATUS: env.dockerPsStatus ?? "0",
     },
   });
   return {
@@ -171,7 +184,7 @@ test("anything but [--dry-run] [<full sha>] is refused with the usage line", () 
     ]) {
       const r = run(env, args);
       assert.equal(r.status, 2, `${args.join(" ")}: ${r.output}`);
-      assert.match(r.output, /usage: deploy\/redeploy\.sh \[--dry-run\] \[<commit>\]/);
+      assert.match(r.output, /usage: deploy\/redeploy\.sh \[--with-identity\] \[--dry-run\] \[<commit>\]/);
     }
     assert.deepEqual(run(env, ["--yes"]).calls, [], "it asked the registry nothing");
   }));
@@ -211,6 +224,61 @@ test("<commit> that is not on origin/main, or not in the repository at all, is r
     }
   }));
 
+/** Move origin's main to c4 (identity changed), so the newest commit has an identity image to look for. */
+function withIdentityCommit(env) {
+  git(env.src, "push", "-q", "--force", env.origin, `${env.c4}:refs/heads/main`);
+  return { ...env, published: `site-${env.c1} docs-${env.c2} identity-${env.c4}` };
+}
+
+test("identity running here: the full deploy, with the newest identity image, so id.asafarim.site stays on the edge", () =>
+  withSetup((env) => {
+    const e = { ...withIdentityCommit(env), identityRunning: "abc123\n" };
+    const dry = run(e, ["--dry-run"]);
+    assert.equal(dry.status, 0, dry.output);
+    assert.match(dry.output, new RegExp(`Newest identity image from: ${env.c4}`));
+    assert.match(dry.output, new RegExp(`deploy/vps-deploy\\.sh ${env.c4} ${env.c4} ${env.c1} ${env.c2}$`, "m"));
+    assert.ok(dry.calls.includes(`docker manifest inspect ghcr.io/alisafari-it/asafarim-os:identity-${env.c4}`));
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.equal(r.calls.at(-1), `vps-deploy ${env.c4} ${env.c4} ${env.c1} ${env.c2} (HEAD ${env.c4})`);
+    assert.doesNotMatch(r.calls.at(-1), /--site-only/);
+  }));
+
+test("--with-identity: the full deploy even before identity runs", () =>
+  withSetup((env) => {
+    const r = run(withIdentityCommit(env), ["--with-identity"]);
+    assert.equal(r.status, 0, r.output);
+    assert.equal(r.calls.at(-1), `vps-deploy ${env.c4} ${env.c4} ${env.c1} ${env.c2} (HEAD ${env.c4})`);
+  }));
+
+test("identity not running and no --with-identity: site-only, and identity is never started", () =>
+  withSetup((env) => {
+    const r = run(withIdentityCommit(env));
+    assert.equal(r.status, 0, r.output);
+    assert.equal(r.calls.at(-1), `vps-deploy --site-only ${env.c4} ${env.c1} ${env.c2} (HEAD ${env.c4})`);
+    assert.ok(!r.calls.some((c) => c.includes(":identity-")), "no identity image was even looked up");
+  }));
+
+test("identity running but its newest image not published yet: exit code 3, nothing changed", () =>
+  withSetup((env) => {
+    const e = { ...withIdentityCommit(env), identityRunning: "abc123", published: `site-${env.c1} docs-${env.c2}` };
+    const r = run(e);
+    assert.equal(r.status, 3, r.output);
+    assert.match(r.output, new RegExp(`identity-${env.c4} is not published \\(yet\\)`));
+    assert.match(r.output, /'Identity image' workflow/);
+    assert.equal(r.head, env.c0);
+    assert.ok(!r.calls.some((c) => c.startsWith("vps-deploy")), "nothing was deployed");
+  }));
+
+test("if it cannot tell whether identity runs, it stops and changes nothing (never a site-only guess)", () =>
+  withSetup((env) => {
+    const r = run({ ...env, dockerPsStatus: "1" });
+    assert.equal(r.status, 1, r.output);
+    assert.match(r.output, /could not list this host's containers/);
+    assert.equal(r.head, env.c0);
+    assert.ok(!r.calls.some((c) => c.startsWith("vps-deploy")));
+  }));
+
 test("it is valid bash, runs main() on one last line, and never prints a secret", () => {
   const r = spawnSync("bash", ["-n", path.join(root, "deploy", "redeploy.sh")], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
@@ -222,6 +290,7 @@ test("it is valid bash, runs main() on one last line, and never prints a secret"
 for (const [name, variable] of [
   ["site", "SITE_IMAGE_PATHS"],
   ["docs", "DOCS_IMAGE_PATHS"],
+  ["identity", "IDENTITY_IMAGE_PATHS"],
 ]) {
   test(`its list of the ${name} image's inputs is the one in .github/workflows/${name}-image.yml`, () => {
     const workflow = readFileSync(path.join(root, ".github", "workflows", `${name}-image.yml`), "utf8");

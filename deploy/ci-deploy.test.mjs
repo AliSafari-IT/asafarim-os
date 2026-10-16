@@ -189,7 +189,7 @@ test("deploy.yml: runs after the CI workflow, and only for a green push to main 
 test("deploy.yml: asks the VPS for exactly `deploy <sha>`, and waits only on redeploy.sh's exit code 3", () => {
   assert.match(workflow, /"\$\{DEPLOY_USER\}@\$\{DEPLOY_HOST\}" "deploy \$\{SHA\}"/);
   assert.match(workflow, /-o StrictHostKeyChecking=yes/);
-  assert.match(workflow, /deploy\/redeploy\.sh --dry-run "\$SHA"/);
+  assert.match(workflow, /deploy\/redeploy\.sh --with-identity --dry-run "\$SHA"/);
   assert.match(workflow, /elif \[\[ \$code -ne 3 \]\]/);
   const redeploy = readFileSync(path.join(root, "deploy", "redeploy.sh"), "utf8");
   assert.match(redeploy, /is not published \(yet\)[^\n]*\n\s*exit 3/);
