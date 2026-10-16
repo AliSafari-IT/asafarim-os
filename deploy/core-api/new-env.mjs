@@ -8,7 +8,7 @@
 // It prints the file's NAME, never a value, and refuses to overwrite an existing file (the passwords only take
 // effect on os-postgres's first start, so a second, different set would not match the database).
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,13 +35,16 @@ export function newEnv() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (existsSync(out)) {
+  // "wx" creates the file or fails if it exists, in one step: no window between a check and the write.
+  try {
+    writeFileSync(out, newEnv(), { mode: 0o600, flag: "wx" });
+  } catch (err) {
+    if (err?.code !== "EEXIST") throw err;
     console.error(
       `${path.relative(root, out)} already exists: not overwriting it. Delete it first only if no deploy has used it.`,
     );
     process.exit(1);
   }
-  writeFileSync(out, newEnv(), { mode: 0o600, flag: "wx" });
   console.log(
     `Wrote ${path.relative(root, out)} (mode 600). Next: pnpm env:encrypt:production, then commit core/core-api/.env.production.age.`,
   );
