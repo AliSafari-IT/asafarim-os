@@ -178,17 +178,20 @@ describe("platform manifest review", () => {
             { type: "shop.order.placed.v1", schema: "./events/placed.json" },
             { type: "shop.order.paid.v1", schema: "./events/paid.json" },
             { type: "shop.order.sent.v1", schema: "./events/sent.json" },
+            { type: "shop.order.lost.v1", schema: "./events/lost.json" },
           ],
         },
       }),
     );
     put("apps/shop/events/paid.json", "{ nope");
     put("apps/shop/events/sent.json", "[1]");
+    mkdirSync(path.join(root, "apps/shop/events/lost.json"), { recursive: true }); // a folder, not a file
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
     expect(kinds()).toEqual([
       "event-schema-missing shop.order.placed.v1",
       "event-schema-invalid shop.order.paid.v1",
       "event-schema-invalid shop.order.sent.v1",
+      "event-schema-missing shop.order.lost.v1",
     ]);
   });
 

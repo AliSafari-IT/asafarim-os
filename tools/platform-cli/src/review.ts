@@ -19,7 +19,7 @@
  * Sign-in plumbing is not a finding: Auth.js's own endpoints under `/api/auth/` and the SDK's session
  * hand-off (`createSessionHandler`).
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { HTTP_METHODS, validateManifest, type AppManifest } from "@asafarim/app-manifest";
 import { MANIFEST_FILE } from "./sync.ts";
@@ -127,9 +127,15 @@ export function globRegex(pattern: string): RegExp {
 export function exportedMethods(text: string): string[] {
   const found = new Set<string>();
   for (const m of HTTP_METHODS) {
-    const decl = new RegExp(`export\\s+(?:async\\s+)?(?:function\\s+|const\\s+|let\\s+|var\\s+)${m}\\b`);
-    const list = new RegExp(`export\\s*\\{[^}]*\\b${m}\\b[^}]*\\}`);
-    if (decl.test(text) || list.test(text)) found.add(m);
+    const decl = new RegExp(`export\\s+(?:async\\s+)?(?:function|const|let|var)\\s+${m}\\b`);
+    if (decl.test(text)) found.add(m);
+  }
+  // `export { GET, POST as P }`: the local names in each export list.
+  for (const list of text.matchAll(/export\s*\{([^}]*)\}/g)) {
+    for (const item of list[1]!.split(",")) {
+      const name = item.trim().split(/\s+/)[0];
+      if (name && (HTTP_METHODS as readonly string[]).includes(name)) found.add(name);
+    }
   }
   return HTTP_METHODS.filter((m) => found.has(m));
 }
@@ -143,7 +149,7 @@ export function mentionsKey(text: string, key: string): boolean {
 /** Module specifiers of the app's own imports: `@/…` (the app root) and relative ones. */
 export function localImports(text: string): string[] {
   const out = new Set<string>();
-  const re = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']((?:@\/|\.{1,2}\/)[^"']+)["']/g;
+  const re = /\b(?:from|import)[\s(]*["']((?:@\/|\.{1,2}\/)[^"'\n]+)["']/g;
   for (const m of text.matchAll(re)) out.add(m[1]!);
   return [...out];
 }
@@ -176,7 +182,16 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
   for (const ev of manifest.events?.publishes ?? []) {
     const file = path.resolve(appDir, ev.schema);
     const inside = !path.relative(appDir, file).startsWith("..");
-    if (!inside || !existsSync(file) || !statSync(file).isFile()) {
+    // Read once and classify the error, rather than checking first (no check-then-use race).
+    let text: string | undefined;
+    if (inside) {
+      try {
+        text = readFileSync(file, "utf8");
+      } catch {
+        text = undefined; // missing, a directory, or unreadable
+      }
+    }
+    if (text === undefined) {
       findings.push({
         app,
         kind: "event-schema-missing",
@@ -188,7 +203,7 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(readFileSync(file, "utf8"));
+      parsed = JSON.parse(text);
     } catch (error) {
       findings.push({
         app,
@@ -317,14 +332,26 @@ export function reviewCommand(args: string[], cwd: string, findRoot: () => strin
   if (!opts) return null;
   const root = opts.root ? path.resolve(cwd, opts.root) : findRoot();
   const appsDir = path.join(root, "apps");
-  const available = existsSync(appsDir)
-    ? readdirSync(appsDir, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && existsSync(path.join(appsDir, e.name, MANIFEST_FILE)))
-        .map((e) => e.name)
-        .sort()
-    : [];
-  const ids = opts.ids.length > 0 ? opts.ids : available;
-  const unknown = ids.filter((id) => !available.includes(id));
+  // Each app's manifest text, read once (an app is a folder with a readable platform.app.json).
+  const manifests = new Map<string, string>();
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(appsDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    entries = []; // no apps/ folder
+  }
+  for (const name of entries) {
+    try {
+      manifests.set(name, readFileSync(path.join(appsDir, name, MANIFEST_FILE), "utf8"));
+    } catch {
+      // not an app folder
+    }
+  }
+  const ids = opts.ids.length > 0 ? opts.ids : [...manifests.keys()];
+  const unknown = ids.filter((id) => !manifests.has(id));
   if (unknown.length > 0) {
     return { ok: false, lines: [`✖ no apps/<id>/${MANIFEST_FILE} for: ${unknown.join(", ")}`] };
   }
@@ -332,12 +359,11 @@ export function reviewCommand(args: string[], cwd: string, findRoot: () => strin
   const reviews: AppReview[] = [];
   const errors: string[] = [];
   for (const id of ids) {
-    const file = path.join(appsDir, id, MANIFEST_FILE);
     let value: unknown;
     try {
-      value = JSON.parse(readFileSync(file, "utf8"));
+      value = JSON.parse(manifests.get(id)!);
     } catch (error) {
-      errors.push(`✖ apps/${id}/${MANIFEST_FILE}: can't read it (${(error as Error).message})`);
+      errors.push(`✖ apps/${id}/${MANIFEST_FILE}: not JSON (${(error as Error).message})`);
       continue;
     }
     const result = validateManifest(value);
