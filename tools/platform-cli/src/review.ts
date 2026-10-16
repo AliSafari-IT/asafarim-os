@@ -15,6 +15,11 @@
  *   route covers with a permission or `expose: false`, the path isn't public, and neither the file nor
  *   any app file it imports (`@/…` or relative, transitively) names one of the app's permissions. A
  *   text match can't prove the check runs on every path, so it reads "possibly".
+ * - `event-not-declared` (P7.2 part 2a): the app's code names an event type in its own namespace
+ *   (`<id>.<entity>.<verb>.v<N>`, as a whole string literal) that the manifest doesn't publish, so
+ *   core-api would refuse it and no subscriber can declare it.
+ * - `event-handler-missing` (P7.2 part 2a): a declared subscription's `handler` path isn't served by
+ *   any of the app's route files, and the app's code never names the event type either.
  *
  * Sign-in plumbing is not a finding: Auth.js's own endpoints under `/api/auth/` and the SDK's session
  * hand-off (`createSessionHandler`).
@@ -25,7 +30,12 @@ import { HTTP_METHODS, validateManifest, type AppManifest } from "@asafarim/app-
 import { MANIFEST_FILE } from "./sync.ts";
 
 export type FindingKind =
-  "event-schema-missing" | "event-schema-invalid" | "permission-never-checked" | "route-unguarded";
+  | "event-schema-missing"
+  | "event-schema-invalid"
+  | "permission-never-checked"
+  | "route-unguarded"
+  | "event-not-declared"
+  | "event-handler-missing";
 
 export interface Finding {
   app: string;
@@ -46,7 +56,9 @@ export interface AppReview {
 }
 
 /** Folders that aren't the app's runtime code. */
-const SKIP_DIRS = new Set(["node_modules", ".next", "dist", "build", "coverage", "test", "e2e", "fixtures", "events"]);
+const SKIP_DIRS = new Set(["node_modules", ".next", "dist", "build", "coverage", "test", "e2e", "fixtures"]);
+/** Folders skipped only at the app's root: `events/` holds the JSON schemas, but `app/events/` can hold handlers. */
+const SKIP_ROOT_DIRS = new Set(["events"]);
 const SOURCE_FILE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const MANIFEST_SOURCE = /^platform\.app\.(?:ts|js|mjs|json)$/;
@@ -60,7 +72,8 @@ export function sourceFiles(appDir: string): string[] {
       if (entry.isSymbolicLink()) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) walk(full);
+        const skip = SKIP_DIRS.has(entry.name) || (dir === appDir && SKIP_ROOT_DIRS.has(entry.name));
+        if (!skip && !entry.name.startsWith(".")) walk(full);
       } else if (
         entry.isFile() &&
         SOURCE_FILE.test(entry.name) &&
@@ -103,6 +116,28 @@ export function samplePaths(url: string): string[] {
     forms = forms.flatMap((f) => options.map((o) => [...f, ...o]));
   }
   return [...new Set(forms.map((f) => `/${f.join("/")}`))];
+}
+
+/**
+ * The paths a Next.js route URL answers, as a regular expression: `[id]` → one segment, `[...x]` → one
+ * or more, `[[...x]]` → none or more.
+ */
+export function routeUrlRegex(url: string): RegExp {
+  let re = "";
+  for (const seg of url.split("/").filter(Boolean)) {
+    if (/^\[\[\.\.\.[^\]]+\]\]$/.test(seg)) re += "(?:/[^/]+)*";
+    else if (/^\[\.\.\.[^\]]+\]$/.test(seg)) re += "(?:/[^/]+)+";
+    else if (/^\[[^\]]+\]$/.test(seg)) re += "/[^/]+";
+    else re += `/${seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`;
+  }
+  return new RegExp(`^${re || "/"}$`);
+}
+
+/** Event types in `namespace` (`<ns>.<entity>.<verb>.v<N>`) that `text` holds as whole string literals. */
+export function eventTypesIn(text: string, namespace: string): string[] {
+  const ns = namespace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(["'\`])(${ns}\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.v[1-9]\\d*)\\1`, "g");
+  return [...new Set([...text.matchAll(re)].map((m) => m[2]!))];
 }
 
 /**
@@ -295,6 +330,42 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
           message: `${method} ${url} is possibly unguarded: no manifest route with a permission or expose: false covers it, it isn't public, and neither the handler nor the app files it imports name one of the app's permissions`,
         });
       }
+    }
+  }
+
+  // 4. Event types the code names in the app's own namespace are declared as published.
+  const published = new Set((manifest.events?.publishes ?? []).map((e) => e.type));
+  const subscribed = manifest.events?.subscribes ?? [];
+  const undeclared = new Map<string, string>(); // type → first file naming it
+  for (const f of files) {
+    for (const type of eventTypesIn(f.text, app)) {
+      if (!published.has(type) && !subscribed.some((s) => s.type === type) && !undeclared.has(type)) {
+        undeclared.set(type, f.rel);
+      }
+    }
+  }
+  for (const [type, file] of [...undeclared].sort(([a], [b]) => a.localeCompare(b))) {
+    findings.push({
+      app,
+      kind: "event-not-declared",
+      subject: type,
+      file: rel(path.join(appDir, file)),
+      message: `the code names event ${type}, but the manifest doesn't publish it (add it to events.publishes with a schema)`,
+    });
+  }
+
+  // 5. Every subscription has a handler: a route file serving its path, or code that names the type.
+  const routeRes = files.map((f) => routeUrl(f.rel)).flatMap((u) => (u === undefined ? [] : [routeUrlRegex(u)]));
+  for (const sub of subscribed) {
+    const served = routeRes.some((re) => re.test(sub.handler));
+    const named = files.some((f) => mentionsKey(f.text, sub.type));
+    if (!served && !named) {
+      findings.push({
+        app,
+        kind: "event-handler-missing",
+        subject: sub.type,
+        message: `the app subscribes to ${sub.type}, but no route file serves its handler ${sub.handler} and no code names the type`,
+      });
     }
   }
 
