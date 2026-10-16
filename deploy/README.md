@@ -240,7 +240,10 @@ The script stops at the first failure and says why. In order:
 1. fetch, refuse a commit that is not on `origin/main`, and `git reset --hard` to it;
 2. decrypt `apps/docs/.env.production.age` into `.env.docs` and `core/identity/.env.production.age` into
    `.env.identity`, with plain `age` (mode 600);
-3. check every variable each example lists is filled: it prints **names, never values**;
+3. check every variable each example lists is filled: it prints **names, never values**. For identity the list follows
+   `IDENTITY_LOGIN_METHOD`: `hub` (the default) needs the example's Hub variables; `local` (or `sms`) needs
+   `IDENTITY_OIDC_JWKS`, `IDENTITY_COOKIE_KEYS`, `IDENTITY_DATABASE_URL` and `IDENTITY_OTP_SECRET`, plus
+   `IDENTITY_SMTP_HOST` and `IDENTITY_SMTP_FROM` for email codes (the Twilio variables for SMS), and no Hub variable;
 4. check `identity_db`, `edge_net`, `deploy/identity/clients.json` and the edge script exist;
 5. `docker compose pull`, then `up -d`;
 6. wait up to 90 seconds for identity's `/readyz` (it checks Redis and the accounts database), then up to 30 seconds for
