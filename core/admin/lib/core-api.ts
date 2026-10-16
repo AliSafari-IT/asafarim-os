@@ -28,6 +28,21 @@ export interface AdminApp {
   roles: number;
   /** Event types it subscribes to whose publisher isn't installed: shown as a warning (P4.1). */
   waitingForPublisher?: string[];
+  /** A removed app's backup and purge date (mirrors core-api's `Retention`, src/admin.ts); null otherwise. */
+  retention?: Retention | null;
+}
+
+/** What Remove kept of a removed app's database, and when it may be purged (ADR 0001 §3 step 6). */
+export interface Retention {
+  removedAt: string | null;
+  /** null: the app had no database, so there is nothing to back up or purge. */
+  database: string | null;
+  backup: { id: number; path: string; sizeBytes: number; sha256: string; createdAt: string } | null;
+  /** From when a purge is allowed without forcing it. */
+  purgeAfter: string | null;
+  purgedAt: string | null;
+  /** A purge would be accepted now (core-api still checks the backup file first). */
+  eligible: boolean;
 }
 
 export interface AdminRole {
@@ -81,6 +96,19 @@ export interface RemoveResult {
   removedGrants: { role: string; subject: string }[];
   /** Other apps' subscriptions that now wait for a publisher. */
   warnings: { app: string; type: string; code: string }[];
+  /** The backup of its database (null: it has none), and from when it may be purged. */
+  backup: { path: string; sizeBytes: number; sha256: string } | null;
+  purgeAfter: string | null;
+}
+
+/** What core-api did when it purged a removed app's database (the parts the console shows). */
+export interface PurgeResult {
+  appId: string;
+  database: { name: string; result: "dropped" | "absent" };
+  role: { name: string; result: "dropped" | "absent" };
+  backup: { path: string; sha256: string };
+  /** Purged before its retention window was over. */
+  forced: boolean;
 }
 
 /** One row of the status board (P6.1; mirrors core-api's `AppStatus`, src/health.ts). */
@@ -114,12 +142,16 @@ export interface RoleGrant {
 
 const base = () => (process.env.CORE_API_URL ?? "http://localhost:4020").replace(/\/$/, "");
 
-async function call<T>(idToken: string, method: string, path: string): Promise<T> {
+async function call<T>(idToken: string, method: string, path: string, body?: object): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${base()}${path}`, {
       method,
-      headers: { authorization: `Bearer ${idToken}` },
+      headers: {
+        authorization: `Bearer ${idToken}`,
+        ...(body ? { "content-type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
       // Next.js caches GET fetches in development; an admin must never see a stale list.
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
@@ -127,10 +159,10 @@ async function call<T>(idToken: string, method: string, path: string): Promise<T
   } catch {
     throw new CoreApiError(0, "unreachable", "core-api isn't reachable right now.");
   }
-  const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+  const payload = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
   if (!res.ok)
-    throw new CoreApiError(res.status, body.error ?? "error", body.message ?? `core-api answered ${res.status}`);
-  return body as T;
+    throw new CoreApiError(res.status, payload.error ?? "error", payload.message ?? `core-api answered ${res.status}`);
+  return payload as T;
 }
 
 export function coreApi(idToken: string) {
@@ -156,6 +188,12 @@ export function coreApi(idToken: string) {
     deactivate: (app: string) => call<{ state: string }>(idToken, "POST", `/admin/v1/apps/${enc(app)}/deactivate`),
     /** Remove (#68): from installed or inactive. core-api tears down its event plumbing, credentials and grants. */
     remove: (app: string) => call<RemoveResult>(idToken, "POST", `/admin/v1/apps/${enc(app)}/remove`),
+    /**
+     * Purge: drop a removed app's database and role. After its retention window, or earlier with
+     * `force` and the app id typed as `confirm`. core-api checks the backup first.
+     */
+    purge: (app: string, opts: { force: boolean; confirm: string }) =>
+      call<PurgeResult>(idToken, "POST", `/admin/v1/apps/${enc(app)}/purge`, opts),
     grant: (role: string, subject: string) =>
       call<{ granted: boolean }>(idToken, "PUT", `/admin/v1/roles/${enc(role)}/grants/${enc(subject)}`),
     revoke: (role: string, subject: string) =>

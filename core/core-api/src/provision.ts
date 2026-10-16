@@ -4,6 +4,9 @@
  * for the roles that need it. Idempotent. Shared by the OS-D1 dev bootstrap
  * (scripts/dev/bootstrap.mjs) and app install.
  *
+ * Remove and purge (ADR 0001 §3 step 6) use the helpers at the end: lock the role while its
+ * database is backed up, then, after the retention window, drop the database and the role.
+ *
  * Every identifier and password goes through format(%I / %L) server-side.
  */
 import type pg from "pg";
@@ -44,4 +47,34 @@ export async function ensureDatabase(
 export function appDatabaseNames(appId: string): { database: string; role: string } {
   const name = `app_${appId.replace(/-/g, "_")}`;
   return { database: name, role: name };
+}
+
+/** Let the role log in again, or stop it (Remove: nothing writes to the database after its backup). */
+export async function setRoleLogin(client: Queryable, role: string, login: boolean): Promise<void> {
+  await ddl(client, login ? "ALTER ROLE %I LOGIN" : "ALTER ROLE %I NOLOGIN", role);
+}
+
+/** End every session on the database but the caller's own. Returns how many were ended. */
+export async function terminateConnections(client: Queryable, database: string): Promise<number> {
+  const r = await client.query<{ ended: boolean }>(
+    "SELECT pg_terminate_backend(pid) AS ended FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+    [database],
+  );
+  return r.rows.filter((x) => x.ended).length;
+}
+
+/**
+ * Purge: drop the app's database (ending its sessions) and then its login role. Idempotent: what is
+ * already gone is `absent`, so a purge that failed halfway can simply be run again.
+ */
+export async function dropDatabaseAndRole(
+  client: Queryable,
+  database: string,
+  role: string,
+): Promise<{ database: "dropped" | "absent"; role: "dropped" | "absent" }> {
+  const dbExists = ((await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [database])).rowCount ?? 0) > 0;
+  if (dbExists) await ddl(client, "DROP DATABASE IF EXISTS %I WITH (FORCE)", database);
+  const roleExists = ((await client.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role])).rowCount ?? 0) > 0;
+  if (roleExists) await ddl(client, "DROP ROLE IF EXISTS %I", role);
+  return { database: dbExists ? "dropped" : "absent", role: roleExists ? "dropped" : "absent" };
 }

@@ -40,6 +40,15 @@ describe("the console's core-api client", () => {
       url: "http://core.test/admin/v1/apps/notes/remove",
       init: { method: "POST" },
     });
+    fn = stub(200, { appId: "notes", forced: true });
+    await coreApi("t").purge("notes", { force: true, confirm: "notes" });
+    const purge = lastCall(fn);
+    expect(purge).toMatchObject({
+      url: "http://core.test/admin/v1/apps/notes/purge",
+      init: { method: "POST", body: '{"force":true,"confirm":"notes"}' },
+    });
+    expect(new Headers(purge.init.headers).get("content-type")).toBe("application/json");
+    expect(new Headers(purge.init.headers).get("authorization")).toBe("Bearer t");
 
     fn = stub(200, { granted: true });
     await coreApi("t").grant("notes.editor", "user@example.test:1");

@@ -1,6 +1,6 @@
 /**
  * Read-only queries for the Admin console (P3.3b): apps, roles and who holds them,
- * a person's grants, and the audit log. Everything here is a SELECT; the writes
+ * a person's grants, the audit log, and removed apps' backups and purge dates. Everything here is a SELECT; the writes
  * (install, activate, grant…) stay in the registry, where each one is audited.
  */
 import type pg from "pg";
@@ -20,6 +20,30 @@ export interface AdminApp {
   roles: number;
   /** Event types the app subscribes to whose publisher isn't installed (a warning; nothing is blocked). */
   waitingForPublisher: string[];
+  /** A removed app's backup and purge date (ADR 0001 §3 step 6); null while it is installed. */
+  retention: Retention | null;
+}
+
+/** What Remove kept of an app's database, and when it may be purged. */
+export interface Retention {
+  removedAt: string | null;
+  /** The database (null: the app had none, so there is nothing to back up or purge). */
+  database: string | null;
+  backup: { id: number; path: string; sizeBytes: number; sha256: string; createdAt: string } | null;
+  /** From when a purge is allowed without `force`. */
+  purgeAfter: string | null;
+  purgedAt: string | null;
+  /**
+   * The database can be purged now: not purged yet, a backup is recorded and purge_after has passed.
+   * The purge itself also checks that the backup file is still there with its sha256.
+   */
+  eligible: boolean;
+}
+
+/** One entry of `GET /admin/v1/retention`. */
+export interface RetentionEntry extends Retention {
+  appId: string;
+  name: string;
 }
 
 export interface AdminRole {
@@ -77,7 +101,38 @@ export interface AuditFilter {
   before?: number;
 }
 
-export function createAdminQueries(pool: pg.Pool) {
+/** The apps columns and backup join that `retentionOf` reads. */
+const RETENTION_COLUMNS = `a.removed_at, a.purge_after, a.purged_at, a.database_name,
+       b.id AS backup_id, b.path AS backup_path, b.size_bytes AS backup_size, b.sha256 AS backup_sha256,
+       b.created_at AS backup_created_at`;
+const RETENTION_JOIN = "LEFT JOIN app_backups b ON b.id = a.backup_id";
+
+const iso = (d: unknown) => (d ? new Date(d as string).toISOString() : null);
+
+/** A removed app's retention, from a row with RETENTION_COLUMNS. */
+export function retentionOf(x: Record<string, unknown>, now: Date): Retention {
+  const backup = x.backup_id
+    ? {
+        id: Number(x.backup_id),
+        path: x.backup_path as string,
+        sizeBytes: Number(x.backup_size),
+        sha256: x.backup_sha256 as string,
+        createdAt: iso(x.backup_created_at)!,
+      }
+    : null;
+  const purgeAfter = iso(x.purge_after);
+  const purgedAt = iso(x.purged_at);
+  return {
+    removedAt: iso(x.removed_at),
+    database: (x.database_name as string | null) ?? null,
+    backup,
+    purgeAfter,
+    purgedAt,
+    eligible: !purgedAt && backup !== null && purgeAfter !== null && new Date(purgeAfter).getTime() <= now.getTime(),
+  };
+}
+
+export function createAdminQueries(pool: pg.Pool, now: () => Date = () => new Date()) {
   async function holdsRole(role: string, subject: string): Promise<boolean> {
     const r = await pool.query(
       `SELECT 1 FROM role_grants g JOIN roles r ON r.key = g.role_key
@@ -91,9 +146,11 @@ export function createAdminQueries(pool: pg.Pool) {
     const r = await pool.query(
       `SELECT a.id, a.manifest->>'name' AS name, a.manifest->'events' AS events, a.version, a.state, a.installed_at, a.registered_at,
               (SELECT count(*) FROM permissions p WHERE p.app_id = a.id AND p.deprecated_at IS NULL) AS permissions,
-              (SELECT count(*) FROM roles r WHERE r.app_id = a.id AND r.deprecated_at IS NULL) AS roles
-         FROM apps a ORDER BY (a.id = 'core') DESC, (a.state = 'removed'), a.id`,
+              (SELECT count(*) FROM roles r WHERE r.app_id = a.id AND r.deprecated_at IS NULL) AS roles,
+              ${RETENTION_COLUMNS}
+         FROM apps a ${RETENTION_JOIN} ORDER BY (a.id = 'core') DESC, (a.state = 'removed'), a.id`,
     );
+    const at = now();
     // Removed apps are listed (so they can be told apart and reinstalled) but publish nothing to anyone.
     const installed = r.rows
       .filter((x) => x.state !== "removed")
@@ -110,7 +167,28 @@ export function createAdminQueries(pool: pg.Pool) {
       roles: Number(x.roles),
       waitingForPublisher:
         x.state === "removed" ? [] : waitingForPublisher(x.id, { events: x.events } as EventsManifest, installed),
+      retention: x.state === "removed" ? retentionOf(x, at) : null,
     }));
+  }
+
+  /**
+   * Removed apps with their backup and purge date (ADR 0001 §3 step 6), the soonest purge first.
+   * `eligibleOnly`: just the ones a purge would accept now (core-api has no scheduler: an admin purges).
+   */
+  async function listRetention(f: { eligibleOnly?: boolean } = {}): Promise<RetentionEntry[]> {
+    const r = await pool.query(
+      `SELECT a.id, a.manifest->>'name' AS name, ${RETENTION_COLUMNS}
+         FROM apps a ${RETENTION_JOIN}
+        WHERE a.state = 'removed'
+        ORDER BY a.purge_after NULLS LAST, a.id`,
+    );
+    const at = now();
+    const all = r.rows.map((x) => ({
+      appId: x.id as string,
+      name: (x.name as string | null) ?? x.id,
+      ...retentionOf(x, at),
+    }));
+    return f.eligibleOnly ? all.filter((e) => e.eligible) : all;
   }
 
   /**
@@ -261,7 +339,17 @@ export function createAdminQueries(pool: pg.Pool) {
     return { events: rows, next: r.rows.length > limit ? rows[rows.length - 1]!.id : null };
   }
 
-  return { holdsRole, listApps, listEvents, listRoles, roleGrants, subjectGrants, audit, CORE_ADMIN_ROLE };
+  return {
+    holdsRole,
+    listApps,
+    listRetention,
+    listEvents,
+    listRoles,
+    roleGrants,
+    subjectGrants,
+    audit,
+    CORE_ADMIN_ROLE,
+  };
 }
 
 export type AdminQueries = ReturnType<typeof createAdminQueries>;

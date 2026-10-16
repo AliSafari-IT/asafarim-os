@@ -211,6 +211,10 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("remove an app (#68, integration: Postg
       revokedCredentials: 1,
       removedGrants: [{ role: `${PUB}.viewer`, subject: "dev-member" }],
       removedEventSchemas: [typeOf(PUB)],
+      // No database (engine "none"): nothing to back up, no purge date (retention.integration.test.ts).
+      removedAt: expect.any(String),
+      backup: null,
+      purgeAfter: null,
       consumers: "none",
       dependentConsumers: { [SUB]: { [typeOf(PUB)]: "deleted" } },
       stream: { stream: streamName(PUB), result: "deleted" },

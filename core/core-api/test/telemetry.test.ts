@@ -184,6 +184,8 @@ describe("routePattern", () => {
     );
     expect(routePattern("/admin/v1/apps")).toBe("/admin/v1/apps");
     expect(routePattern("/admin/v1/apps/notes/activate")).toBe("/admin/v1/apps/:id/activate");
+    expect(routePattern("/admin/v1/apps/notes/purge")).toBe("/admin/v1/apps/:id/purge");
+    expect(routePattern("/admin/v1/retention")).toBe("/admin/v1/retention");
     expect(routePattern("/admin/v1/roles/notes.reader/grants/dev-member")).toBe("/admin/v1/roles/:role/grants/:sub");
     expect(routePattern("/admin/v1/gateway/apps")).toBe("/admin/v1/gateway/apps");
     expect(routePattern("/admin/v1/apps/Not_An_Id")).toBeUndefined();
