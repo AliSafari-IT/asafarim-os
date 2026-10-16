@@ -19,6 +19,12 @@ pnpm platform app new <id> [--name "<Display name>"] [--root <dir>]
                                         # write a minimal app to <dir>/apps/<id>/ (installs nothing)
 pnpm platform app compose <id|image-ref> --env prod|staging --out <file>
                                         # write the compose file that runs an external app (--help)
+pnpm platform app remove <id> [--confirm <id>] [--yes]
+                                        # back up the app's database, then remove the app
+pnpm platform app purge <id> [--force] [--confirm <id>] [--yes]
+                                        # drop a removed app's database and role (after its purge date)
+pnpm platform app retention [--eligible]
+                                        # removed apps with their backup and purge date
 ```
 
 `--other-stack-sites <file>` lists gateway sites that belong to **another stack
@@ -52,6 +58,30 @@ The published JSON Schema is at
 `https://asafarim.site/schemas/app-manifest.schema.json` (and `/schemas/app-manifest/v1.json`).
 `fixtures/external-app/` is a made-up external app; `pnpm e2e` builds it, installs it this
 way and checks the Admin Status board shows it up.
+
+## Remove, purge and retention (`app remove`, `app purge`, `app retention`)
+
+These call core-api's admin API (ADR 0001 §3 step 6; see `core/core-api/README.md`, "Remove and purge") with the
+same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as `app install` (locally they fall back to `.dev/core-api.env`).
+
+**The id is always stated twice.** `remove` and `purge` take the app id as their argument and need it again before
+anything is sent: typed at the prompt (`Type <id> to remove it`), or given as `--confirm <id>`. `--confirm` replaces
+the prompt and is how a script runs them; without it, stdin must be a terminal, so a pipe or CI job without
+`--confirm` is refused. `--yes` never stands in for the id: it is accepted only together with a matching
+`--confirm <id>`. A typed or `--confirm` id that doesn't match, or no second statement at all, stops the command
+before any request (exit 1). This is the same check as the Admin console's typed-id dialog.
+
+- `app remove <id>` backs up the app's database (pg_dump on core-api's host) and removes the app. It prints the
+  backup's path, size, the start of its sha256 and the purge date. `backup_failed` means nothing was removed.
+- `app purge <id>` drops a removed app's database and its login role, and prints what was dropped (`dropped`, or
+  `absent` when it was already gone). Before the purge date it is refused and the date is printed; `--force` purges
+  before then (still with the id confirmed; core-api is sent `{ "force": true, "confirm": "<id>" }`). It is also
+  refused when no backup was recorded (`no_backup`), the backup file is gone (`backup_missing`) or its sha256 has
+  changed (`backup_mismatch`); each says so in plain words, and nothing is dropped.
+- `app retention [--eligible]` lists removed apps as a table: when each was removed, its backup (size, sha256),
+  its purge date and its status (`eligible`, `kept`, `no database`, `no backup (kept)` or `purged …`), then the
+  backup paths. `--eligible` lists only the ones a purge would accept now. Nothing purges on its own: core-api has
+  no scheduler.
 
 ## New app (`app new <id>`)
 
