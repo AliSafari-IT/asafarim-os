@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EventsWarning } from "@/components/EventsWarning";
 import { Flash } from "@/components/Flash";
@@ -138,6 +139,15 @@ export default async function AppsPage({
                 <td className="muted">
                   {app.permissions} permission{app.permissions === 1 ? "" : "s"}, {app.roles} role
                   {app.roles === 1 ? "" : "s"}
+                  <div>
+                    <Link
+                      href={`/admin/events?app=${encodeURIComponent(app.id)}`}
+                      aria-label={`Events of ${app.name}`}
+                      data-testid={`events-link-${app.id}`}
+                    >
+                      Events
+                    </Link>
+                  </div>
                 </td>
                 <td>
                   {app.system ? (

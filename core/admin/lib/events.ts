@@ -128,14 +128,26 @@ export interface SearchHit {
   matched: MatchField[];
 }
 
+/**
+ * The words of some texts as the matcher sees them: each word stemmed, and also as written when the stem differs.
+ * Keeping the written word lets "speeds" (stem "speed") find "speed", whose stem is the 3-letter "spe" that is too
+ * short to match by itself.
+ */
+export function fieldWords(texts: string[]): string[] {
+  return texts.flatMap(words).flatMap((w) => {
+    const s = stem(w);
+    return s === w ? [w] : [s, w];
+  });
+}
+
 function entryWords(entry: CatalogEntry): Record<MatchField, string[]> {
   const texts = schemaTexts(entry.schema);
   const apps = [entry.publisher?.appId ?? "", ...entry.subscribers.map((s) => s.appId)];
   return {
-    type: words(entry.type).map(stem),
-    app: apps.flatMap(words).map(stem),
-    description: texts.description.flatMap(words).map(stem),
-    property: texts.property.flatMap(words).map(stem),
+    type: fieldWords([entry.type]),
+    app: fieldWords(apps),
+    description: fieldWords(texts.description),
+    property: fieldWords(texts.property),
   };
 }
 
@@ -143,8 +155,8 @@ function entryWords(entry: CatalogEntry): Record<MatchField, string[]> {
  * A query word matches a field word that starts with it ("ship" matches "shipment"), or one of at least four letters
  * it starts with ("create" matches "created", whose stem is "creat").
  */
-const matches = (fieldWords: string[], term: string): boolean =>
-  fieldWords.some((w) => w.startsWith(term) || (w.length >= 4 && term.startsWith(w)));
+const matches = (candidates: string[], term: string): boolean =>
+  candidates.some((w) => w.startsWith(term) || (w.length >= 4 && term.startsWith(w)));
 
 /**
  * The entries every query word matches, best first. A word scores the weight of the strongest field it matches
