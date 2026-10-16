@@ -3,8 +3,8 @@
  * signs in is a login method chosen by config (IDENTITY_LOGIN_METHOD):
  *
  * - `hub`: login delegated to Hub (ADR 0002, Addendum A);
- * - `sms`: the service's own SMS sign-in, with connections approved by an
- *   admin (sms-login.ts).
+ * - `local`: the service's own sign-in (email codes, passkeys, SMS), with
+ *   connections approved by an admin (sign-in.ts).
  *
  * Whatever the method, an interaction is finished only for an account that
  * `findAccount` accepts, and tokens are issued only for such an account.
@@ -23,7 +23,7 @@ import { type HttpContext, readForm, sendHtml } from "./http.ts";
 import type { Logger } from "./log.ts";
 import { CONTINUE_PAGE_CSP, continuePage, errorPage, loggedOutPage, logoutPage } from "./pages.ts";
 import { PENDING_TTL_SECONDS, hashSecret, type PendingLogins } from "./pending.ts";
-import type { SmsLogin } from "./sms-login.ts";
+import type { SignIn } from "./sign-in.ts";
 
 export const ACCESS_TOKEN_TTL = 600;
 export const SCOPES = ["openid", "offline_access", "email", "profile", "roles"];
@@ -34,13 +34,13 @@ export interface ProviderDeps {
   cookieKeys: string[];
   clients: OidcClient[];
   /** Default `hub`. */
-  loginMethod?: "hub" | "sms";
+  loginMethod?: "hub" | "local";
   /** `hub` only: the hand-off keys and Hub's continue URL. */
   handoffPrivateKey?: CryptoKey | KeyObject;
   hubPublicKey?: CryptoKey | KeyObject;
   hubContinueUrl?: string;
-  /** `sms` only: the SMS sign-in and the connections admin. */
-  sms?: SmsLogin;
+  /** `local` only: the service's own sign-in (email codes, passkeys, SMS) and the connections admin. */
+  signIn?: SignIn;
   trustProxy: boolean;
   // oidc-provider's adapter contract is a constructor taking the model name.
   adapter: Configuration["adapter"];
@@ -73,10 +73,10 @@ interface HubLogin {
 }
 
 /** The login method's own dependencies, checked once: a misconfiguration fails at startup, not at a sign-in. */
-function loginMethodOf(deps: ProviderDeps): { method: "hub"; hub: HubLogin } | { method: "sms"; sms: SmsLogin } {
-  if ((deps.loginMethod ?? "hub") === "sms") {
-    if (!deps.sms) throw new Error("the sms login method needs its SmsLogin");
-    return { method: "sms", sms: deps.sms };
+function loginMethodOf(deps: ProviderDeps): { method: "hub"; hub: HubLogin } | { method: "local"; signIn: SignIn } {
+  if ((deps.loginMethod ?? "hub") === "local") {
+    if (!deps.signIn) throw new Error("the local login method needs its SignIn");
+    return { method: "local", signIn: deps.signIn };
   }
   const { handoffPrivateKey, hubPublicKey, hubContinueUrl, replay, pending } = deps;
   if (!handoffPrivateKey || !hubPublicKey || !hubContinueUrl || !replay || !pending) {
@@ -279,11 +279,11 @@ export function createProvider(deps: ProviderDeps): Provider {
         );
         return;
       }
-      if (login.method === "sms") {
+      if (login.method === "local") {
         // Finish the login if this browser has an SMS auth session whose principal is connected
         // (and, when the app asked for a new sign-in, a recent one); otherwise send it to the SMS
         // sign-in, which comes back to this URL when done.
-        const sms = login.sms;
+        const sms = login.signIn;
         const reasons: string[] = details.prompt.reasons ?? [];
         const maxAge = Number(details.params.max_age);
         const authorized = await sms.authorizedPrincipal(ctx as unknown as HttpContext);
@@ -435,8 +435,8 @@ export function createProvider(deps: ProviderDeps): Provider {
       return;
     }
 
-    // The SMS sign-in's own pages: /connect, /login…, /logout and /admin….
-    if (login.method === "sms" && (await login.sms.handle(ctx as unknown as HttpContext))) return;
+    // The local sign-in's own pages: /connect, /login…, /logout, /account…, /passkeys… and /admin….
+    if (login.method === "local" && (await login.signIn.handle(ctx as unknown as HttpContext))) return;
 
     await next();
   });

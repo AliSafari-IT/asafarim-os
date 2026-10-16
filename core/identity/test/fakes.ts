@@ -5,18 +5,23 @@
  * routes without a server.
  */
 import { randomUUID } from "node:crypto";
-import type { AuthSession, AuthSessions, LoginFlow, LoginFlows } from "../src/auth-session.ts";
+import type { AuthSession, AuthSessions, Ephemeral, LoginFlow, LoginFlows } from "../src/auth-session.ts";
 import { newToken } from "../src/auth-session.ts";
 import type { CookieOptions, HttpContext } from "../src/http.ts";
 import type { Limit, LimitResult, OtpChallenges, RateLimiter, VerifyResult } from "../src/otp.ts";
 import { OTP_MAX_ATTEMPTS } from "../src/otp.ts";
 import type { SmsSender } from "../src/sms.ts";
+import type { MailMessage, Mailer } from "../src/smtp.ts";
 import type {
   AuditEntry,
   AuditRow,
   ConnectionRequestRow,
   ConnectionRow,
+  Identity,
+  IdentityMethod,
   IdentityStore,
+  NewPasskeyRow,
+  PasskeyRow,
   Principal,
   RequestOutcome,
 } from "../src/store.ts";
@@ -24,7 +29,7 @@ import type {
 interface P {
   id: string;
   isAdmin: boolean;
-  phone: string | null;
+  identities: Identity[];
   verifiedAt: Date | null;
   lastLoginAt: Date | null;
 }
@@ -45,18 +50,32 @@ export class MemoryStore implements IdentityStore {
   readonly connectionsById = new Map<string, C>();
   readonly requests: R[] = [];
   readonly auditLog: AuditEntry[] = [];
+  readonly passkeys = new Map<string, PasskeyRow>();
 
-  private byPhone(phone: string): P | undefined {
-    return [...this.principals.values()].find((p) => p.phone === phone);
+  private by(method: IdentityMethod, identifier: string): P | undefined {
+    return [...this.principals.values()].find((p) =>
+      p.identities.some((i) => i.method === method && i.identifier === identifier),
+    );
   }
 
-  private ensure(phone: string): P {
-    let p = this.byPhone(phone);
+  private ensure(method: IdentityMethod, identifier: string): P {
+    let p = this.by(method, identifier);
     if (!p) {
-      p = { id: randomUUID(), isAdmin: false, phone, verifiedAt: null, lastLoginAt: null };
+      p = {
+        id: randomUUID(),
+        isAdmin: false,
+        identities: [{ method, identifier }],
+        verifiedAt: null,
+        lastLoginAt: null,
+      };
       this.principals.set(p.id, p);
     }
     return p;
+  }
+
+  labelOf(id: string): string | null {
+    const ids = this.principals.get(id)?.identities ?? [];
+    return (ids.find((i) => i.method === "email") ?? ids[0])?.identifier ?? null;
   }
 
   private grant(id: string) {
@@ -65,8 +84,8 @@ export class MemoryStore implements IdentityStore {
     this.connectionsById.set(id, { status: "active", grantedAt: new Date(), revokedAt: null });
   }
 
-  async verifiedPhoneLogin(phone: string) {
-    const p = this.ensure(phone);
+  async verifiedLogin(method: IdentityMethod, identifier: string) {
+    const p = this.ensure(method, identifier);
     p.verifiedAt ??= new Date();
     p.lastLoginAt = new Date();
     return p.id;
@@ -75,7 +94,12 @@ export class MemoryStore implements IdentityStore {
   async principal(id: string): Promise<Principal | null> {
     const p = this.principals.get(id);
     if (!p) return null;
-    return { id: p.id, isAdmin: p.isAdmin, phone: p.phone, connection: this.connectionsById.get(id)?.status ?? "none" };
+    return {
+      id: p.id,
+      isAdmin: p.isAdmin,
+      label: this.labelOf(id),
+      connection: this.connectionsById.get(id)?.status ?? "none",
+    };
   }
 
   async requestConnection(principalId: string): Promise<RequestOutcome> {
@@ -95,7 +119,7 @@ export class MemoryStore implements IdentityStore {
       .map((r) => ({
         id: r.id,
         principalId: r.principalId,
-        phone: this.principals.get(r.principalId)?.phone ?? null,
+        label: this.labelOf(r.principalId),
         createdAt: r.createdAt,
       }));
   }
@@ -105,7 +129,7 @@ export class MemoryStore implements IdentityStore {
       const p = this.principals.get(id)!;
       return {
         principalId: id,
-        phone: p.phone,
+        label: this.labelOf(id),
         status: c.status,
         isAdmin: p.isAdmin,
         grantedAt: c.grantedAt,
@@ -137,20 +161,23 @@ export class MemoryStore implements IdentityStore {
     return true;
   }
 
-  async addConnection(phone: string, actorId: string) {
-    const p = this.ensure(phone);
+  async addConnection(method: IdentityMethod, identifier: string, actorId: string) {
+    const p = this.ensure(method, identifier);
     this.grant(p.id);
     for (const r of this.requests) if (r.principalId === p.id && r.status === "pending") r.status = "approved";
     this.auditLog.push({ event: "connection.added", principalId: p.id, actorId });
     return p.id;
   }
 
-  async bootstrapAdmin(phone: string) {
+  async bootstrapAdmin(identities: readonly Identity[]) {
     const hasAdmin = [...this.principals.values()].some(
       (p) => p.isAdmin && this.connectionsById.get(p.id)?.status === "active",
     );
     if (hasAdmin) return "unchanged" as const;
-    const p = this.ensure(phone);
+    const [first, ...more] = identities;
+    if (!first) return "unchanged" as const;
+    const p = this.ensure(first.method, first.identifier);
+    for (const extra of more) if (!this.by(extra.method, extra.identifier)) p.identities.push(extra);
     p.isAdmin = true;
     this.grant(p.id);
     this.auditLog.push({ event: "connection.bootstrapped", principalId: p.id });
@@ -170,9 +197,32 @@ export class MemoryStore implements IdentityStore {
         event: e.event,
         principalId: e.principalId ?? null,
         actorId: e.actorId ?? null,
-        phone: e.principalId ? (this.principals.get(e.principalId)?.phone ?? null) : null,
+        label: e.principalId ? this.labelOf(e.principalId) : null,
         detail: e.detail ?? {},
       }));
+  }
+
+  async addPasskey(principalId: string, k: NewPasskeyRow) {
+    this.passkeys.set(k.credentialId, { ...k, principalId, createdAt: new Date(), lastUsedAt: null });
+  }
+
+  async passkey(credentialId: string) {
+    return this.passkeys.get(credentialId) ?? null;
+  }
+
+  async passkeysOf(principalId: string) {
+    return [...this.passkeys.values()].filter((k) => k.principalId === principalId);
+  }
+
+  async touchPasskey(credentialId: string, signCount: number) {
+    const k = this.passkeys.get(credentialId);
+    if (k) Object.assign(k, { signCount, lastUsedAt: new Date() });
+  }
+
+  async removePasskey(principalId: string, credentialId: string) {
+    const k = this.passkeys.get(credentialId);
+    if (k?.principalId !== principalId) return false;
+    return this.passkeys.delete(credentialId);
   }
 
   events(): string[] {
@@ -278,6 +328,35 @@ export class MemoryFlows implements LoginFlows {
   }
 }
 
+export class MemoryEphemeral implements Ephemeral {
+  readonly rows = new Map<string, string>();
+
+  async put(key: string, value: string) {
+    this.rows.set(key, value);
+  }
+
+  async take(key: string) {
+    const v = this.rows.get(key) ?? null;
+    this.rows.delete(key);
+    return v;
+  }
+}
+
+export class CapturingMailer implements Mailer {
+  readonly sent: MailMessage[] = [];
+
+  async send(message: MailMessage) {
+    this.sent.push(message);
+  }
+
+  lastCode(to: string): string {
+    const msg = [...this.sent].reverse().find((m) => m.to === to);
+    const m = msg && /code is (\d{6})/.exec(msg.text);
+    if (!m) throw new Error(`no code was emailed to ${to}`);
+    return m[1]!;
+  }
+}
+
 export class CapturingSender implements SmsSender {
   readonly sent: { to: string; body: string }[] = [];
   fail = false;
@@ -316,10 +395,12 @@ export async function request(
   method: "GET" | "POST",
   url: string,
   form?: Record<string, string>,
+  opts: { json?: unknown; headers?: Record<string, string> } = {},
 ): Promise<Reply & { handled: boolean | void }> {
   const u = new URL(url, "https://id.example.test");
   const headers: Record<string, string> = {};
-  const body = form ? new URLSearchParams(form).toString() : "";
+  const body = opts.json !== undefined ? JSON.stringify(opts.json) : form ? new URLSearchParams(form).toString() : "";
+  const contentType = opts.json !== undefined ? "application/json" : form ? "application/x-www-form-urlencoded" : "";
   const ctx: HttpContext & { location?: string } = {
     method,
     path: u.pathname,
@@ -340,7 +421,8 @@ export async function request(
         else browser.cookies.delete(name);
       },
     },
-    is: (type: string) => (form && type === "application/x-www-form-urlencoded" ? type : false),
+    is: (type: string) => (contentType === type ? type : false),
+    get: (field: string) => opts.headers?.[field.toLowerCase()] ?? "",
     set: (field: string, value: string) => {
       headers[field.toLowerCase()] = value;
     },
