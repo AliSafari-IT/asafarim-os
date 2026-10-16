@@ -160,12 +160,14 @@ describe("with telemetry off", () => {
 
 describe("installShutdownFlush", () => {
   // Signals no test runner relies on, with every listener set aside and the re-raise stubbed out.
-  const signals = ["SIGUSR2", "SIGHUP"] as const;
-  let saved: Map<NodeJS.Signals, ReturnType<typeof process.listeners>>;
+  const signals: readonly NodeJS.Signals[] = ["SIGUSR2", "SIGHUP"];
+  let saved: Map<NodeJS.Signals, NodeJS.SignalsListener[]>;
   let kill: MockInstance<typeof process.kill>;
 
   beforeAll(() => {
-    saved = new Map(signals.map((s) => [s, process.listeners(s)] as const));
+    saved = new Map<NodeJS.Signals, NodeJS.SignalsListener[]>(
+      signals.map((s) => [s, process.listeners(s) as NodeJS.SignalsListener[]]),
+    );
     for (const s of signals) process.removeAllListeners(s);
     kill = vi.spyOn(process, "kill").mockImplementation(() => true);
   });
@@ -178,7 +180,7 @@ describe("installShutdownFlush", () => {
     kill.mockRestore();
     for (const s of signals) {
       process.removeAllListeners(s);
-      for (const listener of saved.get(s) ?? []) process.on(s, listener as NodeJS.SignalsListener);
+      for (const listener of saved.get(s) ?? []) process.on(s, listener);
     }
   });
 
