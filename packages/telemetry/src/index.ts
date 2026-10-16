@@ -7,8 +7,10 @@
  *   const log = createLogger({ app: "notes" });                            // lines carry trace_id inside a request
  *   createPublisher({ manifest, schemas, traceContext: activeTraceContext }); // events carry the W3C trace context
  *   subscribe(type, traceEventHandler(handler), opts);                     // the handler's span continues it
+ *   createServer(traceHttpHandler(handler, { route }));                    // a plain node:http service's server spans
  */
 export * from "./events.ts";
+export * from "./http.ts";
 export * from "./logger.ts";
 export * from "./register.ts";
 export * from "./spans.ts";

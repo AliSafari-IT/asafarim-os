@@ -2,7 +2,7 @@
   "name": "@asafarim/core-api",
   "version": "0.1.0",
   "private": true,
-  "description": "ASafariM OS core-api: the app registry, install records, signed self-registration, lifecycle and the permission catalog (P3.1, ADR 0001 \u00a73\u20134)",
+  "description": "ASafariM OS core-api: the app registry, install records, signed self-registration, lifecycle and the permission catalog (P3.1, ADR 0001 §3–4)",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -18,6 +18,7 @@
     "@asafarim/app-manifest": "workspace:*",
     "@asafarim/events": "workspace:*",
     "@asafarim/registry-protocol": "workspace:*",
+    "@asafarim/telemetry": "workspace:*",
     "@nats-io/nats-core": "^3.4.0",
     "@nats-io/nkeys": "^2.0.3",
     "@nats-io/transport-node": "^3.4.0",
