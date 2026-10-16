@@ -1,0 +1,192 @@
+# Deploy the landing page (asafarim.site) and Docs (docs.asafarim.site) to the VPS, automatically.
+#
+# What it deploys is exactly what `pnpm redeploy` deploys by hand (deploy/README.md, "Landing page and docs"): os-site
+# and os-docs, with `vps-deploy.sh --site-only`. Identity is never deployed from here; its full deploy stays manual.
+#
+# - CI passed on a push to main: deploy that commit, unless main has moved on since (the newer commit's own CI run
+#   deploys it, so an older commit can never land after a newer one).
+# - workflow_dispatch: deploy the commit given, or the newest commit on main. Any commit on main, so this is also the
+#   rollback button.
+#
+# Steps: wait until the site and docs images that commit needs are published (the image workflows run alongside CI),
+# using `deploy/redeploy.sh --dry-run <sha>` here on the runner; then SSH to the VPS with a key that can do one thing,
+# `deploy <sha>` (deploy/ci-deploy.sh, a forced command), and check the site answers.
+#
+# Secrets (repository or "production" environment): OS_DEPLOY_HOST, OS_DEPLOY_USER, OS_DEPLOY_SSH_KEY (the private
+# key) and OS_DEPLOY_KNOWN_HOSTS (the VPS's `ssh-keyscan` line). OS_DEPLOY_PORT is optional (default 22).
+# Setup: deploy/README.md, "Automatic deploy".
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Full sha on main to deploy (empty: the newest commit on main)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  # One deploy at a time, never cancelled half-way (the VPS also holds a lock). A newer pending run replaces an older
+  # pending one, which is what we want: the newest commit wins.
+  group: os-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only a green CI run of a push to main of this repository. Never a pull request's run, never a fork's.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Lets the owner add protection rules (required reviewers, wait timer) in Settings → Environments.
+    environment:
+      name: production
+      url: https://asafarim.site
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          # The image commits are found from history (deploy/redeploy.sh), so the whole of main is needed.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pick the commit
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_SHA: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          git fetch --prune origin main
+          head="$(git rev-parse origin/main)"
+          if [[ "$EVENT" == "workflow_run" ]]; then sha="$RUN_SHA"; else sha="${INPUT_SHA:-$head}"; fi
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The commit must be a full 40-character sha, got '${sha}'."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::${sha} is not on main. Only main is deployed."
+            exit 1
+          fi
+          if [[ "$EVENT" == "workflow_run" && "$sha" != "$head" ]]; then
+            echo "::notice::main has moved on to ${head:0:12} since ${sha:0:12}: not deploying an older commit (the newer one deploys after its CI)."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      # To see whether the images are published, as the VPS will. Read-only.
+      - name: Log in to GHCR
+        if: steps.pick.outputs.deploy == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The Site image and Docs image workflows start with CI and may still be building. redeploy.sh exits 3 for "not
+      # published (yet)" only: that is waited out (up to 30 minutes); any other failure stops here.
+      - name: Wait for the site and docs images
+        if: steps.pick.outputs.deploy == 'true'
+        env:
+          SHA: ${{ steps.pick.outputs.sha }}
+        run: |
+          set -uo pipefail
+          for attempt in $(seq 1 60); do
+            out="$(deploy/redeploy.sh --dry-run "$SHA" 2>&1)"
+            code=$?
+            if [[ $code -eq 0 ]]; then
+              echo "$out"
+              exit 0
+            elif [[ $code -ne 3 ]]; then
+              echo "$out"
+              echo "::error::deploy/redeploy.sh --dry-run failed (exit ${code}). Nothing was deployed."
+              exit "$code"
+            fi
+            [[ $attempt -eq 1 ]] && echo "$out"
+            echo "An image is not published yet (attempt ${attempt}/60); waiting 30 s..."
+            sleep 30
+          done
+          echo "$out"
+          echo "::error::An image was still not published after 30 minutes. Check the Site image and Docs image runs. Nothing was deployed."
+          exit 1
+
+      - name: Check the deploy secrets
+        if: steps.pick.outputs.deploy == 'true'
+        env:
+          OS_DEPLOY_HOST: ${{ secrets.OS_DEPLOY_HOST }}
+          OS_DEPLOY_USER: ${{ secrets.OS_DEPLOY_USER }}
+          OS_DEPLOY_SSH_KEY: ${{ secrets.OS_DEPLOY_SSH_KEY }}
+          OS_DEPLOY_KNOWN_HOSTS: ${{ secrets.OS_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          missing=()
+          for name in OS_DEPLOY_HOST OS_DEPLOY_USER OS_DEPLOY_SSH_KEY OS_DEPLOY_KNOWN_HOSTS; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing secrets: ${missing[*]}. See deploy/README.md, \"Automatic deploy\". Nothing was deployed."
+            exit 1
+          fi
+
+      # The key's authorized_keys line forces deploy/ci-deploy.sh, so `deploy <sha>` is all it can do.
+      - name: Deploy over SSH
+        if: steps.pick.outputs.deploy == 'true'
+        env:
+          SHA: ${{ steps.pick.outputs.sha }}
+          DEPLOY_HOST: ${{ secrets.OS_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.OS_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.OS_DEPLOY_PORT }}
+          DEPLOY_KEY: ${{ secrets.OS_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.OS_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/ssh"
+          install -m 700 -d "$dir"
+          ( umask 077 && printf '%s\n' "$DEPLOY_KEY" > "$dir/key" && printf '%s\n' "$KNOWN_HOSTS" > "$dir/known_hosts" )
+          ssh -i "$dir/key" -p "${DEPLOY_PORT:-22}" \
+            -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$dir/known_hosts" \
+            -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "deploy ${SHA}"
+
+      - name: Remove the key
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/ssh"
+
+      # vps-deploy.sh already checked both containers and the edge. This is the outside view.
+      - name: Check the site answers
+        if: steps.pick.outputs.deploy == 'true'
+        run: |
+          set -uo pipefail
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors -o /dev/null https://asafarim.site/ \
+            || { echo "::error::https://asafarim.site/ did not answer after the deploy."; exit 1; }
+          # docs.asafarim.site may not have its DNS record yet (deploy/README.md): a warning, not a failure.
+          curl -fsS --retry 3 --retry-delay 5 --retry-all-errors https://docs.asafarim.site/api/health \
+            || echo "::warning::https://docs.asafarim.site/api/health did not answer (DNS not set up yet?)."
+
+      - name: Summary
+        if: always() && steps.pick.outputs.deploy == 'true'
+        env:
+          SHA: ${{ steps.pick.outputs.sha }}
+          STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "Deploy of \`${SHA}\` (asafarim.site, docs.asafarim.site): **${STATUS}**."
+            echo "Roll back: run this workflow again with an earlier commit."
+          } >> "$GITHUB_STEP_SUMMARY"
