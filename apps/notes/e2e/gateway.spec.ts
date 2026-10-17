@@ -91,7 +91,7 @@ async function signInThroughGateway(page: Page, displayName: string) {
   await page.goto(`${GATEWAY}/`);
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.getByRole("button", { name: new RegExp(displayName) }).click();
-  await expect(page.getByTestId("who")).toContainText("Dev Member");
+  await expect(page.getByTestId("who").getByRole("button", { name: /^Your account menu: Dev Member/ })).toBeVisible();
 }
 
 test.describe.configure({ mode: "serial" });
