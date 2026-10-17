@@ -1,6 +1,7 @@
-import { AppSwitcher } from "@asafarim/app-sdk/react";
+import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
 import { forbidden, unauthorized } from "next/navigation";
 import { signOutAction } from "../actions";
+import { SignOutIcon } from "@/components/SignOutIcon";
 import { Markdown } from "@/components/Markdown";
 import { anchorNote, sectionsOf, type Section } from "@/lib/anchor";
 import { auth } from "@/lib/auth";
@@ -95,14 +96,20 @@ export default async function NotesPage({
           <a className="button secondary" href="/">
             Documents
           </a>
-          <span className="muted" data-testid="who">
-            {session?.user?.name ?? g.subject}
+          <span data-testid="who">
+            <UserMenu
+              name={session?.user?.name}
+              email={session?.user?.email}
+              signOut={
+                <form action={signOutAction}>
+                  <button type="submit" data-testid="sign-out">
+                    <SignOutIcon />
+                    Sign out
+                  </button>
+                </form>
+              }
+            />
           </span>
-          <form action={signOutAction}>
-            <button type="submit" className="secondary">
-              Sign out
-            </button>
-          </form>
         </div>
       </header>
       <main id="all-notes" className="document" tabIndex={-1}>

@@ -1,5 +1,5 @@
 /**
- * `pnpm --filter @asafarim/site build`: progress.json → dist/ (index.html, styles.css, favicon.svg and the
+ * `pnpm --filter @asafarim/site build`: progress.json → dist/ (index.html, styles.css, session.js, favicon.svg and the
  * screenshots the page uses), plus the app manifest's JSON Schema under /schemas/ (#87). Node built-ins
  * only: the image build runs this with no `pnpm install`.
  */
@@ -86,6 +86,7 @@ export function buildSite(siteDir: string, outDir: string, opts: { schemaFile?: 
   put("styles.css", path.join(siteDir, "public", "styles.css"));
   put("favicon.svg", path.join(siteDir, "public", "favicon.svg"));
   put("robots.txt", path.join(siteDir, "public", "robots.txt"));
+  put("session.js", path.join(siteDir, "public", "session.js"));
   // Only the screenshots the page uses: a stale PNG in public/ never ships.
   for (const file of imageSizes.keys()) put(`screenshots/${file}`, path.join(shotsDir, file));
   for (const name of MANIFEST_SCHEMA_PATHS) {

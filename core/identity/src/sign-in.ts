@@ -583,6 +583,29 @@ export function createSignIn(d: SignInDeps): SignIn {
     return principal ? { ...current, principal } : null;
   }
 
+  /**
+   * Who is signed in here, for the OS home page (asafarim.site) to show an account menu instead of "Sign in".
+   * Read with `fetch(…, { credentials: "include" })` from the home page's origin only (CORS, no other origin
+   * gets an Allow-Origin header). It returns the label and initials, never the id, a token or a session.
+   */
+  async function whoami(ctx: HttpContext) {
+    const home = new URL(d.homeUrl).origin;
+    ctx.set("Vary", "Origin");
+    ctx.set("Cache-Control", "no-store");
+    if (ctx.get("Origin") === home) {
+      ctx.set("Access-Control-Allow-Origin", home);
+      ctx.set("Access-Control-Allow-Credentials", "true");
+    }
+    const me = await requireSession(ctx);
+    if (!me) return json(ctx, 200, { signedIn: false });
+    return json(ctx, 200, {
+      signedIn: true,
+      label: me.principal.label,
+      initials: initialsOf(me.principal.label),
+      connected: me.principal.connection === "active",
+    });
+  }
+
   async function passkeyRegisterOptions(ctx: HttpContext) {
     const me = await requireSession(ctx);
     if (!me || !d.passkeys) return json(ctx, 401, { error: "Sign in first." });
@@ -841,6 +864,9 @@ export function createSignIn(d: SignInDeps): SignIn {
         case "/account":
           await showAccount(ctx);
           return true;
+        case "/whoami":
+          await whoami(ctx);
+          return true;
         case "/static/passkey.js":
           if (!d.passkeys) return false;
           ctx.status = 200;
@@ -907,4 +933,15 @@ export function createSignIn(d: SignInDeps): SignIn {
     auditInteractionLogin,
     loginUrl: (uid, fresh) => `/login?uid=${encodeURIComponent(uid)}${fresh ? "&fresh=1" : ""}`,
   };
+}
+
+/** Up to two letters for an avatar: "ali.safari@x.com" → "AS", "ali@x.com" → "AL", a phone number → "#". */
+export function initialsOf(label: string | null): string {
+  if (!label) return "?";
+  const local = label.includes("@") ? label.slice(0, label.indexOf("@")) : label;
+  const words = local.split(/[^\p{L}\p{N}]+/u).filter((w) => /\p{L}/u.test(w));
+  if (words.length === 0) return "#";
+  const first = words[0]!;
+  const second = words[1];
+  return (second ? first[0]! + second[0]! : first.slice(0, 2)).toUpperCase();
 }

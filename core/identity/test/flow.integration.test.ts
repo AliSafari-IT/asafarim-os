@@ -308,7 +308,8 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
       },
     );
     expect(protectedHeader.alg).toBe("ES256");
-    expect(payload).toMatchObject({ sub: "u-1", nonce: "nn" });
+    // The ID token carries the scopes' claims too (conformIdTokenClaims: false): Auth.js reads only the ID token.
+    expect(payload).toMatchObject({ sub: "u-1", nonce: "nn", email: "u1@example.test", name: "User One" });
 
     const ui = await fetch(`${issuer}/me`, { headers: { authorization: `Bearer ${t.json.access_token}` } });
     expect(await ui.json()).toEqual({ sub: "u-1", email: "u1@example.test", name: "User One", roles: ["tester"] });

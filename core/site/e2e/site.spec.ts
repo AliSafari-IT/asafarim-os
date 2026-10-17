@@ -7,6 +7,27 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ALLOWED_LINK_HOSTS } from "../src/progress.ts";
 
+/**
+ * Identity's /whoami, answered here (the test has no identity): signed out unless a test says otherwise,
+ * with the CORS headers identity sends to this site.
+ */
+async function whoami(page: Page, me: object = { signedIn: false }) {
+  await page.route("https://id.asafarim.site/whoami", (route) =>
+    route.fulfill({
+      json: me,
+      headers: {
+        "access-control-allow-origin": route.request().headers()["origin"] ?? "",
+        "access-control-allow-credentials": "true",
+        vary: "Origin",
+      },
+    }),
+  );
+}
+
+test.beforeEach(async ({ page }) => {
+  await whoami(page);
+});
+
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("console", (msg) => msg.type() === "error" && errors.push(msg.text()));
@@ -62,6 +83,45 @@ test("the top bar links to sign-in and to the docs", async ({ page }) => {
   await expect(nav.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "https://id.asafarim.site/login");
 });
 
+test("signed in, the top bar shows the person's avatar and menu instead of Sign in", async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.unroute("https://id.asafarim.site/whoami");
+  await whoami(page, { signedIn: true, label: "ali@example.test", initials: "AL", connected: true });
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Main" });
+  const avatar = nav.getByRole("button", { name: "Your account menu: ali@example.test" });
+  await expect(avatar).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Sign in" })).toHaveCount(0);
+  await expect(page.locator("#access")).toContainText("signed in as ali@example.test");
+
+  await avatar.click();
+  await expect(page.getByTestId("user-name")).toHaveText("ali@example.test");
+  await expect(page.getByTestId("user-docs")).toHaveAttribute("href", "https://docs.asafarim.site/");
+  await expect(page.getByTestId("user-account")).toHaveAttribute("href", "https://id.asafarim.site/account");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("user-name")).toBeHidden();
+
+  // The keyboard opens it on the first item.
+  await avatar.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("user-docs")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByTestId("user-account")).toBeFocused();
+  // A click outside closes it.
+  await page.getByRole("heading", { level: 1 }).click();
+  await expect(page.getByTestId("user-name")).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
+test("signed out (or identity unreachable), the page keeps its Sign in link", async ({ page }) => {
+  await page.unroute("https://id.asafarim.site/whoami");
+  await page.route("https://id.asafarim.site/whoami", (route) => route.abort());
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Main" });
+  await expect(nav.getByRole("link", { name: "Sign in" })).toBeVisible();
+  await expect(page.getByTestId("user")).toHaveCount(0);
+});
+
 test("works at phone width: no horizontal scroll, images fit", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 740 });
   await page.goto("/");
@@ -96,7 +156,8 @@ test("the container sends the security headers", async ({ request }) => {
     expect(headers["x-content-type-options"], path).toBe("nosniff");
     const csp = headers["content-security-policy"] ?? "";
     expect(csp, path).toContain("default-src 'none'");
-    expect(csp, path).toContain("script-src 'none'");
+    expect(csp, path).toContain("script-src 'self'");
+    expect(csp, path).toContain("connect-src https://id.asafarim.site");
     expect(csp, path).toContain("frame-ancestors 'none'");
   }
 });

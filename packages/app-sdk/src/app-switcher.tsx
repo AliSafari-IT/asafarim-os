@@ -7,6 +7,9 @@
  *
  *   <AppSwitcher apps={tiles} current="docs" />
  *
+ * The list ends with a link back to the OS homepage (`home`). Opening animates, and the grid icon's
+ * dots ripple on hover; with "reduce motion" nothing moves.
+ *
  * Keyboard: Enter/Space/ArrowDown open it on the first app, ArrowUp on the last; ArrowUp/Down,
  * Home/End move; Escape closes and returns focus to the button; Tab leaves. A click outside closes
  * it. Every item is a plain link, so middle-click and "open in new tab" work. It uses the host's
@@ -38,6 +41,8 @@ export interface AppSwitcherProps {
   fallback: { name: string; glyph: string };
   /** The menu's accessible name. */
   label?: string;
+  /** The link back to the OS homepage at the foot of the list (default: asafarim.site); null for none. */
+  home?: { href: string; label: string } | null;
 }
 
 /** The next focused index for a key, or undefined when the key isn't a move. Wraps at both ends. */
@@ -68,28 +73,83 @@ export function switcherTiles(apps: readonly LauncherTile[]): LauncherTile[] {
 export const APP_SWITCHER_CSS = `
 .asafarim-switcher{--s-bg:var(--card,#fff);--s-ink:var(--ink,#1d1b16);--s-muted:var(--muted,#6b6559);--s-line:var(--line,#e4dfd3);--s-accent:var(--accent,#7c3aed);--s-accent-ink:var(--accent-ink,#fff);position:relative;display:inline-block}
 @media (prefers-color-scheme:dark){.asafarim-switcher{--s-bg:var(--card,#1f1c17);--s-ink:var(--ink,#f1ece2);--s-muted:var(--muted,#a39c8e);--s-line:var(--line,#37322a);--s-accent:var(--accent,#a78bfa);--s-accent-ink:var(--accent-ink,#15130f)}}
-.asafarim-switcher__button{display:inline-flex;align-items:center;gap:.5rem;padding:.25rem .5rem .25rem .25rem;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--s-ink);font:inherit;font-weight:700;cursor:pointer}
-.asafarim-switcher__button:hover,.asafarim-switcher__button[aria-expanded="true"]{border-color:var(--s-line);background:var(--s-bg)}
+.asafarim-switcher__button{display:inline-flex;align-items:center;gap:.5rem;padding:.25rem .5rem .25rem .25rem;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--s-ink);font:inherit;font-weight:700;cursor:pointer;transition:border-color .15s,background-color .15s,box-shadow .2s}
+.asafarim-switcher__button:hover,.asafarim-switcher__button[aria-expanded="true"]{border-color:var(--s-line);background:var(--s-bg);box-shadow:0 2px 10px rgb(0 0 0 / .08)}
 .asafarim-switcher__button:focus-visible,.asafarim-switcher__item:focus-visible{outline:2px solid var(--s-accent);outline-offset:2px}
-.asafarim-switcher__chevron{width:.75rem;height:.75rem;opacity:.7;transition:transform .15s}
-.asafarim-switcher__button[aria-expanded="true"] .asafarim-switcher__chevron{transform:rotate(180deg)}
-.asafarim-switcher__glyph{display:inline-grid;place-items:center;flex:none;width:2rem;height:2rem;border-radius:8px;background:var(--s-accent);color:var(--s-accent-ink);font-size:.75rem;font-weight:700}
-.asafarim-switcher__menu{position:absolute;z-index:50;top:calc(100% + 6px);left:0;width:max-content;min-width:16rem;max-width:min(22rem,calc(100vw - 2rem));max-height:min(70vh,28rem);overflow:auto;margin:0;padding:.375rem;border:1px solid var(--s-line);border-radius:12px;background:var(--s-bg);box-shadow:0 12px 32px rgb(0 0 0 / .25)}
+.asafarim-switcher__grid{width:1rem;height:1rem;color:var(--s-muted);transition:transform .25s cubic-bezier(.2,.8,.2,1),color .15s}
+.asafarim-switcher__grid circle{transform-box:fill-box;transform-origin:center}
+.asafarim-switcher__button:hover .asafarim-switcher__grid{color:var(--s-accent)}
+.asafarim-switcher__button:hover .asafarim-switcher__grid circle{animation:asafarim-dot 1.1s ease-in-out infinite;animation-delay:calc(var(--d) * 70ms)}
+.asafarim-switcher__button[aria-expanded="true"] .asafarim-switcher__grid{color:var(--s-accent);transform:rotate(45deg)}
+.asafarim-switcher__glyph{display:inline-grid;place-items:center;flex:none;width:2rem;height:2rem;border-radius:8px;background:linear-gradient(135deg,var(--s-accent),color-mix(in srgb,var(--s-accent) 65%,#000));color:var(--s-accent-ink);font-size:.75rem;font-weight:700;box-shadow:inset 0 1px 0 rgb(255 255 255 / .25)}
+.asafarim-switcher__menu{position:absolute;z-index:50;top:calc(100% + 6px);left:0;width:max-content;min-width:16rem;max-width:min(22rem,calc(100vw - 2rem));max-height:min(70vh,28rem);overflow:auto;margin:0;padding:.375rem;border:1px solid var(--s-line);border-radius:12px;background:var(--s-bg);box-shadow:0 12px 32px rgb(0 0 0 / .25);transform-origin:top left;animation:asafarim-pop .18s cubic-bezier(.2,.8,.2,1)}
 .asafarim-switcher__list{margin:0;padding:0;list-style:none}
+.asafarim-switcher__list>li,.asafarim-switcher__foot{animation:asafarim-rise .22s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i,0) * 35ms)}
 .asafarim-switcher__empty{margin:0;padding:.5rem;color:var(--s-muted);font-size:.85rem}
+.asafarim-switcher__note{margin:.25rem .5rem .375rem;color:var(--s-muted);font-size:.8rem;line-height:1.4}
 .asafarim-switcher__heading{padding:.375rem .5rem .25rem;color:var(--s-muted);font-size:.75rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
-.asafarim-switcher__item{display:flex;align-items:flex-start;gap:.625rem;padding:.5rem;border-radius:8px;color:var(--s-ink);text-decoration:none}
-.asafarim-switcher__item:hover{background:color-mix(in srgb,var(--s-accent) 12%,transparent)}
+.asafarim-switcher__item{display:flex;align-items:flex-start;gap:.625rem;padding:.5rem;border-radius:8px;color:var(--s-ink);text-decoration:none;transition:background-color .12s,transform .12s}
+.asafarim-switcher__item:hover{background:color-mix(in srgb,var(--s-accent) 12%,transparent);transform:translateX(2px)}
 .asafarim-switcher__item[aria-current="page"]{background:color-mix(in srgb,var(--s-accent) 18%,transparent)}
+.asafarim-switcher__foot{margin-top:.25rem;padding-top:.25rem;border-top:1px solid var(--s-line)}
+.asafarim-switcher__home{align-items:center}
+.asafarim-switcher__home .asafarim-switcher__glyph{background:transparent;color:var(--s-accent);border:1px solid var(--s-line);box-shadow:none}
+.asafarim-switcher__home svg{width:1.1rem;height:1.1rem}
 .asafarim-switcher__text{display:grid;min-width:0}
 .asafarim-switcher__name{font-weight:600}
 .asafarim-switcher__desc{display:-webkit-box;overflow:hidden;color:var(--s-muted);font-size:.8rem;line-height:1.35;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
 .asafarim-switcher__check{align-self:center;margin-left:auto;color:var(--s-accent);font-size:.8rem;font-weight:700}
-@media (prefers-reduced-motion:reduce){.asafarim-switcher__chevron{transition:none}}
+@keyframes asafarim-pop{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes asafarim-rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes asafarim-dot{0%,100%{transform:scale(1)}50%{transform:scale(.55)}}
+@media (prefers-reduced-motion:reduce){.asafarim-switcher *,.asafarim-switcher *::before{animation:none!important;transition:none!important}}
 `;
 
-export function AppSwitcher({ apps, current, fallback, label = "Your apps" }: AppSwitcherProps) {
+/** The way back to the OS homepage, at the foot of the list. */
+export const OS_HOME = { href: "https://asafarim.site/", label: "ASafariM OS home" } as const;
+
+/** The 3×3 apps-grid icon (its dots ripple on hover). */
+function GridIcon() {
+  const dots = [];
+  for (let r = 0; r < 3; r++)
+    for (let c = 0; c < 3; c++)
+      dots.push(
+        <circle
+          key={`${r}${c}`}
+          cx={2 + c * 4}
+          cy={2 + r * 4}
+          r={1.4}
+          fill="currentColor"
+          style={{ "--d": r + c } as object}
+        />,
+      );
+  return (
+    <svg className="asafarim-switcher__grid" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+      {dots}
+    </svg>
+  );
+}
+
+/** A house: the OS home link's glyph. */
+export function HomeIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+      <path
+        d="M3 9.2 10 3l7 6.2V17a1 1 0 0 1-1 1h-3.5v-5h-5v5H4a1 1 0 0 1-1-1z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function AppSwitcher({ apps, current, fallback, label = "Your apps", home = OS_HOME }: AppSwitcherProps) {
   const tiles = switcherTiles(apps);
+  const homeHref = home ? safeHref(home.href) : undefined;
+  // Keyboard order: the apps, then the home link.
+  const count = tiles.length + (homeHref ? 1 : 0);
   const face = tiles.find((t) => t.key === current) ?? { ...fallback, key: current };
   const [open, setOpen] = useState(false);
   const [focus, setFocus] = useState(-1);
@@ -117,7 +177,7 @@ export function AppSwitcher({ apps, current, fallback, label = "Your apps" }: Ap
 
   const openAt = (index: number) => {
     setOpen(true);
-    setFocus(tiles.length ? index : -1);
+    setFocus(count ? index : -1);
   };
   const close = (refocus: boolean) => {
     setOpen(false);
@@ -136,7 +196,7 @@ export function AppSwitcher({ apps, current, fallback, label = "Your apps" }: Ap
       openAt(0);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      openAt(tiles.length - 1);
+      openAt(count - 1);
     } else if (e.key === "Escape" && open) {
       e.preventDefault();
       close(true);
@@ -152,7 +212,7 @@ export function AppSwitcher({ apps, current, fallback, label = "Your apps" }: Ap
       close(false);
       return;
     }
-    const next = moveIndex(e.key, focus, tiles.length);
+    const next = moveIndex(e.key, focus, count);
     if (next !== undefined) {
       e.preventDefault();
       setFocus(next);
@@ -176,9 +236,7 @@ export function AppSwitcher({ apps, current, fallback, label = "Your apps" }: Ap
           {face.glyph}
         </span>
         <span>{face.name}</span>
-        <svg className="asafarim-switcher__chevron" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
-          <path d="M2 4.5 6 8.5 10 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-        </svg>
+        <GridIcon />
       </button>
       {open ? (
         <nav id={menuId} className="asafarim-switcher__menu" aria-label={label} onKeyDown={onMenuKey}>
@@ -188,7 +246,7 @@ export function AppSwitcher({ apps, current, fallback, label = "Your apps" }: Ap
           ) : (
             <ul className="asafarim-switcher__list">
               {tiles.map((t, i) => (
-                <li key={t.key}>
+                <li key={t.key} style={{ "--i": i } as object}>
                   <a
                     ref={(el) => {
                       itemRefs.current[i] = el;
@@ -215,6 +273,28 @@ export function AppSwitcher({ apps, current, fallback, label = "Your apps" }: Ap
               ))}
             </ul>
           )}
+          {tiles.length === 1 ? (
+            <p className="asafarim-switcher__note" data-testid="app-switcher-note">
+              More apps appear here as you get access to them.
+            </p>
+          ) : null}
+          {homeHref && home ? (
+            <div className="asafarim-switcher__foot" style={{ "--i": tiles.length } as object}>
+              <a
+                ref={(el) => {
+                  itemRefs.current[tiles.length] = el;
+                }}
+                className="asafarim-switcher__item asafarim-switcher__home"
+                href={homeHref}
+                data-testid="app-switcher-home"
+              >
+                <span className="asafarim-switcher__glyph" aria-hidden="true">
+                  <HomeIcon />
+                </span>
+                <span className="asafarim-switcher__name">{home.label}</span>
+              </a>
+            </div>
+          ) : null}
         </nav>
       ) : null}
     </div>

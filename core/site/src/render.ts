@@ -1,8 +1,10 @@
 /**
  * Renders the asafarim.site landing page from the progress file. Pure: progress in, HTML out.
  *
- * The page is static HTML and one stylesheet: no scripts, no web fonts, no third-party anything. That
- * is what lets the edge serve it under a CSP with `script-src 'none'` (sites/asafarim-os.caddy).
+ * The page is static HTML, one stylesheet and one small script of this origin's own (session.js, which
+ * asks identity who is signed in and swaps "Sign in" for their avatar): no inline scripts or styles, no
+ * web fonts, no third-party assets. That is what lets the edge serve it under a CSP with
+ * `script-src 'self'` and `connect-src` identity only (sites/asafarim-os.caddy).
  */
 import { pullRequestUrl, type Progress } from "./progress.ts";
 
@@ -44,25 +46,56 @@ const anchor = (href: string, label: string, extra = "") =>
  * id.asafarim.site's own sign-in page (email code or passkey), which also offers "Request connection" to someone
  * who has no access yet.
  */
+/** Identity's origin: session.js asks its /whoami who is signed in (credentialed, CORS for this site only). */
+export const IDENTITY_ORIGIN = "https://id.asafarim.site";
+
 export const APP_LINKS = {
   docs: { label: "Docs", href: "https://docs.asafarim.site/" },
   signIn: { label: "Sign in", href: "https://id.asafarim.site/login" },
 } as const;
 
+/** The brand mark: the OS core with an app orbiting it (it turns slowly; still with "reduce motion"). */
+const BRAND_MARK = `<svg class="mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false">
+        <rect class="mark-core" x="8" y="8" width="16" height="16" rx="5" />
+        <g class="mark-orbit"><circle cx="16" cy="2.5" r="2.5" /></g>
+        <g class="mark-orbit mark-orbit-slow"><circle cx="29.5" cy="16" r="1.75" /></g>
+      </svg>`;
+
+/**
+ * The hero's picture: apps orbiting the OS core on two rings, the rings' dashes drifting. Decorative
+ * (aria-hidden), drawn in the theme's colours, and still with "reduce motion".
+ */
+const HERO_ART = `
+      <svg class="hero-art" viewBox="0 0 240 240" aria-hidden="true" focusable="false">
+        <circle class="ring" cx="120" cy="120" r="104" />
+        <circle class="ring ring-inner" cx="120" cy="120" r="70" />
+        <g class="orbit orbit-outer">
+          <circle class="app" cx="120" cy="16" r="11" />
+          <circle class="app app-soft" cx="210" cy="172" r="8" />
+          <circle class="app app-soft" cx="30" cy="172" r="6" />
+        </g>
+        <g class="orbit orbit-inner">
+          <circle class="app" cx="190" cy="120" r="7" />
+          <circle class="app app-soft" cx="50" cy="120" r="9" />
+        </g>
+        <rect class="core" x="84" y="84" width="72" height="72" rx="20" />
+        <text class="core-text" x="120" y="129" text-anchor="middle">OS</text>
+      </svg>`;
+
 function renderTopbar(): string {
   return `
     <nav class="topbar" aria-label="Main">
-      <a class="brand" href="./">ASafariM <span>OS</span></a>
+      <a class="brand" href="./">${BRAND_MARK}<span class="brand-name">ASafariM <span>OS</span></span></a>
       <ul>
         <li>${anchor(APP_LINKS.docs.href, APP_LINKS.docs.label)}</li>
-        <li>${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
+        <li id="account" data-identity="${IDENTITY_ORIGIN}">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
       </ul>
     </nav>`;
 }
 
 function renderAccess(): string {
   return `
-      <p class="access">
+      <p class="access" id="access">
         Have access? ${anchor(APP_LINKS.signIn.href, "Sign in")}, then open ${anchor(APP_LINKS.docs.href, "the docs")}.
         No access yet? Sign in with your email and choose <em>Request connection</em>: an admin approves it.
       </p>`;
@@ -149,9 +182,10 @@ export function renderPage(progress: Progress, options: RenderOptions): string {
     <link rel="canonical" href="${SITE_URL}" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
+    <script src="session.js" defer></script>
   </head>
   <body>${renderTopbar()}
-    <header class="hero">
+    <header class="hero">${HERO_ART}
       <span class="badge">In development · updated ${escapeHtml(formatDate(progress.updated))}</span>
       <h1>ASafariM <span>OS</span></h1>
       <p class="lead">

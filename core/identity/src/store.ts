@@ -519,10 +519,12 @@ export class PrincipalAccounts implements AccountStore {
   async find(sub: string): Promise<Account | null> {
     const p = await this.store.principal(sub);
     if (!p) return null;
+    // The label is the principal's email (else its phone number): apps show it instead of the bare id.
+    const email = p.label && p.label.includes("@") ? p.label : null;
     return {
       sub: p.id,
-      email: null,
-      name: null,
+      email,
+      name: p.label,
       picture: null,
       roles: p.isAdmin ? ["identity.admin"] : [],
       isActive: p.connection === "active",

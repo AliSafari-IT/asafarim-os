@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LauncherTile } from "../src/index.ts";
-import { AppSwitcher, moveIndex, switcherTiles } from "../src/react.tsx";
+import { AppSwitcher, moveIndex, OS_HOME, switcherTiles } from "../src/react.tsx";
 
 const tile = (key: string, over: Partial<LauncherTile> = {}): LauncherTile => ({
   key,
@@ -65,5 +65,15 @@ describe("moveIndex: keyboard moves through the list, wrapping", () => {
     expect(moveIndex("End", 0, 3)).toBe(2);
     expect(moveIndex("a", 0, 3)).toBeUndefined();
     expect(moveIndex("ArrowDown", 0, 0)).toBeUndefined();
+  });
+});
+
+describe("AppSwitcher: the way home and the single-app note", () => {
+  it("exports the OS home link and the grid icon; no chevron any more", () => {
+    const html = renderToStaticMarkup(
+      <AppSwitcher apps={[tile("docs")]} current="docs" fallback={{ name: "Docs", glyph: "DC" }} />,
+    );
+    expect(html).toContain("asafarim-switcher__grid");
+    expect(OS_HOME.href).toBe("https://asafarim.site/");
   });
 });

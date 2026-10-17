@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isAllowedLink, parseProgress, type Progress } from "../src/progress.ts";
-import { APP_LINKS, DESCRIPTION, TITLE, escapeHtml, formatDate, renderPage } from "../src/render.ts";
+import { APP_LINKS, DESCRIPTION, IDENTITY_ORIGIN, TITLE, escapeHtml, formatDate, renderPage } from "../src/render.ts";
 
 const progress: Progress = parseProgress({
   updated: "2026-10-10",
@@ -40,8 +40,9 @@ describe("renderPage", () => {
     for (const img of html.match(/<img [^>]*>/g) ?? []) expect(img).toMatch(/ alt="[^"]+"/);
   });
 
-  it("has no scripts, no inline styles and no third-party assets (the CSP allows none)", () => {
-    expect(html).not.toMatch(/<script|\sstyle=|<style|\son[a-z]+=/i);
+  it("has one script of its own and no inline scripts, inline styles or third-party assets (the CSP allows none)", () => {
+    expect(html.match(/<script\b[^>]*>/g)).toEqual(['<script src="session.js" defer>']);
+    expect(html).not.toMatch(/<script[^>]*>[^<]|\sstyle=|<style|\son[a-z]+=/i);
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
       expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|((docs|id)\.)?asafarim\.site)\//);
     }
@@ -53,6 +54,9 @@ describe("renderPage", () => {
     const nav = /<nav class="topbar" aria-label="Main">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
     expect(nav).toContain('<a href="https://docs.asafarim.site/">Docs</a>');
     expect(nav).toContain('<a href="https://id.asafarim.site/login" class="btn btn-small">Sign in</a>');
+    // session.js swaps the "Sign in" slot for the avatar, asking identity at this origin.
+    expect(nav).toContain(`<li id="account" data-identity="${IDENTITY_ORIGIN}">`);
+    expect(IDENTITY_ORIGIN).toBe("https://id.asafarim.site");
     for (const link of Object.values(APP_LINKS)) expect(isAllowedLink(link.href)).toBe(true);
     expect(html).toMatch(/Request connection/);
   });

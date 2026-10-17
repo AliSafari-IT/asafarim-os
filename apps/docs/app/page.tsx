@@ -1,7 +1,8 @@
-import { AppSwitcher } from "@asafarim/app-sdk/react";
+import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
 import Link from "next/link";
 import { forbidden, unauthorized } from "next/navigation";
 import { refreshAction, signOutAction } from "./actions";
+import { SignOutIcon } from "@/components/SignOutIcon";
 import { Markdown } from "@/components/Markdown";
 import type { NavNode } from "@/components/nav";
 import { Notes, type NoteView } from "@/components/Notes";
@@ -157,14 +158,20 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           <a className="button secondary" href="/notes" data-testid="all-notes">
             All notes
           </a>
-          <span className="muted" data-testid="who">
-            {session?.user?.name ?? subject}
+          <span data-testid="who">
+            <UserMenu
+              name={session?.user?.name}
+              email={session?.user?.email}
+              signOut={
+                <form action={signOutAction}>
+                  <button type="submit" data-testid="sign-out">
+                    <SignOutIcon />
+                    Sign out
+                  </button>
+                </form>
+              }
+            />
           </span>
-          <form action={signOutAction}>
-            <button type="submit" className="secondary">
-              Sign out
-            </button>
-          </form>
         </div>
       </header>
 

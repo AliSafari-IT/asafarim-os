@@ -8,8 +8,9 @@
 # (asafarim-platform#837); the edge validates the WHOLE config, so publishing this file while both define
 # asafarim.site fails safely.
 
-# The OS landing page (#70): static files from os-site:8080 (core/site). The page has no scripts and
-# loads nothing from another origin, so the CSP allows only this origin's stylesheet and images. The
+# The OS landing page (#70): static files from os-site:8080 (core/site). Its one script and stylesheet
+# are this origin's own, and the script only asks identity who is signed in (session.js -> /whoami), so
+# the CSP allows this origin's script, stylesheet and images, and connections to identity alone. The
 # container sends the same headers itself (core/site/nginx.conf; deploy/compose.prod.test.mjs checks
 # that the two CSPs match); `defer` makes the edge's values replace the upstream's instead of
 # sending each header twice.
@@ -19,7 +20,7 @@ asafarim.site {
     Strict-Transport-Security "max-age=31536000"
     X-Content-Type-Options nosniff
     Referrer-Policy strict-origin-when-cross-origin
-    Content-Security-Policy "default-src 'none'; script-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https://id.asafarim.site; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     -Server
   }
   reverse_proxy os-site:8080
