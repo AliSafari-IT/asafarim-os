@@ -164,6 +164,10 @@ test("the app switcher in the top bar lists the OS apps this person can open, Do
   await page.keyboard.press("Escape");
   await expect(page.getByRole("navigation", { name: "Your apps" })).toHaveCount(0);
   await expect(button).toBeFocused();
+  // Enter opens on the first app too.
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("navigation", { name: "Your apps" }).getByRole("link").first()).toBeFocused();
+  await page.keyboard.press("Escape");
 });
 
 test("Lighthouse accessibility is at least 95, light and dark", async () => {
