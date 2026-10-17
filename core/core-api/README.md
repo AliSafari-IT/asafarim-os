@@ -39,7 +39,7 @@ node --env-file=../../.dev/core-api.env src/server.ts
 | `CORE_API_RETENTION_DAYS`           | 0 to 3650, default 30: how long a removed app's database is kept before it may be purged                                  |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`       | P6.2: traces (one SERVER span per request, `/authz/check` too) and request metrics over OTLP. Unset = off                 |
 
-On SIGTERM or SIGINT core-api stops accepting connections, stops answering the bus's auth callout, flushes the last traces and metrics (at most 2 s, however the collector behaves), then exits 0 (`createShutdown` in `src/server.ts`).
+On SIGTERM or SIGINT core-api stops accepting connections, stops the health poller and waits for its last round and the alert saves and webhook calls in flight (at most 3 s; a slow or failed flush is logged and never blocks the exit), stops answering the bus's auth callout, flushes the last traces and metrics (at most 2 s, however the collector behaves), then exits 0 (`createShutdown` in `src/server.ts`).
 
 ## Install (admin)
 

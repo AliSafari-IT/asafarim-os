@@ -218,6 +218,98 @@ describe("on SIGTERM", () => {
       expect(telemetry.shutdown.mock.invocationCallOrder[0]).toBeLessThan(exit.mock.invocationCallOrder[0] ?? 0);
     }
   });
+
+  it("stops the poller and waits for its last round and the alerts in flight before the callout", async () => {
+    const steps: string[] = [];
+    let roundDone!: () => void;
+    let alertsDone!: () => void;
+    const shutdown = createShutdown({
+      server: { close: () => steps.push("server.close") },
+      callout: { stop: async () => void steps.push("callout.stop") },
+      health: {
+        stop: () => void steps.push("health.stop"),
+        settled: () => {
+          steps.push("health.settled");
+          return new Promise<void>((resolve) => (roundDone = resolve));
+        },
+      },
+      alerts: {
+        settled: () => {
+          steps.push("alerts.settled");
+          return new Promise<void>((resolve) => (alertsDone = resolve));
+        },
+      },
+      telemetry: { shutdown: async () => void steps.push("telemetry.shutdown") },
+      log: (l) => void steps.push(`log ${String(l.msg)}`),
+      exit: (code) => void steps.push(`exit ${code}`),
+    });
+
+    const done = shutdown("SIGTERM");
+    await vi.waitFor(() => expect(steps).toContain("health.settled"));
+    // The round's alerts are awaited only once the round itself is done.
+    expect(steps).not.toContain("alerts.settled");
+    roundDone();
+    await vi.waitFor(() => expect(steps).toContain("alerts.settled"));
+    expect(steps).not.toContain("callout.stop");
+    alertsDone();
+    await done;
+    expect(steps).toEqual([
+      "log core-api.shutdown",
+      "server.close",
+      "health.stop",
+      "health.settled",
+      "alerts.settled",
+      "callout.stop",
+      "telemetry.shutdown",
+      "exit 0",
+    ]);
+  });
+
+  it("goes on after flushTimeoutMs when the alert flush hangs, and logs it", async () => {
+    vi.useFakeTimers();
+    try {
+      const lines: Record<string, unknown>[] = [];
+      const exit = vi.fn();
+      const telemetry = { shutdown: vi.fn(async () => {}) };
+      const done = createShutdown({
+        server: { close: () => undefined },
+        health: { stop: () => undefined, settled: async () => {} },
+        alerts: { settled: () => new Promise<void>(() => {}) },
+        telemetry,
+        log: (l) => void lines.push(l),
+        exit,
+        flushTimeoutMs: 1000,
+      })("SIGTERM");
+      await vi.advanceTimersByTimeAsync(999);
+      expect(exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
+      expect(lines).toContainEqual({ msg: "core-api.shutdown_flush_timeout", timeoutMs: 1000 });
+      expect(telemetry.shutdown).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs a failed flush by error class only, then still flushes telemetry and exits", async () => {
+    const lines: Record<string, unknown>[] = [];
+    const exit = vi.fn();
+    const telemetry = { shutdown: vi.fn(async () => {}) };
+    await createShutdown({
+      server: { close: () => undefined },
+      health: { stop: () => undefined, settled: () => Promise.reject(new TypeError("https://hook.example/secret")) },
+      alerts: { settled: async () => {} },
+      telemetry,
+      log: (l) => void lines.push(l),
+      exit,
+    })("SIGTERM");
+    expect(lines).toContainEqual({ msg: "core-api.shutdown_flush_failed", error: "TypeError" });
+    expect(JSON.stringify(lines)).not.toContain("secret");
+    expect(lines.some((l) => l.msg === "core-api.shutdown_flush_timeout")).toBe(false);
+    expect(telemetry.shutdown).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
 });
 
 describe("routePattern", () => {
