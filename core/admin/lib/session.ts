@@ -15,7 +15,7 @@ import { CoreApiError, coreApi } from "./core-api";
 import { idTokenExpired } from "./util";
 
 export type AdminState =
-  | { state: "ok"; idToken: string; subject: string; name: string }
+  | { state: "ok"; idToken: string; subject: string; name: string; email?: string }
   | { state: "signed-out" }
   | { state: "forbidden"; subject: string };
 
@@ -36,7 +36,13 @@ export const adminState = cache(async (): Promise<AdminState> => {
     if (err instanceof CoreApiError && err.status === 403) return { state: "forbidden", subject };
     throw err; // core-api down: the error page, not a wrong answer
   }
-  return { state: "ok", idToken, subject, name: typeof token.name === "string" ? token.name : subject };
+  return {
+    state: "ok",
+    idToken,
+    subject,
+    name: typeof token.name === "string" ? token.name : subject,
+    email: typeof token.email === "string" ? token.email : undefined,
+  };
 });
 
 /** For pages, layouts and server actions: an administrator, or a redirect to sign-in, or a 403. */

@@ -1,5 +1,6 @@
-import { Launcher } from "@asafarim/app-sdk/react";
+import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
 import { createNoteAction, signInAction, signOutAction } from "./actions";
+import { SignOutIcon } from "@/components/SignOutIcon";
 import { auth } from "@/lib/auth";
 import { listNotes } from "@/lib/db";
 import { describeAccess } from "@/lib/gate";
@@ -49,21 +50,27 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
 
   return (
     <main>
-      <header>
-        <div>
-          <h1>Notes</h1>
-          <span className="muted" data-testid="who">
-            Signed in as {session?.user?.name ?? subject}
-          </span>
+      <header className="topbar">
+        <div className="brand">
+          <h1 className="visually-hidden">Notes</h1>
+          {/* The OS's app switcher: Notes and every other app this person can open (core-api's launcher). */}
+          <AppSwitcher apps={apps} current="notes" fallback={{ name: "Notes", glyph: "NT" }} />
         </div>
-        <form action={signOutAction}>
-          <button type="submit" className="secondary">
-            Sign out
-          </button>
-        </form>
+        <span data-testid="who">
+          <UserMenu
+            name={session?.user?.name}
+            email={session?.user?.email}
+            signOut={
+              <form action={signOutAction}>
+                <button type="submit" data-testid="sign-out">
+                  <SignOutIcon />
+                  Sign out
+                </button>
+              </form>
+            }
+          />
+        </span>
       </header>
-
-      <Launcher apps={apps} current="notes" label="Your apps" />
 
       {error ? (
         <div className="notice bad" role="alert" data-testid="error">

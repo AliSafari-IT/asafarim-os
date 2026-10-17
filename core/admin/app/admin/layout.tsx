@@ -1,4 +1,6 @@
+import { UserMenu } from "@asafarim/app-sdk/react";
 import { Nav } from "@/components/Nav";
+import { SignOutIcon } from "@/components/SignOutIcon";
 import { signOut } from "@/lib/auth";
 import { requireAdmin } from "@/lib/session";
 
@@ -20,13 +22,19 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <header className="top">
           <h1>ASafariM OS Admin</h1>
           <Nav />
-          <div className="who">
-            <span data-testid="who">Signed in as {admin.name}</span>
-            <form action={signOutAction}>
-              <button type="submit" className="secondary">
-                Sign out
-              </button>
-            </form>
+          <div className="who" data-testid="who">
+            <UserMenu
+              name={admin.name}
+              email={admin.email}
+              signOut={
+                <form action={signOutAction}>
+                  <button type="submit" data-testid="sign-out">
+                    <SignOutIcon />
+                    Sign out
+                  </button>
+                </form>
+              }
+            />
           </div>
         </header>
         <main id="main" tabIndex={-1}>
