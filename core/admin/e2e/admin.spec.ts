@@ -147,6 +147,17 @@ test("the admin signs in and activates notes through a styled dialog", async () 
   await expect(page.getByTestId("flash-notice")).toContainText("notes is active");
   await expect(page.getByTestId("state-notes")).toHaveText("active");
   await page.screenshot({ path: `${SHOTS}/a4-apps-after-activate.png` });
+
+  // The OS app switcher in Admin's top bar (core-api's /admin/v1/launcher for this admin): closed
+  // until pressed, and its face is Admin's own, since Admin isn't an app in the launcher.
+  const switcher = page.getByRole("button", { name: "Admin: switch app", exact: true });
+  await expect(switcher).toHaveAttribute("aria-expanded", "false");
+  await switcher.click();
+  const apps = page.getByRole("navigation", { name: "Your apps" });
+  await expect(apps).toBeVisible();
+  await expect(apps.getByRole("link", { name: "ASafariM OS home" })).toHaveAttribute("href", "https://asafarim.site/");
+  await page.keyboard.press("Escape");
+  await expect(apps).toBeHidden();
   await page.close();
 });
 

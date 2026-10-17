@@ -444,6 +444,31 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
       expect(keys).not.toContain("core");
     });
 
+    it("GET /admin/v1/launcher: the signed-in admin's own launcher, the same list an app gets for them", async () => {
+      await cli("PUT", `/admin/v1/roles/${NOTES}.viewer/grants/dev-admin`);
+      const r = await as("dev-admin", "GET", "/admin/v1/launcher");
+      expect(r.status).toBe(200);
+      const body = await json<{ subject: string; apps: { key: string; href: string }[] }>(r);
+      expect(body.subject).toBe("dev-admin");
+      expect(body.apps).toEqual((await launcher(NOTES, "dev-admin")).body.apps);
+      expect(body.apps.map((a) => a.key)).toEqual([NOTES, DOCS]);
+      expect(body.apps[0]!.href).toBe(`http://${NOTES}.localhost:8080`);
+      await cli("DELETE", `/admin/v1/roles/${NOTES}.viewer/grants/dev-admin`);
+      expect(
+        (await json<{ apps: { key: string }[] }>(await as("dev-admin", "GET", "/admin/v1/launcher"))).apps.map(
+          (a) => a.key,
+        ),
+      ).toEqual([DOCS]);
+    });
+
+    it("GET /admin/v1/launcher: the CLI token (no person) gets an empty list; a non-admin 403; no token 401", async () => {
+      const r = await cli("GET", "/admin/v1/launcher");
+      expect(r.status).toBe(200);
+      expect(await json(r)).toEqual({ subject: null, apps: [] });
+      expect((await as("dev-member", "GET", "/admin/v1/launcher")).status).toBe(403);
+      expect((await call("GET", "/admin/v1/launcher", undefined)).status).toBe(401);
+    });
+
     it("the request is signed and bound to the person's path: another person, another method, no signature are refused", async () => {
       const path = (s: string) => `/registry/v1/apps/${NOTES}/launcher/${s}`;
       const forB = signRequest({ credential: credentials.get(NOTES)!, method: "GET", path: path("a") });

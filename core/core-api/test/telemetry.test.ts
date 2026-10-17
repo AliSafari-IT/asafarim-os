@@ -234,6 +234,7 @@ describe("routePattern", () => {
     expect(routePattern("/admin/v1/retention")).toBe("/admin/v1/retention");
     expect(routePattern("/admin/v1/roles/notes.reader/grants/dev-member")).toBe("/admin/v1/roles/:role/grants/:sub");
     expect(routePattern("/admin/v1/gateway/apps")).toBe("/admin/v1/gateway/apps");
+    expect(routePattern("/admin/v1/launcher")).toBe("/admin/v1/launcher");
     expect(routePattern("/admin/v1/apps/Not_An_Id")).toBeUndefined();
     expect(routePattern("/authz/check/extra")).toBeUndefined();
     expect(routePattern("/")).toBeUndefined();
