@@ -1,4 +1,4 @@
-import { Launcher } from "@asafarim/app-sdk/react";
+import { AppSwitcher } from "@asafarim/app-sdk/react";
 import Link from "next/link";
 import { forbidden, unauthorized } from "next/navigation";
 import { refreshAction, signOutAction } from "./actions";
@@ -135,10 +135,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
       </a>
       <header className="topbar">
         <div className="brand">
-          <span className="glyph" aria-hidden="true">
-            DC
-          </span>
-          <span className="name">Docs</span>
+          {/* The OS's app switcher: Docs and every other app this person can open (core-api's launcher). */}
+          <AppSwitcher apps={apps} current="docs" fallback={{ name: "Docs", glyph: "DC" }} />
           <span className="muted mono" data-testid="source">
             {repo}
           </span>
@@ -169,9 +167,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           </form>
         </div>
       </header>
-      <div className="apps">
-        <Launcher apps={apps} current="docs" label="Your apps" />
-      </div>
 
       {view.status === "unavailable" ? (
         <p className="notice" role="status" data-testid="unavailable">

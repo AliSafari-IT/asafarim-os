@@ -1,3 +1,4 @@
+import { AppSwitcher } from "@asafarim/app-sdk/react";
 import { forbidden, unauthorized } from "next/navigation";
 import { signOutAction } from "../actions";
 import { Markdown } from "@/components/Markdown";
@@ -76,6 +77,11 @@ export default async function NotesPage({
     groups.push({ path, sections, notes: shown.filter((n) => n.docPath === path) });
   }
 
+  // A launcher that can't be loaded is left out: it must never break the page.
+  const apps = await getPlatform()
+    .access.launcher(g.subject)
+    .catch(() => []);
+
   return (
     <>
       <a className="skip" href="#all-notes">
@@ -83,10 +89,7 @@ export default async function NotesPage({
       </a>
       <header className="topbar">
         <div className="brand">
-          <span className="glyph" aria-hidden="true">
-            DC
-          </span>
-          <span className="name">Docs</span>
+          <AppSwitcher apps={apps} current="docs" fallback={{ name: "Docs", glyph: "DC" }} />
         </div>
         <div className="who">
           <a className="button secondary" href="/">
