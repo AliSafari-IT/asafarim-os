@@ -33,14 +33,16 @@
  * Traces (P6 part 2c): with OTEL_EXPORTER_OTLP_ENDPOINT set, every request runs in a SERVER span
  * named `METHOD /route/pattern` (see `routePattern`) that continues the caller's `traceparent`, so
  * the gateway's `/authz/check` shows up in the trace of the request it lets through. The span
- * carries the method, the route pattern and the status, nothing else (`traceHttpHandler`).
+ * carries the method, the route pattern and the status, nothing else (`traceHttpHandler`). Each
+ * query the request makes is a CLIENT span under it (`traceDatabasePool`): the operation keyword,
+ * the database name and, on failure, the SQLSTATE; never the SQL text or its parameters.
  */
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import pg from "pg";
 import { createStreamAdmin } from "@asafarim/events";
-import { registerTelemetry, traceHttpHandler, type Telemetry } from "@asafarim/telemetry";
+import { registerTelemetry, traceDatabasePool, traceHttpHandler, type Telemetry } from "@asafarim/telemetry";
 import { createAdminQueries } from "./admin.ts";
 import { createPgDumpBackups, parseRetentionDays } from "./backup.ts";
 import {
@@ -470,6 +472,16 @@ export function parsePurgeBody(raw: string): { force: boolean; confirm?: string 
 }
 
 /** Every app the gateway might be asked about (removed ones are gone). */
+/** The database name in a Postgres connection URL (`db.namespace` on the database spans), if it has one. */
+export function databaseNameOf(url: string): string | undefined {
+  try {
+    const name = decodeURIComponent(new URL(url).pathname.replace(/^\//, ""));
+    return name === "" ? undefined : name;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function loadGatewayApps(pool: pg.Pool): Promise<GatewayApp[]> {
   const r = await pool.query<GatewayApp>("SELECT id, state, manifest FROM apps WHERE state <> 'removed' ORDER BY id");
   return r.rows;
@@ -569,7 +581,11 @@ async function main() {
   if (adminToken === undefined && !identity) {
     throw new Error("the admin token is off and CORE_API_IDENTITY_ISSUER isn't set: nobody could call the admin API");
   }
-  const pool = new pg.Pool({ connectionString: required("CORE_API_DATABASE_URL"), max: 8 });
+  const databaseUrl = required("CORE_API_DATABASE_URL");
+  // Each query inside a traced request is a CLIENT span (operation and database name only, never SQL).
+  const pool = traceDatabasePool(new pg.Pool({ connectionString: databaseUrl, max: 8 }), {
+    namespace: databaseNameOf(databaseUrl),
+  });
   const applied = await migrate(pool);
   const provisionerUrl = required("CORE_API_PROVISIONER_URL");
   const appDb = new URL(provisionerUrl);

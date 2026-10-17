@@ -34,3 +34,16 @@ createServer(traceHttpHandler(handler, { route: (req) => routePattern(req) }));
 ```
 
 Each request runs in a SERVER span named `METHOD /route/pattern` (just `METHOD` when no route matches), continuing the caller's trace through the global propagator; an invalid `traceparent` starts a new trace. The span carries only `http.request.method` (`_OTHER` for an unknown method), `http.route`, `http.response.status_code` and, on a 5xx or a thrown error, `error.type`: never the URL, a query string, a header, a cookie or what the handler decided. `RouteMetricsProcessor` records the same `http.server.request.duration` sample as for a Next.js request. Tests use `registerTestTelemetry()` from `@asafarim/telemetry/testing`: the same processors, in-memory sinks.
+
+## Database spans
+
+```ts
+const pool = traceDatabasePool(new pg.Pool({ connectionString }), { namespace: "core" });
+```
+
+Every client the pool connects (so `pool.query` and checked-out clients alike) is wrapped: a query run inside a recording span becomes a CLIENT span, the child of that span, named after the statement's operation (`SELECT`, `INSERT`, `BEGIN`…; `postgresql` when the first keyword isn't on the fixed list). It carries only `db.system.name` (`postgresql`), `db.operation.name`, `db.namespace` (the name you pass) and, when the query fails, `error.type` and `db.response.status_code` (the SQLSTATE, e.g. `23505`). Never the SQL text, its parameters, rows or the error message. The promise and callback forms are both traced and their results are unchanged.
+
+- **No parent, no span.** Queries outside a request (health polling, the gateway snapshot, migrations at start) aren't traced, so they don't open a root trace each; with telemetry off nothing changes.
+- **Passed through untraced:** submittables (cursors, `pg-query-stream`) and config objects with their own `callback`.
+- **Where it's used:** core-api's pool. `core/identity` and Next.js apps' pools aren't wrapped yet.
+- **No `pg` dependency:** the client and pool are typed structurally (`traceDatabaseClient` wraps a single client).

@@ -26,6 +26,11 @@ export const ALLOWED_SPAN_ATTRIBUTES: ReadonlySet<string> = new Set([
   "next.rsc",
   "next.segment",
   "error.type",
+  // Database CLIENT spans (db.ts): the system, the operation keyword, the database name and the SQLSTATE.
+  "db.system.name",
+  "db.operation.name",
+  "db.namespace",
+  "db.response.status_code",
 ]);
 
 /** Event attributes that may leave the app: the exception's type, never its message or stack. */
