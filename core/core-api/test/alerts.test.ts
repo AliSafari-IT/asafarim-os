@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createStatusAlerter, parseAlertConfig, plain } from "../src/alerts.ts";
+import { createStatusAlerter, parseAlertConfig, plain, splitMessages } from "../src/alerts.ts";
 import type { AppStatus, StatusReport } from "../src/health.ts";
 
 const HOOK = "https://discord.example/api/webhooks/123/secret-token";
@@ -53,6 +53,42 @@ function setup(over: { downRounds?: number; status?: number; fetch?: typeof fetc
 }
 
 describe("status alerts", () => {
+  it("splits a large round into several messages, in order, without losing an app", async () => {
+    const { alerter, calls } = setup({ downRounds: 1 });
+    const ids = Array.from({ length: 30 }, (_, i) => `app-${String(i).padStart(2, "0")}-${"x".repeat(40)}`);
+    alerter.observe(report(...ids.map((id) => down(id, { name: `${id} name ${"y".repeat(40)}` }))));
+    await alerter.settled();
+    expect(calls.length).toBeGreaterThan(1);
+    const contents = calls.map((c) => c.body.content);
+    for (const c of contents) expect(c.length).toBeLessThanOrEqual(1900);
+    expect(nth(contents, 0).startsWith("ASafariM OS status\n")).toBe(true);
+    for (const c of contents.slice(1)) expect(c.startsWith("ASafariM OS status (continued)\n")).toBe(true);
+    const lines = contents.flatMap((c) => c.split("\n").slice(1));
+    expect(lines).toHaveLength(30);
+    for (const [i, id] of ids.entries()) {
+      expect(nth(lines, i)).toContain(`(${plain(id, 64)})`); // each app once, in round order
+      expect(nth(lines, i).endsWith("…")).toBe(false);
+    }
+  });
+
+  it("keeps sending the rest when one message of a round fails", async () => {
+    const calls: string[] = [];
+    const logs: object[] = [];
+    let n = 0;
+    const fetchFn = vi.fn(async (_url: string | URL | Request, init: RequestInit = {}) => {
+      calls.push(JSON.parse(String(init.body)).content);
+      n += 1;
+      if (n === 1) throw new TypeError("fetch failed");
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+    const alerter = createStatusAlerter({ webhookUrl: HOOK, downRounds: 1, fetch: fetchFn, log: (l) => logs.push(l) });
+    alerter.observe(report(...Array.from({ length: 30 }, (_, i) => down(`app-${i}-${"z".repeat(60)}`))));
+    await alerter.settled();
+    expect(calls.length).toBeGreaterThan(1);
+    expect(logs).toContainEqual({ msg: "health.alert_failed", error: "TypeError" });
+    expect(logs.filter((l) => (l as { msg: string }).msg === "health.alert_sent")).toHaveLength(calls.length - 1);
+  });
+
   it("says nothing while everything is up", async () => {
     const { alerter, calls } = setup();
     for (let i = 0; i < 5; i++) alerter.observe(report(entry("core-api"), entry("notes")));
@@ -245,5 +281,29 @@ describe("parseAlertConfig", () => {
         bad,
       ).toThrow(/1 to 20/);
     }
+  });
+});
+
+describe("splitMessages", () => {
+  it("keeps a round that fits in one message", () => {
+    expect(splitMessages(["a", "b"])).toEqual(["ASafariM OS status\na\nb"]);
+    expect(splitMessages([])).toEqual([]);
+  });
+
+  it("never cuts a line between messages and keeps each message within the cap", () => {
+    const lines = Array.from({ length: 9 }, (_, i) => `${i}`.repeat(30));
+    const out = splitMessages(lines, 100);
+    for (const m of out) expect(m.length).toBeLessThanOrEqual(100);
+    expect(out.flatMap((m) => m.split("\n").slice(1))).toEqual(lines);
+  });
+
+  it("shortens only a single line that is longer than a whole message", () => {
+    const out = splitMessages(["ok", "L".repeat(500), "after"], 100);
+    for (const m of out) expect(m.length).toBeLessThanOrEqual(100);
+    const lines = out.flatMap((m) => m.split("\n").slice(1));
+    expect(lines).toHaveLength(3);
+    expect(nth(lines, 0)).toBe("ok");
+    expect(nth(lines, 1).endsWith("…")).toBe(true);
+    expect(nth(lines, 2)).toBe("after");
   });
 });
