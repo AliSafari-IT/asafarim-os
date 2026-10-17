@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { AppStatus } from "@/lib/core-api";
 import { coreApi } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
-import { PROBE_LABEL, formatLatency, overall, problemText, summary } from "@/lib/status";
+import { NO_ALERTS, PROBE_LABEL, alertsNote, formatLatency, overall, problemText, summary } from "@/lib/status";
 import { formatTime } from "@/lib/util";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,9 @@ function Probe({ id, kind, value }: { id: string; kind: "live" | "ready"; value:
 
 export default async function StatusPage() {
   const admin = await requireAdmin();
-  const report = await coreApi(admin.idToken).status();
+  const api = coreApi(admin.idToken);
+  // The alert history never breaks the board: an older core-api, or one that can't answer, shows none.
+  const [report, history] = await Promise.all([api.status(), api.alerts().catch(() => NO_ALERTS)]);
   const counts = summary(report.apps);
 
   return (
@@ -95,6 +97,60 @@ export default async function StatusPage() {
                     <td>{a.checkedAt ? formatTime(a.checkedAt) : <span className="muted">–</span>}</td>
                     <td>{formatTime(a.since)}</td>
                     <td data-testid={`problem-${a.id}`}>
+                      {problem ? (
+                        <>
+                          {problem} <span className="muted mono">({a.error})</span>
+                        </>
+                      ) : (
+                        <span className="muted">None</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h3 id="recent-alerts">Recent alerts</h3>
+      <p className="muted" data-testid="alerts-note">
+        {alertsNote(history)}
+      </p>
+      {history.alerts.length === 0 ? (
+        <p className="muted" data-testid="alerts-empty">
+          No app has gone down or recovered since core-api started.
+        </p>
+      ) : (
+        <div className="table-wrap">
+          <table aria-labelledby="recent-alerts" data-testid="alerts">
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">What</th>
+                <th scope="col">App</th>
+                <th scope="col">Live</th>
+                <th scope="col">Ready</th>
+                <th scope="col">Problem</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.alerts.map((a, i) => {
+                const problem = problemText(a);
+                return (
+                  <tr key={`${a.at}-${a.id}-${a.kind}-${i}`} data-testid={`alert-${a.id}`} data-kind={a.kind}>
+                    <td>{formatTime(a.at)}</td>
+                    <td>
+                      <span className={`badge ${a.kind === "down" ? "down" : "up"}`}>
+                        {a.kind === "down" ? "Down" : "Recovered"}
+                      </span>
+                    </td>
+                    <th scope="row">
+                      {a.name} <span className="muted mono">{a.id}</span>
+                    </th>
+                    <td>{PROBE_LABEL[a.live]}</td>
+                    <td>{PROBE_LABEL[a.ready]}</td>
+                    <td>
                       {problem ? (
                         <>
                           {problem} <span className="muted mono">({a.error})</span>

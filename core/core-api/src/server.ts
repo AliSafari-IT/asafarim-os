@@ -27,6 +27,7 @@
  *   GET  /admin/v1/subjects/<sub>/grants         what a person holds
  *   GET  /admin/v1/audit[?app=&actor=&limit=&before=]   the audit log, newest first
  *   GET  /admin/v1/status                        each app's live/ready, as last polled (P6.1, health.ts)
+ *   GET  /admin/v1/alerts                        the last 50 down/recovered transitions, newest first (alerts.ts)
  *   GET  /admin/v1/retention[?eligible=true]     removed apps: their backup, purge date, whether purge is due
  *   GET  /registry/v1/apps/:id/launcher/:sub     the apps a person can open (the app, signed)
  *   GET  /admin/v1/launcher                      the apps the signed-in admin can open (Admin's app switcher;
@@ -67,7 +68,7 @@ import { ApiError } from "./errors.ts";
 import { MAX_SCHEMAS_REQUEST_BYTES } from "./event-schemas.ts";
 import { migrate } from "./migrate.ts";
 import { createAppSnapshot, createGateway, type GatewayApp } from "./gateway.ts";
-import { createStatusAlerter, parseAlertConfig } from "./alerts.ts";
+import { createStatusAlerter, parseAlertConfig, parseDownRounds, type StatusAlerter } from "./alerts.ts";
 import { createHealthPoller, parseHealthConfig, upstreamVar, type HealthPoller } from "./health.ts";
 import { startAuthCallout } from "./nats-auth.ts";
 import { createRegistry, type Registry } from "./registry.ts";
@@ -169,6 +170,7 @@ const ROUTES: readonly [RegExp, string][] = (
     [`/admin/v1/subjects/${SUB}/grants`, "/admin/v1/subjects/:sub/grants"],
     ["/admin/v1/audit", "/admin/v1/audit"],
     ["/admin/v1/status", "/admin/v1/status"],
+    ["/admin/v1/alerts", "/admin/v1/alerts"],
     ["/admin/v1/gateway/apps", "/admin/v1/gateway/apps"],
     [`/admin/v1/apps/${APP_ID}`, "/admin/v1/apps/:id"],
     [`/admin/v1/apps/${APP_ID}/install`, "/admin/v1/apps/:id/install"],
@@ -252,6 +254,8 @@ export function createHandler(opts: {
   now?: () => Date;
   /** The app health poller (P6.1). Without it GET /admin/v1/status answers an empty board. */
   health?: Pick<HealthPoller, "status">;
+  /** The status alerter (alerts.ts). Without it GET /admin/v1/alerts answers an empty history. */
+  alerts?: Pick<StatusAlerter, "history">;
 }) {
   const log = opts.log ?? ((l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`));
   const snapshot = opts.snapshot ?? createAppSnapshot(() => loadGatewayApps(opts.pool));
@@ -400,6 +404,9 @@ export function createHandler(opts: {
         }
         if (req.method === "GET" && p === "/admin/v1/status") {
           return json(res, 200, opts.health?.status() ?? { checkedAt: null, intervalMs: null, apps: [] });
+        }
+        if (req.method === "GET" && p === "/admin/v1/alerts") {
+          return json(res, 200, opts.alerts?.history() ?? { webhook: false, downRounds: null, alerts: [] });
         }
         if (req.method === "GET" && p === "/admin/v1/gateway/apps") {
           return json(res, 200, {
@@ -677,12 +684,11 @@ async function main() {
       port: appDbPort,
     },
   });
-  const alerter = alertConfig
-    ? createStatusAlerter({
-        ...alertConfig,
-        log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
-      })
-    : undefined;
+  // Always on: Admin's alert history keeps the transitions; the webhook only when it is configured.
+  const alerter = createStatusAlerter({
+    ...(alertConfig ?? { downRounds: parseDownRounds(process.env) }),
+    log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
+  });
   // P6.1: each active app's live/ready, polled at the upstream the gateway uses for it (OS_APP_<ID>_UPSTREAM).
   const health = createHealthPoller({
     ...healthConfig,
@@ -693,13 +699,15 @@ async function main() {
       ...(callout ? { bus: () => callout.ping() } : {}),
     },
     log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
-    ...(alerter ? { onRound: alerter.observe } : {}),
+    onRound: alerter.observe,
   });
   health.start();
   // Forget expired registration nonces even when nobody registers.
   setInterval(() => void registry.pruneNonces().catch(() => undefined), 60_000).unref();
   const port = Number(process.env.PORT ?? 4020);
-  const server = createServer(createHandler({ registry, pool, adminToken, identity, tokenKey, snapshot, health }));
+  const server = createServer(
+    createHandler({ registry, pool, adminToken, identity, tokenKey, snapshot, health, alerts: alerter }),
+  );
   server.listen(port, () =>
     process.stdout.write(
       `${JSON.stringify({ service: "core-api", msg: "core-api.started", port, migrations: applied })}\n`,

@@ -10,6 +10,7 @@ import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createIdentityVerifier } from "../src/admin-auth.ts";
+import { createStatusAlerter, type AlertHistory } from "../src/alerts.ts";
 import { signRegistration, signRequest } from "../src/credentials.ts";
 import { createAppSnapshot } from "../src/gateway.ts";
 import { createHealthPoller, type HealthPoller, type StatusReport } from "../src/health.ts";
@@ -122,11 +123,14 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
         void poller.refresh();
       },
     });
+    // No webhook: the alert history alone, one bad round = down, so a test can see a transition at once.
+    const alerter = createStatusAlerter({ downRounds: 1 });
     const poller = createHealthPoller({
       apps: () => loadGatewayApps(pool),
       upstream: () => appStubHost,
       selfChecks: { database: () => pool.query("SELECT 1") },
       timeoutMs: 1000,
+      onRound: alerter.observe,
     });
     const jwk = { ...(await exportJWK(idKey.publicKey)), kid: "idk", alg: "ES256", use: "sig" };
     const identity = createIdentityVerifier({
@@ -135,7 +139,16 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
       keys: createLocalJWKSet({ keys: [jwk] }),
     });
     const s = createServer(
-      createHandler({ registry, pool, adminToken: opts.adminToken, identity, snapshot, health: poller, log: () => {} }),
+      createHandler({
+        registry,
+        pool,
+        adminToken: opts.adminToken,
+        identity,
+        snapshot,
+        health: poller,
+        alerts: alerter,
+        log: () => {},
+      }),
     );
     await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
     return { s, base: `http://127.0.0.1:${(s.address() as AddressInfo).port}`, health: poller };
@@ -575,6 +588,29 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
     expect(
       (await json<StatusReport>(await cli("GET", "/admin/v1/status"))).apps.find((a) => a.id === NOTES),
     ).toMatchObject({ state: "active", polled: true, live: "up", ready: "up" });
+  });
+
+  it("GET /admin/v1/alerts: admins only; a down and a recovered transition, newest first, no webhook", async () => {
+    expect((await call("GET", "/admin/v1/alerts", undefined)).status).toBe(401);
+    expect((await as("dev-member", "GET", "/admin/v1/alerts")).status).toBe(403);
+
+    await health.refresh();
+    const before = (await json<AlertHistory>(await as("dev-admin", "GET", "/admin/v1/alerts"))).alerts.length;
+    healthy = false;
+    await health.refresh();
+    healthy = true;
+    await health.refresh();
+    const res = await as("dev-admin", "GET", "/admin/v1/alerts");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const h = await json<AlertHistory>(res);
+    expect(h).toMatchObject({ webhook: false, downRounds: 1 });
+    const mine = h.alerts.slice(0, h.alerts.length - before).filter((a) => a.id === NOTES);
+    expect(mine.map((a) => a.kind)).toEqual(["recovered", "down"]);
+    expect(mine[1]).toMatchObject({ name: NOTES.toUpperCase(), ready: "down", error: "bad_status", detail: "503" });
+    expect(JSON.stringify(h)).not.toContain(appStubHost);
+    // The CLI token may read it too.
+    expect((await cli("GET", "/admin/v1/alerts")).status).toBe(200);
   });
 
   it("with the CLI token switched off, only people with core.admin can call the admin API", async () => {
