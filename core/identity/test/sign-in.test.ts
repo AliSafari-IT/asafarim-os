@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { createLogger } from "../src/log.ts";
-import { type SignIn, createSignIn } from "../src/sign-in.ts";
+import { type SignIn, createSignIn, initialsOf } from "../src/sign-in.ts";
 import { SoftPasskey } from "./authenticator.ts";
 import {
   Browser,
@@ -112,6 +112,34 @@ describe("local sign-in", () => {
     const id = /<code data-account-id>([^<]+)<\/code>/.exec(page)?.[1];
     expect(id).toBeTruthy();
     expect((await store.principal(id!))?.id).toBe(id);
+  });
+
+  it("/whoami: signed out, or who is signed in; CORS only for the home page's origin", async () => {
+    const out = await go(new Browser(), "GET", "/whoami", undefined, {
+      headers: { origin: "https://home.example.test" },
+    });
+    expect(out.status).toBe(200);
+    expect(JSON.parse(out.body)).toEqual({ signedIn: false });
+    expect(out.headers["access-control-allow-origin"]).toBe("https://home.example.test");
+    expect(out.headers["access-control-allow-credentials"]).toBe("true");
+    expect(out.headers["cache-control"]).toBe("no-store");
+
+    const b = new Browser();
+    await emailSignIn(b, ADMIN);
+    const me = await go(b, "GET", "/whoami", undefined, { headers: { origin: "https://home.example.test" } });
+    expect(JSON.parse(me.body)).toEqual({ signedIn: true, label: ADMIN, initials: "AL", connected: true });
+    expect(me.body).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/); // never the principal id
+
+    const evil = await go(b, "GET", "/whoami", undefined, { headers: { origin: "https://evil.example" } });
+    expect(evil.headers["access-control-allow-origin"]).toBeUndefined();
+    expect(evil.headers["access-control-allow-credentials"]).toBeUndefined();
+  });
+
+  it("initials for an avatar: two words, or the first two letters; a phone number is #", () => {
+    expect(initialsOf("ali.safari@example.test")).toBe("AS");
+    expect(initialsOf("ali@example.test")).toBe("AL");
+    expect(initialsOf("+32470000002")).toBe("#");
+    expect(initialsOf(null)).toBe("?");
   });
 
   it("the QR code's /connect only starts a sign-in", async () => {

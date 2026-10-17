@@ -56,8 +56,11 @@ describe("buildSite", () => {
     const written = buildSite(siteDir, out);
     expect(written).toContain("index.html");
     expect(written).toContain("styles.css");
+    // The page's one script ships beside it (the CSP allows only this origin's).
+    expect(written).toContain("session.js");
     const html = readFileSync(path.join(out, "index.html"), "utf8");
     for (const [, src] of html.matchAll(/<img src="([^"]+)"/g)) expect(written).toContain(src);
+    for (const [, src] of html.matchAll(/<script src="([^"]+)"/g)) expect(written).toContain(src);
   });
 
   it("serves the app manifest JSON Schema at its $id and at the versioned path, byte for byte (#87)", () => {

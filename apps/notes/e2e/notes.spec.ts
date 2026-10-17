@@ -115,7 +115,7 @@ test("a seeded inactive account can't sign in", async ({ page }) => {
 
 test("member → read-only → editor → inactive", async ({ page }) => {
   await signInAs(page, "Dev Member");
-  await expect(page.getByTestId("who")).toContainText("dev-member");
+  await expect(page.getByTestId("who")).toContainText("Dev Member");
 
   // 1. The app isn't activated yet: it says so, and the API answers 503.
   await expect(page.getByTestId("state")).toContainText(/installed|inactive/);

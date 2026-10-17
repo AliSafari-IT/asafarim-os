@@ -14,7 +14,16 @@ import type { LauncherTile } from "./launcher.ts";
 import { safeHref } from "./safe-href.ts";
 
 export { safeHref };
-export { AppSwitcher, APP_SWITCHER_CSS, moveIndex, switcherTiles, type AppSwitcherProps } from "./app-switcher.tsx";
+export {
+  AppSwitcher,
+  APP_SWITCHER_CSS,
+  HomeIcon,
+  moveIndex,
+  OS_HOME,
+  switcherTiles,
+  type AppSwitcherProps,
+} from "./app-switcher.tsx";
+export { ACCOUNT_URL, hueOf, initialsOf, UserMenu, USER_MENU_CSS, type UserMenuProps } from "./user-menu.tsx";
 
 export interface LauncherProps {
   apps: readonly LauncherTile[];

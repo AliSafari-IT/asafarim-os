@@ -110,6 +110,9 @@ export function createProvider(deps: ProviderDeps): Provider {
     responseTypes: ["code"],
     pkce: { required: () => true },
     scopes: SCOPES,
+    // The ID token carries every claim its scopes allow (email, name, roles), not only `sub`: Auth.js reads the
+    // signed-in person from the ID token and never calls userinfo, so apps would otherwise show a bare id.
+    conformIdTokenClaims: false,
     claims: {
       openid: ["sub"],
       email: ["email"],

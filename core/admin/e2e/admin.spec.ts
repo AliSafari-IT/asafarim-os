@@ -131,7 +131,7 @@ test("signed out, /admin sends you to sign in; a signed-in non-admin gets a 403"
 test("the admin signs in and activates notes through a styled dialog", async () => {
   const page = await adminCtx.newPage();
   await signIn(page, `${ADMIN}/admin`, "Dev Admin");
-  await expect(page.getByTestId("who")).toContainText("dev-admin"); // the subject: what the audit log calls them
+  await expect(page.getByTestId("who")).toContainText("Dev Admin"); // their name from the ID token (the audit log still names the subject)
   await openApps(page);
   await expect(page.getByTestId("app-core")).toContainText("Always active"); // built in: no action
   await expect(page.getByTestId("state-notes")).toHaveText(/installed|inactive/);
@@ -272,7 +272,7 @@ test("the member's launcher shows Notes, and they can write", async () => {
   expect(await launcherFor("dev-member")).toContain("notes"); // what core-api answers
   const page = await memberCtx.newPage();
   await signIn(page, NOTES, "Dev Member");
-  await expect(page.getByTestId("who")).toContainText("dev-member");
+  await expect(page.getByTestId("who")).toContainText("Dev Member");
   // (the permission lookup is cached for a second in development)
   await expect
     .poll(

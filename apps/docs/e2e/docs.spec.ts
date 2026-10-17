@@ -150,6 +150,8 @@ test("the app switcher in the top bar lists the OS apps this person can open, Do
   for (const href of await menu.getByRole("link").evaluateAll((as) => as.map((a) => a.getAttribute("href")))) {
     expect(href, "every item is an http(s) link to its app").toMatch(/^https?:\/\//);
   }
+  // The way back to the OS homepage, at the foot.
+  await expect(menu.getByTestId("app-switcher-home")).toHaveAttribute("href", "https://asafarim.site/");
   mkdirSync(SHOTS, { recursive: true });
   await page.screenshot({ path: `${SHOTS}/docs-app-switcher.png` });
 
@@ -168,6 +170,34 @@ test("the app switcher in the top bar lists the OS apps this person can open, Do
   await page.keyboard.press("Enter");
   await expect(page.getByRole("navigation", { name: "Your apps" }).getByRole("link").first()).toBeFocused();
   await page.keyboard.press("Escape");
+});
+
+test("the account menu shows the person (never an id), links to the account and OS home, and signs out", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.goto("/");
+  const avatar = page.getByTestId("who").getByRole("button", { name: /^Your account menu: / });
+  await expect(avatar).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("who")).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+
+  await avatar.click();
+  const name = page.getByTestId("user-menu-name");
+  await expect(name).toBeVisible();
+  await expect(name).not.toHaveText(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+  await expect(page.getByTestId("user-menu-account")).toHaveAttribute("href", /\/account$/);
+  await expect(page.getByTestId("user-menu-home")).toHaveAttribute("href", "https://asafarim.site/");
+  mkdirSync(SHOTS, { recursive: true });
+  await page.screenshot({ path: `${SHOTS}/docs-user-menu.png` });
+
+  // Escape closes it and gives focus back to the avatar.
+  await page.keyboard.press("Escape");
+  await expect(name).toHaveCount(0);
+  await expect(avatar).toBeFocused();
+
+  await avatar.click();
+  await page.getByTestId("sign-out").click();
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
 });
 
 test("Lighthouse accessibility is at least 95, light and dark", async () => {

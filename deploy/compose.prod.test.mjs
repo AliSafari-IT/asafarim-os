@@ -255,10 +255,22 @@ test("asafarim.site has the identity block's headers plus a strict CSP, the same
   // `defer`: the edge's values replace the container's instead of each header being sent twice.
   assert.match(block, /^\s*defer$/m);
   const csp = /Content-Security-Policy "([^"]+)"/.exec(block)?.[1] ?? "";
-  for (const directive of ["default-src 'none'", "script-src 'none'", "frame-ancestors 'none'", "base-uri 'none'"]) {
+  for (const directive of [
+    "default-src 'none'",
+    "script-src 'self'",
+    "connect-src https://id.asafarim.site",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+  ]) {
     assert.ok(csp.split("; ").includes(directive), `the CSP needs ${directive}`);
   }
-  assert.doesNotMatch(csp, /https?:|\*|'unsafe-/, "no third-party origins, wildcards or unsafe-* sources");
+  // The only other origin is identity, and only for session.js's /whoami.
+  assert.doesNotMatch(
+    csp.replace("connect-src https://id.asafarim.site", ""),
+    /https?:|\*|'unsafe-/,
+    "no other origins, wildcards or unsafe-* sources",
+  );
   assert.equal(/add_header Content-Security-Policy "([^"]+)" always;/.exec(nginxText)?.[1], csp);
   assert.equal(/add_header Strict-Transport-Security "([^"]+)" always;/.exec(nginxText)?.[1], hsts.exec(block)?.[1]);
 });
@@ -304,7 +316,9 @@ test("id.asafarim.site has no Content-Security-Policy of its own (identity sets 
 test("the site-only file serves asafarim.site, its www redirect and docs.asafarim.site: no id.asafarim.site (#97, #83)", () => {
   const sites = [...activeSiteOnly.matchAll(/^([a-z0-9.*-]+)(?:, [a-z0-9.*-]+)*\s*\{/gm)].map((m) => m[1]);
   assert.deepEqual(sites.sort(), ["asafarim.site", "docs.asafarim.site", "www.asafarim.site"]);
-  assert.doesNotMatch(activeSiteOnly, /id\.asafarim\.site|os-identity/);
+  // No block or upstream for identity (the landing page's CSP may still name it as connect-src).
+  assert.doesNotMatch(activeSiteOnly, /^\s*id\.asafarim\.site\b/m);
+  assert.doesNotMatch(activeSiteOnly, /os-identity/);
 });
 
 test("the site-only file's landing and docs blocks are identical to the full site file's (#97, #83)", () => {

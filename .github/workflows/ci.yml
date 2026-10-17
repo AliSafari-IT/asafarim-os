@@ -249,7 +249,7 @@ jobs:
             echo "$headers"
             grep -qi '^strict-transport-security: max-age=' <<<"$headers"
             grep -qi '^x-content-type-options: nosniff' <<<"$headers"
-            grep -qi "^content-security-policy: default-src 'none'; script-src 'none';" <<<"$headers"
+            grep -qi "^content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https://id.asafarim.site;" <<<"$headers"
           done
 
       # #87: the served copy is the Zod schema's JSON Schema output, byte for byte. Regenerating it must
