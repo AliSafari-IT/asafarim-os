@@ -207,6 +207,24 @@ describe("the health poller (P6.1)", () => {
     expect(f.calls).toHaveLength(4);
   });
 
+  it("starts no new round on refresh() once stopped, so shutdown's settled() stays final", async () => {
+    const f = stubFetch({ "http://localhost:4100/healthz": 200, "http://localhost:4100/readyz": 200 });
+    const onRound = vi.fn();
+    const p = poller(f.fetch, { onRound });
+    p.start();
+    await p.settled();
+    expect(f.calls).toHaveLength(2);
+    p.stop();
+    await p.refresh();
+    expect(f.calls).toHaveLength(2);
+    expect(onRound).toHaveBeenCalledTimes(1);
+    // A restart polls again.
+    p.start();
+    await p.settled();
+    expect(f.calls).toHaveLength(4);
+    p.stop();
+  });
+
   it("only ever fetches <upstream origin><manifest path>", async () => {
     apps = [
       app("notes"),

@@ -181,6 +181,8 @@ export function createHealthPoller(deps: HealthDeps) {
   let again = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = true;
+  /** Set by stop() (shutdown): a late refresh() then starts no new round. Unlike `stopped`, false before start(). */
+  let halted = false;
 
   async function probe(url: string): Promise<ProbeResult> {
     const started = now();
@@ -382,14 +384,16 @@ export function createHealthPoller(deps: HealthDeps) {
     start() {
       if (!stopped) return;
       stopped = false;
+      halted = false;
       void poll().finally(schedule);
     },
     stop() {
       stopped = true;
+      halted = true;
       clearTimeout(timer);
     },
-    /** A lifecycle change: re-read the apps and check them now. */
-    refresh: poll,
+    /** A lifecycle change: re-read the apps and check them now (nothing once stopped). */
+    refresh: () => (halted ? Promise.resolve() : poll()),
     /** Wait for the round in flight, if any (tests, shutdown). */
     async settled() {
       await inflight;
