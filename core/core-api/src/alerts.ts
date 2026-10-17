@@ -5,7 +5,8 @@
  * live and ready for `downRounds` rounds in a row is **down**: one message says so. When it is live
  * and ready again, one message says it recovered. Nothing else is sent: an app that is deactivated or
  * removed is not an outage (its state is dropped quietly), and a state that holds sends nothing more.
- * Everything that changed in one round goes out in one webhook call.
+ * Everything that changed in one round goes out together: one webhook call, or several in order when
+ * the lines don't fit in one message (no app's line is ever dropped).
  *
  * Off unless `CORE_API_ALERT_WEBHOOK_URL` is set. The URL is a secret (whoever holds it can post),
  * so it is never logged or returned. A message carries only the app id and name, live/ready, the
@@ -86,6 +87,30 @@ function describe(a: AppStatus): string {
   return `${label}: live ${a.live}, ready ${a.ready}${why}`;
 }
 
+const HEADER = "ASafariM OS status";
+
+/**
+ * A round's lines as webhook messages, each at most `max` characters. Lines are never cut between
+ * messages, so every changed app is in exactly one message; only a single line longer than a whole
+ * message is shortened on its own. Later messages say they continue the first.
+ */
+export function splitMessages(lines: string[], max = MAX_CONTENT): string[] {
+  const more = `${HEADER} (continued)`;
+  const room = max - more.length - 1; // the longer header, so a line fits under either
+  const messages: string[] = [];
+  let current = "";
+  for (const raw of lines) {
+    const line = raw.length > room ? `${raw.slice(0, room - 1)}…` : raw;
+    if (current && current.length + 1 + line.length > max) {
+      messages.push(current);
+      current = "";
+    }
+    current = current ? `${current}\n${line}` : `${messages.length ? more : HEADER}\n${line}`;
+  }
+  if (current) messages.push(current);
+  return messages;
+}
+
 export function createStatusAlerter(deps: AlerterDeps) {
   const fetchFn = deps.fetch ?? fetch;
   const timeoutMs = deps.timeoutMs ?? 5000;
@@ -152,9 +177,11 @@ export function createStatusAlerter(deps: AlerterDeps) {
         ...down.map((a) => `🔴 Down: ${describe(a)}`),
         ...recovered.map((a) => `🟢 Recovered: ${describe(a)}`),
       ];
-      let content = `ASafariM OS status\n${lines.join("\n")}`;
-      if (content.length > MAX_CONTENT) content = `${content.slice(0, MAX_CONTENT - 1)}…`;
-      const p = send(content).finally(() => sending.delete(p));
+      const messages = splitMessages(lines);
+      // One after another, so the channel shows them in order; a failed one doesn't stop the rest.
+      const p = messages
+        .reduce((prev, content) => prev.then(() => send(content)), Promise.resolve())
+        .finally(() => sending.delete(p));
       sending.add(p);
     },
     /** Wait for the webhook calls in flight (tests, shutdown). */
