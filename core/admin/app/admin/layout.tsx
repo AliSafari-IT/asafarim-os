@@ -1,7 +1,8 @@
-import { UserMenu } from "@asafarim/app-sdk/react";
+import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
 import { Nav } from "@/components/Nav";
 import { SignOutIcon } from "@/components/SignOutIcon";
 import { signOut } from "@/lib/auth";
+import { coreApi } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +14,11 @@ async function signOutAction() {
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const admin = await requireAdmin(); // a redirect to sign-in, or a 403, before anything is shown
+  // The apps this admin can open, decided by core-api. A launcher that can't be loaded is left out:
+  // it must never break the console.
+  const apps = await coreApi(admin.idToken)
+    .launcher()
+    .catch(() => []);
   return (
     <>
       <a className="skip" href="#main">
@@ -20,7 +26,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       </a>
       <div className="shell">
         <header className="top">
-          <h1>ASafariM OS Admin</h1>
+          <div className="brand">
+            {/* The OS's app switcher: Admin isn't an app in the launcher, so its face is the fallback. */}
+            <AppSwitcher apps={apps} current="admin" fallback={{ name: "Admin", glyph: "AD" }} />
+            <h1>ASafariM OS Admin</h1>
+          </div>
           <Nav />
           <div className="who" data-testid="who">
             <UserMenu

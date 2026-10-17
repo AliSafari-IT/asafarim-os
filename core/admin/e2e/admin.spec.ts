@@ -85,6 +85,8 @@ test.beforeAll(async ({ browser }) => {
   expect(TOKEN, "E2E_ADMIN_TOKEN must be set (pnpm e2e sets it)").not.toBe("");
   // Re-runnable: the first administrator is made by the CLI (the bootstrap); nobody else holds anything.
   await grant("core.admin", "dev-admin");
+  // So Admin's own app switcher has a tile to show once notes is active (by the CLI: not in the admin's audit trail).
+  await grant("notes.viewer", "dev-admin");
   await revoke("core.admin", "dev-member");
   await revoke("notes.editor", "dev-member");
   await revoke("notes.viewer", "dev-member");
@@ -100,6 +102,7 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
+  await revoke("notes.viewer", "dev-admin");
   await revoke("notes.editor", "dev-member");
   await cli("POST", "/admin/v1/apps/notes/deactivate");
   await adminCtx?.close();
@@ -147,6 +150,23 @@ test("the admin signs in and activates notes through a styled dialog", async () 
   await expect(page.getByTestId("flash-notice")).toContainText("notes is active");
   await expect(page.getByTestId("state-notes")).toHaveText("active");
   await page.screenshot({ path: `${SHOTS}/a4-apps-after-activate.png` });
+
+  // The OS app switcher in Admin's top bar (core-api's /admin/v1/launcher for this admin): closed
+  // until pressed, and its face is Admin's own, since Admin isn't an app in the launcher.
+  await page.reload(); // the layout reads the launcher on render: now with notes active
+  const switcher = page.getByRole("button", { name: "Admin: switch app", exact: true });
+  await expect(switcher).toHaveAttribute("aria-expanded", "false");
+  await switcher.click();
+  const apps = page.getByRole("navigation", { name: "Your apps" });
+  await expect(apps).toBeVisible();
+  // A real tile from /admin/v1/launcher (dev-admin holds notes.viewer), not just the home link.
+  await expect(apps.getByRole("link", { name: /Notes/ })).toHaveAttribute(
+    "href",
+    /^http:\/\/notes\.localhost:8080\/?$/,
+  );
+  await expect(apps.getByRole("link", { name: "ASafariM OS home" })).toHaveAttribute("href", "https://asafarim.site/");
+  await page.keyboard.press("Escape");
+  await expect(apps).toBeHidden();
   await page.close();
 });
 
@@ -386,7 +406,8 @@ test("every admin action is in the audit log under the admin's own name", async 
   await expect(page.getByRole("heading", { level: 2, name: "Audit" })).toBeVisible();
 
   // The UI: filter by app and actor.
-  await page.getByLabel("App").selectOption("notes");
+  // Exact: the top bar's "Admin: switch app" button also contains "app".
+  await page.getByLabel("App", { exact: true }).selectOption("notes");
   await page.getByLabel("Actor contains").fill("dev-admin");
   await page.getByRole("button", { name: "Filter" }).click();
   await expect(page.getByTestId("audit-row").first()).toBeVisible();

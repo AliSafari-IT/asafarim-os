@@ -5,6 +5,8 @@
  * secret of its own.
  */
 
+import { parseLauncher, type LauncherTile } from "@asafarim/app-sdk";
+
 export class CoreApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -169,6 +171,12 @@ export function coreApi(idToken: string) {
   const enc = encodeURIComponent;
   return {
     session: () => call<{ actor: string; subject: string }>(idToken, "GET", "/admin/v1/session"),
+    /**
+     * The apps the signed-in admin can open (the top bar's app switcher). An answer that isn't the
+     * launcher contract is an empty list: the switcher must never break the console.
+     */
+    launcher: async (): Promise<LauncherTile[]> =>
+      parseLauncher(await call<unknown>(idToken, "GET", "/admin/v1/launcher")) ?? [],
     apps: async () => (await call<{ apps: AdminApp[] }>(idToken, "GET", "/admin/v1/apps")).apps,
     events: async () => (await call<{ events: CatalogEntry[] }>(idToken, "GET", "/admin/v1/events")).events,
     status: () => call<StatusReport>(idToken, "GET", "/admin/v1/status"),

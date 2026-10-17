@@ -73,6 +73,11 @@ body {
   border-bottom: 1px solid var(--line);
   margin-bottom: 20px;
 }
+.top .brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .top h1 {
   font-size: 1.15rem;
   margin: 0;

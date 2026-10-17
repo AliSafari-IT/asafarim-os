@@ -996,6 +996,14 @@ export function createRegistry(deps: RegistryDeps) {
     path = `/registry/v1/apps/${appId}/launcher/${encodeURIComponent(subject)}`,
   ) {
     await authenticate(appId, "GET", path, headers, "");
+    return launcherForSubject(subject);
+  }
+
+  /**
+   * The apps `subject` can open, with no app signature: for callers that have already proven who
+   * the person is (the signed app endpoint above, and the Admin console's own `/admin/v1/launcher`).
+   */
+  async function launcherForSubject(subject: string) {
     const apps = (
       await deps.pool.query<LauncherApp>("SELECT id, state, manifest FROM apps WHERE state = 'active' ORDER BY id")
     ).rows;
@@ -1064,6 +1072,7 @@ export function createRegistry(deps: RegistryDeps) {
     subjectAccess,
     issueAccessToken,
     launcher,
+    launcherForSubject,
     grantRole,
     revokeRole,
   };

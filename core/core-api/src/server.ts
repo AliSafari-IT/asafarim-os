@@ -29,6 +29,8 @@
  *   GET  /admin/v1/status                        each app's live/ready, as last polled (P6.1, health.ts)
  *   GET  /admin/v1/retention[?eligible=true]     removed apps: their backup, purge date, whether purge is due
  *   GET  /registry/v1/apps/:id/launcher/:sub     the apps a person can open (the app, signed)
+ *   GET  /admin/v1/launcher                      the apps the signed-in admin can open (Admin's app switcher;
+ *                                                the CLI token, which is no person, gets an empty list)
  *
  * Traces (P6 part 2c): with OTEL_EXPORTER_OTLP_ENDPOINT set, every request runs in a SERVER span
  * named `METHOD /route/pattern` (see `routePattern`) that continues the caller's `traceparent`, so
@@ -158,6 +160,7 @@ const ROUTES: readonly [RegExp, string][] = (
     [`/registry/v1/apps/${APP_ID}/subjects/${SUB}/token`, "/registry/v1/apps/:id/subjects/:sub/token"],
     [`/registry/v1/apps/${APP_ID}/launcher/${SUB}`, "/registry/v1/apps/:id/launcher/:sub"],
     ["/admin/v1/session", "/admin/v1/session"],
+    ["/admin/v1/launcher", "/admin/v1/launcher"],
     ["/admin/v1/apps", "/admin/v1/apps"],
     ["/admin/v1/events", "/admin/v1/events"],
     ["/admin/v1/roles", "/admin/v1/roles"],
@@ -355,6 +358,10 @@ export function createHandler(opts: {
         const caller = await authorizeAdmin(req.headers.authorization);
         const actor = caller.actor;
         if (req.method === "GET" && p === "/admin/v1/session") return json(res, 200, caller);
+        if (req.method === "GET" && p === "/admin/v1/launcher") {
+          if (caller.kind !== "user" || !caller.subject) return json(res, 200, { subject: null, apps: [] });
+          return json(res, 200, await opts.registry.launcherForSubject(caller.subject));
+        }
         if (req.method === "GET" && p === "/admin/v1/apps") return json(res, 200, { apps: await queries.listApps() });
         if (req.method === "GET" && p === "/admin/v1/events")
           return json(res, 200, { events: await queries.listEvents() });
