@@ -17,7 +17,9 @@
  * Alert history: every down and recovered transition is also kept in memory (the last 50, newest
  * first) for Admin's Status page, whether or not a webhook is set. It holds the same fields a message
  * does (time, app id and name, live/ready, error class and detail), never a URL, upstream or header,
- * and it starts empty when core-api restarts.
+ * and, with a store (alert-store.ts), it is saved best effort and the newest are loaded again when
+ * core-api starts, so it survives a restart. A failed save or load is logged by class and never
+ * delays or breaks a poll round.
  */
 import { SELF_ID, type AppStatus, type RoundInfo, type StatusReport } from "./health.ts";
 
@@ -69,6 +71,16 @@ export interface AlerterDeps {
   /** Per webhook call; default 5 s. */
   timeoutMs?: number;
   log?: (line: object) => void;
+  /** Where the history is kept across restarts; unset = memory only. */
+  store?: AlertStore;
+}
+
+/** Keeps the alert history across restarts (alert-store.ts has the Postgres one). */
+export interface AlertStore {
+  /** One round's transitions, in the order the history shows them. */
+  save(records: AlertRecord[]): Promise<void>;
+  /** The newest `limit` transitions, newest round first. */
+  recent(limit: number): Promise<AlertRecord[]>;
 }
 
 interface Tracked {
@@ -178,6 +190,17 @@ export function createStatusAlerter(deps: AlerterDeps) {
   const sending = new Set<Promise<void>>();
   /** Newest round first (a round's own lines in message order); trimmed to `historySize`. */
   const history: AlertRecord[] = [];
+  const store = deps.store;
+
+  /** A store failure, by class only (a pg SQLSTATE or the error's name), never its message. */
+  const storeFailed = (msg: string) => (err: unknown) =>
+    log({ msg, error: (err as { code?: unknown })?.code ?? (err as Error)?.name ?? "Error" });
+
+  /** Keeps a pending promise in `sending` until it settles, so settled() waits for it. */
+  const track = (p: Promise<void>) => {
+    const t = p.finally(() => sending.delete(t));
+    sending.add(t);
+  };
 
   async function send(webhookUrl: string, content: string) {
     const ctl = new AbortController();
@@ -235,8 +258,18 @@ export function createStatusAlerter(deps: AlerterDeps) {
 
       if (down.length === 0 && recovered.length === 0) return;
       const at = now().toISOString();
-      history.unshift(...down.map((a) => record("down", a, at)), ...recovered.map((a) => record("recovered", a, at)));
+      const changes = [...down.map((a) => record("down", a, at)), ...recovered.map((a) => record("recovered", a, at))];
+      history.unshift(...changes);
       if (history.length > historySize) history.length = historySize;
+      if (store) {
+        // Its own copies, and a store that throws instead of rejecting can't break the round either.
+        const rows = changes.map((r) => ({ ...r }));
+        track(
+          Promise.resolve()
+            .then(() => store.save(rows))
+            .catch(storeFailed("health.alert_store_failed")),
+        );
+      }
 
       const webhookUrl = deps.webhookUrl;
       if (!webhookUrl) return;
@@ -246,10 +279,24 @@ export function createStatusAlerter(deps: AlerterDeps) {
       ];
       const messages = splitMessages(lines);
       // One after another, so the channel shows them in order; a failed one doesn't stop the rest.
-      const p = messages
-        .reduce((prev, content) => prev.then(() => send(webhookUrl, content)), Promise.resolve())
-        .finally(() => sending.delete(p));
-      sending.add(p);
+      track(messages.reduce((prev, content) => prev.then(() => send(webhookUrl, content)), Promise.resolve()));
+    },
+    /**
+     * Load the newest saved transitions into the history (once, at start, before polling). Never
+     * throws. Anything already observed in this process stays on top, and a saved row that is not
+     * older than it is left out, so nothing shows twice.
+     */
+    async load() {
+      if (!store || historySize === 0) return;
+      try {
+        const saved = await store.recent(historySize);
+        const oldest = history.at(-1)?.at;
+        const older = oldest === undefined ? saved : saved.filter((r) => r.at < oldest);
+        history.push(...older.slice(0, historySize - history.length).map((r) => ({ ...r })));
+        log({ msg: "health.alert_history_loaded", count: older.length });
+      } catch (err) {
+        storeFailed("health.alert_history_load_failed")(err);
+      }
     },
     /** The recent transitions for Admin, newest round first (a copy). */
     history(): AlertHistory {
@@ -259,7 +306,7 @@ export function createStatusAlerter(deps: AlerterDeps) {
         alerts: history.map((r) => ({ ...r })),
       };
     },
-    /** Wait for the webhook calls in flight (tests, shutdown). */
+    /** Wait for the webhook calls and store saves in flight (tests, shutdown). */
     async settled() {
       await Promise.all([...sending]);
     },

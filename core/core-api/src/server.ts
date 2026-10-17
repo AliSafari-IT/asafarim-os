@@ -27,7 +27,8 @@
  *   GET  /admin/v1/subjects/<sub>/grants         what a person holds
  *   GET  /admin/v1/audit[?app=&actor=&limit=&before=]   the audit log, newest first
  *   GET  /admin/v1/status                        each app's live/ready, as last polled (P6.1, health.ts)
- *   GET  /admin/v1/alerts                        the last 50 down/recovered transitions, newest first (alerts.ts)
+ *   GET  /admin/v1/alerts                        the last 50 down/recovered transitions, newest first (alerts.ts,
+ *                                                kept across restarts in alert_events, alert-store.ts)
  *   GET  /admin/v1/retention[?eligible=true]     removed apps: their backup, purge date, whether purge is due
  *   GET  /registry/v1/apps/:id/launcher/:sub     the apps a person can open (the app, signed)
  *   GET  /admin/v1/launcher                      the apps the signed-in admin can open (Admin's app switcher;
@@ -68,6 +69,7 @@ import { ApiError } from "./errors.ts";
 import { MAX_SCHEMAS_REQUEST_BYTES } from "./event-schemas.ts";
 import { migrate } from "./migrate.ts";
 import { createAppSnapshot, createGateway, type GatewayApp } from "./gateway.ts";
+import { createPgAlertStore } from "./alert-store.ts";
 import { createStatusAlerter, parseAlertConfig, parseDownRounds, type StatusAlerter } from "./alerts.ts";
 import { createHealthPoller, parseHealthConfig, upstreamVar, type HealthPoller } from "./health.ts";
 import { startAuthCallout } from "./nats-auth.ts";
@@ -684,11 +686,15 @@ async function main() {
       port: appDbPort,
     },
   });
-  // Always on: Admin's alert history keeps the transitions; the webhook only when it is configured.
+  // Always on: Admin's alert history keeps the transitions (and in the database, so it survives a
+  // restart); the webhook only when it is configured.
   const alerter = createStatusAlerter({
     ...(alertConfig ?? { downRounds: parseDownRounds(process.env) }),
+    store: createPgAlertStore(pool),
     log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
   });
+  // Before the first poll round, so a transition seen now is never older than the loaded ones.
+  await alerter.load();
   // P6.1: each active app's live/ready, polled at the upstream the gateway uses for it (OS_APP_<ID>_UPSTREAM).
   const health = createHealthPoller({
     ...healthConfig,
