@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { createStatusAlerter, parseAlertConfig, parseDownRounds, plain, splitMessages } from "../src/alerts.ts";
+import {
+  createStatusAlerter,
+  parseAlertConfig,
+  parseDownRounds,
+  plain,
+  splitMessages,
+  type AlertRecord,
+  type AlertStore,
+} from "../src/alerts.ts";
 import type { AppStatus, StatusReport } from "../src/health.ts";
 
 const HOOK = "https://discord.example/api/webhooks/123/secret-token";
@@ -347,6 +355,167 @@ describe("alert history", () => {
     alerter.observe(report(down("notes")));
     alerter.observe(report(entry("notes", { state: "inactive", polled: false, live: "unknown", ready: "unknown" })));
     expect(alerter.history().alerts.map((a) => [a.kind, a.id])).toEqual([["down", "notes"]]);
+  });
+});
+
+describe("alert history store", () => {
+  const clock = () => {
+    let t = Date.parse("2026-10-17T10:00:00.000Z");
+    return () => new Date((t += 30_000));
+  };
+  const rec = (at: string, kind: AlertRecord["kind"], id: string): AlertRecord => ({
+    at,
+    kind,
+    id,
+    name: id.toUpperCase(),
+    live: "up",
+    ready: kind === "down" ? "down" : "up",
+  });
+
+  function memoryStore(saved: AlertRecord[] = []) {
+    const rounds: AlertRecord[][] = [];
+    const store: AlertStore = {
+      save: vi.fn(async (records: AlertRecord[]) => {
+        rounds.push(records);
+      }),
+      recent: vi.fn(async (limit: number) => saved.slice(0, limit)),
+    };
+    return { store, rounds };
+  }
+
+  it("saves each round's transitions in history order, and nothing for a round without a change", async () => {
+    const { store, rounds } = memoryStore();
+    const alerter = createStatusAlerter({ downRounds: 1, now: clock(), store });
+    alerter.observe(report(entry("core-api"), down("notes"), down("docs")));
+    alerter.observe(report(entry("core-api"), down("notes"), down("docs"))); // still down: no change
+    alerter.observe(report(entry("core-api"), entry("notes"), down("docs")));
+    await alerter.settled();
+    expect(rounds.map((r) => r.map((a) => [a.kind, a.id]))).toEqual([
+      [
+        ["down", "notes"],
+        ["down", "docs"],
+      ],
+      [["recovered", "notes"]],
+    ]);
+    // The same records the history shows: newest round first, each round in its own order.
+    expect(alerter.history().alerts).toEqual([...rounds[1]!, ...rounds[0]!]);
+    // Its own copies: the history isn't changed through them.
+    rounds[0]![0]!.id = "changed";
+    expect(alerter.history().alerts.map((a) => a.id)).not.toContain("changed");
+  });
+
+  it("a failed save is logged by class, never its message, and changes nothing else", async () => {
+    for (const save of [
+      async () => {
+        throw Object.assign(new Error("password=hunter2"), { code: "57P01" });
+      },
+      () => {
+        throw new TypeError("sync"); // throws instead of rejecting
+      },
+    ]) {
+      const logs: object[] = [];
+      const calls: string[] = [];
+      const fetchFn = vi.fn(async (url: string | URL | Request) => {
+        calls.push(String(url));
+        return new Response(null, { status: 204 });
+      }) as unknown as typeof fetch;
+      const alerter = createStatusAlerter({
+        webhookUrl: HOOK,
+        downRounds: 1,
+        fetch: fetchFn,
+        log: (l) => logs.push(l),
+        store: { save, recent: async () => [] },
+      });
+      expect(() => alerter.observe(report(down("notes")))).not.toThrow();
+      await alerter.settled();
+      expect(alerter.history().alerts.map((a) => a.id)).toEqual(["notes"]);
+      expect(calls).toEqual([HOOK]); // the webhook still went out
+      const failed = logs.filter((l) => (l as { msg: string }).msg === "health.alert_store_failed");
+      expect(failed).toHaveLength(1);
+      expect(JSON.stringify(logs)).not.toContain("hunter2");
+      expect(failed[0]).toEqual({
+        msg: "health.alert_store_failed",
+        error: expect.stringMatching(/^(57P01|TypeError)$/),
+      });
+    }
+  });
+
+  it("settled() waits for a slow save", async () => {
+    let release = () => {};
+    const done: string[] = [];
+    const alerter = createStatusAlerter({
+      downRounds: 1,
+      store: {
+        save: () =>
+          new Promise<void>((r) => {
+            release = () => {
+              done.push("saved");
+              r();
+            };
+          }),
+        recent: async () => [],
+      },
+    });
+    alerter.observe(report(down("notes")));
+    const waiting = alerter.settled().then(() => done.push("settled"));
+    await Promise.resolve();
+    release();
+    await waiting;
+    expect(done).toEqual(["saved", "settled"]);
+  });
+
+  it("load() fills the history from the store, newest first, up to historySize", async () => {
+    const saved = [
+      rec("2026-10-17T09:02:00.000Z", "recovered", "notes"),
+      rec("2026-10-17T09:01:00.000Z", "down", "notes"),
+      rec("2026-10-17T09:01:00.000Z", "down", "docs"),
+    ];
+    const { store } = memoryStore(saved);
+    const alerter = createStatusAlerter({ downRounds: 1, historySize: 2, store });
+    await alerter.load();
+    expect(store.recent).toHaveBeenCalledWith(2);
+    expect(alerter.history().alerts).toEqual(saved.slice(0, 2));
+    // A copy: changing what the store returned doesn't change the history.
+    saved[0]!.id = "changed";
+    expect(alerter.history().alerts[0]!.id).toBe("notes");
+  });
+
+  it("load() keeps what this process already saw on top, and leaves out rows that aren't older", async () => {
+    const now = clock(); // first round at 10:00:30
+    const saved = [
+      rec("2026-10-17T10:00:30.000Z", "down", "notes"), // this process's own round, already saved
+      rec("2026-10-17T09:00:00.000Z", "recovered", "docs"),
+    ];
+    const { store } = memoryStore(saved);
+    const alerter = createStatusAlerter({ downRounds: 1, now, store });
+    alerter.observe(report(down("notes")));
+    await alerter.load();
+    expect(alerter.history().alerts.map((a) => [a.at, a.kind, a.id])).toEqual([
+      ["2026-10-17T10:00:30.000Z", "down", "notes"],
+      ["2026-10-17T09:00:00.000Z", "recovered", "docs"],
+    ]);
+  });
+
+  it("a failed load is logged by class and leaves the history as it was; no store or size 0 = no call", async () => {
+    const logs: object[] = [];
+    const alerter = createStatusAlerter({
+      downRounds: 1,
+      log: (l) => logs.push(l),
+      store: {
+        save: async () => {},
+        recent: async () => {
+          throw Object.assign(new Error("connect ECONNREFUSED 10.0.0.5:5432"), { code: "ECONNREFUSED" });
+        },
+      },
+    });
+    await expect(alerter.load()).resolves.toBeUndefined();
+    expect(alerter.history().alerts).toEqual([]);
+    expect(logs).toEqual([{ msg: "health.alert_history_load_failed", error: "ECONNREFUSED" }]);
+
+    await expect(createStatusAlerter({ downRounds: 1 }).load()).resolves.toBeUndefined();
+    const { store } = memoryStore();
+    await createStatusAlerter({ downRounds: 1, historySize: 0, store }).load();
+    expect(store.recent).not.toHaveBeenCalled();
   });
 });
 
