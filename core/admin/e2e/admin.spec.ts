@@ -53,7 +53,8 @@ async function launcherFor(sub: string): Promise<string[]> {
 async function signIn(page: Page, url: string, displayName: string) {
   await page.goto(url);
   await page.getByRole("button", { name: "Sign in" }).click();
-  const chooser = page.getByRole("button", { name: new RegExp(displayName) });
+  // Anchored: once signed in, the account menu's button ("Your account menu: <name>") also carries the name.
+  const chooser = page.getByRole("button", { name: new RegExp(`^${displayName}`) });
   const signedIn = page.getByTestId("who");
   await expect(chooser.or(signedIn)).toBeVisible({ timeout: 20_000 });
   if (await chooser.isVisible()) await chooser.click();
@@ -558,7 +559,9 @@ for (const scheme of ["light", "dark"] as const) {
         const sample: Record<string, string> = {
           body: "main p, main h2",
           muted: ".muted",
-          primary: "button:not(.secondary):not(.danger)",
+          // In main: the top bar's first button is now the account menu's avatar, whose own text (the
+          // initials) sits on the avatar's gradient, not on the button's colours.
+          primary: "main button:not(.secondary):not(.danger)",
           secondary: "button.secondary:not(.danger)",
           danger: "button.secondary.danger, button.danger",
           nav: 'nav[aria-label="Admin"] a[aria-current="page"]',

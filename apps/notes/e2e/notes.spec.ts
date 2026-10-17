@@ -153,7 +153,7 @@ test("member → read-only → editor → inactive", async ({ page }) => {
   expect((await grant("notes.editor")).body).toMatchObject({ granted: true });
   await waitForAccess(page, "notes.write");
   await page.getByLabel("Title").fill(FIRST);
-  await page.getByLabel("Note").fill("Written by an editor.");
+  await page.getByLabel("Note", { exact: true }).fill("Written by an editor."); // not the "Notes: switch app" button
   await page.getByRole("button", { name: "Add note" }).click();
   await expect(page.getByTestId("note").first()).toContainText(FIRST);
   await page.screenshot({ path: `${SHOTS}/03-editor-can-write.png` });
