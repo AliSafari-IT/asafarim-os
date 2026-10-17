@@ -43,8 +43,8 @@
     "@asafarim/envage": "^0.4.2",
     "@nats-io/nkeys": "^2.0.3",
     "pg": "^8.23.1",
-    "prettier": "^3.5.0",
-    "turbo": "^2.11.7",
+    "prettier": "^3.9.10",
+    "turbo": "^2.11.8",
     "typescript": "^5.9.0"
   },
   "dependencies": {}

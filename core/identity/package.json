@@ -23,11 +23,11 @@
   },
   "devDependencies": {
     "@asafarim/config": "workspace:*",
-    "@types/node": "^24.19.1",
+    "@types/node": "^24.19.2",
     "@types/oidc-provider": "^9.12.1",
     "@types/pg": "^8.23.1",
     "eslint": "^9.39.5",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.4"
   }
 }
