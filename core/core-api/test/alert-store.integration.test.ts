@@ -5,7 +5,8 @@
  *  - a round's transitions are saved in order and read back newest round first, as the in-memory
  *    history shows them, with no field added or lost;
  *  - a new alerter (core-api restarted) loads the history the old one saved;
- *  - rows older than the retention window are deleted when a round is saved; newer ones stay;
+ *  - rows older than the retention window are deleted when a round is saved and before a read;
+ *    newer ones stay;
  *  - the table refuses a kind or probe value that isn't one of the known ones.
  *
  * Needs CORE_API_TEST_ADMIN_URL (see registry.integration.test.ts). Skipped without it, except when
@@ -111,6 +112,19 @@ describe.skipIf(!ADMIN_URL)("the alert history in Postgres (integration)", () =>
     expect((await store.recent(10)).map((r) => r.id)).toEqual(["kept", "kept"]);
     expect((await store.recent(10))[0]).toEqual(fresh);
     expect(await store.recent(0)).toEqual([]);
+  });
+
+  it("deletes expired rows before reading, even when no round was saved since they expired", async () => {
+    await pool.query("DELETE FROM alert_events");
+    await pool.query(
+      `INSERT INTO alert_events (at, kind, app_id, name, live, ready)
+       VALUES (now() - interval '40 days', 'down', 'old', 'OLD', 'up', 'down'),
+              (now() - interval '20 days', 'down', 'kept', 'KEPT', 'up', 'down')`,
+    );
+    const store = createPgAlertStore(pool, { retentionDays: 30 });
+    expect((await store.recent(10)).map((r) => r.id)).toEqual(["kept"]);
+    const { rows } = await pool.query<{ app_id: string }>("SELECT app_id FROM alert_events");
+    expect(rows.map((r) => r.app_id)).toEqual(["kept"]); // deleted, not just hidden
   });
 
   it("refuses a kind or a probe value that isn't a known one", async () => {

@@ -5,7 +5,8 @@
  *
  * A row holds only what an AlertRecord holds (time, kind, app id and name, live/ready, error class and
  * detail), never a URL, upstream or header. Rows older than `retentionDays` (default 90) are deleted
- * when a round is saved.
+ * when a round is saved and before the history is read, so an expired row is never shown again, even
+ * after a long quiet spell with no new round.
  */
 import type pg from "pg";
 import type { AlertRecord, AlertStore } from "./alerts.ts";
@@ -25,6 +26,8 @@ interface Row {
 
 export function createPgAlertStore(pool: Pick<pg.Pool, "query">, opts: { retentionDays?: number } = {}): AlertStore {
   const retentionDays = Math.max(1, Math.floor(opts.retentionDays ?? DEFAULT_RETENTION_DAYS));
+  const prune = () =>
+    pool.query("DELETE FROM alert_events WHERE at < now() - make_interval(days => $1)", [retentionDays]);
   return {
     async save(records) {
       if (records.length === 0) return;
@@ -44,11 +47,12 @@ export function createPgAlertStore(pool: Pick<pg.Pool, "query">, opts: { retenti
           records.map((r) => r.detail ?? null),
         ],
       );
-      await pool.query("DELETE FROM alert_events WHERE at < now() - make_interval(days => $1)", [retentionDays]);
+      await prune();
     },
     async recent(limit) {
       const n = Math.max(0, Math.floor(limit));
       if (n === 0) return [];
+      await prune();
       // Newest round first; within a round, the order it was saved in (as the in-memory history).
       const { rows } = await pool.query<Row>(
         `SELECT at, kind, app_id, name, live, ready, error, detail FROM alert_events
