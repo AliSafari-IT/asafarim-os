@@ -206,29 +206,62 @@ export function startTelemetry(env: Record<string, string | undefined> = process
 
 /**
  * What SIGTERM and SIGINT do, in order: stop accepting connections (requests in flight end with
- * the process, as before), stop answering the bus's auth callout, flush the last traces and
- * metrics (bounded by the telemetry's own timeout, 2 s), then exit 0. A second signal while this
- * runs changes nothing.
+ * the process, as before), stop the health poller, wait for its round in flight and the alert
+ * saves and webhook calls in flight (at most `flushTimeoutMs`, 3 s by default), stop answering
+ * the bus's auth callout, flush the last traces and metrics (bounded by the telemetry's own
+ * timeout, 2 s), then exit 0. A failed or slow flush is logged and never blocks the exit. A
+ * second signal while this runs changes nothing.
  */
 export function createShutdown({
   server,
   callout,
   telemetry,
   log,
+  health,
+  alerts,
   exit = (code) => process.exit(code),
+  flushTimeoutMs = 3000,
 }: {
   /** The HTTP server: `close()` stops it accepting connections. */
   server: { close(): unknown };
   callout?: { stop(): Promise<void> };
+  /** The health poller: stopped, then its round in flight awaited, so its alerts are seen. */
+  health?: Pick<HealthPoller, "stop" | "settled">;
+  /** The status alerter: its store saves and webhook calls in flight are awaited. */
+  alerts?: Pick<StatusAlerter, "settled">;
   telemetry: Pick<Telemetry, "shutdown">;
   log: (line: Record<string, unknown>) => void;
   exit?: (code: number) => void;
+  /** The most the health and alert flush may take before the shutdown goes on without it. */
+  flushTimeoutMs?: number;
 }): (signal: NodeJS.Signals) => Promise<void> {
   let running: Promise<void> | undefined;
+  /** Waits for the last poll round, then the alerts it raised; never throws, never outlasts the bound. */
+  const flushAlerts = async () => {
+    if (!health && !alerts) return;
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), flushTimeoutMs);
+      timer.unref?.();
+    });
+    const flush = (async () => {
+      await health?.settled();
+      await alerts?.settled();
+      return "done" as const;
+    })().catch((err: unknown) => {
+      log({ msg: "core-api.shutdown_flush_failed", error: (err as Error)?.name ?? "Error" });
+      return "failed" as const;
+    });
+    const outcome = await Promise.race([flush, timedOut]);
+    clearTimeout(timer);
+    if (outcome === "timeout") log({ msg: "core-api.shutdown_flush_timeout", timeoutMs: flushTimeoutMs });
+  };
   return (signal) =>
     (running ??= (async () => {
       log({ msg: "core-api.shutdown", reason: signal });
       server.close();
+      health?.stop();
+      await flushAlerts();
       await callout?.stop().catch(() => undefined);
       await telemetry.shutdown();
       exit(0);
@@ -719,10 +752,13 @@ async function main() {
       `${JSON.stringify({ service: "core-api", msg: "core-api.started", port, migrations: applied })}\n`,
     ),
   );
-  // On shutdown: stop accepting, stop answering the bus, flush telemetry (bounded), exit.
+  // On shutdown: stop accepting, stop polling, flush the last alerts (bounded), stop answering the
+  // bus, flush telemetry (bounded), exit.
   const shutdown = createShutdown({
     server,
     callout,
+    health,
+    alerts: alerter,
     telemetry,
     log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
   });
