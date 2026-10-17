@@ -76,6 +76,16 @@ export interface HealthDeps {
   timeoutMs?: number;
   now?: () => number;
   log?: (line: object) => void;
+  /**
+   * Called with the board after every round (the status alerts, alerts.ts). `appsChecked` is false
+   * when the app list couldn't be read: only core-api's own entry is new, the apps' are kept from an
+   * earlier round. It must not throw; if it does, the error is logged and polling carries on.
+   */
+  onRound?: (report: StatusReport, round: RoundInfo) => void;
+}
+
+export interface RoundInfo {
+  appsChecked: boolean;
 }
 
 export const SELF_ID = "core-api";
@@ -222,13 +232,47 @@ export function createHealthPoller(deps: HealthDeps) {
     return { ...next, since: same ? prev.since : iso(at) };
   }
 
+  function selfStatus(self: ProbeResult): Omit<AppStatus, "since"> {
+    return {
+      id: SELF_ID,
+      name: "core-api",
+      state: "active",
+      polled: true,
+      live: "up", // it's answering this
+      ready: self.probe,
+      latencyMs: self.latencyMs,
+      ...(self.error ? { error: self.error } : {}),
+      ...(self.detail ? { detail: self.detail } : {}),
+      checkedAt: iso(now()),
+    };
+  }
+
+  /** Tell `onRound` (the alerts); a throwing hook never stops polling. */
+  function notify(round: RoundInfo) {
+    if (!deps.onRound) return;
+    try {
+      deps.onRound(status(), round);
+    } catch (err) {
+      log({ msg: "health.on_round_failed", error: (err as Error).message });
+    }
+  }
+
   async function round() {
     let apps: HealthApp[];
     try {
       apps = await deps.apps();
     } catch (err) {
-      // Keep the last known results; the next round tries again.
+      // Keep the apps' last known results; the next round tries again. core-api's own entry is still
+      // checked, so a database outage (the usual cause) shows on the board and reaches the alerts.
       log({ msg: "health.apps_unavailable", error: (err as Error).message });
+      const self = selfStatus(await selfProbe());
+      const prev = entries.get(SELF_ID);
+      const settled = settle(self, now());
+      if (prev && (prev.live !== settled.live || prev.ready !== settled.ready)) {
+        log({ msg: "health.changed", appId: SELF_ID, live: settled.live, ready: settled.ready, error: settled.error });
+      }
+      entries = new Map([[SELF_ID, settled], ...[...entries].filter(([id]) => id !== SELF_ID)]);
+      notify({ appsChecked: false });
       return;
     }
     const results = await Promise.all(
@@ -281,19 +325,7 @@ export function createHealthPoller(deps: HealthDeps) {
           };
         }),
     );
-    const self = await selfProbe();
-    const selfEntry: Omit<AppStatus, "since"> = {
-      id: SELF_ID,
-      name: "core-api",
-      state: "active",
-      polled: true,
-      live: "up", // it's answering this
-      ready: self.probe,
-      latencyMs: self.latencyMs,
-      ...(self.error ? { error: self.error } : {}),
-      ...(self.detail ? { detail: self.detail } : {}),
-      checkedAt: iso(now()),
-    };
+    const selfEntry = selfStatus(await selfProbe());
     const done = now();
     const next = new Map<string, AppStatus>();
     // Removed apps (and ones no longer loaded) simply aren't carried over.
@@ -307,6 +339,15 @@ export function createHealthPoller(deps: HealthDeps) {
     }
     entries = next;
     lastRound = done;
+    notify({ appsChecked: true });
+  }
+
+  function status(): StatusReport {
+    return {
+      checkedAt: lastRound === null ? null : iso(lastRound),
+      intervalMs,
+      apps: [...entries.values()],
+    };
   }
 
   /** One round now; if one is already running, run once more after it (never two at once). */
@@ -353,13 +394,7 @@ export function createHealthPoller(deps: HealthDeps) {
     async settled() {
       await inflight;
     },
-    status(): StatusReport {
-      return {
-        checkedAt: lastRound === null ? null : iso(lastRound),
-        intervalMs,
-        apps: [...entries.values()],
-      };
-    },
+    status,
   };
 }
 

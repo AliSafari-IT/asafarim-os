@@ -262,6 +262,56 @@ describe("the health poller (P6.1)", () => {
     await p.refresh();
     expect(entry(p, "notes")).toMatchObject({ live: "up" });
   });
+
+  it("a failed app list still checks core-api itself, so a database outage shows (and reaches onRound)", async () => {
+    const f = stubFetch({ "http://localhost:4100/healthz": 200, "http://localhost:4100/readyz": 200 });
+    let dbUp = true;
+    const rounds: string[][] = [];
+    const p = poller(f.fetch, {
+      apps: async () => {
+        if (!dbUp) throw new Error("db down");
+        return apps;
+      },
+      selfChecks: {
+        database: async () => {
+          if (!dbUp) throw new Error("down");
+        },
+      },
+      onRound: (r, round) => rounds.push([String(round.appsChecked), ...r.apps.map((a) => `${a.id}:${a.ready}`)]),
+    });
+    await p.refresh();
+    dbUp = false;
+    await p.refresh();
+    expect(p.status().apps[0]).toMatchObject({
+      id: "core-api",
+      ready: "down",
+      error: "check_failed",
+      detail: "database",
+    });
+    expect(entry(p, "notes")).toMatchObject({ live: "up", ready: "up" });
+    expect(rounds).toEqual([
+      ["true", "core-api:up", "notes:up"],
+      ["false", "core-api:down", "notes:up"],
+    ]);
+  });
+
+  it("a throwing onRound is logged and polling carries on", async () => {
+    const f = stubFetch({ "http://localhost:4100/healthz": 200, "http://localhost:4100/readyz": 200 });
+    const logs: object[] = [];
+    const p = poller(f.fetch, {
+      onRound: () => {
+        throw new Error("boom");
+      },
+      log: (l) => logs.push(l),
+    });
+    await p.refresh();
+    await p.refresh();
+    expect(logs).toEqual([
+      { msg: "health.on_round_failed", error: "boom" },
+      { msg: "health.on_round_failed", error: "boom" },
+    ]);
+    expect(entry(p, "notes")).toMatchObject({ live: "up" });
+  });
 });
 
 describe("healthUrl", () => {

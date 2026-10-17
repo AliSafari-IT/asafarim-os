@@ -65,6 +65,7 @@ import { ApiError } from "./errors.ts";
 import { MAX_SCHEMAS_REQUEST_BYTES } from "./event-schemas.ts";
 import { migrate } from "./migrate.ts";
 import { createAppSnapshot, createGateway, type GatewayApp } from "./gateway.ts";
+import { createStatusAlerter, parseAlertConfig } from "./alerts.ts";
 import { createHealthPoller, parseHealthConfig, upstreamVar, type HealthPoller } from "./health.ts";
 import { startAuthCallout } from "./nats-auth.ts";
 import { createRegistry, type Registry } from "./registry.ts";
@@ -612,6 +613,8 @@ async function main() {
   const tokenKey = parseTokenKey(required("CORE_API_TOKEN_SIGNING_JWK"));
   const snapshot = createAppSnapshot(() => loadGatewayApps(pool));
   const healthConfig = parseHealthConfig(process.env);
+  // Status alerts to a webhook (Discord), off unless CORE_API_ALERT_WEBHOOK_URL is set (alerts.ts).
+  const alertConfig = parseAlertConfig(process.env);
   // P4.1: with a bus configured, installing (or re-registering) an app creates its JetStream stream
   // when it publishes, and its durable consumers when it subscribes.
   const busConfig = parseBusConfig(process.env);
@@ -667,6 +670,12 @@ async function main() {
       port: appDbPort,
     },
   });
+  const alerter = alertConfig
+    ? createStatusAlerter({
+        ...alertConfig,
+        log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
+      })
+    : undefined;
   // P6.1: each active app's live/ready, polled at the upstream the gateway uses for it (OS_APP_<ID>_UPSTREAM).
   const health = createHealthPoller({
     ...healthConfig,
@@ -677,6 +686,7 @@ async function main() {
       ...(callout ? { bus: () => callout.ping() } : {}),
     },
     log: (l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`),
+    ...(alerter ? { onRound: alerter.observe } : {}),
   });
   health.start();
   // Forget expired registration nonces even when nobody registers.

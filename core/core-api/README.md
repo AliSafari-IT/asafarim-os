@@ -31,6 +31,8 @@ node --env-file=../../.dev/core-api.env src/server.ts
 | `CORE_API_NATS_ACCOUNT`             | the NATS account apps are put in; default `OS`                                                                            |
 | `CORE_API_HEALTH_INTERVAL_SECONDS`  | P6.1: how often each active app's manifest `live`/`ready` are polled; 5 to 3600, default 30 (`GET /admin/v1/status`)      |
 | `CORE_API_HEALTH_TIMEOUT_MS`        | per health request; 100 to 10000, default 2000                                                                            |
+| `CORE_API_ALERT_WEBHOOK_URL`        | status alerts (§9): an https webhook, e.g. Discord's; one message when an entry stays down, one on recovery. Unset = off  |
+| `CORE_API_ALERT_DOWN_ROUNDS`        | health rounds in a row an entry must be down before its alert; 1 to 20, default 2. The webhook URL is never logged        |
 | `OS_APP_<ID>_UPSTREAM`              | where an app runs (`host:port`), the same variable the gateway uses; health is polled only at this plus the manifest path |
 | `CORE_API_BACKUP_DIR`               | where Remove writes an app's database backup; default the repository's git-ignored `.dev/backups/`. Set it in production  |
 | `CORE_API_PG_DUMP`                  | the `pg_dump` binary (default: `pg_dump` from `PATH`); at least the Postgres server's major version (16)                  |
