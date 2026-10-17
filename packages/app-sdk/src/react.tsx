@@ -11,6 +11,10 @@
  * an empty list. Dark accents are light, so the glyph's dark-mode fallback ink is dark.
  */
 import type { LauncherTile } from "./launcher.ts";
+import { safeHref } from "./safe-href.ts";
+
+export { safeHref };
+export { AppSwitcher, APP_SWITCHER_CSS, moveIndex, switcherTiles, type AppSwitcherProps } from "./app-switcher.tsx";
 
 export interface LauncherProps {
   apps: readonly LauncherTile[];
@@ -18,16 +22,6 @@ export interface LauncherProps {
   current?: string;
   /** The landmark's accessible name. */
   label?: string;
-}
-
-/** Only http(s) links are rendered: a tile can't smuggle in `javascript:`. */
-export function safeHref(href: string): string | undefined {
-  try {
-    const u = new URL(href);
-    return u.protocol === "http:" || u.protocol === "https:" ? u.href : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export const LAUNCHER_CSS = `

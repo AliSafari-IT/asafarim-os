@@ -131,6 +131,41 @@ test("the home page: a start card, one card per section, and previous / next und
   await expect(page.getByTestId("doc-title")).toHaveText("Demo app overview");
 });
 
+test("the app switcher in the top bar lists the OS apps this person can open, Docs marked current", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.goto("/");
+  const button = page.getByRole("button", { name: "Docs: switch app" });
+  await expect(button).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("navigation", { name: "Your apps" })).toHaveCount(0);
+
+  await button.click();
+  const menu = page.getByRole("navigation", { name: "Your apps" });
+  await expect(menu).toBeVisible();
+  await expect(button).toHaveAttribute("aria-expanded", "true");
+  const docs = menu.getByTestId("app-switcher-docs");
+  await expect(docs).toHaveAttribute("aria-current", "page");
+  await expect(docs).toHaveAttribute("href", /^https?:\/\//);
+  for (const href of await menu.getByRole("link").evaluateAll((as) => as.map((a) => a.getAttribute("href")))) {
+    expect(href, "every item is an http(s) link to its app").toMatch(/^https?:\/\//);
+  }
+  mkdirSync(SHOTS, { recursive: true });
+  await page.screenshot({ path: `${SHOTS}/docs-app-switcher.png` });
+
+  // A click outside closes it.
+  await page.getByTestId("home").getByRole("heading", { level: 1 }).click();
+  await expect(menu).toHaveCount(0);
+
+  // Keyboard: ArrowDown opens on the first app, Escape closes and gives focus back to the button.
+  await button.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("navigation", { name: "Your apps" }).getByRole("link").first()).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("navigation", { name: "Your apps" })).toHaveCount(0);
+  await expect(button).toBeFocused();
+});
+
 test("Lighthouse accessibility is at least 95, light and dark", async () => {
   const results = [await accessibilityScore("light"), await accessibilityScore("dark")];
   mkdirSync("test-results", { recursive: true });
