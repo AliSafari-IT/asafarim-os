@@ -172,7 +172,8 @@ export function createStatusAlerter(deps: AlerterDeps) {
   const timeoutMs = deps.timeoutMs ?? 5000;
   const log = deps.log ?? (() => undefined);
   const now = deps.now ?? (() => new Date());
-  const historySize = deps.historySize ?? DEFAULT_HISTORY;
+  // A whole number of at least 0, so trimming in observe() can never throw.
+  const historySize = Math.max(0, Math.floor(deps.historySize ?? DEFAULT_HISTORY));
   const tracked = new Map<string, Tracked>();
   const sending = new Set<Promise<void>>();
   /** Newest round first (a round's own lines in message order); trimmed to `historySize`. */

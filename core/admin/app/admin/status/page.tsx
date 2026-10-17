@@ -19,8 +19,16 @@ function Probe({ id, kind, value }: { id: string; kind: "live" | "ready"; value:
 export default async function StatusPage() {
   const admin = await requireAdmin();
   const api = coreApi(admin.idToken);
-  // The alert history never breaks the board: an older core-api, or one that can't answer, shows none.
-  const [report, history] = await Promise.all([api.status(), api.alerts().catch(() => NO_ALERTS)]);
+  // The alert history never breaks the board: if it can't be loaded (an older core-api, or one that
+  // can't answer), the page says so instead of showing an empty history.
+  const [report, loaded] = await Promise.all([
+    api.status(),
+    api.alerts().then(
+      (h) => ({ history: h, failed: false }),
+      () => ({ history: NO_ALERTS, failed: true }),
+    ),
+  ]);
+  const history = loaded.history;
   const counts = summary(report.apps);
 
   return (
@@ -114,10 +122,16 @@ export default async function StatusPage() {
       )}
 
       <h3 id="recent-alerts">Recent alerts</h3>
-      <p className="muted" data-testid="alerts-note">
-        {alertsNote(history)}
-      </p>
-      {history.alerts.length === 0 ? (
+      {loaded.failed ? (
+        <p className="muted" data-testid="alerts-unavailable">
+          Alert history couldn&apos;t be loaded from core-api. Use Refresh to try again.
+        </p>
+      ) : (
+        <p className="muted" data-testid="alerts-note">
+          {alertsNote(history)}
+        </p>
+      )}
+      {loaded.failed ? null : history.alerts.length === 0 ? (
         <p className="muted" data-testid="alerts-empty">
           No app has gone down or recovered since core-api started.
         </p>

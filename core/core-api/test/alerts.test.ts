@@ -317,6 +317,14 @@ describe("alert history", () => {
     expect(alerts[0]!.at > alerts[1]!.at).toBe(true);
   });
 
+  it("a fractional or negative historySize never makes observe throw", () => {
+    for (const historySize of [1.5, -3]) {
+      const alerter = createStatusAlerter({ downRounds: 1, historySize });
+      expect(() => alerter.observe(report(down("notes")))).not.toThrow();
+      expect(alerter.history().alerts.length).toBe(historySize > 0 ? 1 : 0);
+    }
+  });
+
   it("bounds an app's own text and strips control characters", () => {
     const alerter = createStatusAlerter({ downRounds: 1 });
     alerter.observe(report(down("notes", { name: `Bad\u0007${"n".repeat(200)}`, detail: "d".repeat(200) })));
