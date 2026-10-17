@@ -35,7 +35,9 @@
  * the gateway's `/authz/check` shows up in the trace of the request it lets through. The span
  * carries the method, the route pattern and the status, nothing else (`traceHttpHandler`). Each
  * query the request makes is a CLIENT span under it (`traceDatabasePool`): the operation keyword,
- * the database name and, on failure, the SQLSTATE; never the SQL text or its parameters.
+ * the database name and, on failure, the SQLSTATE; never the SQL text or its parameters. The
+ * provisioner's own connections (install, remove, purge) are traced the same way
+ * (`createProvisioner`).
  */
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -45,6 +47,7 @@ import { createStreamAdmin } from "@asafarim/events";
 import {
   databaseNameOf,
   registerTelemetry,
+  traceDatabaseClient,
   traceDatabasePool,
   traceHttpHandler,
   type Telemetry,
@@ -68,6 +71,26 @@ import { createRegistry, type Registry } from "./registry.ts";
 import { SIGNATURE_HEADERS, jwksOf, verificationKeyOf, type SigningKey } from "@asafarim/registry-protocol";
 
 const MAX_BODY = 256 * 1024;
+
+/**
+ * The registry's provisioner (install, remove, purge): one new connection per call, as the
+ * provisioner role. Each query it runs inside a traced request is a CLIENT span (P6, ADR 0001 §9):
+ * the operation, the database name from `url` and, on failure, the SQLSTATE; never the SQL text or
+ * its parameters, so the passwords in `CREATE ROLE … PASSWORD` never reach a span. Nothing is
+ * traced with telemetry off. `newClient` exists for tests.
+ */
+export function createProvisioner(
+  url: string,
+  newClient: (connectionString: string) => pg.Client = (connectionString) => new pg.Client({ connectionString }),
+): () => Promise<pg.Client> {
+  const namespace = databaseNameOf(url);
+  return async () => {
+    const c = traceDatabaseClient(newClient(url), { namespace });
+    await c.connect();
+    return c;
+  };
+}
+
 /** CORE_API_BACKUP_DIR when unset: the repository's git-ignored `.dev/backups/` (local development). */
 export const DEFAULT_BACKUP_DIR = path.resolve(import.meta.dirname, "../../../.dev/backups");
 const APP_ID = "([a-z][a-z0-9-]{1,31})";
@@ -638,11 +661,7 @@ async function main() {
       snapshot.invalidate();
       void health.refresh();
     },
-    provisioner: async () => {
-      const c = new pg.Client({ connectionString: provisionerUrl });
-      await c.connect();
-      return c;
-    },
+    provisioner: createProvisioner(provisionerUrl),
     appDatabaseHost: {
       host: process.env.CORE_API_APP_DB_HOST ?? appDb.hostname,
       port: appDbPort,
