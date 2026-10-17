@@ -406,7 +406,8 @@ test("every admin action is in the audit log under the admin's own name", async 
   await expect(page.getByRole("heading", { level: 2, name: "Audit" })).toBeVisible();
 
   // The UI: filter by app and actor.
-  await page.getByLabel("App").selectOption("notes");
+  // Exact: the top bar's "Admin: switch app" button also contains "app".
+  await page.getByLabel("App", { exact: true }).selectOption("notes");
   await page.getByLabel("Actor contains").fill("dev-admin");
   await page.getByRole("button", { name: "Filter" }).click();
   await expect(page.getByTestId("audit-row").first()).toBeVisible();
