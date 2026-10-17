@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { isAllowedLink, parseProgress, type Progress } from "../src/progress.ts";
 import { APP_LINKS, DESCRIPTION, IDENTITY_ORIGIN, TITLE, escapeHtml, formatDate, renderPage } from "../src/render.ts";
@@ -55,8 +56,9 @@ describe("renderPage", () => {
     expect(nav).toContain('<a href="https://docs.asafarim.site/">Docs</a>');
     expect(nav).toContain('<a href="https://id.asafarim.site/login" class="btn btn-small">Sign in</a>');
     // session.js swaps the "Sign in" slot for the avatar, asking identity at this origin.
-    expect(nav).toContain(`<li id="account" data-identity="${IDENTITY_ORIGIN}">`);
-    expect(IDENTITY_ORIGIN).toBe("https://id.asafarim.site");
+    expect(nav).toContain('<li id="account">');
+    const script = readFileSync(new URL("../public/session.js", import.meta.url), "utf8");
+    expect(script).toContain(`const identity = "${IDENTITY_ORIGIN}";`);
     for (const link of Object.values(APP_LINKS)) expect(isAllowedLink(link.href)).toBe(true);
     expect(html).toMatch(/Request connection/);
   });

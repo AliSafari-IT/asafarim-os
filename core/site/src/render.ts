@@ -46,7 +46,10 @@ const anchor = (href: string, label: string, extra = "") =>
  * id.asafarim.site's own sign-in page (email code or passkey), which also offers "Request connection" to someone
  * who has no access yet.
  */
-/** Identity's origin: session.js asks its /whoami who is signed in (credentialed, CORS for this site only). */
+/**
+ * Identity's origin: session.js asks its /whoami who is signed in (credentialed, CORS for this site only).
+ * session.js has the same constant (a static file); the render test keeps the two equal.
+ */
 export const IDENTITY_ORIGIN = "https://id.asafarim.site";
 
 export const APP_LINKS = {
@@ -88,7 +91,7 @@ function renderTopbar(): string {
       <a class="brand" href="./">${BRAND_MARK}<span class="brand-name">ASafariM <span>OS</span></span></a>
       <ul>
         <li>${anchor(APP_LINKS.docs.href, APP_LINKS.docs.label)}</li>
-        <li id="account" data-identity="${IDENTITY_ORIGIN}">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
+        <li id="account">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
       </ul>
     </nav>`;
 }

@@ -6,9 +6,10 @@
 // and colours through the CSSOM, so the CSP needs no inline scripts or styles.
 (() => {
   "use strict";
+  // Fixed here, not read from the page: every link this script builds is a constant.
+  const identity = "https://id.asafarim.site";
   const slot = document.getElementById("account");
-  const identity = slot && slot.dataset.identity;
-  if (!slot || !identity || !/^https:\/\/[a-z0-9.-]+$/.test(identity)) return;
+  if (!slot) return;
 
   const DOCS = "https://docs.asafarim.site/";
   const ACCOUNT = identity + "/account";
