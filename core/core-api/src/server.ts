@@ -42,7 +42,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import pg from "pg";
 import { createStreamAdmin } from "@asafarim/events";
-import { registerTelemetry, traceDatabasePool, traceHttpHandler, type Telemetry } from "@asafarim/telemetry";
+import {
+  databaseNameOf,
+  registerTelemetry,
+  traceDatabasePool,
+  traceHttpHandler,
+  type Telemetry,
+} from "@asafarim/telemetry";
 import { createAdminQueries } from "./admin.ts";
 import { createPgDumpBackups, parseRetentionDays } from "./backup.ts";
 import {
@@ -472,16 +478,6 @@ export function parsePurgeBody(raw: string): { force: boolean; confirm?: string 
 }
 
 /** Every app the gateway might be asked about (removed ones are gone). */
-/** The database name in a Postgres connection URL (`db.namespace` on the database spans), if it has one. */
-export function databaseNameOf(url: string): string | undefined {
-  try {
-    const name = decodeURIComponent(new URL(url).pathname.replace(/^\//, ""));
-    return name === "" ? undefined : name;
-  } catch {
-    return undefined;
-  }
-}
-
 export async function loadGatewayApps(pool: pg.Pool): Promise<GatewayApp[]> {
   const r = await pool.query<GatewayApp>("SELECT id, state, manifest FROM apps WHERE state <> 'removed' ORDER BY id");
   return r.rows;

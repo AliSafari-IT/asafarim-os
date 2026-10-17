@@ -3,6 +3,7 @@
  * the event outbox (P4.1) whose rows the relay sends to the bus.
  */
 import { OUTBOX_SQL, startAppRelay, type Relay } from "@asafarim/app-sdk/events";
+import { databaseNameOf, traceDatabasePool } from "@asafarim/telemetry";
 import pg from "pg";
 import manifest from "../platform.app";
 import { NOTE_CREATED, publisher, type NoteCreatedV1 } from "./events";
@@ -17,14 +18,24 @@ function pool(): pg.Pool {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not set (run `pnpm platform app install notes --env-out .dev/notes.env`)");
   if (!globalForDb.notesPool) {
-    globalForDb.notesPool = new pg.Pool({ connectionString: url, max: 5 });
-    // An idle connection dropped by the server (a restart, an admin terminating it) is reported on
-    // the pool; unhandled, it would crash the process. The pool replaces it on the next query.
-    globalForDb.notesPool.on("error", (err) =>
-      console.warn(JSON.stringify({ app: "notes", level: "warn", msg: "db.idle_connection_lost", error: err.message })),
-    );
+    globalForDb.notesPool = createNotesPool(url);
   }
   return globalForDb.notesPool;
+}
+
+/**
+ * The app's pool. Each query inside a traced request is a CLIENT span (P6, ADR 0001 §9): the
+ * operation, the database name and, on failure, the SQLSTATE; never the SQL text or its parameters.
+ * Nothing is traced with telemetry off. Connecting is lazy, so this never touches the network.
+ */
+export function createNotesPool(url: string): pg.Pool {
+  const p = traceDatabasePool(new pg.Pool({ connectionString: url, max: 5 }), { namespace: databaseNameOf(url) });
+  // An idle connection dropped by the server (a restart, an admin terminating it) is reported on
+  // the pool; unhandled, it would crash the process. The pool replaces it on the next query.
+  p.on("error", (err) =>
+    console.warn(JSON.stringify({ app: "notes", level: "warn", msg: "db.idle_connection_lost", error: err.message })),
+  );
+  return p;
 }
 
 const SCHEMA = `

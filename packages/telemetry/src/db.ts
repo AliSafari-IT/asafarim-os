@@ -20,6 +20,19 @@
  */
 import { SpanKind, SpanStatusCode, context, trace, type Attributes } from "@opentelemetry/api";
 
+/**
+ * The database name in a Postgres connection URL (its path), for `db.namespace`; undefined when the
+ * URL has none or doesn't parse. Only the name is read: never the user, password, host or query.
+ */
+export function databaseNameOf(url: string): string | undefined {
+  try {
+    const name = decodeURIComponent(new URL(url).pathname.replace(/^\//, ""));
+    return name === "" ? undefined : name;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The part of a `pg` client this wraps. */
 export interface QueryableClient {
   query: (...args: never[]) => unknown;

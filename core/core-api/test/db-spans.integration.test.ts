@@ -10,10 +10,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import pg from "pg";
-import { ALLOWED_SPAN_ATTRIBUTES, traceDatabasePool, traceHttpHandler } from "@asafarim/telemetry";
+import { ALLOWED_SPAN_ATTRIBUTES, databaseNameOf, traceDatabasePool, traceHttpHandler } from "@asafarim/telemetry";
 import { SpanKind, registerTestTelemetry, type TestTelemetry } from "@asafarim/telemetry/testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { databaseNameOf } from "../src/server.ts";
 
 const ADMIN_URL = process.env.CORE_API_TEST_ADMIN_URL;
 if (process.env.CORE_API_TEST_REQUIRED && !ADMIN_URL) throw new Error("CORE_API_TEST_ADMIN_URL must be set");
@@ -21,16 +20,6 @@ if (process.env.CORE_API_TEST_REQUIRED && !ADMIN_URL) throw new Error("CORE_API_
 const SECRET = "secret-parameter-value";
 /** `STATUS_ERROR` (core-api doesn't depend on @opentelemetry/api itself). */
 const STATUS_ERROR = 2;
-
-describe("databaseNameOf", () => {
-  it("reads the database name from a connection URL", () => {
-    expect(databaseNameOf("postgres://core_api:pw@os-postgres:5432/core")).toBe("core");
-    expect(databaseNameOf("postgres://u:p@h/my%20db?sslmode=disable")).toBe("my db");
-    expect(databaseNameOf("postgres://u:p@h:5432")).toBeUndefined();
-    expect(databaseNameOf("postgres://u:p@h:5432/")).toBeUndefined();
-    expect(databaseNameOf("not a url")).toBeUndefined();
-  });
-});
 
 describe.skipIf(!ADMIN_URL)("database spans (real Postgres)", () => {
   let pool: pg.Pool;
