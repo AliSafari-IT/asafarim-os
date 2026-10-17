@@ -277,7 +277,7 @@ describe("the health poller (P6.1)", () => {
           if (!dbUp) throw new Error("down");
         },
       },
-      onRound: (r) => rounds.push(r.apps.map((a) => `${a.id}:${a.ready}`)),
+      onRound: (r, round) => rounds.push([String(round.appsChecked), ...r.apps.map((a) => `${a.id}:${a.ready}`)]),
     });
     await p.refresh();
     dbUp = false;
@@ -290,8 +290,8 @@ describe("the health poller (P6.1)", () => {
     });
     expect(entry(p, "notes")).toMatchObject({ live: "up", ready: "up" });
     expect(rounds).toEqual([
-      ["core-api:up", "notes:up"],
-      ["core-api:down", "notes:up"],
+      ["true", "core-api:up", "notes:up"],
+      ["false", "core-api:down", "notes:up"],
     ]);
   });
 

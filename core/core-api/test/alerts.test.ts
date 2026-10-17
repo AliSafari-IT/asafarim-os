@@ -133,6 +133,33 @@ describe("status alerts", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("a round that couldn't read the app list counts only core-api, and forgets nobody", async () => {
+    const { alerter, calls } = setup({ downRounds: 2 });
+    alerter.observe(report(entry("core-api"), down("notes")));
+    // Two rounds without an app list: notes' kept result isn't a second bad round; core-api's is new.
+    const partial = { appsChecked: false };
+    alerter.observe(
+      report(entry("core-api", { ready: "down", error: "check_failed", detail: "database" }), down("notes")),
+      partial,
+    );
+    alerter.observe(
+      report(entry("core-api", { ready: "down", error: "check_failed", detail: "database" }), down("notes")),
+      partial,
+    );
+    await alerter.settled();
+    expect(calls).toHaveLength(1);
+    expect(nth(calls, 0).body.content.split("\n")).toEqual([
+      "ASafariM OS status",
+      "🔴 Down: CORE-API (core-api): live up, ready down, check\\_failed database",
+    ]);
+    // The next full round is notes' second bad one.
+    alerter.observe(report(entry("core-api"), down("notes")));
+    await alerter.settled();
+    expect(calls).toHaveLength(2);
+    expect(nth(calls, 1).body.content).toContain("Down: NOTES");
+    expect(nth(calls, 1).body.content).toContain("Recovered: CORE-API");
+  });
+
   it("never puts upstreams or URLs in a message, and neutralises manifest text", async () => {
     const { alerter, calls } = setup({ downRounds: 1 });
     alerter.observe(report(down("evil", { name: "@everyone <https://x.example> `code` **bold**\nsecond line" })));

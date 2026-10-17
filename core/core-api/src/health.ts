@@ -77,10 +77,15 @@ export interface HealthDeps {
   now?: () => number;
   log?: (line: object) => void;
   /**
-   * Called with the board after every round (the status alerts, alerts.ts). It must not throw; if it
-   * does, the error is logged and polling carries on.
+   * Called with the board after every round (the status alerts, alerts.ts). `appsChecked` is false
+   * when the app list couldn't be read: only core-api's own entry is new, the apps' are kept from an
+   * earlier round. It must not throw; if it does, the error is logged and polling carries on.
    */
-  onRound?: (report: StatusReport) => void;
+  onRound?: (report: StatusReport, round: RoundInfo) => void;
+}
+
+export interface RoundInfo {
+  appsChecked: boolean;
 }
 
 export const SELF_ID = "core-api";
@@ -243,10 +248,10 @@ export function createHealthPoller(deps: HealthDeps) {
   }
 
   /** Tell `onRound` (the alerts); a throwing hook never stops polling. */
-  function notify() {
+  function notify(round: RoundInfo) {
     if (!deps.onRound) return;
     try {
-      deps.onRound(status());
+      deps.onRound(status(), round);
     } catch (err) {
       log({ msg: "health.on_round_failed", error: (err as Error).message });
     }
@@ -267,7 +272,7 @@ export function createHealthPoller(deps: HealthDeps) {
         log({ msg: "health.changed", appId: SELF_ID, live: settled.live, ready: settled.ready, error: settled.error });
       }
       entries = new Map([[SELF_ID, settled], ...[...entries].filter(([id]) => id !== SELF_ID)]);
-      notify();
+      notify({ appsChecked: false });
       return;
     }
     const results = await Promise.all(
@@ -334,7 +339,7 @@ export function createHealthPoller(deps: HealthDeps) {
     }
     entries = next;
     lastRound = done;
-    notify();
+    notify({ appsChecked: true });
   }
 
   function status(): StatusReport {

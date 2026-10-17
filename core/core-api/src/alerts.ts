@@ -13,7 +13,7 @@
  * upstream, a URL or a header. Mentions are disabled. A failed or slow send is logged by status or
  * class and dropped: it never delays a poll round, and nothing is retried.
  */
-import type { AppStatus, StatusReport } from "./health.ts";
+import { SELF_ID, type AppStatus, type RoundInfo, type StatusReport } from "./health.ts";
 
 export interface AlertConfig {
   webhookUrl: string;
@@ -115,12 +115,20 @@ export function createStatusAlerter(deps: AlerterDeps) {
   }
 
   return {
-    /** One finished poll round. Never throws, never waits for the webhook. */
-    observe(report: StatusReport) {
+    /**
+     * One finished poll round. Never throws, never waits for the webhook. When the round couldn't
+     * read the app list, only core-api's own entry is new: the apps' kept results neither count as
+     * another bad round nor are forgotten.
+     */
+    observe(report: StatusReport, round: RoundInfo = { appsChecked: true }) {
       const down: AppStatus[] = [];
       const recovered: AppStatus[] = [];
       const seen = new Set<string>();
       for (const a of report.apps) {
+        if (!round.appsChecked && a.id !== SELF_ID) {
+          seen.add(a.id); // kept from an earlier round: not checked again, so no change
+          continue;
+        }
         if (!a.polled) continue; // installed or inactive: not an outage
         seen.add(a.id);
         const t = tracked.get(a.id) ?? { bad: 0, alerted: false };
