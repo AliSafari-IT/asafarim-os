@@ -126,7 +126,12 @@ export function AppSwitcher({ apps, current, fallback, label = "Your apps" }: Ap
   };
 
   const onButtonKey = (e: KeyboardEvent<HTMLButtonElement>) => {
-    if (e.key === "ArrowDown") {
+    if (e.key === "Enter" || e.key === " ") {
+      // Keyboard activation opens on the first app (or closes an open list); the native click is not wanted.
+      e.preventDefault();
+      if (open) close(false);
+      else openAt(0);
+    } else if (e.key === "ArrowDown") {
       e.preventDefault();
       openAt(0);
     } else if (e.key === "ArrowUp") {
@@ -161,7 +166,6 @@ export function AppSwitcher({ apps, current, fallback, label = "Your apps" }: Ap
         ref={buttonRef}
         type="button"
         className="asafarim-switcher__button"
-        aria-haspopup="true"
         aria-expanded={open}
         aria-controls={menuId}
         aria-label={`${face.name}: switch app`}

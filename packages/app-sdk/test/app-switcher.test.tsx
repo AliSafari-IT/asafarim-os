@@ -23,7 +23,8 @@ describe("AppSwitcher", () => {
     );
     expect(html).toContain('aria-label="Docs: switch app"');
     expect(html).toContain('aria-expanded="false"');
-    expect(html).toContain('aria-haspopup="true"');
+    // A disclosure of plain links, not an ARIA menu: no aria-haspopup.
+    expect(html).not.toContain("aria-haspopup");
     expect(html).toContain(">DO</span>");
     expect(html).not.toContain("app-switcher-notes");
   });
