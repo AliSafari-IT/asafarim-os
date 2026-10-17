@@ -7,6 +7,7 @@ import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ALLOWED_SPAN_ATTRIBUTES,
+  databaseNameOf,
   redactSpan,
   sqlOperation,
   traceDatabaseClient,
@@ -200,5 +201,20 @@ describe("traceDatabasePool", () => {
     pool.emit("connect", client);
     await inRequest(() => client.query("BEGIN") as Promise<unknown>);
     expect(dbSpans().map((s) => s.name)).toEqual(["BEGIN"]);
+  });
+});
+
+describe("databaseNameOf", () => {
+  it("reads only the database name from a connection URL", () => {
+    expect(databaseNameOf("postgres://core_api:pw@os-postgres:5432/core")).toBe("core");
+    expect(databaseNameOf("postgres://u:p@h/my%20db?sslmode=disable")).toBe("my db");
+    expect(databaseNameOf("postgresql://notes_app:secret@app-db:5432/app_notes")).toBe("app_notes");
+  });
+
+  it("is undefined when the URL has no database name or doesn't parse", () => {
+    expect(databaseNameOf("postgres://u:p@h:5432")).toBeUndefined();
+    expect(databaseNameOf("postgres://u:p@h:5432/")).toBeUndefined();
+    expect(databaseNameOf("not a url")).toBeUndefined();
+    expect(databaseNameOf("")).toBeUndefined();
   });
 });

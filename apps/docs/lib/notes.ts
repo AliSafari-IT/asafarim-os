@@ -5,6 +5,7 @@ import "server-only";
  * Without DATABASE_URL there are no notes: the reader still works and says so.
  */
 import { createHash } from "node:crypto";
+import { databaseNameOf, traceDatabasePool } from "@asafarim/telemetry";
 import pg from "pg";
 import { z } from "zod";
 
@@ -166,16 +167,23 @@ export function getNotes(): NotesStore | null {
     if (!url) {
       g.docsNotes = null;
     } else {
-      const pool = new pg.Pool({ connectionString: url, max: 5 });
-      // An idle connection dropped by the server is reported on the pool; unhandled, it would crash
-      // the process. The pool replaces it on the next query.
-      pool.on("error", (err) =>
-        console.warn(
-          JSON.stringify({ app: "docs", level: "warn", msg: "db.idle_connection_lost", error: err.message }),
-        ),
-      );
-      g.docsNotes = createNotesStore(pool);
+      g.docsNotes = createNotesStore(createDocsPool(url));
     }
   }
   return g.docsNotes;
+}
+
+/**
+ * The app's pool. Each query inside a traced request is a CLIENT span (P6, ADR 0001 §9): the
+ * operation, the database name and, on failure, the SQLSTATE; never the SQL text or its parameters
+ * (study notes are personal). Nothing is traced with telemetry off. Connecting is lazy.
+ */
+export function createDocsPool(url: string): pg.Pool {
+  const pool = traceDatabasePool(new pg.Pool({ connectionString: url, max: 5 }), { namespace: databaseNameOf(url) });
+  // An idle connection dropped by the server is reported on the pool; unhandled, it would crash
+  // the process. The pool replaces it on the next query.
+  pool.on("error", (err) =>
+    console.warn(JSON.stringify({ app: "docs", level: "warn", msg: "db.idle_connection_lost", error: err.message })),
+  );
+  return pool;
 }
