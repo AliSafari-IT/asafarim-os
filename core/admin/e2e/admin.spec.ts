@@ -261,6 +261,11 @@ test("the Status page shows core-api, notes and the external app as up and ready
     await expect(page.getByTestId(`problem-${id}`)).toHaveText("None");
   }
   await expect(page.getByTestId("status-summary")).toContainText("up");
+  // Alert history (ADR 0001 Addendum M follow-up): always shown; e2e sets no webhook, so it says so.
+  await expect(page.getByRole("heading", { level: 3, name: "Recent alerts" })).toBeVisible();
+  await expect(page.getByTestId("alerts-note")).toContainText("No alert webhook is set");
+  await expect(page.getByTestId("alerts-note")).toContainText("after 2 failed checks in a row");
+  await expect(page.getByTestId("alerts-empty").or(page.getByTestId("alerts"))).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/a4c-status.png` });
   await page.getByTestId(`status-${EXTERNAL}`).screenshot({ path: `${SHOTS}/a4d-status-external-app.png` });
   await page.getByTestId("status-refresh").click();

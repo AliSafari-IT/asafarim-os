@@ -136,6 +136,26 @@ export interface StatusReport {
   apps: AppStatus[];
 }
 
+/** One down or recovered transition (mirrors core-api's `AlertRecord`, src/alerts.ts). */
+export interface AlertRecord {
+  at: string;
+  kind: "down" | "recovered";
+  id: string;
+  name: string;
+  live: AppStatus["live"];
+  ready: AppStatus["ready"];
+  error?: string;
+  detail?: string;
+}
+
+export interface AlertHistory {
+  /** Whether core-api sends alerts to a webhook (never its URL). */
+  webhook: boolean;
+  downRounds: number | null;
+  /** Newest first; the last 50, kept in core-api's memory. */
+  alerts: AlertRecord[];
+}
+
 export interface RoleGrant {
   subject: string;
   granted_by: string;
@@ -180,6 +200,7 @@ export function coreApi(idToken: string) {
     apps: async () => (await call<{ apps: AdminApp[] }>(idToken, "GET", "/admin/v1/apps")).apps,
     events: async () => (await call<{ events: CatalogEntry[] }>(idToken, "GET", "/admin/v1/events")).events,
     status: () => call<StatusReport>(idToken, "GET", "/admin/v1/status"),
+    alerts: () => call<AlertHistory>(idToken, "GET", "/admin/v1/alerts"),
     roles: async (app?: string) =>
       (await call<{ roles: AdminRole[] }>(idToken, "GET", `/admin/v1/roles${app ? `?app=${enc(app)}` : ""}`)).roles,
     roleGrants: async (role: string) =>

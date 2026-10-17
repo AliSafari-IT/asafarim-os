@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppStatus } from "../lib/core-api";
-import { formatLatency, overall, problemText, summary } from "../lib/status";
+import { alertsNote, formatLatency, overall, problemText, summary } from "../lib/status";
 
 const row = (over: Partial<AppStatus> & { id: string }): AppStatus => ({
   name: over.id,
@@ -45,5 +45,17 @@ describe("the Status page helpers (P6.1)", () => {
   it("formats latency", () => {
     expect(formatLatency(null)).toBe("–");
     expect(formatLatency(42)).toBe("42 ms");
+  });
+});
+
+describe("the Recent alerts note", () => {
+  it("says what counts as down and where alerts go, never a URL", () => {
+    expect(alertsNote({ webhook: false, downRounds: 2 })).toBe(
+      "An app counts as down after 2 failed checks in a row. No alert webhook is set, so they are only shown here. core-api keeps the last 50 in memory; a restart clears them.",
+    );
+    expect(alertsNote({ webhook: true, downRounds: 1 })).toMatch(
+      /^An app counts as down after 1 failed check in a row\. Each one was also sent/,
+    );
+    expect(alertsNote({ webhook: false, downRounds: null })).toMatch(/^No alert webhook is set/);
   });
 });

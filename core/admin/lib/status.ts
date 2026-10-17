@@ -1,5 +1,5 @@
 /** Pure helpers for the Status page (P6.1; unit-tested in test/status.test.ts). */
-import type { AppStatus } from "./core-api";
+import type { AlertHistory, AppStatus } from "./core-api";
 
 /** Text for a probe, so the badge never relies on color alone. */
 export const PROBE_LABEL: Record<AppStatus["live"], string> = { up: "Up", down: "Down", unknown: "Unknown" };
@@ -46,3 +46,17 @@ export function summary(apps: AppStatus[]): { polled: number; up: number; notPol
 
 /** "120 ms", or an en dash when there's no measurement. */
 export const formatLatency = (ms: number | null): string => (ms === null ? "–" : `${ms} ms`);
+
+/** An alert history that couldn't be loaded (an older core-api, or it's down): shown as empty, never an error page. */
+export const NO_ALERTS: AlertHistory = { webhook: false, downRounds: null, alerts: [] };
+
+/** The sentence under "Recent alerts": where alerts go and what counts as down. */
+export function alertsNote(h: Pick<AlertHistory, "webhook" | "downRounds">): string {
+  const rounds = h.downRounds
+    ? `An app counts as down after ${h.downRounds} failed check${h.downRounds === 1 ? "" : "s"} in a row. `
+    : "";
+  const where = h.webhook
+    ? "Each one was also sent to the alert webhook."
+    : "No alert webhook is set, so they are only shown here.";
+  return `${rounds}${where} core-api keeps the last 50 in memory; a restart clears them.`;
+}

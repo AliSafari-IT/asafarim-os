@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createStatusAlerter, parseAlertConfig, plain, splitMessages } from "../src/alerts.ts";
+import { createStatusAlerter, parseAlertConfig, parseDownRounds, plain, splitMessages } from "../src/alerts.ts";
 import type { AppStatus, StatusReport } from "../src/health.ts";
 
 const HOOK = "https://discord.example/api/webhooks/123/secret-token";
@@ -249,6 +249,113 @@ describe("status alerts", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("alert history", () => {
+  const clock = () => {
+    let t = Date.parse("2026-10-17T10:00:00.000Z");
+    return () => new Date((t += 30_000));
+  };
+
+  it("keeps every transition without a webhook, and sends nothing", async () => {
+    const fetchFn = vi.fn();
+    const alerter = createStatusAlerter({ downRounds: 2, now: clock(), fetch: fetchFn as unknown as typeof fetch });
+    expect(alerter.history()).toEqual({ webhook: false, downRounds: 2, alerts: [] });
+    alerter.observe(report(entry("core-api"), down("notes")));
+    expect(alerter.history().alerts).toEqual([]); // one bad round is not down yet
+    alerter.observe(report(entry("core-api"), down("notes")));
+    alerter.observe(report(entry("core-api"), entry("notes")));
+    await alerter.settled();
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(alerter.history().alerts).toEqual([
+      {
+        at: "2026-10-17T10:01:00.000Z",
+        kind: "recovered",
+        id: "notes",
+        name: "NOTES",
+        live: "up",
+        ready: "up",
+      },
+      {
+        at: "2026-10-17T10:00:30.000Z",
+        kind: "down",
+        id: "notes",
+        name: "NOTES",
+        live: "up",
+        ready: "down",
+        error: "bad_status",
+        detail: "503",
+      },
+    ]);
+  });
+
+  it("records the same transitions the webhook sends, and says the webhook is on without its URL", async () => {
+    const { alerter, calls } = setup({ downRounds: 1 });
+    alerter.observe(report(entry("core-api"), down("notes"), down("docs")));
+    await alerter.settled();
+    expect(calls).toHaveLength(1);
+    const h = alerter.history();
+    expect(h.webhook).toBe(true);
+    expect(h.alerts.map((a) => [a.kind, a.id])).toEqual([
+      ["down", "notes"],
+      ["down", "docs"],
+    ]);
+    expect(JSON.stringify(h)).not.toContain("secret-token");
+    expect(JSON.stringify(h)).not.toContain("discord");
+  });
+
+  it("keeps only the newest historySize transitions, newest first", () => {
+    const alerter = createStatusAlerter({ downRounds: 1, historySize: 3, now: clock() });
+    for (let i = 0; i < 4; i++) {
+      alerter.observe(report(down("notes")));
+      alerter.observe(report(entry("notes")));
+    }
+    const alerts = alerter.history().alerts;
+    expect(alerts).toHaveLength(3);
+    expect(alerts.map((a) => a.kind)).toEqual(["recovered", "down", "recovered"]);
+    expect(alerts[0]!.at > alerts[1]!.at).toBe(true);
+  });
+
+  it("a fractional or negative historySize never makes observe throw", () => {
+    for (const historySize of [1.5, -3]) {
+      const alerter = createStatusAlerter({ downRounds: 1, historySize });
+      expect(() => alerter.observe(report(down("notes")))).not.toThrow();
+      expect(alerter.history().alerts.length).toBe(historySize > 0 ? 1 : 0);
+    }
+  });
+
+  it("bounds an app's own text and strips control characters", () => {
+    const alerter = createStatusAlerter({ downRounds: 1 });
+    alerter.observe(report(down("notes", { name: `Bad\u0007${"n".repeat(200)}`, detail: "d".repeat(200) })));
+    const [a] = alerter.history().alerts;
+    expect(a!.name).not.toMatch(/\p{Cc}/u);
+    expect(a!.name.length).toBeLessThanOrEqual(80);
+    expect(a!.detail!.length).toBeLessThanOrEqual(64);
+  });
+
+  it("returns a copy: changing it doesn't change the history", () => {
+    const alerter = createStatusAlerter({ downRounds: 1 });
+    alerter.observe(report(down("notes")));
+    alerter.history().alerts[0]!.id = "changed";
+    alerter.history().alerts.pop();
+    expect(alerter.history().alerts.map((a) => a.id)).toEqual(["notes"]);
+  });
+
+  it("forgets nothing when an app is deactivated: the history is a log, not the board", () => {
+    const alerter = createStatusAlerter({ downRounds: 1 });
+    alerter.observe(report(down("notes")));
+    alerter.observe(report(entry("notes", { state: "inactive", polled: false, live: "unknown", ready: "unknown" })));
+    expect(alerter.history().alerts.map((a) => [a.kind, a.id])).toEqual([["down", "notes"]]);
+  });
+});
+
+describe("parseDownRounds", () => {
+  it("defaults to 2 and takes 1 to 20 without a webhook", () => {
+    expect(parseDownRounds({})).toBe(2);
+    expect(parseDownRounds({ CORE_API_ALERT_DOWN_ROUNDS: "" })).toBe(2);
+    expect(parseDownRounds({ CORE_API_ALERT_DOWN_ROUNDS: "4" })).toBe(4);
+    expect(() => parseDownRounds({ CORE_API_ALERT_DOWN_ROUNDS: "0" })).toThrow(/1 to 20/);
   });
 });
 
