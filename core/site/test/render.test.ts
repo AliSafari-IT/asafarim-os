@@ -42,7 +42,7 @@ describe("renderPage", () => {
   });
 
   it("has one script of its own and no inline scripts, inline styles or third-party assets (the CSP allows none)", () => {
-    expect(html.match(/<script\b[^>]*>/g)).toEqual(['<script src="session.js" defer>']);
+    expect(html.match(/<script\b[^>]*>/gi)).toEqual(['<script src="session.js" defer>']);
     expect(html).not.toMatch(/<script[^>]*>[^<]|\sstyle=|<style|\son[a-z]+=/i);
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
       expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|((docs|id)\.)?asafarim\.site)\//);

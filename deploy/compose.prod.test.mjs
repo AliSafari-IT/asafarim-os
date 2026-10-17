@@ -317,7 +317,8 @@ test("the site-only file serves asafarim.site, its www redirect and docs.asafari
   const sites = [...activeSiteOnly.matchAll(/^([a-z0-9.*-]+)(?:, [a-z0-9.*-]+)*\s*\{/gm)].map((m) => m[1]);
   assert.deepEqual(sites.sort(), ["asafarim.site", "docs.asafarim.site", "www.asafarim.site"]);
   // No block or upstream for identity (the landing page's CSP may still name it as connect-src).
-  assert.doesNotMatch(activeSiteOnly, /^\s*id\.asafarim\.site\b|os-identity/m);
+  assert.doesNotMatch(activeSiteOnly, /^\s*id\.asafarim\.site\b/m);
+  assert.doesNotMatch(activeSiteOnly, /os-identity/);
 });
 
 test("the site-only file's landing and docs blocks are identical to the full site file's (#97, #83)", () => {
