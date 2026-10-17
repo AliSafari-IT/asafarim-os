@@ -124,7 +124,7 @@ jobs:
         run: pnpm --silent platform manifest review --markdown > "$RUNNER_TEMP/review.md" || echo "::warning::manifest review exited $?"
 
       - name: Post or update the PR comment
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           REVIEW_FILE: ${{ runner.temp }}/review.md
         with:
