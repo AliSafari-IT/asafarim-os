@@ -74,8 +74,22 @@ describe("platform app remove|purge|retention: arguments", () => {
       yes: false,
     });
     expect(parseRetentionArgs(["purge", "notes"])).toEqual({ action: "purge", id: "notes", force: false, yes: false });
-    expect(parseRetentionArgs(["retention"])).toEqual({ action: "retention", eligible: false });
-    expect(parseRetentionArgs(["retention", "--eligible"])).toEqual({ action: "retention", eligible: true });
+    expect(parseRetentionArgs(["retention"])).toEqual({ action: "retention", eligible: false, verify: false });
+    expect(parseRetentionArgs(["retention", "--eligible"])).toEqual({
+      action: "retention",
+      eligible: true,
+      verify: false,
+    });
+    expect(parseRetentionArgs(["retention", "--verify"])).toEqual({
+      action: "retention",
+      eligible: false,
+      verify: true,
+    });
+    expect(parseRetentionArgs(["retention", "--verify", "--eligible"])).toEqual({
+      action: "retention",
+      eligible: true,
+      verify: true,
+    });
   });
 
   it("refuses malformed input (the usage is printed)", () => {
@@ -90,6 +104,8 @@ describe("platform app remove|purge|retention: arguments", () => {
       ["purge", "notes", "--force", "--force"],
       ["retention", "--all"],
       ["retention", "--eligible", "x"],
+      ["retention", "--verify", "--verify"],
+      ["retention", "--eligible", "--eligible"],
       ["delete", "notes"],
     ]) {
       expect(parseRetentionArgs(bad), bad.join(" ")).toBeNull();
@@ -465,5 +481,90 @@ describe("platform app retention", () => {
   it("surfaces core-api's error", async () => {
     const r = await retentionCommand(["retention"], workspace(), ENV, reply(401, { error: "unauthorized" }), pipe());
     expect(r).toEqual({ ok: false, lines: ["core-api didn't accept the admin token (CORE_API_ADMIN_TOKEN)."] });
+  });
+
+  const checked = (notes: string, wiki: string, wikiPurged = false) => [
+    { ...entries[0]!, backupCheck: notes },
+    { ...entries[1]!, backupCheck: wiki, ...(wikiPurged ? { purgedAt: "2026-11-16T10:00:00.000Z" } : {}) },
+    { ...entries[2]!, backupCheck: null },
+  ];
+
+  it("--verify asks core-api to check the backups, adds a Check column, and exits 0 when all are ok", async () => {
+    const fetchImpl = reply(200, { apps: checked("ok", "ok") });
+    const r = await retentionCommand(["retention", "--verify"], workspace(), ENV, fetchImpl, pipe());
+    expect(call(fetchImpl)[0]).toBe("http://localhost:4020/admin/v1/retention?verify=true");
+    expect(r?.ok).toBe(true);
+    expect(r!.lines).toEqual([
+      "App    Removed               Backup (size, sha256)  Check  Purge after           Status",
+      "notes  2026-09-01 08:00 UTC  5.3 MiB abcdef012345…  ok     2026-10-01 08:00 UTC  eligible",
+      "wiki   2026-10-16 09:19 UTC  900 B ffffffffffff…    ok     2026-11-15 09:19 UTC  kept",
+      "plain  2026-10-10 00:00 UTC  –                      –      –                     no database",
+      "",
+      "Backups:",
+      `  notes  ${BACKUP.path}`,
+      "  wiki  /var/backups/wiki.dump",
+      "",
+      "All 2 backup(s) match their recorded sha256.",
+      "",
+      "Purge one with `platform app purge <id>`.",
+    ]);
+  });
+
+  it("--verify exits 1 and names each backup that is missing, changed or unreadable", async () => {
+    const r = await retentionCommand(
+      ["retention", "--verify"],
+      workspace(),
+      ENV,
+      reply(200, { apps: checked("missing", "mismatch", true) }),
+      pipe(),
+    );
+    expect(r?.ok).toBe(false);
+    expect(r!.lines).toContain("2 of 2 backup(s) failed the check:");
+    expect(r!.lines).toContain(`  notes: ${BACKUP.path} isn't there any more`);
+    expect(r!.lines).toContain(
+      "  wiki: /var/backups/wiki.dump doesn't match its recorded sha256 (it changed after Remove) — it is the only copy of its data",
+    );
+    const unreadable = await retentionCommand(
+      ["retention", "--verify"],
+      workspace(),
+      ENV,
+      reply(200, { apps: checked("ok", "unreadable") }),
+      pipe(),
+    );
+    expect(unreadable?.ok).toBe(false);
+    expect(unreadable!.lines).toContain("1 of 2 backup(s) failed the check:");
+    expect(
+      unreadable!.lines.some((l) => l.startsWith("  wiki: /var/backups/wiki.dump is there but couldn't be read")),
+    ).toBe(true);
+  });
+
+  it("--verify --eligible sends both; an older core-api that didn't check fails rather than passing", async () => {
+    const fetchImpl = reply(200, { apps: entries });
+    const r = await retentionCommand(["retention", "--eligible", "--verify"], workspace(), ENV, fetchImpl, pipe());
+    expect(call(fetchImpl)[0]).toBe("http://localhost:4020/admin/v1/retention?eligible=true&verify=true");
+    expect(r?.ok).toBe(false);
+    expect(r!.lines[1]).toContain("not checked");
+    expect(r!.lines).toContain("core-api didn't check the backups (an older core-api without ?verify=true?).");
+  });
+
+  it("--verify with no backups to check passes and says so; without --verify a bad backup doesn't change the exit", async () => {
+    const none = await retentionCommand(
+      ["retention", "--verify"],
+      workspace(),
+      ENV,
+      reply(200, { apps: [{ ...entries[2]!, backupCheck: null }] }),
+      pipe(),
+    );
+    expect(none?.ok).toBe(true);
+    expect(none!.lines.at(-1)).toBe("No backups to check.");
+    const plain = await retentionCommand(
+      ["retention"],
+      workspace(),
+      ENV,
+      reply(200, { apps: checked("missing", "ok") }),
+      pipe(),
+    );
+    expect(plain?.ok).toBe(true);
+    expect(plain!.lines[0]).not.toContain("Check");
   });
 });

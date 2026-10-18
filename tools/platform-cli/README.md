@@ -25,8 +25,9 @@ pnpm platform app remove <id> [--confirm <id>] [--yes]
                                         # back up the app's database, then remove the app
 pnpm platform app purge <id> [--force] [--confirm <id>] [--yes]
                                         # drop a removed app's database and role (after its purge date)
-pnpm platform app retention [--eligible]
+pnpm platform app retention [--eligible] [--verify]
                                         # removed apps with their backup and purge date
+                                        # (--verify: check each backup's sha256 now; exit 1 unless all ok)
 pnpm platform status [--alerts] [--json]
                                         # core-api's status board (and alert history); read-only
 ```
@@ -86,6 +87,11 @@ before any request (exit 1). This is the same check as the Admin console's typed
   its purge date and its status (`eligible`, `kept`, `no database`, `no backup (kept)` or `purged …`), then the
   backup paths. `--eligible` lists only the ones a purge would accept now. Nothing purges on its own: core-api has
   no scheduler.
+- `app retention --verify` (with or without `--eligible`) asks core-api to check each recorded backup file against
+  its sha256 now (`GET /admin/v1/retention?verify=true`), purged apps included, since after a purge the backup is
+  the only copy of the data. A Check column shows `ok`, `missing`, `mismatch` or `unreadable` (`–` without a
+  backup), and a line names each backup that failed. It exits 1 unless every recorded backup is `ok`, so a cron job
+  or a script can alert on it. Read-only; core-api hashes one file at a time, so a large backup takes a moment.
 
 ## Status board and alerts (`status`)
 

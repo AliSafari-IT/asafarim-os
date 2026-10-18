@@ -90,6 +90,7 @@ interface Retention {
   purgeAfter: string | null;
   purgedAt: string | null;
   eligible: boolean;
+  backupCheck?: "ok" | "missing" | "mismatch" | "unreadable" | null;
 }
 
 describe.skipIf(!ADMIN_URL || !HAS_PG_DUMP)("remove backs up, purge after the retention window (integration)", () => {
@@ -104,6 +105,7 @@ describe.skipIf(!ADMIN_URL || !HAS_PG_DUMP)("remove backs up, purge after the re
   const now = () => clock;
 
   async function coreApi(over: { pgDump?: string; bus?: EventBus } = {}) {
+    const backups = createPgDumpBackups({ dir: backupDir, connection: ADMIN_URL!, pgDump: over.pgDump ?? PG_DUMP });
     const registry = createRegistry({
       pool,
       now,
@@ -114,10 +116,12 @@ describe.skipIf(!ADMIN_URL || !HAS_PG_DUMP)("remove backs up, purge after the re
         return c;
       },
       appDatabaseHost: { host: new URL(ADMIN_URL!).hostname, port: Number(new URL(ADMIN_URL!).port || 5432) },
-      backups: createPgDumpBackups({ dir: backupDir, connection: ADMIN_URL!, pgDump: over.pgDump ?? PG_DUMP }),
+      backups,
       retentionDays: 30,
     });
-    const server = createServer(createHandler({ registry, pool, adminToken: ADMIN_TOKEN, now, log: () => {} }));
+    const server = createServer(
+      createHandler({ registry, pool, adminToken: ADMIN_TOKEN, now, log: () => {}, backups }),
+    );
     servers.push(server);
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -320,14 +324,19 @@ describe.skipIf(!ADMIN_URL || !HAS_PG_DUMP)("remove backs up, purge after the re
   it("purge is refused when the backup file is gone or changed, and for an app without a recorded backup", async () => {
     clock = new Date("2026-11-15T12:00:00.000Z"); // due
     const [{ path: file }] = (await pool.query("SELECT path FROM app_backups WHERE app_id = $1", [KEEP])).rows;
+    const verdict = async () => (await retention("?verify=true")).find((r) => r.appId === KEEP)?.backupCheck;
+    expect(await verdict()).toBe("ok");
     renameSync(file, `${file}.away`);
+    expect(await verdict()).toBe("missing");
     expect(await refusal(await purge(KEEP))).toEqual([409, "purge_refused", "backup_missing"]);
     renameSync(`${file}.away`, file);
     const original = readFileSync(file);
     appendFileSync(file, "tampered");
+    expect(await verdict()).toBe("mismatch");
     expect(await refusal(await purge(KEEP))).toEqual([409, "purge_refused", "backup_mismatch"]);
     rmSync(file);
     appendFileSync(file, original);
+    expect(await verdict()).toBe("ok");
 
     // An app removed before backups existed (#69): the database stays, nothing to check it against.
     await install(OLD);
@@ -368,6 +377,8 @@ describe.skipIf(!ADMIN_URL || !HAS_PG_DUMP)("remove backs up, purge after the re
       purgedAt: "2026-11-15T12:00:00.000Z",
       eligible: false,
     });
+    // After the purge the backup is the only copy: verify still checks it.
+    expect((await retention("?verify=true")).find((r) => r.appId === KEEP)?.backupCheck).toBe("ok");
     expect(await refusal(await purge(KEEP))).toEqual([409, "invalid_state", undefined]);
   });
 

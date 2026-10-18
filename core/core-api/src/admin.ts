@@ -4,6 +4,7 @@
  * (install, activate, grant…) stay in the registry, where each one is audited.
  */
 import type pg from "pg";
+import type { BackupCheck } from "./backup.ts";
 import { CORE_ADMIN_ROLE } from "./admin-auth.ts";
 import { WAITING_FOR_PUBLISHER, publishedTypes, waitingForPublisher, type EventsManifest } from "./event-plumbing.ts";
 
@@ -44,6 +45,42 @@ export interface Retention {
 export interface RetentionEntry extends Retention {
   appId: string;
   name: string;
+}
+
+/**
+ * `GET /admin/v1/retention?verify=true`: the backup file checked now against its recorded sha256.
+ * `unreadable`: it is there but couldn't be read (e.g. permissions); null: no backup is recorded.
+ */
+export type BackupVerdict = BackupCheck | "unreadable";
+
+/**
+ * Check each entry's backup file against its recorded sha256, one file at a time (a dump can be
+ * large; hashing several at once would only compete for the same disk). Purged apps are checked too:
+ * their backup is the only copy of the data left. Read-only: nothing is moved, deleted or recorded.
+ * A failed read never fails the list; it is `unreadable`, logged with the error code only.
+ */
+export async function verifyRetention<T extends { appId: string; backup: { path: string; sha256: string } | null }>(
+  entries: T[],
+  check: (file: string, sha256: string) => Promise<BackupCheck>,
+  log: (line: object) => void = () => {},
+): Promise<(T & { backupCheck: BackupVerdict | null })[]> {
+  const out: (T & { backupCheck: BackupVerdict | null })[] = [];
+  for (const e of entries) {
+    if (!e.backup) {
+      out.push({ ...e, backupCheck: null });
+      continue;
+    }
+    let backupCheck: BackupVerdict;
+    try {
+      backupCheck = await check(e.backup.path, e.backup.sha256);
+    } catch (err) {
+      const code = (err as { code?: unknown }).code;
+      log({ msg: "core-api.backup_check_failed", app: e.appId, error: typeof code === "string" ? code : "error" });
+      backupCheck = "unreadable";
+    }
+    out.push({ ...e, backupCheck });
+  }
+  return out;
 }
 
 export interface AdminRole {
