@@ -23,7 +23,8 @@ async function cli(method: string, urlPath: string) {
 async function signIn(page: Page, url: string, displayName: string) {
   await page.goto(url);
   await page.getByRole("button", { name: "Sign in" }).click();
-  const chooser = page.getByRole("button", { name: new RegExp(displayName) });
+  // Anchored, so it matches the user chooser only, never the account menu ("Your account menu: <name>").
+  const chooser = page.getByRole("button", { name: new RegExp(`^${displayName}`) });
   const signedIn = page.getByTestId("who");
   await expect(chooser.or(signedIn)).toBeVisible({ timeout: 20_000 });
   if (await chooser.isVisible()) await chooser.click();
