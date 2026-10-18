@@ -94,6 +94,7 @@ export function createPgAlertStore(pool: Pick<pg.Pool, "query">, opts: { retenti
          SELECT $1::timestamptz, 'cleared', id, id, 'unknown', 'unknown' FROM unnest($2::text[]) AS id`,
         [at, ids],
       );
+      await prune();
     },
   };
 }

@@ -792,12 +792,24 @@ describe("an alerted app that stops being polled is cleared in the store", () =>
     expect(cleared.map((c) => c.ids)).toEqual([["gone"]]);
   });
 
-  it("a round that couldn't read the app list clears nothing", async () => {
-    const { alerter, cleared } = clearing();
-    alerter.observe(report(entry("core-api"), down("notes")));
-    alerter.observe(report(entry("core-api"), down("notes")), { appsChecked: false }); // notes: kept result
+  it("a round that couldn't read the app list clears and forgets nothing, even an app missing from it", async () => {
+    const { alerter, calls, cleared, store } = clearing();
+    store.open = async () => [{ id: "docs", at: new Date(Date.now() - 60_000).toISOString() }];
+    await alerter.load();
+    alerter.observe(report(entry("core-api"), down("notes"), down("docs"))); // docs: restored, no second down
+    // No kept results yet: the report holds only core-api's own entry.
+    alerter.observe(report(entry("core-api")), { appsChecked: false });
     await alerter.settled();
     expect(cleared).toEqual([]);
+    expect(calls).toHaveLength(1); // the "down" for notes
+    // Both are still alerted: a healthy round sends their "recovered", and no second "down".
+    alerter.observe(report(entry("core-api"), entry("notes"), entry("docs")));
+    await alerter.settled();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.split("\n").slice(1)).toEqual([
+      "🟢 Recovered: NOTES (notes): live up, ready up",
+      "🟢 Recovered: DOCS (docs): live up, ready up",
+    ]);
   });
 
   it("a failed clear is logged by class only and never breaks the round", async () => {

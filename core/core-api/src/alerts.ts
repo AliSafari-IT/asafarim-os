@@ -307,7 +307,9 @@ export function createStatusAlerter(deps: AlerterDeps) {
       // tell the store, so a restart doesn't restore it as still down.
       const cleared: string[] = [];
       for (const [id, t] of [...tracked]) {
-        if (seen.has(id)) continue;
+        // A round that couldn't read the app list says nothing about the apps missing from it (a state
+        // restored at start has no kept result yet): only core-api's own entry can be gone.
+        if (seen.has(id) || (!round.appsChecked && id !== SELF_ID)) continue;
         if (t.alerted) cleared.push(id);
         tracked.delete(id);
       }

@@ -200,6 +200,14 @@ describe.skipIf(!ADMIN_URL)("the alert history in Postgres (integration)", () =>
       "SELECT kind, app_id, live, ready FROM alert_events WHERE kind = 'cleared'",
     );
     expect(rows).toEqual([{ kind: "cleared", app_id: "notes", live: "unknown", ready: "unknown" }]);
+
+    await pool.query(
+      `INSERT INTO alert_events (at, kind, app_id, name, live, ready)
+       VALUES (now() - interval '40 days', 'down', 'old', 'OLD', 'up', 'down')`,
+    );
+    await createPgAlertStore(pool, { retentionDays: 30 }).clear!(["docs"], new Date().toISOString());
+    const left = await pool.query<{ app_id: string }>("SELECT app_id FROM alert_events WHERE app_id = 'old'");
+    expect(left.rows).toEqual([]); // a clear prunes too
   });
 
   it("an app deactivated while down gets no recovered after a restart once it is active and healthy", async () => {
