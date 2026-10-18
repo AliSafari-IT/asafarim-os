@@ -67,7 +67,8 @@ function table(header: string[], rows: string[][]): string[] {
 }
 
 const count = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? String(n) : "?");
-const when = (iso: unknown) => (typeof iso === "string" ? formatDate(iso) : "–");
+/** A date for the terminal: formatDate passes a string it can't parse through, so it is cleaned too. */
+const when = (iso: unknown) => (typeof iso === "string" ? clean(formatDate(iso)) : "–");
 
 function stateOf(a: ListedApp): string {
   const state = clean(a.state);
@@ -76,7 +77,8 @@ function stateOf(a: ListedApp): string {
 
 /** What a removed app's row adds below the table: when it was removed and when it may be purged. */
 function retentionNote(a: ListedApp): string | null {
-  if (a.state !== "removed" || !isObject(a.retention)) return null;
+  if (a.state !== "removed") return null;
+  if (!isObject(a.retention)) return `${clean(a.id)}: removed, but core-api's reply has no retention details`;
   const r = a.retention;
   const removed = `removed ${when(r.removedAt)}`;
   if (r.purgedAt) return `${clean(a.id)}: ${removed}, database purged ${when(r.purgedAt)}`;

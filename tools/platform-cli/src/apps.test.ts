@@ -113,6 +113,23 @@ describe("platform app list: the list", () => {
     expect(lines).toContain("  tiny: removed 2026-10-15 10:00 UTC, no database kept");
   });
 
+  it("still notes a removed app whose reply has no retention details", () => {
+    const lines = formatAppList([{ ...OLD, retention: null }] as never);
+    expect(lines).toContain("  old-app: removed, but core-api's reply has no retention details");
+  });
+
+  it("replaces control characters in a date core-api sends that isn't one", async () => {
+    const odd = { ...NOTES, installed_at: "soon\u001b[2J", waitingForPublisher: [] };
+    const removed = { ...OLD, retention: { ...OLD.retention, removedAt: "x\u0007y" } };
+    const r = await appListCommand([], workspace(), ENV, reply(200, { apps: [odd, removed] }));
+    expect(r?.ok).toBe(true);
+    // eslint-disable-next-line no-control-regex
+    for (const line of r!.lines) expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    const text = r!.lines.join("\n");
+    expect(text).toContain("soon?[2J");
+    expect(text).toContain("old-app: removed x?y");
+  });
+
   it("has no notes when nothing waits and nothing is removed", () => {
     const lines = formatAppList([CORE] as never);
     expect(lines).toHaveLength(2);
