@@ -15,6 +15,17 @@ describe("the checked-in progress file", () => {
     expect(progress.roadmap.map((r) => r.id)).toEqual(["P4", "P6", "P7"]);
   });
 
+  it("lists each merged pull request under one milestone only, and in date order", () => {
+    const progress = parseProgress(real());
+    const prs = progress.shipped.flatMap((m) => m.prs);
+    expect(new Set(prs).size).toBe(prs.length);
+    const dates = progress.shipped.map((m) => m.date);
+    // The first four keep the order they were first listed in (P2 was finished after P3).
+    const later = dates.slice(4);
+    expect(later).toEqual([...later].sort());
+    expect(dates.every((d) => d <= progress.updated)).toBe(true);
+  });
+
   it("says nothing about migrating asafarim.com apps (ADR 0001 Amendment B)", () => {
     expect(readFileSync(file, "utf8")).not.toMatch(/migrat/i);
   });
