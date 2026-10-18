@@ -6,8 +6,11 @@
  *                          back up the app's database and remove the app (POST /admin/v1/apps/<id>/remove)
  *   platform app purge <id> [--force] [--confirm <id>] [--yes]
  *                          drop a removed app's database and role (POST /admin/v1/apps/<id>/purge)
- *   platform app retention [--eligible]
- *                          removed apps, their backup and purge date (GET /admin/v1/retention)
+ *   platform app retention [--eligible] [--verify]
+ *                          removed apps, their backup and purge date (GET /admin/v1/retention);
+ *                          --verify: core-api checks each listed backup file against its sha256 now, and
+ *                          the command exits 1 unless every listed backup is ok (with --eligible, only the
+ *                          eligible entries are listed, so only those are checked)
  *
  * The confirmation rule, the same for remove and purge: the app id is always stated twice, as the
  * argument and again, either typed at the prompt or given as `--confirm <id>`. `--confirm` replaces
@@ -57,15 +60,20 @@ const APP_ID = /^[a-z][a-z0-9-]{1,31}$/;
 export type RetentionArgs =
   | { action: "remove"; id: string; confirm?: string; yes: boolean }
   | { action: "purge"; id: string; force: boolean; confirm?: string; yes: boolean }
-  | { action: "retention"; eligible: boolean };
+  | { action: "retention"; eligible: boolean; verify: boolean };
 
 /** `remove|purge|retention …`; null = not one of these (the usage is printed). */
 export function parseRetentionArgs(args: string[]): RetentionArgs | null {
   const [action, ...rest] = args;
   if (action === "retention") {
-    if (rest.length === 0) return { action, eligible: false };
-    if (rest.length === 1 && rest[0] === "--eligible") return { action, eligible: true };
-    return null;
+    let eligible = false;
+    let verify = false;
+    for (const f of rest) {
+      if (f === "--eligible" && !eligible) eligible = true;
+      else if (f === "--verify" && !verify) verify = true;
+      else return null;
+    }
+    return { action, eligible, verify };
   }
   if (action !== "remove" && action !== "purge") return null;
   const [id, ...flags] = rest;
@@ -296,6 +304,22 @@ interface RetentionEntry {
   purgeAfter: string | null;
   purgedAt: string | null;
   eligible: boolean;
+  /** Only with --verify (`?verify=true`); null: no backup recorded. */
+  backupCheck?: BackupVerdict | null;
+}
+
+type BackupVerdict = "ok" | "missing" | "mismatch" | "unreadable";
+
+/** What --verify prints for each verdict; anything else core-api might answer is shown as is. */
+function checkOf(e: RetentionEntry): string {
+  if (e.backupCheck === undefined) return "not checked";
+  if (e.backupCheck === null) return "–";
+  return String(e.backupCheck);
+}
+
+/** The entries whose recorded backup isn't ok now (an entry without a backup has nothing to check). */
+export function failedChecks(entries: RetentionEntry[]): RetentionEntry[] {
+  return entries.filter((e) => e.backup && e.backupCheck !== "ok");
 }
 
 function statusOf(e: RetentionEntry): string {
@@ -306,16 +330,17 @@ function statusOf(e: RetentionEntry): string {
 }
 
 /** A table in the drift report's style (padded columns, a header row), then the backup paths. */
-export function formatRetention(entries: RetentionEntry[], eligibleOnly: boolean): string[] {
+export function formatRetention(entries: RetentionEntry[], eligibleOnly: boolean, verify = false): string[] {
   if (entries.length === 0) return [eligibleOnly ? "No removed app can be purged now." : "No removed apps."];
   const rows = entries.map((e) => [
     e.appId,
     formatDate(e.removedAt),
     e.backup ? `${formatBytes(e.backup.sizeBytes)} ${shortSha(e.backup.sha256)}` : "–",
+    ...(verify ? [checkOf(e)] : []),
     formatDate(e.purgeAfter),
     statusOf(e),
   ]);
-  const header = ["App", "Removed", "Backup (size, sha256)", "Purge after", "Status"];
+  const header = ["App", "Removed", "Backup (size, sha256)", ...(verify ? ["Check"] : []), "Purge after", "Status"];
   const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i]!.length)));
   const line = (cells: string[]) =>
     cells
@@ -325,8 +350,34 @@ export function formatRetention(entries: RetentionEntry[], eligibleOnly: boolean
   const lines = [line(header), ...rows.map(line)];
   const withBackup = entries.filter((e) => e.backup);
   if (withBackup.length > 0) lines.push("", "Backups:", ...withBackup.map((e) => `  ${e.appId}  ${e.backup!.path}`));
+  if (verify) lines.push("", ...verifyLines(entries));
   if (entries.some((e) => e.eligible && !e.purgedAt)) lines.push("", "Purge one with `platform app purge <id>`.");
   return lines;
+}
+
+/** The --verify verdict: one line when all is well, else one line per backup that isn't ok. */
+function verifyLines(entries: RetentionEntry[]): string[] {
+  const checked = entries.filter((e) => e.backup);
+  if (checked.length === 0) return ["No backups to check."];
+  if (checked.some((e) => e.backupCheck === undefined)) {
+    return ["core-api didn't check the backups (an older core-api without ?verify=true?)."];
+  }
+  const failed = failedChecks(entries);
+  if (failed.length === 0) return [`All ${checked.length} backup(s) match their recorded sha256.`];
+  const why: Record<string, string> = {
+    missing: "isn't there any more",
+    mismatch: "doesn't match its recorded sha256 (it changed after Remove)",
+    unreadable: "is there but couldn't be read (see core-api's log: core-api.backup_check_failed)",
+  };
+  return [
+    `${failed.length} of ${checked.length} backup(s) failed the check:`,
+    ...failed.map(
+      (e) =>
+        `  ${e.appId}: ${e.backup!.path} ${why[String(e.backupCheck)] ?? `(${String(e.backupCheck)})`}${
+          e.purgedAt ? " — it is the only copy of its data" : ""
+        }`,
+    ),
+  ];
 }
 
 export async function retentionCommand(
@@ -343,10 +394,12 @@ export async function retentionCommand(
   if ("error" in target) return { ok: false, lines: [target.error] };
 
   if (p.action === "retention") {
-    const r = await request(target, "GET", `/admin/v1/retention${p.eligible ? "?eligible=true" : ""}`, fetchImpl);
+    const query = [p.eligible ? "eligible=true" : "", p.verify ? "verify=true" : ""].filter(Boolean).join("&");
+    const r = await request(target, "GET", `/admin/v1/retention${query ? `?${query}` : ""}`, fetchImpl);
     if (!r.ok) return { ok: false, lines: commonRefusal(r, "", "").filter(Boolean) };
     const apps = Array.isArray(r.out.apps) ? (r.out.apps as RetentionEntry[]) : [];
-    return { ok: true, lines: formatRetention(apps, p.eligible) };
+    const lines = formatRetention(apps, p.eligible, p.verify);
+    return { ok: !p.verify || failedChecks(apps).length === 0, lines };
   }
 
   if (p.action === "remove") {

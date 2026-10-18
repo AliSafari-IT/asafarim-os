@@ -29,7 +29,9 @@
  *   GET  /admin/v1/status                        each app's live/ready, as last polled (P6.1, health.ts)
  *   GET  /admin/v1/alerts                        the last 50 down/recovered transitions, newest first (alerts.ts,
  *                                                kept across restarts in alert_events, alert-store.ts)
- *   GET  /admin/v1/retention[?eligible=true]     removed apps: their backup, purge date, whether purge is due
+ *   GET  /admin/v1/retention[?eligible=true][&verify=true]
+ *                                                removed apps: their backup, purge date, whether purge is due;
+ *                                                verify: each backup file checked against its sha256 now
  *   GET  /registry/v1/apps/:id/launcher/:sub     the apps a person can open (the app, signed)
  *   GET  /admin/v1/launcher                      the apps the signed-in admin can open (Admin's app switcher;
  *                                                the CLI token, which is no person, gets an empty list)
@@ -56,8 +58,8 @@ import {
   traceHttpHandler,
   type Telemetry,
 } from "@asafarim/telemetry";
-import { createAdminQueries } from "./admin.ts";
-import { createPgDumpBackups, parseRetentionDays } from "./backup.ts";
+import { createAdminQueries, verifyRetention } from "./admin.ts";
+import { createPgDumpBackups, parseRetentionDays, type DatabaseBackups } from "./backup.ts";
 import {
   CORE_ADMIN_ROLE,
   bearerMatches,
@@ -291,6 +293,8 @@ export function createHandler(opts: {
   health?: Pick<HealthPoller, "status">;
   /** The status alerter (alerts.ts). Without it GET /admin/v1/alerts answers an empty history. */
   alerts?: Pick<StatusAlerter, "history">;
+  /** Remove's backups (the registry's). Without them GET /admin/v1/retention?verify=true is refused. */
+  backups?: Pick<DatabaseBackups, "check">;
 }) {
   const log = opts.log ?? ((l) => process.stdout.write(`${JSON.stringify({ service: "core-api", ...l })}\n`));
   const snapshot = opts.snapshot ?? createAppSnapshot(() => loadGatewayApps(opts.pool));
@@ -431,11 +435,18 @@ export function createHandler(opts: {
           return json(res, 200, await queries.audit({ app, actor: who, limit: num("limit"), before: num("before") }));
         }
         if (req.method === "GET" && p === "/admin/v1/retention") {
-          const eligible = url.searchParams.get("eligible");
-          if (eligible !== null && eligible !== "true" && eligible !== "false") {
-            throw new ApiError("bad_request", "eligible must be true or false");
-          }
-          return json(res, 200, { apps: await queries.listRetention({ eligibleOnly: eligible === "true" }) });
+          const flag = (name: string) => {
+            const v = url.searchParams.get(name);
+            if (v !== null && v !== "true" && v !== "false")
+              throw new ApiError("bad_request", `${name} must be true or false`);
+            return v === "true";
+          };
+          const eligibleOnly = flag("eligible");
+          const verify = flag("verify");
+          if (verify && !opts.backups) throw new ApiError("bad_request", "backup verification isn't configured");
+          const apps = await queries.listRetention({ eligibleOnly });
+          if (!verify) return json(res, 200, { apps });
+          return json(res, 200, { apps: await verifyRetention(apps, opts.backups!.check, log) });
         }
         if (req.method === "GET" && p === "/admin/v1/status") {
           return json(res, 200, opts.health?.status() ?? { checkedAt: null, intervalMs: null, apps: [] });
@@ -745,7 +756,7 @@ async function main() {
   setInterval(() => void registry.pruneNonces().catch(() => undefined), 60_000).unref();
   const port = Number(process.env.PORT ?? 4020);
   const server = createServer(
-    createHandler({ registry, pool, adminToken, identity, tokenKey, snapshot, health, alerts: alerter }),
+    createHandler({ registry, pool, adminToken, identity, tokenKey, snapshot, health, alerts: alerter, backups }),
   );
   server.listen(port, () =>
     process.stdout.write(

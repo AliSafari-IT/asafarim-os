@@ -296,6 +296,7 @@ More endpoints, for the console (all read-only except where noted; every write i
 | `GET /admin/v1/audit[?app=&actor=&limit=&before=]` | the audit log, newest first (`actor` is a case-insensitive part; `next` pages)                                                                     |
 | `GET /admin/v1/events`                             | the event catalog (P4.2): publisher, schema, subscribers, dangling subscriptions (see above)                                                       |
 | `GET /admin/v1/retention[?eligible=true]`          | removed apps with their backup, `purgeAfter` and whether a purge is due now (`eligible`); see [Remove and purge](#remove-and-purge)                |
+| `GET /admin/v1/retention?verify=true`              | the same, and each backup file checked against its sha256 now (`backupCheck`); see [Remove and purge](#remove-and-purge)                           |
 
 ### The CLI token: bootstrap, rotation, switching off
 
@@ -350,6 +351,8 @@ Drops the removed app's **database and its login role** (`DROP DATABASE … WITH
 Only a removed app that has a database and hasn't been purged yet (`409 invalid_state` otherwise). The drop is idempotent (what is already gone is `absent`), so a purge that failed halfway can be run again. It sets `purged_at` and is audited as **`app.purged`** with the database and role outcome, the backup, the dates and `forced` (purged before `purge_after`). The backup file and its row are kept: they are the only copy of the data afterwards. Restore with `pg_restore --create --dbname=postgres <file>`.
 
 **Nothing purges on its own**: core-api has no scheduler. `GET /admin/v1/retention?eligible=true` lists the apps a purge would accept now, and an administrator purges them.
+
+**Checking the backups:** a purge checks its backup's sha256, but nothing checks it afterwards, when it is the only copy. `GET /admin/v1/retention?verify=true` hashes each listed backup file now, one at a time, purged apps included (with `eligible=true`, only the eligible entries are listed, so only those are checked), and adds `backupCheck` to each entry: `ok`, `missing` (no file at the path), `mismatch` (the sha256 changed), `unreadable` (there, but it couldn't be read; logged as `core-api.backup_check_failed` with the error code), or `null` when no backup is recorded. It is read-only, and without `verify` the reply is unchanged. `pnpm platform app retention --verify` prints it and exits 1 unless every listed backup is `ok`.
 
 ### Reinstall
 
