@@ -33,7 +33,7 @@ export function appIds() {
     .filter((d) => {
       if (!d.isDirectory()) return false;
       try {
-        return readFileSync(path.join(dir, d.name, "platform.app.ts"), "utf8"), true;
+        return (readFileSync(path.join(dir, d.name, "platform.app.ts"), "utf8"), true);
       } catch (err) {
         if (err.code === "ENOENT") return false;
         throw err;
