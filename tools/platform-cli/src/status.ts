@@ -143,17 +143,47 @@ export function formatAlerts(history: AlertHistory): string[] {
   return [...lines, ...table(["At", "Kind", "App", "Checks", "Error"], rows).map((l) => `  ${l}`)];
 }
 
-const asReport = (out: Record<string, unknown>): StatusReport => ({
-  checkedAt: typeof out.checkedAt === "string" ? out.checkedAt : null,
-  intervalMs: typeof out.intervalMs === "number" ? out.intervalMs : null,
-  apps: Array.isArray(out.apps) ? (out.apps as AppStatus[]) : [],
-});
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-const asHistory = (out: Record<string, unknown>): AlertHistory => ({
-  webhook: out.webhook === true,
-  downRounds: typeof out.downRounds === "number" ? out.downRounds : null,
-  alerts: Array.isArray(out.alerts) ? (out.alerts as AlertRecord[]) : [],
-});
+/**
+ * core-api's reply as a board, or null when it isn't one (not an object, or `apps` with an entry
+ * that isn't an object with a string id): the command then fails instead of formatting garbage.
+ */
+export function asReport(out: unknown): StatusReport | null {
+  if (!isObject(out) || (out.apps !== undefined && !Array.isArray(out.apps))) return null;
+  const apps: unknown[] = Array.isArray(out.apps) ? out.apps : [];
+  if (!apps.every((a) => isObject(a) && typeof a.id === "string")) return null;
+  return {
+    checkedAt: typeof out.checkedAt === "string" ? out.checkedAt : null,
+    intervalMs: typeof out.intervalMs === "number" ? out.intervalMs : null,
+    apps: apps as unknown as AppStatus[],
+  };
+}
+
+/** core-api's alert history, or null when it isn't one (the same rule as `asReport`). */
+export function asHistory(out: unknown): AlertHistory | null {
+  if (!isObject(out) || (out.alerts !== undefined && !Array.isArray(out.alerts))) return null;
+  const alerts: unknown[] = Array.isArray(out.alerts) ? out.alerts : [];
+  if (!alerts.every((a) => isObject(a) && typeof a.id === "string")) return null;
+  return {
+    webhook: out.webhook === true,
+    downRounds: typeof out.downRounds === "number" ? out.downRounds : null,
+    alerts: alerts as unknown as AlertRecord[],
+  };
+}
+
+/** A refusal on one of the two fixed routes: a 404 means core-api lacks the route, not an app. */
+function refusal(r: Parameters<typeof commonRefusal>[0], route: string): string[] {
+  if (!("unreachable" in r) && r.error === "not_found") {
+    return [`core-api has no ${route} (it may be older than the status board or alert history).`];
+  }
+  return commonRefusal(r, "", "").filter(Boolean);
+}
+
+const malformed = (route: string) => [`core-api's reply to GET ${route} isn't what this CLI expects.`];
+
+const STATUS = "/admin/v1/status";
+const ALERTS = "/admin/v1/alerts";
 
 export async function statusCommand(
   args: string[],
@@ -167,15 +197,20 @@ export async function statusCommand(
   const target = adminEndpoint(root, env);
   if ("error" in target) return { ok: false, lines: [target.error] };
 
-  const s = await request(target, "GET", "/admin/v1/status", fetchImpl);
-  if (!s.ok) return { ok: false, lines: commonRefusal(s, "", "").filter(Boolean) };
+  const s = await request(target, "GET", STATUS, fetchImpl);
+  if (!s.ok) return { ok: false, lines: refusal(s, STATUS) };
   const report = asReport(s.out);
+  if (!report) return { ok: false, lines: malformed(STATUS) };
 
   let alertsOut: Record<string, unknown> | undefined;
+  let history: AlertHistory | undefined;
   if (p.alerts) {
-    const a = await request(target, "GET", "/admin/v1/alerts", fetchImpl);
-    if (!a.ok) return { ok: false, lines: commonRefusal(a, "", "").filter(Boolean) };
+    const a = await request(target, "GET", ALERTS, fetchImpl);
+    if (!a.ok) return { ok: false, lines: refusal(a, ALERTS) };
+    const h = asHistory(a.out);
+    if (!h) return { ok: false, lines: malformed(ALERTS) };
     alertsOut = a.out;
+    history = h;
   }
 
   const ok = healthy(report);
@@ -186,6 +221,6 @@ export async function statusCommand(
   return {
     ok,
     stdout: true,
-    lines: [...formatStatus(report), ...(alertsOut ? formatAlerts(asHistory(alertsOut)) : [])],
+    lines: [...formatStatus(report), ...(history ? formatAlerts(history) : [])],
   };
 }

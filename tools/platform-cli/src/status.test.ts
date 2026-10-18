@@ -45,7 +45,7 @@ const DOCS_INACTIVE = {
 } as const;
 const NOTES_DOWN = { ...NOTES, ready: "down", error: "bad_status", detail: "503" } as const;
 
-const board = (apps: object[], checkedAt: string | null = "2026-10-18T11:00:05.000Z") => ({
+const board = (apps: unknown[], checkedAt: string | null = "2026-10-18T11:00:05.000Z") => ({
   checkedAt,
   intervalMs: 15000,
   apps,
@@ -77,7 +77,7 @@ const HISTORY = {
 };
 
 /** A fetch that answers by route; records the calls. */
-function routes(map: Record<string, [number, object]>) {
+function routes(map: Record<string, [number, unknown]>) {
   return vi.fn(async (url: string | URL | Request) => {
     const route = new URL(String(url)).pathname;
     const [status, body] = map[route] ?? [404, { error: "not_found" }];
@@ -257,5 +257,39 @@ describe("platform status: refusals (stderr, exit 1)", () => {
     expect(r?.ok).toBe(false);
     expect(r?.lines[0]).toMatch(/CORE_API_ADMIN_TOKEN is not set/);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("a core-api without the route (404) is named as such, not as a missing app", async () => {
+    const r = await statusCommand([], workspace(), ENV, routes({}));
+    expect(r).toEqual({
+      ok: false,
+      lines: ["core-api has no /admin/v1/status (it may be older than the status board or alert history)."],
+    });
+    const a = await statusCommand(["--alerts"], workspace(), ENV, routes({ "/admin/v1/status": [200, board([CORE])] }));
+    expect(a?.lines).toEqual([
+      "core-api has no /admin/v1/alerts (it may be older than the status board or alert history).",
+    ]);
+  });
+
+  it("a reply that isn't a board or a history fails instead of throwing", async () => {
+    for (const body of [board([null]), board([{ name: "no id" }]), { apps: "x" }, null, [CORE]]) {
+      const r = await statusCommand([], workspace(), ENV, routes({ "/admin/v1/status": [200, body] }));
+      expect(r).toEqual({
+        ok: false,
+        lines: ["core-api's reply to GET /admin/v1/status isn't what this CLI expects."],
+      });
+    }
+    for (const json of [[], ["--json"]]) {
+      const r = await statusCommand(
+        ["--alerts", ...json],
+        workspace(),
+        ENV,
+        routes({ "/admin/v1/status": [200, board([CORE])], "/admin/v1/alerts": [200, { ...HISTORY, alerts: [null] }] }),
+      );
+      expect(r).toEqual({
+        ok: false,
+        lines: ["core-api's reply to GET /admin/v1/alerts isn't what this CLI expects."],
+      });
+    }
   });
 });

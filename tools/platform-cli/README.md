@@ -94,7 +94,7 @@ entry (core-api itself and every installed app) with its lifecycle state, live a
 latency, when it was checked and, when a check failed, its error class and detail (an HTTP status or a core-api
 check name). Apps that aren't active are listed as `not polled`. `--alerts` adds the alert history
 (`GET /admin/v1/alerts`): the last down/recovered transitions, newest first, and whether core-api sends them to a
-webhook (never its URL). `--json` prints core-api's replies unchanged, as `{ "status": …, "alerts": … }`.
+webhook (never its URL). `--json` prints core-api's replies unchanged, as `{ "status": … }`, or `{ "status": …, "alerts": … }` with `--alerts`.
 
 It uses the same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as `app install`, and only reads. The exit code is 0
 when core-api has finished a health round and every polled entry is live and ready, otherwise 1 (also when
