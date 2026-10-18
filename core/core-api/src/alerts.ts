@@ -26,9 +26,10 @@
  * entry, and its "recovered" one still goes out once it is healthy again. Only a "down" from the last
  * `restoreMaxAgeMs` (default 24 h) is restored: the store is best effort, so a lost "recovered" row
  * could otherwise hide a later, separate outage after a restart for as long as it lasts; an older
- * outage that still holds is announced again instead. Known limit: an app that was deactivated or
- * removed while down leaves no row saying so, so if it is active and healthy again after a restart it
- * gets one "recovered".
+ * outage that still holds is announced again instead. An app that stops being polled (deactivated or
+ * removed) while alerted is cleared in the store too (`clear`), best effort, so after a restart it is
+ * not restored as alerted and gets no "recovered" for an outage whose end nobody saw. Neither the
+ * history nor the webhook says anything about it.
  */
 import { SELF_ID, type AppStatus, type RoundInfo, type StatusReport } from "./health.ts";
 
@@ -94,6 +95,8 @@ export interface AlertStore {
   recent(limit: number): Promise<AlertRecord[]>;
   /** The apps whose newest saved transition is "down" (alerted, not yet recovered), with its time. */
   open?(): Promise<{ id: string; at: string }[]>;
+  /** Ends the open "down" of apps that stopped being polled while alerted; never shown as an alert. */
+  clear?(ids: string[], at: string): Promise<void>;
 }
 
 interface Tracked {
@@ -300,11 +303,28 @@ export function createStatusAlerter(deps: AlerterDeps) {
         }
         tracked.set(a.id, t);
       }
-      // Deactivated or removed since the last round: forget it, say nothing.
-      for (const id of [...tracked.keys()]) if (!seen.has(id)) tracked.delete(id);
+      // Deactivated or removed since the last round: forget it, say nothing. If it had been alerted on,
+      // tell the store, so a restart doesn't restore it as still down.
+      const cleared: string[] = [];
+      for (const [id, t] of [...tracked]) {
+        if (seen.has(id)) continue;
+        if (t.alerted) cleared.push(id);
+        tracked.delete(id);
+      }
+      let stamp: string | undefined;
+      const stampNow = () => (stamp ??= now().toISOString());
+      if (store?.clear && cleared.length > 0) {
+        const clear = store.clear.bind(store);
+        const at = stampNow();
+        track(
+          Promise.resolve()
+            .then(() => clear(cleared, at))
+            .catch(storeFailed("health.alert_clear_failed")),
+        );
+      }
 
       if (down.length === 0 && recovered.length === 0) return;
-      const at = now().toISOString();
+      const at = stampNow();
       const changes = [...down.map((a) => record("down", a, at)), ...recovered.map((a) => record("recovered", a, at))];
       history.unshift(...changes);
       if (history.length > historySize) history.length = historySize;

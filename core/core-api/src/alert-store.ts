@@ -10,6 +10,9 @@
  *
  * `open()` gives the apps whose newest row (within the retention window) is "down", with its time, so a
  * restarted core-api knows which apps it already alerted on and sends no second "down" for them.
+ *
+ * `clear()` saves a "cleared" row (migration 006) for apps that stopped being polled while alerted, so
+ * `open()` no longer counts them. `recent()` never returns a "cleared" row: it isn't an alert.
  */
 import type pg from "pg";
 import type { AlertRecord, AlertStore } from "./alerts.ts";
@@ -59,7 +62,7 @@ export function createPgAlertStore(pool: Pick<pg.Pool, "query">, opts: { retenti
       // Newest round first; within a round, the order it was saved in (as the in-memory history).
       const { rows } = await pool.query<Row>(
         `SELECT at, kind, app_id, name, live, ready, error, detail FROM alert_events
-         ORDER BY at DESC, id ASC LIMIT $1`,
+         WHERE kind <> 'cleared' ORDER BY at DESC, id ASC LIMIT $1`,
         [n],
       );
       return rows.map((r) => ({
@@ -82,6 +85,15 @@ export function createPgAlertStore(pool: Pick<pg.Pool, "query">, opts: { retenti
          ) newest WHERE kind = 'down' ORDER BY app_id`,
       );
       return rows.map((r) => ({ id: r.app_id, at: r.at.toISOString() }));
+    },
+    async clear(ids, at) {
+      if (ids.length === 0) return;
+      // Only ends the open "down": the name and probe values are placeholders nobody is shown.
+      await pool.query(
+        `INSERT INTO alert_events (at, kind, app_id, name, live, ready)
+         SELECT $1::timestamptz, 'cleared', id, id, 'unknown', 'unknown' FROM unnest($2::text[]) AS id`,
+        [at, ids],
+      );
     },
   };
 }

@@ -723,3 +723,101 @@ describe("splitMessages", () => {
     expect(nth(lines, 2)).toBe("after");
   });
 });
+
+describe("an alerted app that stops being polled is cleared in the store", () => {
+  function clearing(over: { clear?: AlertStore["clear"] } = {}) {
+    const calls: string[] = [];
+    const logs: object[] = [];
+    const cleared: { ids: string[]; at: string }[] = [];
+    const fetchFn = vi.fn(async (_url: string | URL | Request, init: RequestInit = {}) => {
+      calls.push(JSON.parse(String(init.body)).content);
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+    const store: AlertStore = {
+      save: vi.fn(async () => {}),
+      recent: async () => [],
+      clear:
+        over.clear ??
+        vi.fn(async (ids: string[], at: string) => {
+          cleared.push({ ids: [...ids], at });
+        }),
+    };
+    let t = Date.parse("2026-10-18T03:00:00.000Z");
+    const alerter = createStatusAlerter({
+      webhookUrl: HOOK,
+      downRounds: 1,
+      fetch: fetchFn,
+      log: (l) => logs.push(l),
+      now: () => new Date((t += 1_000)),
+      store,
+    });
+    return { alerter, calls, logs, cleared, store };
+  }
+
+  it("deactivated or removed while down: one clear, and nothing in the history or the webhook", async () => {
+    const { alerter, calls, cleared } = clearing();
+    alerter.observe(report(entry("core-api"), down("notes"), down("docs")));
+    await alerter.settled();
+    expect(calls).toHaveLength(1);
+    // notes deactivated (no longer polled), docs removed (gone from the report)
+    alerter.observe(report(entry("core-api"), entry("notes", { state: "inactive", polled: false })));
+    await alerter.settled();
+    expect(cleared).toEqual([{ ids: ["notes", "docs"], at: "2026-10-18T03:00:02.000Z" }]);
+    expect(calls).toHaveLength(1);
+    expect(alerter.history().alerts.map((a) => [a.kind, a.id])).toEqual([
+      ["down", "notes"],
+      ["down", "docs"],
+    ]);
+    alerter.observe(report(entry("core-api")));
+    await alerter.settled();
+    expect(cleared).toHaveLength(1); // once, not every round
+  });
+
+  it("an app that was never alerted on, or has recovered, is not cleared", async () => {
+    const { alerter, cleared, store } = clearing();
+    alerter.observe(report(entry("core-api"), entry("notes"), down("docs")));
+    alerter.observe(report(entry("core-api"), entry("notes"), entry("docs")));
+    alerter.observe(report(entry("core-api")));
+    await alerter.settled();
+    expect(cleared).toEqual([]);
+    expect(store.clear).not.toHaveBeenCalled();
+  });
+
+  it("a restored alerted app that is gone after the restart is cleared too", async () => {
+    const { alerter, cleared, store } = clearing();
+    store.open = async () => [{ id: "gone", at: new Date(Date.now() - 60_000).toISOString() }];
+    await alerter.load();
+    alerter.observe(report(entry("core-api")));
+    await alerter.settled();
+    expect(cleared.map((c) => c.ids)).toEqual([["gone"]]);
+  });
+
+  it("a round that couldn't read the app list clears nothing", async () => {
+    const { alerter, cleared } = clearing();
+    alerter.observe(report(entry("core-api"), down("notes")));
+    alerter.observe(report(entry("core-api"), down("notes")), { appsChecked: false }); // notes: kept result
+    await alerter.settled();
+    expect(cleared).toEqual([]);
+  });
+
+  it("a failed clear is logged by class only and never breaks the round", async () => {
+    const { alerter, calls, logs } = clearing({
+      clear: () => {
+        throw Object.assign(new Error("password=hunter2"), { code: "57P01" });
+      },
+    });
+    alerter.observe(report(entry("core-api"), down("notes")));
+    expect(() => alerter.observe(report(entry("core-api"), down("docs")))).not.toThrow();
+    await alerter.settled();
+    expect(logs).toContainEqual({ msg: "health.alert_clear_failed", error: "57P01" });
+    expect(JSON.stringify(logs)).not.toContain("hunter2");
+    expect(calls).toHaveLength(2); // the second round's "down" still went out
+  });
+
+  it("a store without clear() is fine: the app is forgotten as before", async () => {
+    const alerter = createStatusAlerter({ downRounds: 1, store: { save: async () => {}, recent: async () => [] } });
+    alerter.observe(report(down("notes")));
+    expect(() => alerter.observe(report())).not.toThrow();
+    await alerter.settled();
+  });
+});
