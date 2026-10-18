@@ -33,7 +33,8 @@
 #   3. check every variable listed in core/identity/.env.production.example and apps/docs/.env.production.example
 #      is set: by NAME, never by value;
 #   4. check the networks and the client config it needs exist;
-#   5. `docker compose pull`, then `up -d`;
+#   5. `docker compose pull` (tried up to 3 times, 10s apart: DEPLOY_PULL_ATTEMPTS, DEPLOY_PULL_RETRY_DELAY), then
+#      `up -d`;
 #   6. wait for identity's /readyz, os-site's /healthz and os-docs's /api/health;
 #   7. publish sites/asafarim-os.caddy on the shared edge (validate -> swap -> reload -> verify).
 # Only step 7 makes id.asafarim.site, asafarim.site and docs.asafarim.site reachable, and only if every step before
@@ -77,6 +78,26 @@ main() {
 
   log() { echo "[deploy $(date -Is)] $*"; }
   fatal() { echo "FATAL: $*" >&2; exit 1; }
+
+  # Step 5's pull, tried up to DEPLOY_PULL_ATTEMPTS times (default 3), DEPLOY_PULL_RETRY_DELAY seconds apart (default
+  # 10). A pull can fail for a moment on the host (containerd's "failed commit on ref ... rename ... no such file", a
+  # registry hiccup) while every image exists; one retry gets past it. Returns non-zero only when every attempt
+  # failed, and the caller stops as before. Nothing is started until a pull succeeds.
+  local pull_attempts="${DEPLOY_PULL_ATTEMPTS:-3}" pull_delay="${DEPLOY_PULL_RETRY_DELAY:-10}"
+  [[ "$pull_attempts" =~ ^[1-9][0-9]*$ ]] || fatal "DEPLOY_PULL_ATTEMPTS must be a whole number of at least 1, got '${pull_attempts}'."
+  [[ "$pull_delay" =~ ^[0-9]+$ ]] || fatal "DEPLOY_PULL_RETRY_DELAY must be a whole number of seconds, got '${pull_delay}'."
+  pull_with_retry() {
+    local attempt
+    for ((attempt = 1; attempt <= pull_attempts; attempt++)); do
+      "$@" && return 0
+      if ((attempt < pull_attempts)); then
+        log "The pull failed (attempt ${attempt} of ${pull_attempts}). Trying again in ${pull_delay}s..."
+        sleep "$pull_delay"
+      fi
+    done
+    log "The pull failed ${pull_attempts} time(s)."
+    return 1
+  }
 
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<commit> must be a full 40-character sha, got '${commit}'."
   [[ "$image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<image-commit> must be a full 40-character sha, got '${image_commit}'."
@@ -179,7 +200,7 @@ main() {
     log "Checking the compose file (os-site and os-docs only)..."
     "${compose[@]}" config -q --no-env-resolution os-site os-docs
     log "Pulling ghcr.io/alisafari-it/asafarim-os:site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}..."
-    "${compose[@]}" pull os-site os-docs \
+    pull_with_retry "${compose[@]}" pull os-site os-docs \
       || fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${SITE_IMAGE_TAG} has no site image or ${DOCS_IMAGE_TAG} no docs image (see the 'Site image' and 'Docs image' workflow runs)."
     log "Starting os-site and os-docs..."
     "${compose[@]}" up -d --no-deps os-site os-docs
@@ -187,7 +208,7 @@ main() {
     log "Checking the compose file..."
     "${compose[@]}" config -q
     log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")..."
-    if ! "${compose[@]}" pull; then
+    if ! pull_with_retry "${compose[@]}" pull; then
       fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image (see the 'Identity image', 'Site image', 'Docs image' and 'Core API image' workflow runs)."
     fi
     log "Starting the stack..."
