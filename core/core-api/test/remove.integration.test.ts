@@ -156,6 +156,12 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("remove an app (#68, integration: Postg
       () => true,
       () => false,
     );
+  // A consumer's num_pending can lag the publish ack for a moment, so poll it rather than read it once.
+  const pendingFor = (app: string, type: string, publisher: string) =>
+    expect.poll(async () => (await jsm.consumers.info(streamName(publisher), consumerName(app, type))).num_pending, {
+      timeout: 5000,
+      interval: 50,
+    });
   const grant = (role: string, sub: string) =>
     fetch(`${base}/admin/v1/roles/${role}/grants/${sub}`, {
       method: "PUT",
@@ -199,7 +205,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("remove an app (#68, integration: Postg
     expect((await grant(`${PUB}.viewer`, "dev-member")).status).toBe(200);
     // An event from before the removal, waiting for SUB.
     await jetstream(nc).publish(typeOf(PUB), enc.encode("{}"));
-    expect((await jsm.consumers.info(streamName(PUB), consumerName(SUB, typeOf(PUB)))).num_pending).toBe(1);
+    await pendingFor(SUB, typeOf(PUB), PUB).toBe(1);
 
     const res = await remove(PUB);
     expect(res.status).toBe(200);
@@ -259,7 +265,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("remove an app (#68, integration: Postg
     expect(await streamExists(PUB)).toBe(true);
     expect((await jsm.streams.info(streamName(PUB))).state.messages).toBe(0);
     expect(await consumerExists(SUB, typeOf(PUB), PUB)).toBe(true);
-    expect((await jsm.consumers.info(streamName(PUB), consumerName(SUB, typeOf(PUB)))).num_pending).toBe(0);
+    await pendingFor(SUB, typeOf(PUB), PUB).toBe(0);
     // Like a first install: it waits for the app to register.
     expect((await get<{ registered_at: string | null }>(`/admin/v1/apps/${PUB}`)).registered_at).toBeNull();
 
@@ -277,7 +283,7 @@ describe.skipIf(!ADMIN_URL || !NATS_URL)("remove an app (#68, integration: Postg
 
     // Only what is published after the reinstall reaches SUB.
     await jetstream(nc).publish(typeOf(PUB), enc.encode("{}"));
-    expect((await jsm.consumers.info(streamName(PUB), consumerName(SUB, typeOf(PUB)))).num_pending).toBe(1);
+    await pendingFor(SUB, typeOf(PUB), PUB).toBe(1);
   });
 
   it("a subscriber: its consumers go; the publisher's stream and messages stay", async () => {
