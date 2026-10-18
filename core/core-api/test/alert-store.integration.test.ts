@@ -1,6 +1,6 @@
 /**
- * Admin's alert history across a core-api restart, against a real Postgres (migration 005,
- * alert-store.ts):
+ * Admin's alert history across a core-api restart, against a real Postgres (migrations 005 and
+ * 006, alert-store.ts):
  *
  *  - a round's transitions are saved in order and read back newest round first, as the in-memory
  *    history shows them, with no field added or lost;
@@ -9,6 +9,8 @@
  *    newer ones stay;
  *  - open() gives the apps whose newest row is "down", and a new alerter (core-api restarted) sends no
  *    second "down" for them, while their "recovered" still goes out;
+ *  - an app deactivated or removed while down is cleared: open() no longer lists it, recent() never
+ *    shows the "cleared" row, and after a restart it gets no "recovered" when it is healthy again;
  *  - the table refuses a kind or probe value that isn't one of the known ones.
  *
  * Needs CORE_API_TEST_ADMIN_URL (see registry.integration.test.ts). Skipped without it, except when
@@ -58,7 +60,7 @@ describe.skipIf(!ADMIN_URL)("the alert history in Postgres (integration)", () =>
     const url = new URL(ADMIN_URL!);
     url.pathname = `/${coreDb}`;
     pool = new pg.Pool({ connectionString: url.href, max: 2 });
-    expect(await migrate(pool)).toContain("005_alert_history.sql");
+    expect(await migrate(pool)).toEqual(expect.arrayContaining(["005_alert_history.sql", "006_alert_cleared.sql"]));
   });
 
   afterAll(async () => {
@@ -177,6 +179,63 @@ describe.skipIf(!ADMIN_URL)("the alert history in Postgres (integration)", () =>
     expect(sent[0]).toContain("Recovered: NOTES (notes)");
     const { rows } = await pool.query<{ kind: string }>("SELECT kind FROM alert_events ORDER BY id");
     expect(rows.map((r) => r.kind)).toEqual(["down", "recovered"]);
+  });
+
+  it("clear() ends an open down without showing up in the history", async () => {
+    await pool.query("DELETE FROM alert_events");
+    await pool.query(
+      `INSERT INTO alert_events (at, kind, app_id, name, live, ready)
+       VALUES (now() - interval '2 hours', 'down', 'notes', 'NOTES', 'up', 'down'),
+              (now() - interval '2 hours', 'down', 'docs', 'DOCS', 'up', 'down')`,
+    );
+    const store = createPgAlertStore(pool);
+    await store.clear!(["notes"], new Date(Date.now() - 60 * 60 * 1000).toISOString());
+    await store.clear!([], new Date().toISOString()); // nothing to do
+    expect((await store.open!()).map((o) => o.id)).toEqual(["docs"]);
+    expect((await store.recent(10)).map((r) => [r.kind, r.id])).toEqual([
+      ["down", "notes"],
+      ["down", "docs"],
+    ]);
+    const { rows } = await pool.query<{ kind: string; app_id: string; live: string; ready: string }>(
+      "SELECT kind, app_id, live, ready FROM alert_events WHERE kind = 'cleared'",
+    );
+    expect(rows).toEqual([{ kind: "cleared", app_id: "notes", live: "unknown", ready: "unknown" }]);
+
+    await pool.query(
+      `INSERT INTO alert_events (at, kind, app_id, name, live, ready)
+       VALUES (now() - interval '40 days', 'down', 'old', 'OLD', 'up', 'down')`,
+    );
+    await createPgAlertStore(pool, { retentionDays: 30 }).clear!(["docs"], new Date().toISOString());
+    const left = await pool.query<{ app_id: string }>("SELECT app_id FROM alert_events WHERE app_id = 'old'");
+    expect(left.rows).toEqual([]); // a clear prunes too
+  });
+
+  it("an app deactivated while down gets no recovered after a restart once it is active and healthy", async () => {
+    await pool.query("DELETE FROM alert_events");
+    let t = Date.now() - 60_000;
+    const now = () => new Date((t += 1_000));
+    const before = createStatusAlerter({ downRounds: 1, now, store: createPgAlertStore(pool) });
+    before.observe(report(entry("core-api"), down("notes")));
+    before.observe(report(entry("core-api"), entry("notes", { state: "inactive", polled: false })));
+    await before.settled();
+
+    const sent: string[] = [];
+    const fetchFn = (async (_url: string | URL | Request, init: RequestInit = {}) => {
+      sent.push(JSON.parse(String(init.body)).content);
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+    const after = createStatusAlerter({
+      webhookUrl: "https://discord.example/api/webhooks/1/t",
+      downRounds: 1,
+      now,
+      fetch: fetchFn,
+      store: createPgAlertStore(pool),
+    });
+    await after.load();
+    expect(after.history().alerts.map((a) => [a.kind, a.id])).toEqual([["down", "notes"]]);
+    after.observe(report(entry("core-api"), entry("notes"))); // reactivated, healthy
+    await after.settled();
+    expect(sent).toEqual([]);
   });
 
   it("refuses a kind or a probe value that isn't a known one", async () => {
