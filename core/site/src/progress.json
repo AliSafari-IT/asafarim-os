@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-12",
+  "updated": "2026-10-18",
   "repo": "https://github.com/AliSafari-IT/asafarim-os",
   "shipped": [
     {
@@ -52,6 +52,13 @@
       "prs": [69]
     },
     {
+      "id": "P6.1",
+      "title": "Health and status board",
+      "date": "2026-10-10",
+      "summary": "core-api checks every active app's live and ready endpoints from its manifest, and the Admin console shows them on one Status page.",
+      "prs": [84]
+    },
+    {
       "id": "Landing",
       "title": "This page is live",
       "date": "2026-10-12",
@@ -64,6 +71,90 @@
       "date": "2026-10-12",
       "summary": "Every app's requests become OpenTelemetry traces and per-route rate, error and duration metrics, with only route patterns leaving the app, and its JSON log lines carry the trace id. One command starts a local collector.",
       "prs": [96]
+    },
+    {
+      "id": "External apps",
+      "title": "Install an app from its image",
+      "date": "2026-10-14",
+      "summary": "An app built in another repository is installed from its container image: its manifest travels as an image label and is validated, and one command runs it locally or writes its production compose file.",
+      "prs": [90, 105, 107]
+    },
+    {
+      "id": "Docs",
+      "title": "A private documentation reader",
+      "date": "2026-10-16",
+      "summary": "docs.asafarim.site, the second built-in app: it renders documents from their source repository with contents and search, keeps study notes on a part of a document, and is open only to the people the OS grants it to.",
+      "prs": [85, 86, 88, 91, 92, 111]
+    },
+    {
+      "id": "P6 part 2",
+      "title": "Traces across apps",
+      "date": "2026-10-16",
+      "summary": "One request stays one trace through the gateway, core-api and the event bus, and every app flushes its traces and metrics when it stops.",
+      "prs": [112, 113, 114, 117, 125]
+    },
+    {
+      "id": "Retention",
+      "title": "Backup and purge",
+      "date": "2026-10-16",
+      "summary": "Removing an app first backs up its database. The database is dropped only after a retention window, and only if the backup is still there and unchanged. The CLI can remove, purge and list them.",
+      "prs": [115, 116]
+    },
+    {
+      "id": "P7.2",
+      "title": "Manifest review",
+      "date": "2026-10-16",
+      "summary": "Every pull request gets an advisory check that compares an app's manifest with its code: unguarded routes, permissions never checked, and events without a schema or a handler, posted as one comment.",
+      "prs": [118, 121, 124]
+    },
+    {
+      "id": "Sign-in",
+      "title": "Email codes and passkeys",
+      "date": "2026-10-16",
+      "summary": "id.asafarim.site signs people in with a one-time email code or a passkey, built in the OS with no outside provider, and an admin approves new connections.",
+      "prs": [122, 127, 129]
+    },
+    {
+      "id": "P7.4",
+      "title": "Event search",
+      "date": "2026-10-16",
+      "summary": "The Admin console's event catalog answers questions like \"which app emits something when an order ships?\" by searching event types, apps and schema descriptions.",
+      "prs": [128, 134]
+    },
+    {
+      "id": "Database spans",
+      "title": "Database time in every trace",
+      "date": "2026-10-17",
+      "summary": "Queries from core-api, Notes and Docs show up in their request's trace with the operation and the database name only, never the SQL text or its values.",
+      "prs": [142, 143, 149]
+    },
+    {
+      "id": "Top bar",
+      "title": "App switcher and account menu",
+      "date": "2026-10-17",
+      "summary": "Every OS app has the same top bar: a switcher to each app you can open, and an account menu with your name and Sign out.",
+      "prs": [152, 153, 155, 156, 157]
+    },
+    {
+      "id": "Core in production",
+      "title": "core-api and its own database",
+      "date": "2026-10-18",
+      "summary": "core-api runs in production next to the OS's own Postgres on a private network, started by the deploy only once its encrypted settings are committed. A failed image pull is retried before the deploy gives up.",
+      "prs": [140, 141, 164]
+    },
+    {
+      "id": "Alerts",
+      "title": "Down and recovered alerts",
+      "date": "2026-10-18",
+      "summary": "core-api can send one message to a chat webhook when an app goes down and one when it recovers. It keeps the history on the Status page, and remembers what it already reported across a restart.",
+      "prs": [150, 154, 158, 159, 160, 161, 163]
+    },
+    {
+      "id": "P7.1",
+      "title": "Scaffold a new app",
+      "date": "2026-10-18",
+      "summary": "One command writes a new app with its manifest, sign-in, the OS top bar, a permission-checked example route, health endpoints, telemetry and a test. It passes manifest review with no findings.",
+      "prs": [103, 120, 165]
     }
   ],
   "screenshots": [
@@ -107,12 +198,12 @@
     {
       "id": "P6",
       "title": "Observability",
-      "summary": "Shared telemetry for every app, metrics and logs in one place, and a public status board."
+      "summary": "Metrics, traces and logs in one place with dashboards, alerts on traces and metrics, and a public status board."
     },
     {
       "id": "P7",
       "title": "AI assist",
-      "summary": "A scaffolder for new apps, automated manifest review and a copilot in the Admin console."
+      "summary": "AI help where text matching can't see: drafting a new app's manifest, a deeper manifest review, semantic event search and a read-only copilot in the Admin console."
     }
   ],
   "links": [
