@@ -6,7 +6,7 @@
 # (there are no snippets here yet).
 #
 # id.asafarim.site (identity), since #70 the asafarim.site landing page (os-site), and since #83
-# docs.asafarim.site (os-docs). Cutover: the asafarim.site and www.asafarim.site blocks must first be
+# docs.asafarim.site (os-docs), and since #175 admin.asafarim.site (os-admin). Cutover: the asafarim.site and www.asafarim.site blocks must first be
 # removed from asafarim-com.caddy; the edge validates the WHOLE config, so publishing this file while both
 # define asafarim.site fails safely.
 
@@ -67,4 +67,22 @@ docs.asafarim.site {
     -X-Powered-By
   }
   reverse_proxy os-docs:3000
+}
+
+# The Admin console (asafarim-os#175): a Next.js server at os-admin:3000 (core/admin). Private: every page but
+# /api/health asks for a sign-in, and core-api checks `core.admin` on every call. No Content-Security-Policy here
+# for the same reason as docs: Next's pages need their inline scripts, and `defer` makes the edge's values replace
+# the upstream's instead of sending each header twice.
+admin.asafarim.site {
+  header {
+    defer
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options nosniff
+    Referrer-Policy no-referrer
+    X-Frame-Options DENY
+    X-Robots-Tag "noindex, nofollow"
+    -Server
+    -X-Powered-By
+  }
+  reverse_proxy os-admin:3000
 }

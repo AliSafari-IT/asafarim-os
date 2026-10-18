@@ -1,0 +1,15 @@
+# Build context filter for core/admin/Dockerfile (BuildKit reads <Dockerfile>.dockerignore).
+**/node_modules
+.git
+**/.turbo
+**/.next
+**/dist
+**/coverage
+**/.env*
+**/*.log
+**/test-results
+**/playwright-report
+tools/dev-hub
+.dev
+.age
+deploy/identity

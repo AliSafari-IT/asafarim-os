@@ -298,6 +298,44 @@ test("core-api's env committed and identity running: the full deploy with the ne
     assert.equal(r.calls.at(-1), `vps-deploy ${e.c6} ${env.c4} ${env.c1} ${env.c2} ${e.c6} (HEAD ${e.c6})`);
   }));
 
+/** The Admin console (#175): c7 adds its encrypted env and c8 changes it, on top of the core-api commits. */
+function withAdmin(env) {
+  const base = withCoreApi(env);
+  const c7 = commit(env.src, "admin env", { "core/admin/.env.production.age": "stand-in ciphertext" });
+  const c8 = commit(env.src, "admin", { "core/admin/app/x.ts": "k1" });
+  git(env.src, "push", "-q", "--force", env.origin, `${c8}:refs/heads/main`);
+  return { ...base, c7, c8, published: `${base.published} admin-${c8}` };
+}
+
+test("the Admin console's env committed next to core-api: its newest image is checked and passed as the sixth sha", () =>
+  withSetup((env) => {
+    const e = { ...withAdmin(env), identityRunning: "abc123" };
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.match(r.output, new RegExp(`Newest admin image from: ${e.c8}`));
+    assert.ok(r.calls.includes(`docker manifest inspect ghcr.io/alisafari-it/asafarim-os:admin-${e.c8}`));
+    assert.equal(r.calls.at(-1), `vps-deploy ${e.c8} ${env.c4} ${env.c1} ${env.c2} ${e.c6} ${e.c8} (HEAD ${e.c8})`);
+  }));
+
+test("the Admin console's newest image not published yet: exit code 3, naming the 'Admin image' workflow", () =>
+  withSetup((env) => {
+    const base = withAdmin(env);
+    const r = run({ ...base, identityRunning: "abc123", published: base.published.replace(` admin-${base.c8}`, "") });
+    assert.equal(r.status, 3, r.output);
+    assert.match(r.output, new RegExp(`admin-${base.c8} is not published \\(yet\\)`));
+    assert.match(r.output, /'Admin image' workflow/);
+    assert.ok(!r.calls.some((c) => c.startsWith("vps-deploy")));
+  }));
+
+test("core-api's env committed without the Admin console's: no admin image is looked up, five shas as before", () =>
+  withSetup((env) => {
+    const e = { ...withCoreApi(env), identityRunning: "abc123" };
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.ok(!r.calls.some((c) => c.includes(":admin-")));
+    assert.equal(r.calls.at(-1), `vps-deploy ${e.c6} ${env.c4} ${env.c1} ${env.c2} ${e.c6} (HEAD ${e.c6})`);
+  }));
+
 test("core-api's newest image not published yet: exit code 3, naming the 'Core API image' workflow, nothing changed", () =>
   withSetup((env) => {
     const base = withCoreApi(env);
@@ -339,6 +377,7 @@ for (const [name, variable] of [
   ["docs", "DOCS_IMAGE_PATHS"],
   ["identity", "IDENTITY_IMAGE_PATHS"],
   ["core-api", "CORE_API_IMAGE_PATHS"],
+  ["admin", "ADMIN_IMAGE_PATHS"],
 ]) {
   test(`its list of the ${name} image's inputs is the one in .github/workflows/${name}-image.yml`, () => {
     const workflow = readFileSync(path.join(root, ".github", "workflows", `${name}-image.yml`), "utf8");

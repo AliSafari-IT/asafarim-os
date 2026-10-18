@@ -27,6 +27,29 @@ The ASafariM OS **Admin console** (P3.3b, ADR 0001 §3–4): the apps, who may d
 
 Every write goes through a server action that re-checks the administrator, calls the admin API, and returns to the page with a message (`role="status"` / `role="alert"`). Return paths are limited to `/admin…`.
 
+## In production
+
+<https://admin.asafarim.site>, the `os-admin` service of [`deploy/compose.prod.yml`](../../deploy/compose.prod.yml) (image from `core/admin/Dockerfile`, published by the "Admin image" workflow). It runs with the **core** stack: `deploy/vps-deploy.sh` starts it when the commit has `core/core-api/.env.production.age` **and** `core/admin/.env.production.age`, and `deploy/redeploy.sh` passes its image sha as the sixth argument. It reaches core-api at `http://os-core-api:4020` on the private `os_core` network and identity at its public URL; the edge proxies the site (`sites/asafarim-os.caddy`).
+
+| Variable             | Where                            | What                                                                                                                                |
+| -------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_SECRET`        | `core/admin/.env.production.age` | Auth.js's session secret (≥ 32 random bytes)                                                                                        |
+| `OIDC_CLIENT_SECRET` | the same file                    | the `core-admin` client's secret; identity holds the same value as `IDENTITY_CLIENT_SECRET_ADMIN` (`core/identity/.env.production`) |
+
+The `core-admin` client goes in the VPS's `deploy/identity/clients.json` (not in git):
+
+```json
+{
+  "client_id": "core-admin",
+  "primary_domain": "admin.asafarim.site",
+  "redirect_uris": ["https://admin.asafarim.site/api/auth/callback/asafarim"],
+  "post_logout_redirect_uris": ["https://admin.asafarim.site/"],
+  "client_secret_env": "IDENTITY_CLIENT_SECRET_ADMIN"
+}
+```
+
+**First administrator (once, on the VPS):** `deploy/core-api/admin.sh grant core.admin <account id>` (the id is on <https://id.asafarim.site/account>). From then on, an administrator grants and revokes roles (for example `docs.owner`) under **Roles & grants**, with no SSH. Permissions are cached for up to 60 seconds.
+
 ## Accessibility and themes
 
 A skip link; landmarks (`banner`, `navigation "Admin"`, `main`); one `h1`; captioned tables with column and row headers; every control has a name; visible focus. Confirmation is a native modal `<dialog>` (never `window.confirm`): the browser traps focus, **Escape cancels**, focus returns to the button, and **Cancel has focus first**, so a stray Enter can't confirm. Light and dark follow `prefers-color-scheme`; the e2e checks contrast of at least 4.5:1 in both.
@@ -49,4 +72,4 @@ Traces and metrics (P6.2) are off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set; t
 - **No production directory of people.** Locally it searches the seeded users; elsewhere, grant by typing the subject id.
 - **No install or manifest editing.** Install (and reinstall after a removal) is the CLI (`platform app install`); the console activates, deactivates and removes.
 - **Remove keeps the app's OIDC client**, and doesn't cut the removed app's open bus connections (new ones are refused). Its database is backed up and kept until an administrator purges it: nothing purges on a schedule.
-- **No Dockerfile or deploy yet:** this is local and CI; deployment arrives with the rest of ADR 0001 §8.
+- **Deploy is the owner's:** see [In production](#in-production). Nothing deploys it automatically.

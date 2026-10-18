@@ -3,7 +3,7 @@
 # (#83). The owner deploys it with deploy/vps-deploy.sh; nothing else runs this file. See deploy/README.md for the
 # deploy, the rollback and the network rules.
 #
-#   IMAGE_TAG=<sha> SITE_IMAGE_TAG=<sha> DOCS_IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+#   IMAGE_TAG=<sha> SITE_IMAGE_TAG=<sha> DOCS_IMAGE_TAG=<sha> CORE_API_IMAGE_TAG=<sha> ADMIN_IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
 #
 # Paths here are relative to THIS file (deploy/), not to the repository root.
 name: asafarim-os
@@ -135,7 +135,8 @@ services:
 
   # ---- core-api (the control plane) and its Postgres -----------------------------------------------------------
   # Started only when the deployed commit has core/core-api/.env.production.age: deploy/vps-deploy.sh then turns
-  # the "core" profile on. Neither joins edge_net; nothing outside this host reaches them.
+  # the "core" profile on. Neither joins edge_net; nothing outside this host reaches them. The Admin console
+  # (os-admin, below) has its own "admin" profile on top of this one.
 
   os-postgres:
     # The OS's OWN Postgres (never the platform's): the core database, and one database per installed app
@@ -203,6 +204,44 @@ services:
         aliases:
           - os-core-api
 
+  os-admin:
+    # admin.asafarim.site: the Admin console's Next.js server (core/admin/Dockerfile, asafarim-os#175), published by
+    # .github/workflows/admin-image.yml. ADMIN_IMAGE_TAG is the full commit sha of that build; deploy/vps-deploy.sh
+    # always sets it. Its own "admin" profile, which deploy/vps-deploy.sh turns on (next to "core") once
+    # core/admin/.env.production.age is committed: without it the env_file below would not exist.
+    image: ghcr.io/alisafari-it/asafarim-os:admin-${ADMIN_IMAGE_TAG:?set ADMIN_IMAGE_TAG to the admin image's commit sha}
+    profiles: [admin]
+    restart: unless-stopped
+    read_only: true
+    # uid/gid 1000 is the image's `node` user, the only writer.
+    tmpfs:
+      - /tmp:size=16m
+      - /app/core/admin/.next/cache:size=32m,uid=1000,gid=1000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 256m
+    cpus: 0.5
+    # Decrypted from core/admin/.env.production.age by deploy/vps-deploy.sh, at the repository root: AUTH_SECRET and
+    # OIDC_CLIENT_SECRET (core/admin/.env.production.example).
+    env_file:
+      - ../.env.admin
+    environment:
+      HOSTNAME: 0.0.0.0
+      # Sign-in goes through this stack's identity, at its public URL.
+      OIDC_ISSUER: https://id.asafarim.site
+      # Every page and action calls core-api's admin API as the signed-in administrator (ID token as Bearer).
+      CORE_API_URL: http://os-core-api:4020
+    depends_on:
+      - os-core-api
+    networks:
+      edge_net:
+        # Unique on the shared edge_net; sites/asafarim-os.caddy proxies admin.asafarim.site to it.
+        aliases:
+          - os-admin
+      # core-api, by its name on os_core. Not os_net: the console never reaches identity's Redis.
+      os_core:
+
 networks:
   # The shared edge's network, created with the edge. identity joins it to be reachable by the edge's Caddy.
   edge_net:
@@ -214,7 +253,7 @@ networks:
     external: true
     name: identity_db
   os_net:
-  # core-api, its Postgres and the apps it serves (os-docs). identity and os-redis are not on it.
+  # core-api, its Postgres, the Admin console and the apps it serves (os-docs). identity and os-redis are not on it.
   os_core:
 
 volumes:

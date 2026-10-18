@@ -202,6 +202,15 @@ waits for it like the others.
    creates its roles. Then, with your account id from <https://id.asafarim.site/account>:
    `deploy/core-api/admin.sh grant docs.owner <account id>`. Permissions are cached for up to 60 seconds.
 
+**Admin console (admin.asafarim.site, #175).** So that nobody needs SSH to grant roles, the console runs as `os-admin`
+next to core-api. To turn it on: (1) add the `core-admin` client to `deploy/identity/clients.json` and
+`IDENTITY_CLIENT_SECRET_ADMIN` to `core/identity/.env.production` (the client's JSON and the variables are in
+[`core/admin/README.md`](../core/admin/README.md#in-production)); (2) create `core/admin/.env.production` from its
+example (`AUTH_SECRET`, and `OIDC_CLIENT_SECRET` equal to `IDENTITY_CLIENT_SECRET_ADMIN`), then
+`pnpm env:encrypt:production` and commit both `.age` files; (3) deploy that commit with `deploy/redeploy.sh` (the full
+deploy, since identity runs: it starts `os-admin` and waits for its `/api/health`); (4) once, on the VPS:
+`deploy/core-api/admin.sh grant core.admin <account id>`. Then grant everything else in the browser.
+
 `deploy/core-api/admin.sh apps` and `grants <account id>` show the state. The admin token is read from `.env.core-api`
 and never printed.
 

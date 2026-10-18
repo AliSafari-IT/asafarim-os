@@ -4,7 +4,7 @@
 # asafarim.site landing page (os-site, #70) and the Docs app (docs.asafarim.site, os-docs, #83).
 # Run by the OWNER, from the repository folder (normally /var/repos/asafarim-os). Nothing else runs it.
 #
-#   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>]
+#   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>]
 #   deploy/vps-deploy.sh --site-only <commit> [<site-image-commit>] [<docs-image-commit>]
 #
 #   <commit>        the repository state to deploy, as a full 40-character sha: this script, the
@@ -18,6 +18,8 @@
 #                   "Docs image" workflow (#83).
 #   <core-api-image-commit>  the commit whose core-api image to run (default: <commit>), with the "Core API image"
 #                   workflow. Used only when core-api is part of the deploy (below).
+#   <admin-image-commit>  the commit whose Admin console image to run (default: <commit>), with the "Admin image"
+#                   workflow (#175). Used only when the console is part of the deploy (below).
 #   --site-only     the landing page and docs, without identity (#97, #83): steps 1, 2 and 3 for the docs env
 #                   only, 4 (edge_net and the edge script only), 5 and 6 for os-site and os-docs only, then
 #                   step 7 with sites/asafarim-os-site.caddy, and step 8: before the edge cutover, the same file
@@ -44,6 +46,10 @@
 # .env.core-api and check core/core-api/.env.production.example's names; step 5 turns the compose profile "core" on,
 # which starts os-postgres and os-core-api (never on edge_net; the admin API on 127.0.0.1:4020 only); step 6 also waits
 # for os-core-api's /readyz. Without that file the deploy is exactly what it was before, and core-api is not started.
+#
+# The Admin console (admin.asafarim.site, os-admin, #175; full mode only): when core-api is part of the deploy and the
+# commit has core/admin/.env.production.age, the same steps decrypt it into .env.admin, check
+# core/admin/.env.production.example's names, start os-admin (profile "admin", on top of "core") and wait for its /api/health.
 # asafarim.site cutover: remove the asafarim.site and www.asafarim.site blocks from asafarim-com.caddy first
 # (deploy/README.md); until then step 7's validation refuses the duplicate host and keeps the old config.
 #
@@ -53,8 +59,8 @@ set -euo pipefail
 # Everything lives in main(), called on ONE line at the very end. Step 1 resets this checkout, which can
 # replace this very file while bash is still reading it; bash has parsed all of main() by then.
 main() {
-  local usage="usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] | --site-only <commit> [<site-image-commit>] [<docs-image-commit>]"
-  local site_only=false with_core_api=false
+  local usage="usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>] | --site-only <commit> [<site-image-commit>] [<docs-image-commit>]"
+  local site_only=false with_core_api=false with_admin=false
   if [[ "${1:-}" == "--site-only" ]]; then
     site_only=true
     shift
@@ -63,12 +69,13 @@ main() {
     # (it defaults to <commit> and is never pulled).
     set -- "${1:-}" "" "${2:-}" "${3:-}"
   fi
-  (($# <= 5)) || { echo "FATAL: ${usage}" >&2; exit 1; }
+  (($# <= 6)) || { echo "FATAL: ${usage}" >&2; exit 1; }
   local commit="${1:?$usage}"
   local image_commit="${2:-$commit}"
   local site_image_commit="${3:-$commit}"
   local docs_image_commit="${4:-$commit}"
   local core_api_image_commit="${5:-$commit}"
+  local admin_image_commit="${6:-$commit}"
 
   local repo_dir
   repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -104,6 +111,7 @@ main() {
   [[ "$site_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<site-image-commit> must be a full 40-character sha, got '${site_image_commit}'."
   [[ "$docs_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<docs-image-commit> must be a full 40-character sha, got '${docs_image_commit}'."
   [[ "$core_api_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<core-api-image-commit> must be a full 40-character sha, got '${core_api_image_commit}'."
+  [[ "$admin_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<admin-image-commit> must be a full 40-character sha, got '${admin_image_commit}'."
   # age in both modes: os-docs's env (AUTH_SECRET) is decrypted by a site-only deploy too.
   for tool in git age docker flock; do
     command -v "$tool" >/dev/null 2>&1 || fatal "'${tool}' is not installed on this host."
@@ -173,6 +181,23 @@ main() {
     else
       log "No core/core-api/.env.production.age in this commit: core-api is not part of this deploy."
     fi
+
+    # The Admin console joins once its encrypted env is committed, and only next to core-api (it is a client of it).
+    if [[ -f core/admin/.env.production.age ]]; then
+      [[ "$with_core_api" == true ]] \
+        || fatal "core/admin/.env.production.age is in this commit but core/core-api/.env.production.age is not: the Admin console needs core-api."
+      with_admin=true
+      log "Decrypting core/admin/.env.production.age..."
+      ( umask 077 && age -d -i .age/key.txt core/admin/.env.production.age > .env.admin.tmp ) \
+        || { rm -f .env.admin.tmp; fatal "age could not decrypt core/admin/.env.production.age."; }
+      mv -f .env.admin.tmp .env.admin
+      chmod 600 .env.admin
+      log "Checking the Admin console environment (names only)..."
+      require_env_vars .env.admin core/admin/.env.production.example \
+        || fatal "fill the variables named above in core/admin/.env.production, re-encrypt it, commit the .age file, and deploy that commit."
+    else
+      log "No core/admin/.env.production.age in this commit: the Admin console is not part of this deploy."
+    fi
   fi
   docker network inspect edge_net >/dev/null 2>&1 \
     || fatal "the edge_net network does not exist. The shared edge is not installed on this host."
@@ -185,8 +210,10 @@ main() {
   export DOCS_IMAGE_TAG="$docs_image_commit"
   # Always set, so the compose file renders; the image is only pulled when the "core" profile is on.
   export CORE_API_IMAGE_TAG="$core_api_image_commit"
+  export ADMIN_IMAGE_TAG="$admin_image_commit"
   if [[ "$with_core_api" == true ]]; then
     export COMPOSE_PROFILES=core
+    [[ "$with_admin" == true ]] && export COMPOSE_PROFILES=core,admin
   else
     unset COMPOSE_PROFILES
   fi
@@ -207,9 +234,9 @@ main() {
   else
     log "Checking the compose file..."
     "${compose[@]}" config -q
-    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")..."
+    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")$([[ "$with_admin" == true ]] && echo ", :admin-${ADMIN_IMAGE_TAG}")..."
     if ! pull_with_retry "${compose[@]}" pull; then
-      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image (see the 'Identity image', 'Site image', 'Docs image' and 'Core API image' workflow runs)."
+      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image or ${ADMIN_IMAGE_TAG} no admin image (see the 'Identity image', 'Site image', 'Docs image', 'Core API image' and 'Admin image' workflow runs)."
     fi
     log "Starting the stack..."
     "${compose[@]}" up -d --remove-orphans
@@ -246,6 +273,22 @@ main() {
         fatal "os-core-api did not become ready within 120s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 os-postgres os-core-api"
       fi
       log "os-core-api is ready."
+    fi
+
+    if [[ "$with_admin" == true ]]; then
+      log "Waiting for os-admin's /api/health..."
+      local admin_ready=false
+      for _ in $(seq 1 30); do
+        if "${compose[@]}" exec -T os-admin wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
+          admin_ready=true
+          break
+        fi
+        sleep 2
+      done
+      if [[ "$admin_ready" != true ]]; then
+        fatal "os-admin did not become ready within 60s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 os-admin"
+      fi
+      log "os-admin is ready."
     fi
   fi
 
