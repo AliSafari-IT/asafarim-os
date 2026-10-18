@@ -179,19 +179,26 @@ test("identity: a failure never prints a value", () => {
   assert.doesNotMatch(result.output, /s3cr3t/);
 });
 
-test("the docs example requires AUTH_SECRET and OIDC_CLIENT_SECRET only, for now; the app's later secrets are listed commented out (#83)", () => {
+test("the docs example requires the app's secrets; only CORE_API_URL is still listed commented out (#83)", () => {
   const text = readFileSync(docsExample, "utf8");
-  assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), ["AUTH_SECRET", "OIDC_CLIENT_SECRET"]);
+  const required = [
+    "AUTH_SECRET",
+    "DOCS_GITHUB_TOKEN",
+    "DOCS_ISSUES_TOKEN",
+    "DOCS_AI_API_KEY",
+    "DATABASE_URL",
+    "ASAFARIM_REGISTRY_CREDENTIAL",
+    "OIDC_CLIENT_SECRET",
+  ];
+  assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), required);
   const manifest = JSON.parse(readFileSync(path.join(root, "apps", "docs", "platform.app.json"), "utf8"));
-  for (const name of manifest.secrets) assert.match(text, new RegExp(`^# ${name}=$`, "m"), `${name} is not listed`);
+  for (const name of manifest.secrets) assert.match(text, new RegExp(`^(# )?${name}=$`, "m"), `${name} is not listed`);
+  assert.match(text, /^# CORE_API_URL=$/m);
   const empty = check("", text);
   assert.equal(empty.status, 1);
-  assert.match(empty.output, /AUTH_SECRET/);
-  assert.equal(
-    check("AUTH_SECRET=stand-in\nOIDC_CLIENT_SECRET=stand-in\n", text).status,
-    0,
-    "the app's later secrets are not required yet",
-  );
+  for (const name of required) assert.match(empty.output, new RegExp(name));
+  const filled = required.map((name) => `${name}=stand-in\n`).join("");
+  assert.equal(check(filled, text).status, 0);
 });
 
 test("the script is valid bash", () => {
