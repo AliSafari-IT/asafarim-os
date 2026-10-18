@@ -247,7 +247,7 @@ describe("the outside clients (#82)", () => {
       usage: { inputTokens: 12, outputTokens: 3 },
     });
     const body = JSON.parse(String(sent[0]!.body));
-    expect(body).toMatchObject({ model: "claude-test", tool_choice: { type: "tool", name: "issue_draft" } });
+    expect(body).toMatchObject({ model: "claude-test", tool_choice: { type: "auto" } });
   });
 
   it("Anthropic: a timeout is an AiTimeoutError", async () => {
