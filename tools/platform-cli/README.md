@@ -30,6 +30,12 @@ pnpm platform app purge <id> [--force] [--confirm <id>] [--yes]
 pnpm platform app retention [--eligible] [--verify]
                                         # removed apps with their backup and purge date
                                         # (--verify: check each listed backup's sha256 now; exit 1 unless all ok)
+pnpm platform role list [--app <id>] [--json]
+                                        # every declared role with its holders and permissions; read-only
+pnpm platform role holders <role> [--json]
+                                        # who holds a role; read-only
+pnpm platform role held-by <subject> [--json]
+                                        # every role a person (identity sub) holds; read-only
 pnpm platform status [--alerts] [--json]
                                         # core-api's status board (and alert history); read-only
 pnpm platform audit [--app <id>] [--actor <text>] [--limit <n>] [--before <id>] [--json]
@@ -137,6 +143,24 @@ core-api's reply unchanged (`{ "apps": […] }`).
 It uses the same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as `status`, and only reads. It exits 0 when core-api
 answered, and 1 when it can't be reached, refuses or answers with something else. Control characters in the text are
 replaced.
+
+## Roles and grants (`role list`, `role holders`, `role held-by`)
+
+`role grant|revoke` changes who holds an app's declared role; these three only read, the same data as Admin's Roles
+and People pages:
+
+- `role list [--app <id>]` (`GET /admin/v1/roles`): one row per role with its app, number of holders, number of
+  permissions and description. Below the table, a deprecated role (the app no longer declares it, kept while someone
+  holds it) and a role that still grants a permission the app no longer declares (ADR 0001 §3.4) each get a line.
+- `role holders <role>` (`GET /admin/v1/roles/<role>/grants`): who holds it, when it was granted and by whom.
+  core-api answers an empty list for a role it doesn't know, so "Nobody holds …" also covers a typo.
+- `role held-by <subject>` (`GET /admin/v1/subjects/<sub>/grants`): every role one person (their identity `sub`)
+  holds, across apps.
+
+The role and subject are checked with core-api's own rules before anything is asked. `--json` prints core-api's
+reply unchanged. They use the same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as `status`. They exit 0 when core-api
+answered, and 1 when it can't be reached, refuses or answers with something else. Control characters in the text
+are replaced.
 
 ## New app (`app new <id>`)
 
