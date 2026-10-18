@@ -21,6 +21,7 @@ const code = script
 const realExample = path.join(root, "core", "identity", ".env.production.example");
 const docsExample = path.join(root, "apps", "docs", ".env.production.example");
 const coreApiExample = path.join(root, "core", "core-api", ".env.production.example");
+const adminExample = path.join(root, "core", "admin", ".env.production.example");
 
 /** Run require_env_vars on two fixture files; returns { status, output } with stdout and stderr together. */
 function check(envText, exampleText) {
@@ -317,6 +318,8 @@ function runDeploy(
     docsEnvEmpty = false,
     coreApiEnv = false,
     coreApiEnvEmpty = false,
+    adminEnv = false,
+    adminEnvEmpty = false,
     pullFails = 0,
     pullAttempts = "",
   } = {},
@@ -339,6 +342,7 @@ function runDeploy(
       "core/identity/.env.production.example",
       "apps/docs/.env.production.example",
       "core/core-api/.env.production.example",
+      "core/admin/.env.production.example",
     ]) {
       cpSync(path.join(root, file), path.join(repo, file), { recursive: true });
     }
@@ -352,6 +356,7 @@ function runDeploy(
       writeFileSync(path.join(repo, "deploy/identity/clients.json"), "{}\n");
     }
     if (coreApiEnv) writeFileSync(path.join(repo, "core/core-api/.env.production.age"), "stand-in ciphertext\n");
+    if (adminEnv) writeFileSync(path.join(repo, "core/admin/.env.production.age"), "stand-in ciphertext\n");
     const fill = (example) =>
       readFileSync(example, "utf8")
         .match(/^[A-Z][A-Z0-9_]*(?==)/gm)
@@ -365,6 +370,9 @@ function runDeploy(
       `elif [[ "$*" == *core/core-api/* ]]; then`,
       `  [[ -n "$CORE_API_ENV_EMPTY" ]] && exit 0`,
       fill(coreApiExample),
+      `elif [[ "$*" == *core/admin/* ]]; then`,
+      `  [[ -n "$ADMIN_ENV_EMPTY" ]] && exit 0`,
+      fill(adminExample),
       `else`,
       fill(realExample),
       `fi`,
@@ -419,6 +427,7 @@ function runDeploy(
         EDGE_ID: edgeId,
         DOCS_ENV_EMPTY: docsEnvEmpty ? "1" : "",
         CORE_API_ENV_EMPTY: coreApiEnvEmpty ? "1" : "",
+        ADMIN_ENV_EMPTY: adminEnvEmpty ? "1" : "",
         PULL_FAILS: String(pullFails),
         PULL_COUNT: path.join(dir, "pull-count"),
         DEPLOY_PULL_RETRY_DELAY: "0",
@@ -433,6 +442,7 @@ function runDeploy(
       envIdentityWritten: existsSync(path.join(repo, ".env.identity")),
       envDocsWritten: existsSync(path.join(repo, ".env.docs")),
       envCoreApiWritten: existsSync(path.join(repo, ".env.core-api")),
+      envAdminWritten: existsSync(path.join(repo, ".env.admin")),
       liveSite: existsSync(liveSite) ? readFileSync(liveSite, "utf8") : null,
       repo,
     };
@@ -497,10 +507,14 @@ test("--site-only takes at most three shas, each a full sha", () => {
     runDeploy(["--site-only", SHA, SITE_SHA, "abc"]).stderr,
     /<docs-image-commit> must be a full 40-character sha/,
   );
-  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA], { full: true }).stderr, /usage:/);
+  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, SHA], { full: true }).stderr, /usage:/);
   assert.match(
     runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, "abc"], { full: true }).stderr,
     /<core-api-image-commit> must be a full 40-character sha/,
+  );
+  assert.match(
+    runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, "abc"], { full: true }).stderr,
+    /<admin-image-commit> must be a full 40-character sha/,
   );
   assert.match(runDeploy(["--site-only"]).stderr, /usage:/);
 });
@@ -651,6 +665,61 @@ test("a core-api env with a variable missing stops the deploy before pulling, na
   assert.match(r.stderr, /missing or empty in \.env\.core-api: POSTGRES_PASSWORD/);
   assert.match(r.stderr, /node deploy\/core-api\/new-env\.mjs/);
   assert.ok(!r.calls.some((c) => / (pull|up) /.test(c)), r.calls.join("\n"));
+});
+
+// The Admin console (#175): part of the full deploy next to core-api, once core/admin/.env.production.age is committed.
+test("without core/admin/.env.production.age: the admin env is not decrypted, no admin profile, os-admin is not waited for", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA], { full: true, coreApiEnv: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!r.calls.some((c) => c.includes("core/admin")));
+  assert.equal(r.envAdminWritten, false);
+  assert.ok(r.calls.some((c) => c.startsWith("profiles=core ")));
+  assert.ok(!r.calls.some((c) => c.startsWith("profiles=core,admin") || c.includes("os-admin")));
+});
+
+test("with core/admin/.env.production.age: decrypts and checks it, starts the admin profile, waits for os-admin before publishing", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA], { full: true, coreApiEnv: true, adminEnv: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.calls.includes("age -d -i .age/key.txt core/admin/.env.production.age"));
+  assert.equal(r.envAdminWritten, true, ".env.admin is os-admin's env_file");
+  const profiled = r.calls
+    .filter((c) => c.startsWith("profiles=core,admin "))
+    .map((c) => c.slice("profiles=core,admin ".length));
+  assert.ok(
+    profiled.some((c) => c.endsWith("exec -T os-admin wget -qO- http://127.0.0.1:3000/api/health")),
+    r.calls.join("\n"),
+  );
+  const adminReadyAt = r.calls.findIndex((c) =>
+    c.endsWith("exec -T os-admin wget -qO- http://127.0.0.1:3000/api/health"),
+  );
+  const edgeAt = r.calls.findIndex((c) => c.startsWith("edge-deploy-site.sh"));
+  assert.ok(adminReadyAt >= 0 && edgeAt > adminReadyAt, r.calls.join("\n"));
+});
+
+test("an admin env with a variable missing stops the deploy before pulling, naming it and never a value", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA], {
+    full: true,
+    coreApiEnv: true,
+    adminEnv: true,
+    adminEnvEmpty: true,
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /missing or empty in \.env\.admin: AUTH_SECRET OIDC_CLIENT_SECRET/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c)), r.calls.join("\n"));
+});
+
+test("the admin env without core-api's is refused before anything is pulled: the console is a client of core-api", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA], { full: true, adminEnv: true });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /the Admin console needs core-api/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c)));
+});
+
+test("--site-only never touches the Admin console, even when its env is committed", () => {
+  const r = runDeploy(["--site-only", SHA], { adminEnv: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!r.calls.some((c) => c.includes("core/admin") || c.includes("os-admin")), r.calls.join("\n"));
+  assert.equal(r.envAdminWritten, false);
 });
 
 test("--site-only never touches core-api, even when its env is committed", () => {

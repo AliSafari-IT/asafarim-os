@@ -51,6 +51,7 @@ function render(
     writeFileSync(path.join(dir, ".env.identity"), "");
     writeFileSync(path.join(dir, ".env.docs"), "");
     writeFileSync(path.join(dir, ".env.core-api"), "");
+    writeFileSync(path.join(dir, ".env.admin"), "");
     mkdirSync(path.join(dir, "deploy", "core-api", "initdb"), { recursive: true });
     const run = spawnSync("docker", ["compose", "-f", "compose.prod.yml", "config", "--format", "json"], {
       cwd: path.join(dir, "deploy"),
@@ -60,6 +61,7 @@ function render(
         SITE_IMAGE_TAG: "",
         DOCS_IMAGE_TAG: "",
         CORE_API_IMAGE_TAG: "coresha",
+        ADMIN_IMAGE_TAG: "adminsha",
         COMPOSE_PROFILES: "",
         ...env,
       },
@@ -233,9 +235,15 @@ test("the secrets come from ../.env.identity (decrypted at the repo root by vps-
   assert.match(composeText, /env_file:\n\s+- \.\.\/\.env\.identity\n/);
 });
 
-test("the site file serves id.asafarim.site, asafarim.site and its www redirect, and docs.asafarim.site, nothing else", () => {
+test("the site file serves id.asafarim.site, asafarim.site and its www redirect, docs.asafarim.site and admin.asafarim.site, nothing else", () => {
   const sites = [...activeSite.matchAll(/^([a-z0-9.*-]+)(?:, [a-z0-9.*-]+)*\s*\{/gm)].map((m) => m[1]);
-  assert.deepEqual(sites.sort(), ["asafarim.site", "docs.asafarim.site", "id.asafarim.site", "www.asafarim.site"]);
+  assert.deepEqual(sites.sort(), [
+    "admin.asafarim.site",
+    "asafarim.site",
+    "docs.asafarim.site",
+    "id.asafarim.site",
+    "www.asafarim.site",
+  ]);
   assert.match(siteBlock("www.asafarim.site"), /redir https:\/\/asafarim\.site\{uri\} 301/);
 });
 
@@ -442,4 +450,75 @@ test("the README's stop command renders: every image tag it needs is set, with a
     });
     assert.equal(r.status, 0, `profiles '${profiles}': ${r.stderr}`);
   }
+});
+
+// ---- the Admin console (#175): its own "admin" profile, on top of "core".
+const adminRendered = render({
+  IMAGE_TAG: "testsha",
+  SITE_IMAGE_TAG: "sitesha",
+  DOCS_IMAGE_TAG: "docssha",
+  CORE_API_IMAGE_TAG: "coresha",
+  ADMIN_IMAGE_TAG: "adminsha",
+  COMPOSE_PROFILES: "core,admin",
+});
+assert.equal(adminRendered.status, 0, adminRendered.stderr);
+const adminConfig = JSON.parse(adminRendered.stdout);
+const admin = adminConfig.services["os-admin"];
+
+test("os-admin is only in the admin profile: the core profile alone does not start it (it needs ../.env.admin)", () => {
+  assert.deepEqual(admin.profiles, ["admin"]);
+  assert.ok(!("os-admin" in coreConfig.services));
+  assert.ok(!("os-admin" in config.services));
+});
+
+test("os-admin's image tag comes from ADMIN_IMAGE_TAG, and there is no default", () => {
+  assert.equal(admin.image, "ghcr.io/alisafari-it/asafarim-os:admin-adminsha");
+  const unset = render({
+    IMAGE_TAG: "t",
+    SITE_IMAGE_TAG: "s",
+    DOCS_IMAGE_TAG: "d",
+    CORE_API_IMAGE_TAG: "c",
+    ADMIN_IMAGE_TAG: "",
+    COMPOSE_PROFILES: "core,admin",
+  });
+  assert.notEqual(unset.status, 0, "a deploy without ADMIN_IMAGE_TAG must fail, not pull admin-");
+  assert.match(unset.stderr, /ADMIN_IMAGE_TAG/);
+});
+
+test("os-admin is hardened, reads its secrets from ../.env.admin only, and signs in through id.asafarim.site", () => {
+  assert.equal(admin.read_only, true);
+  assert.deepEqual(admin.cap_drop, ["ALL"]);
+  assert.ok(admin.security_opt.includes("no-new-privileges:true"));
+  assert.ok(Number(admin.mem_limit) > 0 && admin.cpus > 0);
+  assert.ok(admin.tmpfs?.some((t) => t.startsWith("/app/core/admin/.next/cache:") && t.includes("uid=1000")));
+  assert.match(composeText, /os-admin:[\s\S]*?env_file:\n\s+- \.\.\/\.env\.admin\n/);
+  assert.equal(admin.environment.OIDC_ISSUER, adminConfig.services.identity.environment.IDENTITY_ISSUER);
+  assert.equal(admin.environment.CORE_API_URL, "http://os-core-api:4020");
+  assert.equal(admin.environment.HOSTNAME, "0.0.0.0");
+  for (const name of ["AUTH_SECRET", "OIDC_CLIENT_SECRET"]) {
+    assert.ok(!(name in admin.environment), `${name} is a secret: it belongs in .env.admin`);
+  }
+});
+
+test("os-admin is on edge_net under the unique alias os-admin and on os_core for core-api: never os_net", () => {
+  assert.deepEqual(networkNames(admin), ["edge_net", "os_core"]);
+  assert.deepEqual(admin.networks.edge_net.aliases, ["os-admin"]);
+  assert.ok(!admin.ports || admin.ports.length === 0);
+});
+
+test("admin.asafarim.site proxies to os-admin's edge_net alias on port 3000, with the private-site headers", () => {
+  const block = siteBlock("admin.asafarim.site");
+  const upstream = /reverse_proxy ([\w-]+):(\d+)/.exec(block);
+  assert.ok(upstream, "admin.asafarim.site must reverse_proxy to os-admin");
+  assert.ok(admin.networks.edge_net.aliases.includes(upstream[1]), `${upstream[1]} is not os-admin's edge_net alias`);
+  assert.equal(Number(upstream[2]), 3000);
+  assert.match(block, /Strict-Transport-Security/);
+  assert.match(block, /Referrer-Policy no-referrer/);
+  assert.match(block, /X-Robots-Tag "noindex, nofollow"/);
+  assert.match(block, /X-Frame-Options DENY/);
+  assert.doesNotMatch(block, /Content-Security-Policy/);
+});
+
+test("the site-only file has no admin.asafarim.site: the console ships with the full deploy", () => {
+  assert.doesNotMatch(siteOnlyText, /admin\.asafarim\.site/);
 });
