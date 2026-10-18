@@ -27,6 +27,8 @@ pnpm platform app purge <id> [--force] [--confirm <id>] [--yes]
                                         # drop a removed app's database and role (after its purge date)
 pnpm platform app retention [--eligible]
                                         # removed apps with their backup and purge date
+pnpm platform status [--alerts] [--json]
+                                        # core-api's status board (and alert history); read-only
 ```
 
 `--other-stack-sites <file>` lists gateway sites that belong to **another stack
@@ -84,6 +86,20 @@ before any request (exit 1). This is the same check as the Admin console's typed
   its purge date and its status (`eligible`, `kept`, `no database`, `no backup (kept)` or `purged …`), then the
   backup paths. `--eligible` lists only the ones a purge would accept now. Nothing purges on its own: core-api has
   no scheduler.
+
+## Status board and alerts (`status`)
+
+`status` prints core-api's status board (`GET /admin/v1/status`, the same data as Admin's Status page): one row per
+entry (core-api itself and every installed app) with its lifecycle state, live and ready, the slower check's
+latency, when it was checked and, when a check failed, its error class and detail (an HTTP status or a core-api
+check name). Apps that aren't active are listed as `not polled`. `--alerts` adds the alert history
+(`GET /admin/v1/alerts`): the last down/recovered transitions, newest first, and whether core-api sends them to a
+webhook (never its URL). `--json` prints core-api's replies unchanged, as `{ "status": … }`, or `{ "status": …, "alerts": … }` with `--alerts`.
+
+It uses the same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as `app install`, and only reads. The exit code is 0
+when core-api has finished a health round and every polled entry is live and ready, otherwise 1 (also when
+core-api can't be reached or refuses the token), so a script can wait on it. Text that comes from app manifests is
+printed with control characters replaced.
 
 ## New app (`app new <id>`)
 

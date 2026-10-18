@@ -33,6 +33,8 @@
  *   pnpm platform app retention [--eligible] removed apps, their backup and purge date
  *                                            remove and purge take the id twice: typed at the prompt, or --confirm <id>
  *   pnpm platform role grant|revoke <role> <subject>    an admin (un)grants an app's declared role
+ *   pnpm platform status [--alerts] [--json]  core-api's status board (and alert history); read-only,
+ *                                            exits 1 unless every polled entry is live and ready
  */
 import path from "node:path";
 import { computeDrift, formatDrift } from "./against/drift.ts";
@@ -42,6 +44,7 @@ import { boundariesCommand } from "./boundaries.ts";
 import { compileCommand, validateCommand } from "./manifest.ts";
 import { composeCommand } from "./compose.ts";
 import { retentionCommand } from "./retention.ts";
+import { statusCommand } from "./status.ts";
 import { reviewCommand } from "./review.ts";
 import { newAppCommand } from "./scaffold.ts";
 import { findRepoRoot, sync } from "./sync.ts";
@@ -70,6 +73,8 @@ const USAGE = [
   "      isn't a terminal; --yes is accepted only with --confirm <id>; --force purges before the",
   "      purge date)",
   "  platform role grant|revoke <role> <subject>",
+  "  platform status [--alerts] [--json]                 the status board (and alert history) from core-api;",
+  "                                                      exits 1 unless every polled entry is live and ready",
 ].join("\n");
 
 /** pnpm runs the CLI from its package folder; INIT_CWD is where the user typed the command. */
@@ -110,6 +115,8 @@ async function main(argv: string[]): Promise<number> {
     result = reviewCommand(rest.slice(1), cwd, () => findRepoRoot(cwd));
   } else if (command === "boundaries" && rest.length === 0) {
     result = boundariesCommand(findRepoRoot(cwd));
+  } else if (command === "status") {
+    result = await statusCommand(rest, findRepoRoot(cwd));
   } else if (command === "role") {
     result = await roleCommand(rest, findRepoRoot(cwd));
   } else if (command === "app" && rest[0] === "compose") {

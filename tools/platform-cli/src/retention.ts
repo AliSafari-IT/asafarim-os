@@ -110,7 +110,7 @@ type Reply =
   | { ok: false; status: number; error: string; message?: string; details?: unknown }
   | { ok: false; unreachable: string };
 
-async function request(
+export async function request(
   { baseUrl, token }: Endpoint,
   method: "GET" | "POST",
   route: string,
@@ -171,7 +171,7 @@ const shortSha = (sha: string) => `${sha.slice(0, 12)}…`;
 type Backup = { path: string; sizeBytes: number; sha256: string };
 
 /** What every refusal shares: unreachable, the admin token, the role, the app. */
-function commonRefusal(r: Exclude<Reply, { ok: true }>, id: string, nothing: string): string[] {
+export function commonRefusal(r: Exclude<Reply, { ok: true }>, id: string, nothing: string): string[] {
   if ("unreachable" in r) return [r.unreachable, nothing];
   const why = r.message ? ` (${r.message})` : "";
   switch (r.error) {
