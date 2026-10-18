@@ -306,6 +306,8 @@ function runDeploy(
     docsEnvEmpty = false,
     coreApiEnv = false,
     coreApiEnvEmpty = false,
+    pullFails = 0,
+    pullAttempts = "",
   } = {},
 ) {
   const dir = mkdtempSync(path.join(tmpdir(), "vps-deploy-"));
@@ -366,6 +368,10 @@ function runDeploy(
         [
           `[[ "$1" == compose && -n "$COMPOSE_PROFILES" ]] && echo "profiles=$COMPOSE_PROFILES $*" >> "$CALLS"`,
           `case "$*" in`,
+          // The first $PULL_FAILS pulls fail, as a host's containerd sometimes does for a moment.
+          `  "compose "*" pull"|"compose "*" pull "*)`,
+          `    n=$(( $(cat "$PULL_COUNT") + 1 )); echo "$n" > "$PULL_COUNT"`,
+          `    (( n <= PULL_FAILS )) && exit 1 ;;`,
           `  *"ps -q identity"*) printf '%s' "$IDENTITY_RUNNING" ;;`,
           `  "ps -q --filter label=com.docker.compose.project=asafarim-com"*) printf '%s\\n' "$LIVE_ID" ;;`,
           `  "compose -p edge ps -q caddy") printf '%s\\n' "$EDGE_ID" ;;`,
@@ -383,6 +389,7 @@ function runDeploy(
     mkdirSync(path.join(edge, "scripts"), { recursive: true });
     writeFileSync(path.join(edge, "scripts", "edge-deploy-site.sh"), STUB("edge-deploy-site.sh"));
     writeFileSync(calls, "");
+    writeFileSync(path.join(dir, "pull-count"), "0\n");
     mkdirSync(path.dirname(liveSite), { recursive: true });
     writeFileSync(path.join(liveRepo, "infra/caddy/Caddyfile"), "import sites.local/*.caddy\n");
     if (prevLive !== null) writeFileSync(liveSite, prevLive);
@@ -401,11 +408,16 @@ function runDeploy(
         EDGE_ID: edgeId,
         DOCS_ENV_EMPTY: docsEnvEmpty ? "1" : "",
         CORE_API_ENV_EMPTY: coreApiEnvEmpty ? "1" : "",
+        PULL_FAILS: String(pullFails),
+        PULL_COUNT: path.join(dir, "pull-count"),
+        DEPLOY_PULL_RETRY_DELAY: "0",
+        ...(pullAttempts === "" ? {} : { DEPLOY_PULL_ATTEMPTS: pullAttempts }),
       },
     });
     return {
       status: run.status,
       stderr: run.stderr,
+      stdout: run.stdout,
       calls: readFileSync(calls, "utf8").trim().split("\n").filter(Boolean),
       envIdentityWritten: existsSync(path.join(repo, ".env.identity")),
       envDocsWritten: existsSync(path.join(repo, ".env.docs")),
@@ -665,4 +677,55 @@ test("the core-api example lists the six variables new-env.mjs writes, and its o
   assert.equal(jwk.crv, "Ed25519");
   assert.ok(jwk.d && jwk.x && jwk.kid);
   assert.notEqual(newEnv(), text, "every run is new");
+});
+
+// A pull that fails for a moment on the host (containerd's "failed commit on ref ... rename ... no such file", seen on
+// the cc3988d deploy) is tried again before the deploy gives up.
+const composeCallsOf = (r) => r.calls.filter((c) => c.startsWith(compose)).map((c) => c.slice(compose.length + 1));
+
+test("full mode: a pull that fails once is tried again, and the deploy goes on", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA], { full: true, pullFails: 1 });
+  assert.equal(r.status, 0, r.stderr);
+  const calls = composeCallsOf(r);
+  assert.deepEqual(calls.slice(0, 4), ["config -q", "pull", "pull", "up -d --remove-orphans"]);
+  assert.match(r.stdout, /The pull failed \(attempt 1 of 3\)\. Trying again in 0s/);
+  assert.ok(
+    r.calls.some((c) => c.startsWith("edge-deploy-site.sh")),
+    "the site is published",
+  );
+});
+
+test("full mode: three failed pulls stop the deploy before anything starts or is published", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA], { full: true, pullFails: 3 });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /FATAL: the pull failed\./);
+  assert.match(r.stdout, /The pull failed 3 time\(s\)\./);
+  assert.deepEqual(composeCallsOf(r), ["config -q", "pull", "pull", "pull"]);
+  assert.ok(!r.calls.some((c) => / up /.test(c) || c.startsWith("edge-deploy-site.sh")), r.calls.join("\n"));
+  assert.equal(r.liveSite, null);
+});
+
+test("--site-only: the os-site and os-docs pull is tried again too", () => {
+  const ok = runDeploy(["--site-only", SHA, SITE_SHA, DOCS_SHA], { pullFails: 2 });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.deepEqual(
+    composeCallsOf(ok).filter((c) => c.startsWith("pull") || c.startsWith("up")),
+    ["pull os-site os-docs", "pull os-site os-docs", "pull os-site os-docs", "up -d --no-deps os-site os-docs"],
+  );
+  const failed = runDeploy(["--site-only", SHA, SITE_SHA, DOCS_SHA], { pullFails: 3 });
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /FATAL: the pull failed\./);
+  assert.ok(!failed.calls.some((c) => / up /.test(c) || c.startsWith("edge-deploy-site.sh")), failed.calls.join("\n"));
+});
+
+test("DEPLOY_PULL_ATTEMPTS sets the number of tries, and a bad value stops before anything runs", () => {
+  const once = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA], { full: true, pullFails: 1, pullAttempts: "1" });
+  assert.equal(once.status, 1);
+  assert.deepEqual(composeCallsOf(once), ["config -q", "pull"]);
+  for (const bad of ["0", "two", "-1"]) {
+    const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA], { full: true, pullAttempts: bad });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /DEPLOY_PULL_ATTEMPTS must be a whole number of at least 1/);
+    assert.ok(!r.calls.some((c) => c.startsWith("git reset")), r.calls.join("\n"));
+  }
 });
