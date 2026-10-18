@@ -146,7 +146,7 @@
       "id": "Alerts",
       "title": "Down and recovered alerts",
       "date": "2026-10-18",
-      "summary": "core-api sends one message when an app goes down and one when it recovers, keeps the history on the Status page, and remembers what it already reported across a restart.",
+      "summary": "core-api can send one message to a chat webhook when an app goes down and one when it recovers. It keeps the history on the Status page, and remembers what it already reported across a restart.",
       "prs": [150, 154, 158, 159, 160, 161, 163]
     },
     {
