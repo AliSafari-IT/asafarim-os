@@ -30,6 +30,8 @@ pnpm platform app retention [--eligible] [--verify]
                                         # (--verify: check each listed backup's sha256 now; exit 1 unless all ok)
 pnpm platform status [--alerts] [--json]
                                         # core-api's status board (and alert history); read-only
+pnpm platform audit [--app <id>] [--actor <text>] [--limit <n>] [--before <id>] [--json]
+                                        # core-api's audit log, newest first; read-only
 ```
 
 `--other-stack-sites <file>` lists gateway sites that belong to **another stack
@@ -107,6 +109,19 @@ It uses the same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as `app install`, and
 when core-api has finished a health round and every polled entry is live and ready, otherwise 1 (also when
 core-api can't be reached or refuses the token), so a script can wait on it. Text that comes from app manifests is
 printed with control characters replaced.
+
+## Audit log (`audit`)
+
+`audit` prints core-api's audit log (`GET /admin/v1/audit`, the same data as Admin's Audit page), newest first:
+one row per event with its id, time, actor, action, app (`–` for none) and its detail as compact JSON, cut at 80
+characters. `--app <id>` keeps one app's events, `--actor <text>` keeps actors containing that text (any case),
+`--limit <n>` takes 1–200 events (core-api's default is 50), and `--before <id>` starts below that event id. When
+there are older events, the last line is the command for the next page, with the same filters. `--json` prints
+core-api's reply unchanged (`{ "events": […], "next": <id> | null }`), details in full.
+
+It uses the same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as `status`, and only reads. It exits 0 when core-api
+answered, and 1 when it can't be reached, refuses or answers with something else. Control characters in the text are
+replaced.
 
 ## New app (`app new <id>`)
 
