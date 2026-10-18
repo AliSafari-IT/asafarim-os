@@ -7,6 +7,8 @@
  *  - a new alerter (core-api restarted) loads the history the old one saved;
  *  - rows older than the retention window are deleted when a round is saved and before a read;
  *    newer ones stay;
+ *  - open() gives the apps whose newest row is "down", and a new alerter (core-api restarted) sends no
+ *    second "down" for them, while their "recovered" still goes out;
  *  - the table refuses a kind or probe value that isn't one of the known ones.
  *
  * Needs CORE_API_TEST_ADMIN_URL (see registry.integration.test.ts). Skipped without it, except when
@@ -125,6 +127,56 @@ describe.skipIf(!ADMIN_URL)("the alert history in Postgres (integration)", () =>
     expect((await store.recent(10)).map((r) => r.id)).toEqual(["kept"]);
     const { rows } = await pool.query<{ app_id: string }>("SELECT app_id FROM alert_events");
     expect(rows.map((r) => r.app_id)).toEqual(["kept"]); // deleted, not just hidden
+  });
+
+  it("open() lists the apps whose newest row is down, within the retention window", async () => {
+    await pool.query("DELETE FROM alert_events");
+    await pool.query(
+      `INSERT INTO alert_events (at, kind, app_id, name, live, ready)
+       VALUES (now() - interval '40 days', 'down', 'expired', 'EXPIRED', 'up', 'down'),
+              (now() - interval '3 hours', 'down', 'notes', 'NOTES', 'up', 'down'),
+              (now() - interval '2 hours', 'recovered', 'notes', 'NOTES', 'up', 'up'),
+              (now() - interval '2 hours', 'recovered', 'docs', 'DOCS', 'up', 'up'),
+              (now() - interval '1 hour', 'down', 'docs', 'DOCS', 'up', 'down'),
+              (now() - interval '1 hour', 'down', 'core-api', 'core-api', 'up', 'down')`,
+    );
+    const store = createPgAlertStore(pool, { retentionDays: 30 });
+    const open = await store.open!();
+    expect(open.map((o) => o.id)).toEqual(["core-api", "docs"]);
+    // The newest row's own time, about an hour ago.
+    for (const o of open) expect(Math.abs(Date.now() - 60 * 60 * 1000 - Date.parse(o.at))).toBeLessThan(60_000);
+  });
+
+  it("a restarted alerter sends no second down for an app still down, and still sends its recovery", async () => {
+    await pool.query("DELETE FROM alert_events");
+    let t = Date.now() - 60_000;
+    const now = () => new Date((t += 1_000));
+    const before = createStatusAlerter({ downRounds: 1, now, store: createPgAlertStore(pool) });
+    before.observe(report(entry("core-api"), down("notes")));
+    await before.settled();
+
+    const sent: string[] = [];
+    const fetchFn = (async (_url: string | URL | Request, init: RequestInit = {}) => {
+      sent.push(JSON.parse(String(init.body)).content);
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+    const after = createStatusAlerter({
+      webhookUrl: "https://discord.example/api/webhooks/1/t",
+      downRounds: 1,
+      now,
+      fetch: fetchFn,
+      store: createPgAlertStore(pool),
+    });
+    await after.load();
+    after.observe(report(entry("core-api"), down("notes")));
+    await after.settled();
+    expect(sent).toEqual([]);
+    after.observe(report(entry("core-api"), entry("notes")));
+    await after.settled();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Recovered: NOTES (notes)");
+    const { rows } = await pool.query<{ kind: string }>("SELECT kind FROM alert_events ORDER BY id");
+    expect(rows.map((r) => r.kind)).toEqual(["down", "recovered"]);
   });
 
   it("refuses a kind or a probe value that isn't a known one", async () => {

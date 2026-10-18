@@ -20,6 +20,15 @@
  * and, with a store (alert-store.ts), it is saved best effort and the newest are loaded again when
  * core-api starts, so it survives a restart. A failed save or load is logged by class and never
  * delays or breaks a poll round.
+ *
+ * Alerted state across a restart: with a store, an app whose newest saved transition is "down" starts
+ * as already alerted. An app still down after a restart gets no second "down" message or history
+ * entry, and its "recovered" one still goes out once it is healthy again. Only a "down" from the last
+ * `restoreMaxAgeMs` (default 24 h) is restored: the store is best effort, so a lost "recovered" row
+ * could otherwise hide a later, separate outage after a restart for as long as it lasts; an older
+ * outage that still holds is announced again instead. Known limit: an app that was deactivated or
+ * removed while down leaves no row saying so, so if it is active and healthy again after a restart it
+ * gets one "recovered".
  */
 import { SELF_ID, type AppStatus, type RoundInfo, type StatusReport } from "./health.ts";
 
@@ -73,6 +82,8 @@ export interface AlerterDeps {
   log?: (line: object) => void;
   /** Where the history is kept across restarts; unset = memory only. */
   store?: AlertStore;
+  /** The oldest saved "down" restored as already alerted at start; default 24 h. */
+  restoreMaxAgeMs?: number;
 }
 
 /** Keeps the alert history across restarts (alert-store.ts has the Postgres one). */
@@ -81,6 +92,8 @@ export interface AlertStore {
   save(records: AlertRecord[]): Promise<void>;
   /** The newest `limit` transitions, newest round first. */
   recent(limit: number): Promise<AlertRecord[]>;
+  /** The apps whose newest saved transition is "down" (alerted, not yet recovered), with its time. */
+  open?(): Promise<{ id: string; at: string }[]>;
 }
 
 interface Tracked {
@@ -111,6 +124,7 @@ export interface AlertHistory {
 }
 
 const DEFAULT_HISTORY = 50;
+const DEFAULT_RESTORE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /** One line of text, bounded: what the history keeps of an app's own strings. */
 const bounded = (text: string, max: number) => {
@@ -223,6 +237,39 @@ export function createStatusAlerter(deps: AlerterDeps) {
     }
   }
 
+  async function loadHistory(from: AlertStore) {
+    if (historySize === 0) return;
+    try {
+      const saved = await from.recent(historySize);
+      const oldest = history.at(-1)?.at;
+      const older = oldest === undefined ? saved : saved.filter((r) => r.at < oldest);
+      history.push(...older.slice(0, historySize - history.length).map((r) => ({ ...r })));
+      log({ msg: "health.alert_history_loaded", count: older.length });
+    } catch (err) {
+      storeFailed("health.alert_history_load_failed")(err);
+    }
+  }
+
+  async function loadAlerted(from: AlertStore) {
+    if (!from.open) return;
+    try {
+      const open = await from.open();
+      const maxAge = Math.max(0, deps.restoreMaxAgeMs ?? DEFAULT_RESTORE_MAX_AGE_MS);
+      const cutoff = now().getTime() - maxAge;
+      let count = 0;
+      for (const { id, at } of open) {
+        if (typeof id !== "string" || tracked.has(id)) continue;
+        const t = Date.parse(at);
+        if (!(t >= cutoff)) continue; // too old (or unreadable): count it from zero, as before
+        tracked.set(id, { bad: deps.downRounds, alerted: true });
+        count += 1;
+      }
+      log({ msg: "health.alert_state_loaded", count });
+    } catch (err) {
+      storeFailed("health.alert_state_load_failed")(err);
+    }
+  }
+
   return {
     /**
      * One finished poll round. Never throws, never waits for the webhook. When the round couldn't
@@ -282,21 +329,18 @@ export function createStatusAlerter(deps: AlerterDeps) {
       track(messages.reduce((prev, content) => prev.then(() => send(webhookUrl, content)), Promise.resolve()));
     },
     /**
-     * Load the newest saved transitions into the history (once, at start, before polling). Never
-     * throws. Anything already observed in this process stays on top, and a saved row that is not
-     * older than it is left out, so nothing shows twice.
+     * Load what the store kept (once, at start, before polling). Never throws.
+     *
+     * History: the newest saved transitions. Anything already observed in this process stays on top,
+     * and a saved row that is not older than it is left out, so nothing shows twice.
+     *
+     * Alerted state: each app whose newest saved transition is a "down" within `restoreMaxAgeMs`
+     * starts as already alerted, so a restart sends no second "down" for it, and its "recovered" still
+     * goes out. An app this process has already seen keeps what it saw.
      */
     async load() {
-      if (!store || historySize === 0) return;
-      try {
-        const saved = await store.recent(historySize);
-        const oldest = history.at(-1)?.at;
-        const older = oldest === undefined ? saved : saved.filter((r) => r.at < oldest);
-        history.push(...older.slice(0, historySize - history.length).map((r) => ({ ...r })));
-        log({ msg: "health.alert_history_loaded", count: older.length });
-      } catch (err) {
-        storeFailed("health.alert_history_load_failed")(err);
-      }
+      if (!store) return;
+      await Promise.all([loadHistory(store), loadAlerted(store)]);
     },
     /** The recent transitions for Admin, newest round first (a copy). */
     history(): AlertHistory {
