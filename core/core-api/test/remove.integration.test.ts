@@ -89,7 +89,10 @@ interface Catalog {
   }[];
 }
 
-describe.skipIf(!ADMIN_URL || !NATS_URL)("remove an app (#68, integration: Postgres + NATS)", () => {
+// pendingFor (below) polls for up to 5 s, so each test gets more than Vitest's 5 s default.
+const SLOW = { timeout: 15_000 };
+
+describe.skipIf(!ADMIN_URL || !NATS_URL)("remove an app (#68, integration: Postgres + NATS)", SLOW, () => {
   let admin: pg.Client;
   let pool: pg.Pool;
   let bus: StreamAdmin;
