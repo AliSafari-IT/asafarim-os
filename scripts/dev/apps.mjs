@@ -30,7 +30,15 @@ export function appIds() {
     throw err;
   }
   return entries
-    .filter((d) => d.isDirectory() && existsSync(path.join(dir, d.name, "platform.app.ts")))
+    .filter((d) => {
+      if (!d.isDirectory()) return false;
+      try {
+        return readFileSync(path.join(dir, d.name, "platform.app.ts"), "utf8"), true;
+      } catch (err) {
+        if (err.code === "ENOENT") return false;
+        throw err;
+      }
+    })
     .map((d) => d.name);
 }
 
