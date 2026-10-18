@@ -93,6 +93,22 @@ describe("scaffoldApp", () => {
     );
   });
 
+  it("has the OS top bar: the app switcher and the account menu, not the old launcher strip", () => {
+    scaffoldApp(root, { id: "demo-hello", name: "Hello Demo" });
+    const page = readFileSync(path.join(root, "apps/demo-hello/app/page.tsx"), "utf8");
+    expect(page).toContain('import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";');
+    expect(page).toContain(
+      '<AppSwitcher apps={apps} current="demo-hello" fallback={{ name: "Hello Demo", glyph: "DH" }} />',
+    );
+    expect(page).toContain("name={session?.user?.name}");
+    expect(page).toContain("email={session?.user?.email}");
+    expect(page).toContain("<form action={signOutAction}>");
+    expect(page).not.toMatch(/<Launcher\b/);
+    // The launcher still fails soft: a core-api that can't be reached leaves the switcher's list empty.
+    expect(page).toContain(".catch(() => [])");
+    expect(readFileSync(path.join(root, "apps/demo-hello/app/globals.css"), "utf8")).toContain(".topbar {");
+  });
+
   it("gates its example route and its page on the app's own read permission", () => {
     scaffoldApp(root, { id: "demo-hello" });
     const read = (f: string) => readFileSync(path.join(root, "apps/demo-hello", f), "utf8");

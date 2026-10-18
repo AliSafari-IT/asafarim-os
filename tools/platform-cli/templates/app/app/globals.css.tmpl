@@ -73,3 +73,24 @@ button.secondary {
   color: var(--ink);
   border: 1px solid var(--line);
 }
+/* The top bar: the app switcher on the left, the account menu on the right (as in Notes and Docs). */
+.topbar {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

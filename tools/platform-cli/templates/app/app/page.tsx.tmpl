@@ -1,4 +1,4 @@
-import { Launcher } from "@asafarim/app-sdk/react";
+import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
 import { signInAction, signOutAction } from "./actions";
 import { auth } from "@/lib/auth";
 import { describeAccess } from "@/lib/gate";
@@ -39,21 +39,27 @@ export default async function Home() {
 
   return (
     <main>
-      <header>
-        <div>
-          <h1>{{name}}</h1>
-          <span className="muted" data-testid="who">
-            Signed in as {session?.user?.name ?? subject}
-          </span>
+      <header className="topbar">
+        <div className="brand">
+          <h1 className="visually-hidden">{{name}}</h1>
+          {/* The OS's app switcher: this app and every other app this person can open (core-api's launcher). */}
+          <AppSwitcher apps={apps} current="{{id}}" fallback={{ name: "{{name}}", glyph: "{{glyph}}" }} />
         </div>
-        <form action={signOutAction}>
-          <button type="submit" className="secondary">
-            Sign out
-          </button>
-        </form>
+        <span data-testid="who">
+          {/* Who is signed in: name and email from the ID token, "Your account", the OS home and Sign out. */}
+          <UserMenu
+            name={session?.user?.name}
+            email={session?.user?.email}
+            signOut={
+              <form action={signOutAction}>
+                <button type="submit" data-testid="sign-out">
+                  Sign out
+                </button>
+              </form>
+            }
+          />
+        </span>
       </header>
-
-      <Launcher apps={apps} current="{{id}}" label="Your apps" />
 
       {!access.available ? (
         <div className="card" data-testid="state">
