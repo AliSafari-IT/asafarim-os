@@ -141,7 +141,10 @@ describe.skipIf(!ADMIN_URL)("the alert history in Postgres (integration)", () =>
               (now() - interval '1 hour', 'down', 'core-api', 'core-api', 'up', 'down')`,
     );
     const store = createPgAlertStore(pool, { retentionDays: 30 });
-    expect(await store.open!()).toEqual(["core-api", "docs"]);
+    const open = await store.open!();
+    expect(open.map((o) => o.id)).toEqual(["core-api", "docs"]);
+    // The newest row's own time, about an hour ago.
+    for (const o of open) expect(Math.abs(Date.now() - 60 * 60 * 1000 - Date.parse(o.at))).toBeLessThan(60_000);
   });
 
   it("a restarted alerter sends no second down for an app still down, and still sends its recovery", async () => {

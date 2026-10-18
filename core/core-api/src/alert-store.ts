@@ -8,8 +8,8 @@
  * when a round is saved and before the history is read, so an expired row is never shown again, even
  * after a long quiet spell with no new round.
  *
- * `open()` gives the apps whose newest row (within the retention window) is "down", so a restarted
- * core-api knows which apps it already alerted on and sends no second "down" for them.
+ * `open()` gives the apps whose newest row (within the retention window) is "down", with its time, so a
+ * restarted core-api knows which apps it already alerted on and sends no second "down" for them.
  */
 import type pg from "pg";
 import type { AlertRecord, AlertStore } from "./alerts.ts";
@@ -76,12 +76,12 @@ export function createPgAlertStore(pool: Pick<pg.Pool, "query">, opts: { retenti
     async open() {
       await prune();
       // Each app's newest row; an app appears at most once per round, and id breaks a tie in time.
-      const { rows } = await pool.query<{ app_id: string }>(
-        `SELECT app_id FROM (
-           SELECT DISTINCT ON (app_id) app_id, kind FROM alert_events ORDER BY app_id, at DESC, id DESC
+      const { rows } = await pool.query<{ app_id: string; at: Date }>(
+        `SELECT app_id, at FROM (
+           SELECT DISTINCT ON (app_id) app_id, kind, at FROM alert_events ORDER BY app_id, at DESC, id DESC
          ) newest WHERE kind = 'down' ORDER BY app_id`,
       );
-      return rows.map((r) => r.app_id);
+      return rows.map((r) => ({ id: r.app_id, at: r.at.toISOString() }));
     },
   };
 }

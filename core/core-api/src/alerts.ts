@@ -23,9 +23,12 @@
  *
  * Alerted state across a restart: with a store, an app whose newest saved transition is "down" starts
  * as already alerted. An app still down after a restart gets no second "down" message or history
- * entry, and its "recovered" one still goes out once it is healthy again. Known limit: an app that
- * was deactivated or removed while down leaves no row saying so, so if it is active and healthy again
- * after a restart it gets one "recovered".
+ * entry, and its "recovered" one still goes out once it is healthy again. Only a "down" from the last
+ * `restoreMaxAgeMs` (default 24 h) is restored: the store is best effort, so a lost "recovered" row
+ * could otherwise hide a later, separate outage after a restart for as long as it lasts; an older
+ * outage that still holds is announced again instead. Known limit: an app that was deactivated or
+ * removed while down leaves no row saying so, so if it is active and healthy again after a restart it
+ * gets one "recovered".
  */
 import { SELF_ID, type AppStatus, type RoundInfo, type StatusReport } from "./health.ts";
 
@@ -79,6 +82,8 @@ export interface AlerterDeps {
   log?: (line: object) => void;
   /** Where the history is kept across restarts; unset = memory only. */
   store?: AlertStore;
+  /** The oldest saved "down" restored as already alerted at start; default 24 h. */
+  restoreMaxAgeMs?: number;
 }
 
 /** Keeps the alert history across restarts (alert-store.ts has the Postgres one). */
@@ -87,8 +92,8 @@ export interface AlertStore {
   save(records: AlertRecord[]): Promise<void>;
   /** The newest `limit` transitions, newest round first. */
   recent(limit: number): Promise<AlertRecord[]>;
-  /** The ids of the apps whose newest saved transition is "down" (alerted, not yet recovered). */
-  open?(): Promise<string[]>;
+  /** The apps whose newest saved transition is "down" (alerted, not yet recovered), with its time. */
+  open?(): Promise<{ id: string; at: string }[]>;
 }
 
 interface Tracked {
@@ -119,6 +124,7 @@ export interface AlertHistory {
 }
 
 const DEFAULT_HISTORY = 50;
+const DEFAULT_RESTORE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /** One line of text, bounded: what the history keeps of an app's own strings. */
 const bounded = (text: string, max: number) => {
@@ -247,10 +253,14 @@ export function createStatusAlerter(deps: AlerterDeps) {
   async function loadAlerted(from: AlertStore) {
     if (!from.open) return;
     try {
-      const ids = await from.open();
+      const open = await from.open();
+      const maxAge = Math.max(0, deps.restoreMaxAgeMs ?? DEFAULT_RESTORE_MAX_AGE_MS);
+      const cutoff = now().getTime() - maxAge;
       let count = 0;
-      for (const id of ids) {
+      for (const { id, at } of open) {
         if (typeof id !== "string" || tracked.has(id)) continue;
+        const t = Date.parse(at);
+        if (!(t >= cutoff)) continue; // too old (or unreadable): count it from zero, as before
         tracked.set(id, { bad: deps.downRounds, alerted: true });
         count += 1;
       }
@@ -324,9 +334,9 @@ export function createStatusAlerter(deps: AlerterDeps) {
      * History: the newest saved transitions. Anything already observed in this process stays on top,
      * and a saved row that is not older than it is left out, so nothing shows twice.
      *
-     * Alerted state: each app whose newest saved transition is "down" starts as already alerted, so a
-     * restart sends no second "down" for it, and its "recovered" still goes out. An app this process
-     * has already seen keeps what it saw.
+     * Alerted state: each app whose newest saved transition is a "down" within `restoreMaxAgeMs`
+     * starts as already alerted, so a restart sends no second "down" for it, and its "recovered" still
+     * goes out. An app this process has already seen keeps what it saw.
      */
     async load() {
       if (!store) return;

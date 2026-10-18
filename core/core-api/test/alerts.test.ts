@@ -520,6 +520,11 @@ describe("alert history store", () => {
 });
 
 describe("alerted state across a restart", () => {
+  /** Saved "down" rows for these apps, a minute ago. */
+  const openNow = (...ids: string[]) => {
+    const at = new Date(Date.now() - 60_000).toISOString();
+    return async () => ids.map((id) => ({ id, at }));
+  };
   function restarted(open: AlertStore["open"], over: { historySize?: number } = {}) {
     const calls: string[] = [];
     const logs: object[] = [];
@@ -540,7 +545,7 @@ describe("alerted state across a restart", () => {
   }
 
   it("an app still down after a restart gets no second down, and its recovery still goes out", async () => {
-    const { alerter, calls, logs, store } = restarted(async () => ["notes"]);
+    const { alerter, calls, logs, store } = restarted(openNow("notes"));
     await alerter.load();
     expect(logs).toContainEqual({ msg: "health.alert_state_loaded", count: 1 });
     alerter.observe(report(entry("core-api"), down("notes")));
@@ -559,7 +564,7 @@ describe("alerted state across a restart", () => {
   });
 
   it("an app that was alerted and is healthy on the first round after the restart recovers at once", async () => {
-    const { alerter, calls } = restarted(async () => ["docs"]);
+    const { alerter, calls } = restarted(openNow("docs"));
     await alerter.load();
     alerter.observe(report(entry("core-api"), entry("docs")));
     await alerter.settled();
@@ -568,7 +573,7 @@ describe("alerted state across a restart", () => {
   });
 
   it("an app that wasn't alerted before the restart is counted from zero, as before", async () => {
-    const { alerter, calls } = restarted(async () => []);
+    const { alerter, calls } = restarted(openNow());
     await alerter.load();
     alerter.observe(report(down("notes")));
     await alerter.settled();
@@ -580,7 +585,7 @@ describe("alerted state across a restart", () => {
   });
 
   it("a restored app that is gone (deactivated or removed) is forgotten quietly", async () => {
-    const { alerter, calls } = restarted(async () => ["gone"]);
+    const { alerter, calls } = restarted(openNow("gone"));
     await alerter.load();
     alerter.observe(report(entry("core-api")));
     alerter.observe(report(entry("core-api"), entry("gone"))); // active again later: a fresh start
@@ -589,7 +594,7 @@ describe("alerted state across a restart", () => {
   });
 
   it("what this process already saw wins over the store", async () => {
-    const { alerter, calls } = restarted(async () => ["notes"]);
+    const { alerter, calls } = restarted(openNow("notes"));
     alerter.observe(report(entry("notes"))); // seen healthy before load()
     await alerter.load();
     alerter.observe(report(entry("notes")));
@@ -597,8 +602,33 @@ describe("alerted state across a restart", () => {
     expect(calls).toEqual([]); // no "recovered" for an app this process saw healthy
   });
 
+  it("an older down is not restored: an outage past restoreMaxAgeMs is announced again", async () => {
+    const at = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+    const { alerter, calls, logs } = restarted(async () => [
+      { id: "stale", at: at(25 * 60 * 60 * 1000) }, // past the 24 h default
+      { id: "fresh", at: at(23 * 60 * 60 * 1000) },
+      { id: "garbled", at: "not a time" },
+    ]);
+    await alerter.load();
+    expect(logs).toContainEqual({ msg: "health.alert_state_loaded", count: 1 });
+    for (let i = 0; i < 2; i++) alerter.observe(report(down("stale"), down("fresh"), down("garbled")));
+    await alerter.settled();
+    expect(calls).toHaveLength(1);
+    const lines = calls[0]!.split("\n").slice(1);
+    expect(lines.map((l) => l.split(":")[1]!.trim())).toEqual(["STALE (stale)", "GARBLED (garbled)"]);
+
+    const short = createStatusAlerter({
+      downRounds: 1,
+      restoreMaxAgeMs: 30_000,
+      store: { save: async () => {}, recent: async () => [], open: openNow("notes") }, // a minute ago
+    });
+    await short.load();
+    short.observe(report(down("notes")));
+    expect(short.history().alerts.map((a) => [a.kind, a.id])).toEqual([["down", "notes"]]);
+  });
+
   it("restores the state even with historySize 0, and without open() nothing is restored", async () => {
-    const zero = restarted(async () => ["notes"], { historySize: 0 });
+    const zero = restarted(openNow("notes"), { historySize: 0 });
     await zero.alerter.load();
     zero.alerter.observe(report(down("notes")));
     zero.alerter.observe(report(down("notes")));
