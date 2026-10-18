@@ -187,7 +187,11 @@ test("the docs example requires AUTH_SECRET and OIDC_CLIENT_SECRET only, for now
   const empty = check("", text);
   assert.equal(empty.status, 1);
   assert.match(empty.output, /AUTH_SECRET/);
-  assert.equal(check("AUTH_SECRET=stand-in\nOIDC_CLIENT_SECRET=stand-in\n", text).status, 0, "the app's later secrets are not required yet");
+  assert.equal(
+    check("AUTH_SECRET=stand-in\nOIDC_CLIENT_SECRET=stand-in\n", text).status,
+    0,
+    "the app's later secrets are not required yet",
+  );
 });
 
 test("the script is valid bash", () => {
