@@ -36,6 +36,9 @@
  *                                            each listed backup's sha256 now and exits 1 unless all are ok
  *                                            remove and purge take the id twice: typed at the prompt, or --confirm <id>
  *   pnpm platform role grant|revoke <role> <subject>    an admin (un)grants an app's declared role
+ *   pnpm platform role list [--app <id>] [--json]       every declared role, its holders and permissions; read-only
+ *   pnpm platform role holders <role> [--json]          who holds a role; read-only
+ *   pnpm platform role held-by <subject> [--json]       every role a person holds; read-only
  *   pnpm platform status [--alerts] [--json]  core-api's status board (and alert history); read-only,
  *                                            exits 1 unless every polled entry is live and ready
  *   pnpm platform audit [--app <id>] [--actor <text>] [--limit <n>] [--before <id>] [--json]
@@ -51,6 +54,7 @@ import { boundariesCommand } from "./boundaries.ts";
 import { compileCommand, validateCommand } from "./manifest.ts";
 import { composeCommand } from "./compose.ts";
 import { retentionCommand } from "./retention.ts";
+import { roleReadCommand } from "./roles.ts";
 import { statusCommand } from "./status.ts";
 import { reviewCommand } from "./review.ts";
 import { newAppCommand } from "./scaffold.ts";
@@ -83,6 +87,9 @@ const USAGE = [
   "      isn't a terminal; --yes is accepted only with --confirm <id>; --force purges before the",
   "      purge date)",
   "  platform role grant|revoke <role> <subject>",
+  "  platform role list [--app <id>] [--json]            every declared role with its holders and permissions",
+  "  platform role holders <role> [--json]               who holds a role",
+  "  platform role held-by <subject> [--json]            every role a person (identity sub) holds",
   "  platform status [--alerts] [--json]                 the status board (and alert history) from core-api;",
   "                                                      exits 1 unless every polled entry is live and ready",
   "  platform audit [--app <id>] [--actor <text>] [--limit <n>] [--before <id>] [--json]",
@@ -131,6 +138,8 @@ async function main(argv: string[]): Promise<number> {
     result = await statusCommand(rest, findRepoRoot(cwd));
   } else if (command === "audit") {
     result = await auditCommand(rest, findRepoRoot(cwd));
+  } else if (command === "role" && (rest[0] === "list" || rest[0] === "holders" || rest[0] === "held-by")) {
+    result = await roleReadCommand(rest, findRepoRoot(cwd));
   } else if (command === "role") {
     result = await roleCommand(rest, findRepoRoot(cwd));
   } else if (command === "app" && rest[0] === "list") {
