@@ -104,7 +104,8 @@ export function createAnthropicWriter(opts: {
             system,
             messages: [{ role: "user", content: user }],
             tools: [ISSUE_TOOL],
-            tool_choice: { type: "tool", name: ISSUE_TOOL.name },
+            // Newer models reject a forced tool_choice (HTTP 400); the system prompt says to call the tool.
+            tool_choice: { type: "auto" },
           }),
           signal: AbortSignal.timeout(opts.timeoutMs ?? AI_TIMEOUT_MS),
         });
