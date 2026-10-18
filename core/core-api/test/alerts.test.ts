@@ -519,6 +519,116 @@ describe("alert history store", () => {
   });
 });
 
+describe("alerted state across a restart", () => {
+  function restarted(open: AlertStore["open"], over: { historySize?: number } = {}) {
+    const calls: string[] = [];
+    const logs: object[] = [];
+    const fetchFn = vi.fn(async (_url: string | URL | Request, init: RequestInit = {}) => {
+      calls.push(JSON.parse(String(init.body)).content);
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+    const store: AlertStore = { save: vi.fn(async () => {}), recent: async () => [], ...(open ? { open } : {}) };
+    const alerter = createStatusAlerter({
+      webhookUrl: HOOK,
+      downRounds: 2,
+      fetch: fetchFn,
+      log: (l) => logs.push(l),
+      store,
+      ...over,
+    });
+    return { alerter, calls, logs, store };
+  }
+
+  it("an app still down after a restart gets no second down, and its recovery still goes out", async () => {
+    const { alerter, calls, logs, store } = restarted(async () => ["notes"]);
+    await alerter.load();
+    expect(logs).toContainEqual({ msg: "health.alert_state_loaded", count: 1 });
+    alerter.observe(report(entry("core-api"), down("notes")));
+    alerter.observe(report(entry("core-api"), down("notes")));
+    alerter.observe(report(entry("core-api"), down("notes")));
+    await alerter.settled();
+    expect(calls).toEqual([]);
+    expect(alerter.history().alerts).toEqual([]);
+    expect(store.save).not.toHaveBeenCalled();
+
+    alerter.observe(report(entry("core-api"), entry("notes")));
+    await alerter.settled();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.split("\n").slice(1)).toEqual(["🟢 Recovered: NOTES (notes): live up, ready up"]);
+    expect(alerter.history().alerts.map((a) => [a.kind, a.id])).toEqual([["recovered", "notes"]]);
+  });
+
+  it("an app that was alerted and is healthy on the first round after the restart recovers at once", async () => {
+    const { alerter, calls } = restarted(async () => ["docs"]);
+    await alerter.load();
+    alerter.observe(report(entry("core-api"), entry("docs")));
+    await alerter.settled();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("🟢 Recovered: DOCS (docs)");
+  });
+
+  it("an app that wasn't alerted before the restart is counted from zero, as before", async () => {
+    const { alerter, calls } = restarted(async () => []);
+    await alerter.load();
+    alerter.observe(report(down("notes")));
+    await alerter.settled();
+    expect(calls).toEqual([]); // one bad round of two
+    alerter.observe(report(down("notes")));
+    await alerter.settled();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("🔴 Down: NOTES (notes)");
+  });
+
+  it("a restored app that is gone (deactivated or removed) is forgotten quietly", async () => {
+    const { alerter, calls } = restarted(async () => ["gone"]);
+    await alerter.load();
+    alerter.observe(report(entry("core-api")));
+    alerter.observe(report(entry("core-api"), entry("gone"))); // active again later: a fresh start
+    await alerter.settled();
+    expect(calls).toEqual([]);
+  });
+
+  it("what this process already saw wins over the store", async () => {
+    const { alerter, calls } = restarted(async () => ["notes"]);
+    alerter.observe(report(entry("notes"))); // seen healthy before load()
+    await alerter.load();
+    alerter.observe(report(entry("notes")));
+    await alerter.settled();
+    expect(calls).toEqual([]); // no "recovered" for an app this process saw healthy
+  });
+
+  it("restores the state even with historySize 0, and without open() nothing is restored", async () => {
+    const zero = restarted(async () => ["notes"], { historySize: 0 });
+    await zero.alerter.load();
+    zero.alerter.observe(report(down("notes")));
+    zero.alerter.observe(report(down("notes")));
+    await zero.alerter.settled();
+    expect(zero.calls).toEqual([]);
+
+    const none = restarted(undefined);
+    await none.alerter.load();
+    expect(none.logs).not.toContainEqual(expect.objectContaining({ msg: "health.alert_state_loaded" }));
+    none.alerter.observe(report(down("notes")));
+    none.alerter.observe(report(down("notes")));
+    await none.alerter.settled();
+    expect(none.calls).toHaveLength(1);
+  });
+
+  it("a failed state load is logged by class only, keeps the history load, and alerts as before", async () => {
+    const { alerter, calls, logs } = restarted(async () => {
+      throw Object.assign(new Error("password=hunter2"), { code: "57P01" });
+    });
+    await expect(alerter.load()).resolves.toBeUndefined();
+    expect(logs).toContainEqual({ msg: "health.alert_state_load_failed", error: "57P01" });
+    expect(logs).toContainEqual({ msg: "health.alert_history_loaded", count: 0 });
+    expect(JSON.stringify(logs)).not.toContain("hunter2");
+    alerter.observe(report(down("notes")));
+    alerter.observe(report(down("notes")));
+    await alerter.settled();
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("parseDownRounds", () => {
   it("defaults to 2 and takes 1 to 20 without a webhook", () => {
     expect(parseDownRounds({})).toBe(2);
