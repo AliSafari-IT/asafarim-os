@@ -8,8 +8,9 @@
  *                          drop a removed app's database and role (POST /admin/v1/apps/<id>/purge)
  *   platform app retention [--eligible] [--verify]
  *                          removed apps, their backup and purge date (GET /admin/v1/retention);
- *                          --verify: core-api checks each backup file against its sha256 now, and the
- *                          command exits 1 unless every recorded backup is ok
+ *                          --verify: core-api checks each listed backup file against its sha256 now, and
+ *                          the command exits 1 unless every listed backup is ok (with --eligible, only the
+ *                          eligible entries are listed, so only those are checked)
  *
  * The confirmation rule, the same for remove and purge: the app id is always stated twice, as the
  * argument and again, either typed at the prompt or given as `--confirm <id>`. `--confirm` replaces

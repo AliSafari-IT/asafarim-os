@@ -32,7 +32,7 @@
  *                                            drop a removed app's database and role after its retention window
  *   pnpm platform app retention [--eligible] [--verify]
  *                                            removed apps, their backup and purge date; --verify checks
- *                                            each backup's sha256 now and exits 1 unless all are ok
+ *                                            each listed backup's sha256 now and exits 1 unless all are ok
  *                                            remove and purge take the id twice: typed at the prompt, or --confirm <id>
  *   pnpm platform role grant|revoke <role> <subject>    an admin (un)grants an app's declared role
  *   pnpm platform status [--alerts] [--json]  core-api's status board (and alert history); read-only,
@@ -71,7 +71,8 @@ const USAGE = [
   "  platform app purge <id> [--force] [--confirm <id>] [--yes]",
   "                                                      drop a removed app's database and role",
   "  platform app retention [--eligible] [--verify]      removed apps, their backup and purge date",
-  "      (--verify: core-api checks each backup file's sha256 now; exits 1 unless every one is ok)",
+  "      (--verify: core-api checks each listed backup file's sha256 now; exits 1 unless every one is ok;",
+  "      with --eligible only the eligible entries are listed and checked)",
   "      (remove and purge need the id twice: typed at the prompt, or --confirm <id> when stdin",
   "      isn't a terminal; --yes is accepted only with --confirm <id>; --force purges before the",
   "      purge date)",

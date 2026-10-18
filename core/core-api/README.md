@@ -352,7 +352,7 @@ Only a removed app that has a database and hasn't been purged yet (`409 invalid_
 
 **Nothing purges on its own**: core-api has no scheduler. `GET /admin/v1/retention?eligible=true` lists the apps a purge would accept now, and an administrator purges them.
 
-**Checking the backups:** a purge checks its backup's sha256, but nothing checks it afterwards, when it is the only copy. `GET /admin/v1/retention?verify=true` (with or without `eligible=true`) hashes each recorded backup file now, one at a time, purged apps included, and adds `backupCheck` to each entry: `ok`, `missing` (no file at the path), `mismatch` (the sha256 changed), `unreadable` (there, but it couldn't be read; logged as `core-api.backup_check_failed` with the error code), or `null` when no backup is recorded. It is read-only, and without `verify` the reply is unchanged. `pnpm platform app retention --verify` prints it and exits 1 unless every backup is `ok`.
+**Checking the backups:** a purge checks its backup's sha256, but nothing checks it afterwards, when it is the only copy. `GET /admin/v1/retention?verify=true` hashes each listed backup file now, one at a time, purged apps included (with `eligible=true`, only the eligible entries are listed, so only those are checked), and adds `backupCheck` to each entry: `ok`, `missing` (no file at the path), `mismatch` (the sha256 changed), `unreadable` (there, but it couldn't be read; logged as `core-api.backup_check_failed` with the error code), or `null` when no backup is recorded. It is read-only, and without `verify` the reply is unchanged. `pnpm platform app retention --verify` prints it and exits 1 unless every listed backup is `ok`.
 
 ### Reinstall
 
