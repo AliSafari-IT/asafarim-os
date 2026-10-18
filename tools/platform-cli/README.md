@@ -21,6 +21,8 @@ pnpm platform app new <id> [--name "<Display name>"] [--root <dir>]
                                         # write a minimal app to <dir>/apps/<id>/ (installs nothing)
 pnpm platform app compose <id|image-ref> --env prod|staging --out <file>
                                         # write the compose file that runs an external app (--help)
+pnpm platform app list [--json]
+                                        # every app core-api knows, with its state; read-only
 pnpm platform app remove <id> [--confirm <id>] [--yes]
                                         # back up the app's database, then remove the app
 pnpm platform app purge <id> [--force] [--confirm <id>] [--yes]
@@ -118,6 +120,19 @@ characters. `--app <id>` keeps one app's events, `--actor <text>` keeps actors c
 `--limit <n>` takes 1–200 events (core-api's default is 50), and `--before <id>` starts below that event id. When
 there are older events, the last line is the command for the next page, with the same filters. `--json` prints
 core-api's reply unchanged (`{ "events": […], "next": <id> | null }`), details in full.
+
+It uses the same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as `status`, and only reads. It exits 0 when core-api
+answered, and 1 when it can't be reached, refuses or answers with something else. Control characters in the text are
+replaced.
+
+## App list (`app list`)
+
+`app list` prints every app core-api knows (`GET /admin/v1/apps`, the same data as Admin's Apps page): core first,
+then installed apps by id, then removed ones. One row per app with its id, name, version, state (`(system)` for
+core, which can't be deactivated or removed), when it was installed, and its role and permission counts. Below the
+table, an app that subscribes to events no installed app publishes gets a warning line (nothing is blocked), and a
+removed app gets a line with its removal and purge date (`app retention` has the backup details). `--json` prints
+core-api's reply unchanged (`{ "apps": […] }`).
 
 It uses the same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as `status`, and only reads. It exits 0 when core-api
 answered, and 1 when it can't be reached, refuses or answers with something else. Control characters in the text are
