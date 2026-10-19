@@ -40,6 +40,10 @@ pnpm platform status [--alerts] [--json]
                                         # core-api's status board (and alert history); read-only
 pnpm platform audit [--app <id>] [--actor <text>] [--limit <n>] [--before <id>] [--json]
                                         # core-api's audit log, newest first; read-only
+pnpm platform events [--app <id>] [--json]
+                                        # the event catalog: publisher, schema status, subscribers; read-only
+pnpm platform events schema <type>
+                                        # the JSON schema a type's publisher uploaded; read-only
 ```
 
 `--other-stack-sites <file>` lists gateway sites that belong to **another stack
