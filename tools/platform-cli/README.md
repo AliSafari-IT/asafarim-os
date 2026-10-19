@@ -23,6 +23,8 @@ pnpm platform app compose <id|image-ref> --env prod|staging --out <file>
                                         # write the compose file that runs an external app (--help)
 pnpm platform app list [--json]
                                         # every app core-api knows, with its state; read-only
+pnpm platform app show <id> [--json]
+                                        # one app: version, state, its permissions and roles; read-only
 pnpm platform app remove <id> [--confirm <id>] [--yes]
                                         # back up the app's database, then remove the app
 pnpm platform app purge <id> [--force] [--confirm <id>] [--yes]
@@ -149,6 +151,18 @@ core-api's reply unchanged (`{ "apps": […] }`).
 It uses the same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as `status`, and only reads. It exits 0 when core-api
 answered, and 1 when it can't be reached, refuses or answers with something else. Control characters in the text are
 replaced.
+
+## One app (`app show`)
+
+`app show <id>` prints one app as core-api records it (`GET /admin/v1/apps/<id>`): its version, state, when it was
+installed and when it first registered ("not yet" until it has), then every permission it declares (key and
+description) and every role. A permission or role the app no longer declares, kept while a role or grant still uses
+it, is marked "deprecated" with its date. A removed app gets a pointer to `app retention`. The id is checked with
+core-api's pattern before any request. `--json` prints core-api's reply unchanged.
+
+Like `app list` it uses `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` and only reads. It exits 1 when core-api can't be
+reached, refuses, has no such app (`core-api has no app "<id>".`), or answers with something else. Control
+characters in the text are replaced.
 
 ## Roles and grants (`role list`, `role holders`, `role held-by`)
 
