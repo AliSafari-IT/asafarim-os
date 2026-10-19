@@ -21,8 +21,9 @@
  * - `event-handler-missing` (P7.2 part 2a): a declared subscription's `handler` path isn't served by
  *   any of the app's route files, and the app's code never names the event type either.
  * - `permission-not-declared`: the code checks a permission in the app's own namespace (a whole string
- *   literal `<id>.…` as the first or second argument of a check call such as `gate`, `require`,
- *   `includes`, `has` or `can`) that the manifest declares neither as a permission nor as a role. Nobody
+ *   literal `<id>.…` as the first or second argument of a check call such as `gate`, `require`, `can`,
+ *   or `includes`/`has` on a permission or role collection) that the manifest declares neither as a
+ *   permission nor as a role. Nobody
  *   can be granted it, so the check always refuses (often a typo).
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
@@ -149,33 +150,64 @@ export function eventTypesIn(text: string, namespace: string): string[] {
   return [...new Set([...text.matchAll(re)].map((m) => m[2]!))];
 }
 
-/** Calls that check a permission: the app's gate, the SDK's `access.require`, `permissions.includes`, … */
-export const CHECK_CALLS = [
-  "gate",
-  "require",
-  "requirePermission",
-  "includes",
-  "has",
-  "hasPermission",
-  "can",
-  "check",
-  "checkPermission",
-];
-const EVENT_TYPE_SHAPE = /\.v[1-9]\d*$/;
+/**
+ * Calls that check a permission by name: the app's gate, the SDK's `access.require`, … `includes` and
+ * `has` count only on a receiver named for permissions, roles or grants (`access.permissions.includes`,
+ * `roles.has`), so an ordinary membership test (`enabledFeatures.includes(…)`) isn't one.
+ */
+export const CHECK_CALLS = ["gate", "require", "requirePermission", "hasPermission", "can", "check", "checkPermission"];
+const MEMBERSHIP_CHECK = String.raw`[\w$]*(?:[Pp]erm|[Rr]ole|[Gg]rant)[\w$]*\s*\??\.\s*(?:includes|has)`;
+/** `<id>.<entity>.<verb>.v<N>`: an event type, not a permission. */
+const EVENT_TYPE_SHAPE = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.v[1-9]\d*$/;
 /** A last segment that names a file or a host, not a permission (`"notes.env"`, `"notes.asafarim.site"`). */
 const FILE_SUFFIX = /\.(?:json|[cm]?[jt]sx?|env|md|html?|css|txt|ya?ml|sql|png|svg|ico|lock)$/;
 const HOST_SUFFIX = /\.(?:site|com|net|org|io|cloud|dev|local|localhost|eu|be|nl)$/;
 
 /**
+ * `text` with its `//` and `/* *\/` comments blanked (newlines kept), leaving string literals alone, so
+ * a check that only appears in a comment isn't read as code. A light scanner, not a parser: regular
+ * expression literals are read as code.
+ */
+export function stripComments(text: string): string {
+  let out = "";
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote) {
+      out += c;
+      if (c === "\\" && i + 1 < text.length) out += text[++i];
+      else if (c === quote) quote = undefined;
+    } else if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      out += c;
+    } else if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+    } else if (c === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      const stop = close === -1 ? text.length : close + 2;
+      out += text.slice(i, stop).replace(/[^\n]/g, " ");
+      i = stop - 1;
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+/**
  * Keys in `namespace` (`<ns>.<word>[.<word>…]`, lower case) that `text` passes as a whole string literal
- * to a permission-check call (`CHECK_CALLS`), as its first or second argument. Event types, file
- * names and host names are left out.
+ * to a permission-check call (`CHECK_CALLS`, or `includes`/`has` on a permission or role collection),
+ * as its first or second argument. The first argument may hold one level of parentheses
+ * (`require(getSubject(), "…")`). Comments, event types, file names and host names are left out.
  */
 export function checkedKeysIn(text: string, namespace: string): string[] {
   const ns = namespace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const lit = `(["'\`])(${ns}(?:\\.[a-z][a-z0-9-]*)+)\\1`;
-  const re = new RegExp(`\\b(?:${CHECK_CALLS.join("|")})\\s*\\(\\s*(?:[^,()"'\`]*,\\s*)?${lit}`, "g");
-  const keys = [...text.matchAll(re)]
+  const callee = `(?:\\b(?:${CHECK_CALLS.join("|")})|(?<![\\w$])${MEMBERSHIP_CHECK})`;
+  const firstArg = String.raw`(?:[^,()"'\`]|\([^()"'\`]*\))*`;
+  const re = new RegExp(`${callee}\\s*\\(\\s*(?:${firstArg},\\s*)?${lit}`, "g");
+  const keys = [...stripComments(text).matchAll(re)]
     .map((m) => m[2]!)
     .filter((k) => !EVENT_TYPE_SHAPE.test(k) && !FILE_SUFFIX.test(k) && !HOST_SUFFIX.test(k));
   return [...new Set(keys)];

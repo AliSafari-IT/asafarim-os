@@ -20,6 +20,7 @@ import {
   routeUrlRegex,
   samplePaths,
   sourceFiles,
+  stripComments,
   type AppReview,
 } from "./review.ts";
 import { scaffoldApp } from "./scaffold.ts";
@@ -144,15 +145,30 @@ describe("helpers", () => {
       perms.includes(\`shop.admin\`); roles.has("shop.manager"); can("other.orders.read");
       log("shop.orders.logged"); gate(\`shop.\${x}\`); gate("shop.order.placed.v1"); file.includes("shop.env");
       x.includes("shop.data.json"); host.includes("shop.asafarim.site"); gate("myshop.orders.read"); gate(name, "shop.orders.second", "shop.orders.third");
-      gate("shop.orders.wrte");`;
+      gate("shop.orders.wrte"); enabledFeatures.includes("shop.beta"); flags.has("shop.dark");
+      // gate("shop.in.line.comment")
+      /* access.require(subject, "shop.in.block.comment") */ log("// not a comment", "shop.after.string");
+      access.require(getSubject(req), "shop.nested.first"); access?.permissions?.includes("shop.optional");
+      gate("shop.orders.v1"); userGrants.has("shop.granted");`;
     expect(checkedKeysIn(text, "shop")).toEqual([
       "shop.orders.wrte",
       "shop.orders.read",
       "shop.admin",
       "shop.manager",
       "shop.orders.second",
+      "shop.nested.first",
+      "shop.optional",
+      "shop.orders.v1",
+      "shop.granted",
     ]);
     expect(checkedKeysIn(`gate("my-app.items.read")`, "my-app")).toEqual(["my-app.items.read"]);
+  });
+
+  it("blanks comments but leaves strings, and keeps line breaks", () => {
+    expect(stripComments(`a // b\nc /* d\ne */ f "g // h" 'i /* j */' \`k // l\``)).toBe(
+      `a \nc     \n     f "g // h" 'i /* j */' \`k // l\``,
+    );
+    expect(stripComments(`x = "a\\"// b"; // c`)).toBe(`x = "a\\"// b"; \n`);
   });
 
   it("resolves the app's own imports and ignores packages", () => {
