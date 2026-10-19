@@ -131,6 +131,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth(
 - The session is a JWT in a **host-only `__Host-` cookie**: `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`, so another app or subdomain can't read it. (Browsers accept `Secure` cookies on `http://localhost`, so it works in development.)
 - `session.user.id` is the identity `sub`: the subject permissions are resolved for.
 - `keepIdToken: true` keeps the ID token inside the encrypted session cookie (`token.idToken`) for an app that must present it on the person's behalf: the Admin console. It is **not** in the session object (that goes to the browser); read it on the server with `getToken`. `sessionMaxAgeSeconds` caps the session (the console uses the ID token's hour).
+- **How long a person stays signed in:** `sessionMaxAgeSeconds`, counted from sign-in, default `IDENTITY_SESSION_SECONDS` (12 hours, identity's own session). It is an **absolute** limit: the token carries `signedInAt`, and past the limit the session is cleared however active the person is (Auth.js alone would roll it forward on every request). So an app never shows someone as signed in after identity, the OS home page and "Your account" no longer do. A session from before the stamp existed ends once.
 
 The app's OIDC client must exist in identity's client config (in development `pnpm dev:keys` writes one per app in `apps/*`).
 

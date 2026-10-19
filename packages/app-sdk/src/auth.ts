@@ -34,19 +34,31 @@ export interface AuthConfigOptions {
    * `getToken` from `next-auth/jwt`.
    */
   keepIdToken?: boolean;
-  /** Session lifetime in seconds (Auth.js default: 30 days). The console sets it to the ID token's lifetime. */
+  /**
+   * How long a person stays signed in to this app, in seconds, counted from sign-in (default: identity's own session,
+   * IDENTITY_SESSION_SECONDS). It is an absolute limit: Auth.js re-signs the session on every request, which would
+   * otherwise keep it alive for as long as the person is active. The console sets it to the ID token's lifetime.
+   */
   sessionMaxAgeSeconds?: number;
 }
 
+/**
+ * How long identity's own session lasts (AUTH_SESSION_TTL_SECONDS in core/identity/src/auth-session.ts: keep the two
+ * equal). An app's session ends no later, so an app never shows someone as signed in after the OS home page
+ * (asafarim.site, which asks identity) and identity's account page no longer do.
+ */
+export const IDENTITY_SESSION_SECONDS = 12 * 3600;
+
 export function asafarimAuthConfig(opts: AuthConfigOptions) {
   const confidential = Boolean(opts.clientSecret);
+  const maxAge = opts.sessionMaxAgeSeconds ?? IDENTITY_SESSION_SECONDS;
   return {
     secret: opts.secret,
     // Behind the OS gateway or on localhost the Host header is the app's own.
     trustHost: true,
     session: {
       strategy: "jwt" as const,
-      ...(opts.sessionMaxAgeSeconds ? { maxAge: opts.sessionMaxAgeSeconds } : {}),
+      maxAge,
     },
     providers: [
       {
@@ -68,7 +80,11 @@ export function asafarimAuthConfig(opts: AuthConfigOptions) {
       },
     },
     callbacks: {
-      /** Keep the identity `sub` (and its role claim) on the token. */
+      /**
+       * Keep the identity `sub` (and its role claim) on the token, and when the person signed in: the session ends
+       * `maxAge` seconds after that, however active they are (null makes Auth.js clear it). A token without the
+       * stamp is from before this limit existed, and ends too: the person signs in once more.
+       */
       // Generic over the token and session types so Auth.js's own (stricter) types fit.
       jwt<T extends Record<string, unknown>>({
         token,
@@ -78,8 +94,12 @@ export function asafarimAuthConfig(opts: AuthConfigOptions) {
         token: T;
         profile?: { sub?: string | null; roles?: unknown };
         account?: { id_token?: string | null } | null;
-      }): T {
+      }): T | null {
         const t = token as Record<string, unknown>;
+        const now = Math.floor(Date.now() / 1000);
+        if (account) t.signedInAt = now;
+        const signedInAt = t.signedInAt;
+        if (typeof signedInAt !== "number" || now - signedInAt >= maxAge) return null;
         if (profile?.sub) t.sub = String(profile.sub);
         if (Array.isArray(profile?.roles)) t.roles = profile.roles;
         // Only at sign-in (that's when `account` exists), and only when asked for.
