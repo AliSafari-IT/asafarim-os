@@ -129,7 +129,7 @@ export default async function AppsPage({
       <Flash notice={notice} error={error} />
       {checkable ? (
         <p className="muted" data-testid="backup-check-bar">
-          {checking ? (
+          {checking && !checkError ? (
             <>
               Each removed app&apos;s backup file was just checked against the sha256 recorded at Remove.{" "}
               <Link href="/admin/apps">Hide the check</Link>

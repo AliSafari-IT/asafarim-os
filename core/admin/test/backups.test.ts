@@ -9,7 +9,7 @@ import {
   wantsBackupCheck,
   type BackupVerdict,
 } from "../lib/backups";
-import { CoreApiError, coreApi, type Retention } from "../lib/core-api";
+import { BACKUP_CHECK_TIMEOUT_MS, CoreApiError, coreApi, type Retention } from "../lib/core-api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -140,5 +140,27 @@ describe("the backup check on the Apps page (#168's ?verify=true)", () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CoreApiError);
     expect(err).toMatchObject({ status: 400, code: "bad_request", message: "backup verification isn't configured" });
+  });
+
+  it("gives the check longer than other calls (it hashes every backup), and says so when it runs out", async () => {
+    process.env.CORE_API_URL = "http://core.test";
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new DOMException("The operation timed out.", "TimeoutError");
+      }),
+    );
+    const err = await coreApi("t")
+      .verifyBackups()
+      .catch((e: unknown) => e);
+    expect(timeout).toHaveBeenLastCalledWith(BACKUP_CHECK_TIMEOUT_MS);
+    expect(BACKUP_CHECK_TIMEOUT_MS).toBeGreaterThan(8000);
+    expect(err).toMatchObject({ status: 0, code: "timeout", message: "core-api didn't answer within 60 s." });
+    await coreApi("t")
+      .apps()
+      .catch(() => {});
+    expect(timeout).toHaveBeenLastCalledWith(8000);
+    timeout.mockRestore();
   });
 });
