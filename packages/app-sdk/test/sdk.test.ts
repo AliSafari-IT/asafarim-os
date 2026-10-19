@@ -1,12 +1,13 @@
 import { generateKeyPairSync, verify, type KeyObject } from "node:crypto";
 import { canonicalString } from "@asafarim/registry-protocol";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AccessUnavailableError,
   ForbiddenError,
   RegistrationError,
   SESSION_COOKIE_NAME,
   asafarimAuthConfig,
+  IDENTITY_SESSION_SECONDS,
   backoffDelay,
   createAccess,
   createConfig,
@@ -503,9 +504,54 @@ describe("asafarimAuthConfig (Auth.js)", () => {
 
   it("puts the identity sub on the token and session.user.id", () => {
     const cfg = asafarimAuthConfig({ issuer: "http://localhost:4010", clientId: "notes" });
-    const token = cfg.callbacks.jwt({ token: {}, profile: { sub: "dev-member", roles: ["member"] } });
-    expect(token).toEqual({ sub: "dev-member", roles: ["member"] });
+    const token = cfg.callbacks.jwt({
+      token: {},
+      profile: { sub: "dev-member", roles: ["member"] },
+      account: { id_token: "a.b.c" },
+    })!;
+    expect(token).toMatchObject({ sub: "dev-member", roles: ["member"] });
     expect(cfg.callbacks.session({ session: { user: {} }, token }).user).toEqual({ id: "dev-member" });
+  });
+});
+
+describe("asafarimAuthConfig: an app's session never outlives identity's", () => {
+  const NOW = new Date("2026-10-19T10:00:00Z");
+  const now = Math.floor(NOW.getTime() / 1000);
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const cfg = asafarimAuthConfig({ issuer: "http://id", clientId: "docs" });
+  const jwt = (token: Record<string, unknown>, account?: object) =>
+    (cfg.callbacks.jwt as (a: object) => Record<string, unknown> | null)({ token, account });
+
+  it("lasts as long as identity's own session by default", () => {
+    expect(IDENTITY_SESSION_SECONDS).toBe(12 * 3600);
+    expect(cfg.session.maxAge).toBe(IDENTITY_SESSION_SECONDS);
+  });
+
+  it("stamps the sign-in time when the person signs in", () => {
+    expect(jwt({}, { id_token: "a.b.c" })).toMatchObject({ signedInAt: now });
+  });
+
+  it("keeps the session until the limit, then ends it: activity does not extend it", () => {
+    const token = { sub: "u1", signedInAt: now };
+    vi.setSystemTime(new Date(NOW.getTime() + (IDENTITY_SESSION_SECONDS - 1) * 1000));
+    expect(jwt(token)).toEqual(token);
+    vi.setSystemTime(new Date(NOW.getTime() + IDENTITY_SESSION_SECONDS * 1000));
+    expect(jwt(token)).toBeNull();
+  });
+
+  it("ends a session from before the stamp existed, once", () => {
+    expect(jwt({ sub: "u1" })).toBeNull();
+  });
+
+  it("a fresh sign-in starts a new period", () => {
+    vi.setSystemTime(new Date(NOW.getTime() + 2 * IDENTITY_SESSION_SECONDS * 1000));
+    const later = Math.floor(Date.now() / 1000);
+    expect(jwt({ sub: "u1", signedInAt: now }, { id_token: "x" })).toMatchObject({ signedInAt: later });
   });
 });
 
@@ -547,13 +593,24 @@ describe("startApp", () => {
 });
 
 describe("asafarimAuthConfig: the ID token and session lifetime (the Admin console)", () => {
+  const NOW = new Date("2026-10-19T10:00:00Z");
+  const now = Math.floor(NOW.getTime() / 1000);
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
   const jwt = (cfg: ReturnType<typeof asafarimAuthConfig>, args: object) =>
-    (cfg.callbacks.jwt as (a: object) => Record<string, unknown>)({ token: {}, ...args });
+    (cfg.callbacks.jwt as (a: object) => Record<string, unknown> | null)({ token: {}, ...args });
 
   it("doesn't keep the ID token by default", () => {
     const cfg = asafarimAuthConfig({ issuer: "http://id", clientId: "notes" });
-    expect(jwt(cfg, { profile: { sub: "u1" }, account: { id_token: "a.b.c" } })).toEqual({ sub: "u1" });
-    expect(cfg.session).toEqual({ strategy: "jwt" });
+    expect(jwt(cfg, { profile: { sub: "u1" }, account: { id_token: "a.b.c" } })).toEqual({
+      sub: "u1",
+      signedInAt: now,
+    });
+    expect(cfg.session).toEqual({ strategy: "jwt", maxAge: IDENTITY_SESSION_SECONDS });
   });
 
   it("keeps it in the token (never the session) when asked, and only at sign-in", () => {
@@ -566,8 +623,13 @@ describe("asafarimAuthConfig: the ID token and session lifetime (the Admin conso
     expect(jwt(cfg, { profile: { sub: "u1" }, account: { id_token: "a.b.c" } })).toEqual({
       sub: "u1",
       idToken: "a.b.c",
+      signedInAt: now,
     });
-    expect(jwt(cfg, {})).toEqual({}); // a later request has no `account`
+    expect(jwt(cfg, { token: { sub: "u1", idToken: "a.b.c", signedInAt: now } })).toEqual({
+      sub: "u1",
+      idToken: "a.b.c",
+      signedInAt: now,
+    }); // a later request has no `account`
     const session = (cfg.callbacks.session as (a: object) => { user: Record<string, unknown> })({
       session: { user: {} },
       token: { sub: "u1", idToken: "a.b.c" },
