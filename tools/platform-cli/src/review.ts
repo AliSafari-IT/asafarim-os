@@ -20,6 +20,10 @@
  *   core-api would refuse it and no subscriber can declare it.
  * - `event-handler-missing` (P7.2 part 2a): a declared subscription's `handler` path isn't served by
  *   any of the app's route files, and the app's code never names the event type either.
+ * - `permission-not-declared`: the code checks a permission in the app's own namespace (a whole string
+ *   literal `<id>.…` as the first or second argument of a check call such as `gate`, `require`,
+ *   `includes`, `has` or `can`) that the manifest declares neither as a permission nor as a role. Nobody
+ *   can be granted it, so the check always refuses (often a typo).
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -39,7 +43,8 @@ export type FindingKind =
   | "permission-never-checked"
   | "route-unguarded"
   | "event-not-declared"
-  | "event-handler-missing";
+  | "event-handler-missing"
+  | "permission-not-declared";
 
 export interface Finding {
   app: string;
@@ -142,6 +147,38 @@ export function eventTypesIn(text: string, namespace: string): string[] {
   const ns = namespace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const re = new RegExp(`(["'\`])(${ns}\\.[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*\\.v[1-9]\\d*)\\1`, "g");
   return [...new Set([...text.matchAll(re)].map((m) => m[2]!))];
+}
+
+/** Calls that check a permission: the app's gate, the SDK's `access.require`, `permissions.includes`, … */
+export const CHECK_CALLS = [
+  "gate",
+  "require",
+  "requirePermission",
+  "includes",
+  "has",
+  "hasPermission",
+  "can",
+  "check",
+  "checkPermission",
+];
+const EVENT_TYPE_SHAPE = /\.v[1-9]\d*$/;
+/** A last segment that names a file or a host, not a permission (`"notes.env"`, `"notes.asafarim.site"`). */
+const FILE_SUFFIX = /\.(?:json|[cm]?[jt]sx?|env|md|html?|css|txt|ya?ml|sql|png|svg|ico|lock)$/;
+const HOST_SUFFIX = /\.(?:site|com|net|org|io|cloud|dev|local|localhost|eu|be|nl)$/;
+
+/**
+ * Keys in `namespace` (`<ns>.<word>[.<word>…]`, lower case) that `text` passes as a whole string literal
+ * to a permission-check call (`CHECK_CALLS`), as its first or second argument. Event types, file
+ * names and host names are left out.
+ */
+export function checkedKeysIn(text: string, namespace: string): string[] {
+  const ns = namespace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const lit = `(["'\`])(${ns}(?:\\.[a-z][a-z0-9-]*)+)\\1`;
+  const re = new RegExp(`\\b(?:${CHECK_CALLS.join("|")})\\s*\\(\\s*(?:[^,()"'\`]*,\\s*)?${lit}`, "g");
+  const keys = [...text.matchAll(re)]
+    .map((m) => m[2]!)
+    .filter((k) => !EVENT_TYPE_SHAPE.test(k) && !FILE_SUFFIX.test(k) && !HOST_SUFFIX.test(k));
+  return [...new Set(keys)];
 }
 
 /**
@@ -371,6 +408,24 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
         message: `the app subscribes to ${sub.type}, but no route file serves its handler ${sub.handler} and no code names the type`,
       });
     }
+  }
+
+  // 6. Permissions the code checks in the app's own namespace are declared (as a permission or a role).
+  const declared = new Set([...keys, ...manifest.roles.map((r) => r.key)]);
+  const unknownKeys = new Map<string, string>(); // key → first file checking it
+  for (const f of files) {
+    for (const key of checkedKeysIn(f.text, app)) {
+      if (!declared.has(key) && !unknownKeys.has(key)) unknownKeys.set(key, f.rel);
+    }
+  }
+  for (const [key, file] of [...unknownKeys].sort(([a], [b]) => a.localeCompare(b))) {
+    findings.push({
+      app,
+      kind: "permission-not-declared",
+      subject: key,
+      file: rel(path.join(appDir, file)),
+      message: `the code checks permission ${key}, but the manifest doesn't declare it, so nobody can be granted it and the check always refuses (a typo, or add it to permissions)`,
+    });
   }
 
   return { app, findings, handlers, plumbing };

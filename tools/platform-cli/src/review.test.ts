@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  checkedKeysIn,
   exportedMethods,
   globRegex,
   localImports,
@@ -138,6 +139,22 @@ describe("helpers", () => {
     expect(eventTypesIn(`"my-app.item.made.v1"`, "my-app")).toEqual(["my-app.item.made.v1"]);
   });
 
+  it("finds keys the code passes to a permission check in its own namespace", () => {
+    const text = `await gate("shop.orders.wrte"); access.require(subject, 'shop.orders.read', { token });
+      perms.includes(\`shop.admin\`); roles.has("shop.manager"); can("other.orders.read");
+      log("shop.orders.logged"); gate(\`shop.\${x}\`); gate("shop.order.placed.v1"); file.includes("shop.env");
+      x.includes("shop.data.json"); host.includes("shop.asafarim.site"); gate("myshop.orders.read"); gate(name, "shop.orders.second", "shop.orders.third");
+      gate("shop.orders.wrte");`;
+    expect(checkedKeysIn(text, "shop")).toEqual([
+      "shop.orders.wrte",
+      "shop.orders.read",
+      "shop.admin",
+      "shop.manager",
+      "shop.orders.second",
+    ]);
+    expect(checkedKeysIn(`gate("my-app.items.read")`, "my-app")).toEqual(["my-app.items.read"]);
+  });
+
   it("resolves the app's own imports and ignores packages", () => {
     const known = new Set(["lib/gate.ts", "lib/api/index.ts", "app/api/x/helper.tsx"]);
     expect(localImports(`import { a } from "@/lib/gate";\nimport b from "./helper";\nimport z from "zod";`)).toEqual([
@@ -266,6 +283,26 @@ describe("platform manifest review", () => {
     expect(found.map((f) => `${f.kind} ${f.subject} ${f.file}`)).toEqual([
       "event-not-declared shop.cart.emptied.v1 apps/shop/lib/more.ts",
       "event-not-declared shop.order.refunded.v1 apps/shop/lib/events.ts",
+    ]);
+  });
+
+  it("reports a permission the code checks that the manifest declares neither as a permission nor a role", () => {
+    writeApp(manifest({ roles: [{ key: "shop.clerk", grants: ["shop.orders.read"], description: "Clerk" }] }));
+    put("apps/shop/lib/gate.ts", `export async function gate(p: string) { return p; }`);
+    put(
+      "apps/shop/app/api/orders/route.ts",
+      `import { gate } from "@/lib/gate";\nexport async function GET() { await gate("shop.orders.read"); }\nexport async function POST() { await gate("shop.orders.wrte"); }`,
+    );
+    put(
+      "apps/shop/app/page.tsx",
+      `const a = perms.includes("shop.orders.write"); const b = roles.includes("shop.clerk"); const c = roles.includes("shop.owner"); const d = perms.includes("shop.orders.wrte");`,
+    );
+    put("apps/shop/lib/other.ts", `log("shop.audit.read"); can("billing.invoices.read");`);
+    put("apps/shop/lib/gate.test.ts", `gate("shop.tested.only")`);
+    const found = json().reviews[0]!.findings as { kind: string; subject: string; file?: string }[];
+    expect(found.map((f) => `${f.kind} ${f.subject} ${f.file}`)).toEqual([
+      "permission-not-declared shop.orders.wrte apps/shop/app/api/orders/route.ts",
+      "permission-not-declared shop.owner apps/shop/app/page.tsx",
     ]);
   });
 
