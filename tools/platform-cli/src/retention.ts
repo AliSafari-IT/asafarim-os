@@ -23,6 +23,7 @@
  */
 import { createInterface } from "node:readline/promises";
 import { adminEndpoint } from "./app.ts";
+import { clean } from "./text.ts";
 
 type Result = { ok: boolean; lines: string[] };
 type Endpoint = { baseUrl: string; token: string };
@@ -145,20 +146,22 @@ export async function request(
     out = {};
   }
   if (res.ok) return { ok: true, out };
+  // A refusal's error and message are printed by every command, so their control characters are
+  // replaced here, once (CWE-150); the codes core-api sends are plain words and stay as they are.
   return {
     ok: false,
     status: res.status,
-    error: typeof out.error === "string" ? out.error : `http_${res.status}`,
-    ...(typeof out.message === "string" ? { message: out.message } : {}),
+    error: typeof out.error === "string" ? clean(out.error) : `http_${res.status}`,
+    ...(typeof out.message === "string" ? { message: clean(out.message) } : {}),
     ...(out.details !== undefined ? { details: out.details } : {}),
   };
 }
 
-/** `2026-11-15T10:00:00.000Z` → `2026-11-15 10:00 UTC`. */
+/** `2026-11-15T10:00:00.000Z` → `2026-11-15 10:00 UTC`; a string it can't parse is passed through, cleaned. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "–";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+  if (Number.isNaN(d.getTime())) return clean(iso);
   return `${d.toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
@@ -217,7 +220,7 @@ function removeRefusal(r: Exclude<Reply, { ok: true }>, id: string): string[] {
 /** One plain sentence per `purge_refused` reason (core-api's `details.reason`). */
 function purgeRefusedLines(id: string, details: unknown, message: string | undefined): string[] {
   const d = (details ?? {}) as { reason?: unknown; purgeAfter?: unknown; backup?: { path?: unknown } };
-  const file = typeof d.backup?.path === "string" ? d.backup.path : "its backup file";
+  const file = typeof d.backup?.path === "string" ? clean(d.backup.path) : "its backup file";
   switch (d.reason) {
     case "retention":
       return [
