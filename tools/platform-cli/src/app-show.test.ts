@@ -151,6 +151,19 @@ describe("platform app show: refusals", () => {
     expect(n?.lines).toEqual(['core-api has no app "ghost".']);
   });
 
+  it("replaces control characters in core-api's refusal text", async () => {
+    const r = await appShowCommand(
+      ["notes"],
+      workspace(),
+      ENV,
+      reply(409, { error: "odd\u001b[2J", message: "x\u0007y" }),
+    );
+    expect(r?.ok).toBe(false);
+    // eslint-disable-next-line no-control-regex
+    for (const line of r!.lines) expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(r?.lines).toEqual(["core-api refused: odd?[2J (x?y)"]);
+  });
+
   it("fails on a reply that isn't one app, instead of printing garbage", async () => {
     const bodies = [
       [],

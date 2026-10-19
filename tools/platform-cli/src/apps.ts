@@ -236,7 +236,8 @@ export async function appShowCommand(
   const route = `${APPS}/${p.id}`;
   const r = await request(target, "GET", route, fetchImpl);
   // core-api answers not_found both for an unknown app and (with no message) for a missing route.
-  if (!r.ok) return { ok: false, lines: commonRefusal(r, p.id, "").filter(Boolean) };
+  // The refusal carries core-api's error and message text, so it is cleaned like the rest of the reply.
+  if (!r.ok) return { ok: false, lines: commonRefusal(r, p.id, "").filter(Boolean).map(clean) };
   const app = asShownApp(r.out);
   if (!app) return { ok: false, lines: [`core-api's reply to GET ${route} isn't what this CLI expects.`] };
 
