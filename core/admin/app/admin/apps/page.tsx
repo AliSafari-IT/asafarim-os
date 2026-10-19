@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { BackupCheck } from "@/components/BackupCheck";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EventsWarning } from "@/components/EventsWarning";
 import { Flash } from "@/components/Flash";
-import { coreApi, type AdminApp } from "@/lib/core-api";
+import { VERIFY_PARAM, backupVerdicts, hasCheckableBackup, wantsBackupCheck, type BackupVerdict } from "@/lib/backups";
+import { CoreApiError, coreApi, type AdminApp } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
 import { formatTime } from "@/lib/util";
 import { activateApp, deactivateApp, purgeApp, removeApp } from "../actions";
@@ -30,8 +32,11 @@ function formatBytes(n: number): string {
   return `${v.toFixed(1)} ${units[i]}`;
 }
 
-/** A removed app's database: its backup, and when it may be (or was) purged. */
-function RetentionInfo({ app }: { app: AdminApp }) {
+/**
+ * A removed app's database: its backup, and when it may be (or was) purged. With `?verify=1`, also
+ * whether the backup file is still intact (`verdict`; absent when the check didn't run or said nothing).
+ */
+function RetentionInfo({ app, verdict }: { app: AdminApp; verdict?: BackupVerdict }) {
   const r = app.retention;
   if (app.state !== "removed" || !r) return null;
   if (!r.database) return <div className="muted">No database: nothing to back up or purge.</div>;
@@ -44,6 +49,7 @@ function RetentionInfo({ app }: { app: AdminApp }) {
           <div className="mono" title="sha256">
             sha256 {r.backup.sha256.slice(0, 16)}…
           </div>
+          {verdict ? <BackupCheck appId={app.id} verdict={verdict} purged={!!r.purgedAt} /> : null}
         </div>
       ) : (
         <div>No backup recorded: the database is kept and can&apos;t be purged.</div>
@@ -92,8 +98,24 @@ export default async function AppsPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const admin = await requireAdmin();
-  const { notice, error } = await searchParams;
-  const apps = await coreApi(admin.idToken).apps();
+  const params = await searchParams;
+  const { notice, error } = params;
+  const api = coreApi(admin.idToken);
+  const apps = await api.apps();
+
+  // The backup check (#168) runs only when asked for (`?verify=1`): it hashes every backup file.
+  // A refusal or an unreachable core-api is one line; the rest of the page still renders.
+  const checkable = hasCheckableBackup(apps);
+  const checking = checkable && wantsBackupCheck(params[VERIFY_PARAM]);
+  let verdicts = new Map<string, BackupVerdict>();
+  let checkError: string | null = null;
+  if (checking) {
+    try {
+      verdicts = backupVerdicts(await api.verifyBackups());
+    } catch (e) {
+      checkError = e instanceof CoreApiError ? e.message : "core-api didn't answer the backup check.";
+    }
+  }
 
   return (
     <>
@@ -105,6 +127,29 @@ export default async function AppsPage({
         is kept until it is purged, after the retention window.
       </p>
       <Flash notice={notice} error={error} />
+      {checkable ? (
+        <p className="muted" data-testid="backup-check-bar">
+          {checking && !checkError ? (
+            <>
+              Each removed app&apos;s backup file was just checked against the sha256 recorded at Remove.{" "}
+              <Link href="/admin/apps">Hide the check</Link>
+            </>
+          ) : (
+            <>
+              <Link href={`/admin/apps?${VERIFY_PARAM}=1`} data-testid="check-backups">
+                Check backups
+              </Link>
+              : core-api checks each removed app&apos;s backup file against the sha256 recorded at Remove. It only
+              reads, but a large backup takes a while.
+            </>
+          )}
+        </p>
+      ) : null}
+      {checkError ? (
+        <div className="notice bad" role="alert" data-testid="backup-check-error">
+          The backup check failed: {checkError}
+        </div>
+      ) : null}
       <div className="table-wrap">
         <table>
           <caption>Every app core-api knows, with its state</caption>
@@ -133,7 +178,7 @@ export default async function AppsPage({
                 </td>
                 <td>
                   {installStatus(app)}
-                  <RetentionInfo app={app} />
+                  <RetentionInfo app={app} verdict={verdicts.get(app.id)} />
                   <EventsWarning appId={app.id} types={app.waitingForPublisher ?? []} />
                 </td>
                 <td className="muted">

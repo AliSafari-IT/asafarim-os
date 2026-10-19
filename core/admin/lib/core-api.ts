@@ -164,7 +164,17 @@ export interface RoleGrant {
 
 const base = () => (process.env.CORE_API_URL ?? "http://localhost:4020").replace(/\/$/, "");
 
-async function call<T>(idToken: string, method: string, path: string, body?: object): Promise<T> {
+/** How long a call may take. The backup check hashes every backup file, so it gets longer. */
+const TIMEOUT_MS = 8000;
+export const BACKUP_CHECK_TIMEOUT_MS = 60_000;
+
+async function call<T>(
+  idToken: string,
+  method: string,
+  path: string,
+  body?: object,
+  timeoutMs: number = TIMEOUT_MS,
+): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${base()}${path}`, {
@@ -176,9 +186,11 @@ async function call<T>(idToken: string, method: string, path: string, body?: obj
       ...(body ? { body: JSON.stringify(body) } : {}),
       // Next.js caches GET fetches in development; an admin must never see a stale list.
       cache: "no-store",
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch {
+  } catch (e) {
+    if ((e as { name?: unknown } | null)?.name === "TimeoutError")
+      throw new CoreApiError(0, "timeout", `core-api didn't answer within ${Math.round(timeoutMs / 1000)} s.`);
     throw new CoreApiError(0, "unreachable", "core-api isn't reachable right now.");
   }
   const payload = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
@@ -223,6 +235,12 @@ export function coreApi(idToken: string) {
      */
     purge: (app: string, opts: { force: boolean; confirm: string }) =>
       call<PurgeResult>(idToken, "POST", `/admin/v1/apps/${enc(app)}/purge`, opts),
+    /**
+     * Removed apps' retention with each backup file checked now against its recorded sha256
+     * (`GET /admin/v1/retention?verify=true`, read-only). Read the verdicts with `backupVerdicts`.
+     */
+    verifyBackups: () =>
+      call<unknown>(idToken, "GET", "/admin/v1/retention?verify=true", undefined, BACKUP_CHECK_TIMEOUT_MS),
     grant: (role: string, subject: string) =>
       call<{ granted: boolean }>(idToken, "PUT", `/admin/v1/roles/${enc(role)}/grants/${enc(subject)}`),
     revoke: (role: string, subject: string) =>
