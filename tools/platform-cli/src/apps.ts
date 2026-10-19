@@ -139,3 +139,108 @@ export async function appListCommand(
   if (p.json) return { ok: true, stdout: true, lines: [JSON.stringify(r.out, null, 2)] };
   return { ok: true, stdout: true, lines: formatAppList(apps) };
 }
+
+/*
+ * `platform app show <id> [--json]`: one app as core-api records it (GET /admin/v1/apps/<id>): its
+ * version, state, when it was installed and registered, and the permissions and roles it declares,
+ * deprecated ones marked. Read-only, like `app list`; --json prints core-api's reply unchanged.
+ */
+
+/** The shape core-api's routes accept (server.ts APP_ID), plus `core`: checked first, so a typo isn't a request. */
+const SHOW_APP_ID = /^(?:core|[a-z][a-z0-9-]{1,31})$/;
+
+export interface AppShowArgs {
+  id: string;
+  json: boolean;
+}
+
+/** `app show <id> [--json]` (the words after `show`); null = not valid (the usage is printed). */
+export function parseAppShowArgs(args: string[]): AppShowArgs | null {
+  let json = false;
+  const words: string[] = [];
+  for (const a of args) {
+    if (a === "--json" && !json) json = true;
+    else if (!a.startsWith("--")) words.push(a);
+    else return null;
+  }
+  if (words.length !== 1 || !SHOW_APP_ID.test(words[0]!)) return null;
+  return { id: words[0]!, json };
+}
+
+/** One app (mirrors core-api's `registry.get`, core/core-api/src/registry.ts). */
+export interface ShownApp {
+  id: string;
+  version: string;
+  state: string;
+  installed_at: string | null;
+  registered_at: string | null;
+  permissions: { key: string; description?: string | null; deprecated_at?: string | null }[];
+  roles: { key: string; deprecated_at?: string | null }[];
+}
+
+const hasKey = (v: unknown) => isObject(v) && typeof v.key === "string";
+
+/** core-api's reply as one app, or null when it isn't one (the command then fails instead of guessing). */
+export function asShownApp(out: unknown): ShownApp | null {
+  if (!isObject(out) || typeof out.id !== "string") return null;
+  if (!Array.isArray(out.permissions) || !out.permissions.every(hasKey)) return null;
+  if (!Array.isArray(out.roles) || !out.roles.every(hasKey)) return null;
+  return out as unknown as ShownApp;
+}
+
+const deprecatedMark = (at: unknown) => (at ? `  (deprecated ${when(at)})` : "");
+
+export function formatAppShow(app: ShownApp): string[] {
+  const lines = [
+    `App:         ${clean(app.id)}`,
+    `Version:     ${clean(app.version)}`,
+    `State:       ${clean(app.state)}`,
+    `Installed:   ${when(app.installed_at)}`,
+    `Registered:  ${app.registered_at ? when(app.registered_at) : "not yet"}`,
+    "",
+  ];
+  if (app.permissions.length === 0) lines.push("Permissions: none declared");
+  else {
+    const width = Math.max(...app.permissions.map((p) => clean(p.key).length));
+    lines.push(`Permissions (${app.permissions.length}):`);
+    for (const p of app.permissions) {
+      const description = typeof p.description === "string" && p.description ? clean(p.description) : "";
+      lines.push(`  ${`${clean(p.key).padEnd(width)}  ${description}`.trimEnd()}${deprecatedMark(p.deprecated_at)}`);
+    }
+  }
+  if (app.roles.length === 0) lines.push("Roles: none declared");
+  else {
+    lines.push(`Roles (${app.roles.length}):`);
+    for (const r of app.roles) lines.push(`  ${clean(r.key)}${deprecatedMark(r.deprecated_at)}`);
+  }
+  const deprecated = [...app.permissions, ...app.roles].some((x) => x.deprecated_at);
+  if (deprecated)
+    lines.push("", "Deprecated: no longer declared by the app, kept while a role or grant still uses it.");
+  if (app.state === "removed")
+    lines.push("", "Removed: see pnpm platform app retention for its backup and purge date.");
+  return lines;
+}
+
+export async function appShowCommand(
+  args: string[],
+  root: string,
+  env: Record<string, string | undefined> = process.env,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Result | null> {
+  const p = parseAppShowArgs(args);
+  if (!p) return null;
+
+  const target = adminEndpoint(root, env);
+  if ("error" in target) return { ok: false, lines: [target.error] };
+
+  const route = `${APPS}/${p.id}`;
+  const r = await request(target, "GET", route, fetchImpl);
+  // core-api answers not_found both for an unknown app and (with no message) for a missing route.
+  // The refusal carries core-api's error and message text, so it is cleaned like the rest of the reply.
+  if (!r.ok) return { ok: false, lines: commonRefusal(r, p.id, "").filter(Boolean).map(clean) };
+  const app = asShownApp(r.out);
+  if (!app) return { ok: false, lines: [`core-api's reply to GET ${route} isn't what this CLI expects.`] };
+
+  if (p.json) return { ok: true, stdout: true, lines: [JSON.stringify(r.out, null, 2)] };
+  return { ok: true, stdout: true, lines: formatAppShow(app) };
+}

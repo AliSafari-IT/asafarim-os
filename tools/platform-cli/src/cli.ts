@@ -26,6 +26,7 @@
  *                                            install an app from another repository from its image (#87):
  *                                            the manifest comes from its org.asafarim.app.manifest label
  *   pnpm platform app list [--json]                     every app core-api knows, with its state; read-only
+ *   pnpm platform app show <id> [--json]                one app: version, state, its permissions and roles; read-only
  *   pnpm platform app activate|deactivate <id>          change its lifecycle state
  *   pnpm platform app remove <id> [--confirm <id>] [--yes]
  *                                            back up its database and remove it (ADR 0001 §3 step 6)
@@ -51,7 +52,7 @@
 import path from "node:path";
 import { computeDrift, formatDrift } from "./against/drift.ts";
 import { appCommand, roleCommand } from "./app.ts";
-import { appListCommand } from "./apps.ts";
+import { appListCommand, appShowCommand } from "./apps.ts";
 import { loadPlatformWiring, readSiteList } from "./against/load.ts";
 import { auditCommand } from "./audit.ts";
 import { boundariesCommand } from "./boundaries.ts";
@@ -81,6 +82,7 @@ const USAGE = [
   "      (the explicit --image flag tells the two apart; the manifest is read from the image's",
   "      org.asafarim.app.manifest label, pulling it first if needed, and never by running it)",
   "  platform app list [--json]                          every app core-api knows, with its state",
+  "  platform app show <id> [--json]                    one app: version, state, its permissions and roles",
   "  platform app activate|deactivate <id>",
   "  platform app remove <id> [--confirm <id>] [--yes]   back up its database, then remove it",
   "  platform app purge <id> [--force] [--confirm <id>] [--yes]",
@@ -155,6 +157,8 @@ async function main(argv: string[]): Promise<number> {
     result = await roleCommand(rest, findRepoRoot(cwd));
   } else if (command === "app" && rest[0] === "list") {
     result = await appListCommand(rest.slice(1), findRepoRoot(cwd));
+  } else if (command === "app" && rest[0] === "show") {
+    result = await appShowCommand(rest.slice(1), findRepoRoot(cwd));
   } else if (command === "app" && rest[0] === "compose") {
     result = await composeCommand(rest.slice(1), findRepoRoot(cwd), cwd);
   } else if (command === "app" && (rest[0] === "remove" || rest[0] === "purge" || rest[0] === "retention")) {
