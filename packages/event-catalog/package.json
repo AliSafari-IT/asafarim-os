@@ -1,0 +1,29 @@
+{
+  "name": "@asafarim/event-catalog",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Keyword search over the event catalog (P7.4 part 1): deterministic, no model, no network, no dependencies. Shared by the Admin console's Events page and `platform events search`, so the two can't drift.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.2",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.4"
+  }
+}

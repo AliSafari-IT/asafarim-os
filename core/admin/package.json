@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@asafarim/app-sdk": "workspace:*",
+    "@asafarim/event-catalog": "workspace:*",
     "@asafarim/telemetry": "workspace:*",
     "next": "^16.4.0",
     "next-auth": "5.0.0-beta.32",

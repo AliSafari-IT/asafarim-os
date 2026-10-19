@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogEntry } from "../lib/core-api";
-import { catalogFor, entryFlags, eventsAppFilter, schemaText } from "../lib/events";
+import {
+  MAX_QUERY_LENGTH,
+  catalogFor,
+  entryFlags,
+  eventsAppFilter,
+  eventsQuery,
+  schemaText,
+  searchCatalog,
+} from "../lib/events";
 
 const entry = (over: Partial<CatalogEntry> & { type: string }): CatalogEntry => ({
   publisher: null,
@@ -74,5 +82,16 @@ describe("the schema as text", () => {
   it("is pretty-printed JSON, and empty without a schema", () => {
     expect(schemaText(created.schema)).toBe('{\n  "type": "object",\n  "required": [\n    "id",\n    "title"\n  ]\n}');
     expect(schemaText(null)).toBe("");
+  });
+});
+
+// The search itself is tested in @asafarim/event-catalog; this checks the page's import still reaches it.
+describe("the search the page imports", () => {
+  it("is @asafarim/event-catalog's, over the console's own entries", () => {
+    expect(MAX_QUERY_LENGTH).toBe(100);
+    expect(eventsQuery("  task created  ")).toBe("task created");
+    const hits = searchCatalog([created, deleted, dangling], "created");
+    expect(hits.map((h) => h.entry)).toEqual([created]);
+    expect(hits[0]!.matched).toEqual(["type"]);
   });
 });

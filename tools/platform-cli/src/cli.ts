@@ -45,6 +45,8 @@
  *                                            core-api's audit log, newest first; read-only
  *   pnpm platform events [--app <id>] [--json]  the event catalog (publisher, schema, subscribers); read-only
  *   pnpm platform events schema <type>       the JSON schema a type's publisher uploaded; read-only
+ *   pnpm platform events search <words> [--app <id>] [--json]
+ *                                            Admin's keyword search over the catalog, best first; read-only
  */
 import path from "node:path";
 import { computeDrift, formatDrift } from "./against/drift.ts";
@@ -99,6 +101,8 @@ const USAGE = [
   "                                                      the audit log from core-api, newest first",
   "  platform events [--app <id>] [--json]               the event catalog: publisher, schema, subscribers",
   "  platform events schema <type>                       the JSON schema a type's publisher uploaded",
+  "  platform events search <words> [--app <id>] [--json]",
+  "                                                      the types those words find, best first (Admin's search)",
 ].join("\n");
 
 /** pnpm runs the CLI from its package folder; INIT_CWD is where the user typed the command. */

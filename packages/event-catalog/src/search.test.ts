@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CatalogEntry } from "../lib/core-api";
+import type { SearchableEntry } from "./search.ts";
 import {
   MAX_QUERY_LENGTH,
   eventsQuery,
@@ -9,7 +9,16 @@ import {
   searchCatalog,
   stem,
   words,
-} from "../lib/events";
+} from "./search.ts";
+
+/** core-api's full entry shape: the search must keep the fields it doesn't read. */
+interface CatalogEntry extends SearchableEntry {
+  publisher: { appId: string; version: string; state: string } | null;
+  schemaStatus: "provided" | "not_provided" | "no_publisher";
+  schemaUpdatedAt: string | null;
+  schemaAppVersion: string | null;
+  subscribers: { appId: string; state: string; handler: string; consumer: "bound" | "waiting_for_publisher" }[];
+}
 
 const entry = (over: Partial<CatalogEntry> & { type: string }): CatalogEntry => ({
   publisher: null,
@@ -177,5 +186,18 @@ describe("searching the catalog", () => {
   it("keeps the type order on equal scores and leaves the input alone", () => {
     expect(types("v1")).toEqual(catalog.map((e) => e.type).sort());
     expect(catalog[0]).toBe(invoicePaid);
+  });
+
+  it("hands back the caller's own entries, with the fields the search doesn't read", () => {
+    const [hit] = searchCatalog(catalog, "order shipped");
+    expect(hit!.entry).toBe(shipped);
+    expect(hit!.entry.schemaStatus).toBe("provided");
+  });
+
+  it("reads an app id that isn't a string as no words, instead of throwing", () => {
+    const odd = { type: "x.y.created", publisher: { appId: 7 }, schema: null, subscribers: [{ appId: null }] };
+    expect(searchCatalog([odd as unknown as SearchableEntry], "created").map((h) => h.entry.type)).toEqual([
+      "x.y.created",
+    ]);
   });
 });
