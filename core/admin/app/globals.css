@@ -367,3 +367,6 @@ dialog.confirm .actions {
   color: var(--accent);
   font-weight: 600;
 }
+.backup-check {
+  margin-top: 4px;
+}

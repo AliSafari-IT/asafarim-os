@@ -223,6 +223,11 @@ export function coreApi(idToken: string) {
      */
     purge: (app: string, opts: { force: boolean; confirm: string }) =>
       call<PurgeResult>(idToken, "POST", `/admin/v1/apps/${enc(app)}/purge`, opts),
+    /**
+     * Removed apps' retention with each backup file checked now against its recorded sha256
+     * (`GET /admin/v1/retention?verify=true`, read-only). Read the verdicts with `backupVerdicts`.
+     */
+    verifyBackups: () => call<unknown>(idToken, "GET", "/admin/v1/retention?verify=true"),
     grant: (role: string, subject: string) =>
       call<{ granted: boolean }>(idToken, "PUT", `/admin/v1/roles/${enc(role)}/grants/${enc(subject)}`),
     revoke: (role: string, subject: string) =>
