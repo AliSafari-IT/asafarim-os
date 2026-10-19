@@ -44,6 +44,8 @@ pnpm platform events [--app <id>] [--json]
                                         # the event catalog: publisher, schema status, subscribers; read-only
 pnpm platform events schema <type>
                                         # the JSON schema a type's publisher uploaded; read-only
+pnpm platform events search <words> [--app <id>] [--json]
+                                        # Admin's keyword search over the catalog, best first; read-only
 ```
 
 `--other-stack-sites <file>` lists gateway sites that belong to **another stack

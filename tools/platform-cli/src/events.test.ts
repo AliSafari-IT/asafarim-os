@@ -2,7 +2,15 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { asCatalog, catalogFor, eventsCommand, formatCatalog, formatSchema, parseEventsArgs } from "./events.ts";
+import {
+  asCatalog,
+  catalogFor,
+  eventsCommand,
+  formatCatalog,
+  formatSchema,
+  formatSearch,
+  parseEventsArgs,
+} from "./events.ts";
 
 function workspace() {
   const root = mkdtempSync(path.join(tmpdir(), "events-cmd-"));
@@ -220,6 +228,133 @@ describe("platform events schema", () => {
     // eslint-disable-next-line no-control-regex
     for (const line of r.lines) expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
     expect(r.lines.join("\n")).toContain('"description": "a?b\\u001bc"');
+  });
+});
+
+describe("platform events search: arguments", () => {
+  it("takes the words as one query, with --app <id> and --json anywhere, at most once each", () => {
+    expect(parseEventsArgs(["search", "note", "created"])).toEqual({
+      action: "search",
+      query: "note created",
+      json: false,
+    });
+    expect(parseEventsArgs(["search", "--app", "notes", "note", "--json", "created"])).toEqual({
+      action: "search",
+      query: "note created",
+      app: "notes",
+      json: true,
+    });
+    expect(parseEventsArgs(["search", "which app emits something when a note is created?"])).toEqual({
+      action: "search",
+      query: "which app emits something when a note is created?",
+      json: false,
+    });
+  });
+
+  it("needs a word, and refuses unknown flags, a bad app id and repeats", () => {
+    expect(parseEventsArgs(["search"])).toBeNull();
+    expect(parseEventsArgs(["search", "  "])).toBeNull();
+    expect(parseEventsArgs(["search", "--json"])).toBeNull();
+    expect(parseEventsArgs(["search", "note", "--limit", "3"])).toBeNull();
+    expect(parseEventsArgs(["search", "note", "--app", "Not An Id"])).toBeNull();
+    expect(parseEventsArgs(["search", "note", "--json", "--json"])).toBeNull();
+    expect(parseEventsArgs(["search", "note", "--app"])).toBeNull();
+    // `search` is a subcommand only in first place; elsewhere it's an unknown word, as before.
+    expect(parseEventsArgs(["--json", "search", "note"])).toBeNull();
+  });
+
+  it("cuts a long query as Admin's search box does", () => {
+    const p = parseEventsArgs(["search", "a".repeat(150)]);
+    expect(p).toEqual({ action: "search", query: "a".repeat(100), json: false });
+  });
+
+  it("prints the usage (null) for a search without words, before any request", async () => {
+    const fetchImpl = reply(200, { events: [] });
+    expect(await eventsCommand(["search"], workspace(), ENV, fetchImpl)).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("platform events search", () => {
+  it("prints the hits best first, with score, where they matched and the publisher", async () => {
+    const fetchImpl = reply(200, { events: [DELETED, CREATED, PUBLISHED] });
+    const r = await eventsCommand(["search", "note", "created"], workspace(), ENV, fetchImpl);
+    expect(r?.ok).toBe(true);
+    expect(r?.stdout).toBe(true);
+    const text = r!.lines.join("\n");
+    expect(r!.lines[0]).toBe('1 event type matches "note created" (searched for: note, creat).');
+    expect(text).toMatch(/^Type\s+Score\s+Matched in\s+Publisher$/m);
+    expect(text).toMatch(/^notes\.note\.created\.v1\s+8\s+type, app, description, schema property\s+notes@1\.2\.0$/m);
+    expect(text).not.toContain("notes.note.deleted");
+    expect(text).toContain("pnpm platform events schema <type>");
+    const [url] = fetchImpl.mock.calls[0] as unknown as [string];
+    expect(url).toBe("http://localhost:4020/admin/v1/events");
+  });
+
+  it("ranks a type match over an app match, and finds through subscribers and schemas", async () => {
+    const fetchImpl = reply(200, { events: [DELETED, CREATED, PUBLISHED] });
+    const r = await eventsCommand(["search", "notes"], workspace(), ENV, fetchImpl);
+    const rows = r!.lines.filter((l) => /^\S+\.\S+\s+\d+\s/.test(l)).map((l) => l.split(/\s+/)[0]);
+    // Every type names "note"; ties keep the type order.
+    expect(rows).toEqual(["notes.note.created.v1", "notes.note.deleted.v1", "docs.page.published"]);
+    const s = await eventsCommand(["search", "search"], workspace(), ENV, reply(200, { events: [CREATED, DELETED] }));
+    expect(s!.lines[0]).toBe('1 event type matches "search" (searched for: search).');
+    expect(s!.lines.join("\n")).toMatch(/^notes\.note\.created\.v1\s+2\s+app\s+notes@1\.2\.0$/m);
+  });
+
+  it("--app searches only the types the app publishes or subscribes to", async () => {
+    const fetchImpl = reply(200, { events: [DELETED, CREATED, PUBLISHED] });
+    const r = await eventsCommand(["search", "published", "--app", "search"], workspace(), ENV, fetchImpl);
+    expect(r?.ok).toBe(true);
+    expect(r?.lines).toEqual(['No event type matches "published" among search\'s types (searched for: publish).']);
+  });
+
+  it("says so, and still exits 0, when nothing matches", async () => {
+    const r = await eventsCommand(["search", "invoice"], workspace(), ENV, reply(200, { events: [CREATED] }));
+    expect(r).toEqual({
+      ok: true,
+      stdout: true,
+      lines: ['No event type matches "invoice" (searched for: invoice).'],
+    });
+  });
+
+  it("searches question words only when the query has nothing else", () => {
+    expect(formatSearch([CREATED as never], "what is there")[0]).toBe(
+      'No event type matches "what is there" (searched for: what, is, there).',
+    );
+  });
+
+  it("--json prints the query, its words and the hits with their entries", async () => {
+    const fetchImpl = reply(200, { events: [DELETED, CREATED, PUBLISHED] });
+    const r = await eventsCommand(["search", "page", "--json"], workspace(), ENV, fetchImpl);
+    expect(r?.ok).toBe(true);
+    expect(JSON.parse(r!.lines.join("\n"))).toEqual({
+      query: "page",
+      terms: ["page"],
+      hits: [{ score: 4, matched: ["type"], entry: PUBLISHED }],
+    });
+  });
+
+  it("replaces control characters in what core-api sends and in the query", async () => {
+    const evil = {
+      ...CREATED,
+      type: "notes.note.created\u001b[2J",
+      publisher: { ...CREATED.publisher, version: "1\u009b" },
+    };
+    const r = await eventsCommand(["search", "note\u0007"], workspace(), ENV, reply(200, { events: [evil] }));
+    // eslint-disable-next-line no-control-regex
+    for (const line of r!.lines) expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(r!.lines.join("\n")).toContain("notes.note.created");
+  });
+
+  it("refuses as the other events commands do", async () => {
+    const u = await eventsCommand(["search", "note"], workspace(), ENV, reply(401, { error: "unauthorized" }));
+    expect(u).toEqual({ ok: false, lines: ["core-api didn't accept the admin token (CORE_API_ADMIN_TOKEN)."] });
+    const bad = await eventsCommand(["search", "note"], workspace(), ENV, reply(200, { events: "nope" }));
+    expect(bad).toEqual({
+      ok: false,
+      lines: ["core-api's reply to GET /admin/v1/events isn't what this CLI expects."],
+    });
   });
 });
 

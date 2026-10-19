@@ -5,12 +5,16 @@
  *                                           and subscribers (GET /admin/v1/events); --app keeps the types the app
  *                                           publishes or subscribes to; --json prints those entries as JSON
  *   platform events schema <type>           the JSON schema the type's publisher uploaded, as text
+ *   platform events search <words> [--app <id>] [--json]
+ *                                           the types those words find, best first: Admin's keyword search
+ *                                           (P7.4 part 1, @asafarim/event-catalog) over the same catalog
  *
  * Read-only. It talks to the admin API as `platform status` does (`adminEndpoint`: CORE_API_URL and
  * CORE_API_ADMIN_TOKEN, falling back to `.dev/core-api.env` locally). Exit code 0 when core-api answered,
  * 1 when it can't be asked, refuses, answers with something that isn't a catalog, or (schema) the type
- * isn't in the catalog or has no schema.
+ * isn't in the catalog or has no schema. A search that finds nothing is an answer, so it exits 0.
  */
+import { type MatchField, eventsQuery, queryTerms, searchCatalog } from "@asafarim/event-catalog";
 import { adminEndpoint } from "./app.ts";
 import { commonRefusal, formatDate, request } from "./retention.ts";
 import { clean } from "./status.ts";
@@ -22,7 +26,10 @@ const APP_ID = /^(?:core|[a-z][a-z0-9-]{1,31})$/;
 /** An event type as manifests declare it (`<app>.<entity>.<verb>[.v<n>]`); loose on purpose, it only filters. */
 const EVENT_TYPE = /^[a-z][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/;
 
-export type EventsArgs = { action: "list"; app?: string; json: boolean } | { action: "schema"; type: string };
+export type EventsArgs =
+  | { action: "list"; app?: string; json: boolean }
+  | { action: "schema"; type: string }
+  | { action: "search"; query: string; app?: string; json: boolean };
 
 /** `events …` (the words after `events`); null = not valid (the usage is printed). */
 export function parseEventsArgs(args: string[]): EventsArgs | null {
@@ -30,17 +37,24 @@ export function parseEventsArgs(args: string[]): EventsArgs | null {
     if (args.length !== 2 || !EVENT_TYPE.test(args[1]!)) return null;
     return { action: "schema", type: args[1]! };
   }
+  const search = args[0] === "search";
+  const words: string[] = [];
   let json = false;
   let app: string | undefined;
-  for (let i = 0; i < args.length; i++) {
+  for (let i = search ? 1 : 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "--json" && !json) json = true;
     else if (a === "--app" && app === undefined && args[i + 1] !== undefined) {
       app = args[++i]!;
       if (!APP_ID.test(app)) return null;
-    } else return null;
+    } else if (search && !a.startsWith("--")) words.push(a);
+    else return null;
   }
-  return { action: "list", json, ...(app !== undefined ? { app } : {}) };
+  const filter = app !== undefined ? { app } : {};
+  if (!search) return { action: "list", json, ...filter };
+  // The words, as one query cut as the page cuts `?q=` (MAX_QUERY_LENGTH); none: nothing to search for.
+  const query = eventsQuery(words.join(" "));
+  return query === undefined ? null : { action: "search", query, json, ...filter };
 }
 
 /** A subscriber (mirrors core-api's `CatalogSubscriber`, core/core-api/src/admin.ts). */
@@ -158,6 +172,34 @@ export function formatSchema(entries: CatalogEntry[], type: string): Result {
   return { ok: true, stdout: true, lines: [from, "", ...body] };
 }
 
+const MATCHED: Record<MatchField, string> = {
+  type: "type",
+  app: "app",
+  description: "description",
+  property: "schema property",
+};
+
+/** Search hits, best first: the type, its score, where the words matched, and who publishes it. */
+export function formatSearch(entries: CatalogEntry[], query: string, app?: string): string[] {
+  const hits = searchCatalog(entries, query);
+  const terms = queryTerms(query).map(clean).join(", ");
+  const where = app === undefined ? "" : ` among ${clean(app)}'s types`;
+  if (hits.length === 0) return [`No event type matches "${clean(query)}"${where} (searched for: ${terms}).`];
+  const rows = hits.map((h) => [
+    clean(h.entry.type),
+    String(h.score),
+    h.matched.map((f) => MATCHED[f]).join(", "),
+    publisherCell(h.entry),
+  ]);
+  return [
+    `${hits.length} event ${hits.length === 1 ? "type matches" : "types match"} "${clean(query)}"${where} (searched for: ${terms}).`,
+    "",
+    ...table(["Type", "Score", "Matched in", "Publisher"], rows),
+    "",
+    "Every word must match. See a type's schema with pnpm platform events schema <type>.",
+  ];
+}
+
 const EVENTS = "/admin/v1/events";
 
 /** A refusal: a 404 on this fixed route means core-api lacks it. */
@@ -185,6 +227,12 @@ export async function eventsCommand(
 
   if (p.action === "schema") return formatSchema(catalog, p.type);
   const entries = catalogFor(catalog, p.app);
+  if (p.action === "search") {
+    if (!p.json) return { ok: true, stdout: true, lines: formatSearch(entries, p.query, p.app) };
+    const hits = searchCatalog(entries, p.query).map((h) => ({ score: h.score, matched: h.matched, entry: h.entry }));
+    const out = { query: p.query, terms: queryTerms(p.query), hits };
+    return { ok: true, stdout: true, lines: [JSON.stringify(out, null, 2)] };
+  }
   if (p.json) return { ok: true, stdout: true, lines: [JSON.stringify({ events: entries }, null, 2)] };
   return { ok: true, stdout: true, lines: formatCatalog(entries, p.app) };
 }
