@@ -43,6 +43,8 @@
  *                                            exits 1 unless every polled entry is live and ready
  *   pnpm platform audit [--app <id>] [--actor <text>] [--limit <n>] [--before <id>] [--json]
  *                                            core-api's audit log, newest first; read-only
+ *   pnpm platform events [--app <id>] [--json]  the event catalog (publisher, schema, subscribers); read-only
+ *   pnpm platform events schema <type>       the JSON schema a type's publisher uploaded; read-only
  */
 import path from "node:path";
 import { computeDrift, formatDrift } from "./against/drift.ts";
@@ -51,6 +53,7 @@ import { appListCommand } from "./apps.ts";
 import { loadPlatformWiring, readSiteList } from "./against/load.ts";
 import { auditCommand } from "./audit.ts";
 import { boundariesCommand } from "./boundaries.ts";
+import { eventsCommand } from "./events.ts";
 import { compileCommand, validateCommand } from "./manifest.ts";
 import { composeCommand } from "./compose.ts";
 import { retentionCommand } from "./retention.ts";
@@ -94,6 +97,8 @@ const USAGE = [
   "                                                      exits 1 unless every polled entry is live and ready",
   "  platform audit [--app <id>] [--actor <text>] [--limit <n>] [--before <id>] [--json]",
   "                                                      the audit log from core-api, newest first",
+  "  platform events [--app <id>] [--json]               the event catalog: publisher, schema, subscribers",
+  "  platform events schema <type>                       the JSON schema a type's publisher uploaded",
 ].join("\n");
 
 /** pnpm runs the CLI from its package folder; INIT_CWD is where the user typed the command. */
@@ -138,6 +143,8 @@ async function main(argv: string[]): Promise<number> {
     result = await statusCommand(rest, findRepoRoot(cwd));
   } else if (command === "audit") {
     result = await auditCommand(rest, findRepoRoot(cwd));
+  } else if (command === "events") {
+    result = await eventsCommand(rest, findRepoRoot(cwd));
   } else if (command === "role" && (rest[0] === "list" || rest[0] === "holders" || rest[0] === "held-by")) {
     result = await roleReadCommand(rest, findRepoRoot(cwd));
   } else if (command === "role") {
