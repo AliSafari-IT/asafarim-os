@@ -21,6 +21,7 @@ import type { AppManifest } from "@asafarim/app-manifest";
 import { docker, readImageManifest, type Docker } from "./image.ts";
 import { loadManifestFile } from "./manifest.ts";
 import { EXTERNAL_APPS_DIR, EXTERNAL_SOURCE_FILE, MANIFEST_FILE } from "./sync.ts";
+import { clean } from "./text.ts";
 
 type Result = { ok: boolean; lines: string[] };
 
@@ -90,6 +91,14 @@ function envOutTarget(rest: string[], root: string): { target?: string } | { err
 
 type Endpoint = { baseUrl: string; token: string };
 
+/** core-api's text, any type, for the terminal: stringified, then its control characters replaced. */
+const shown = (v: unknown) => clean(String(v ?? ""));
+
+/** The first line of a refusal of install, activate, deactivate, grant or revoke. */
+function refusedLine(out: Record<string, unknown>): string {
+  return `core-api refused: ${shown(out.error)}${out.message ? ` (${shown(out.message)})` : ""}`;
+}
+
 async function post(
   { baseUrl, token }: Endpoint,
   id: string,
@@ -109,9 +118,9 @@ async function post(
   }
   const out = (await res.json()) as Record<string, unknown>;
   if (!res.ok) {
-    const lines = [`core-api refused: ${String(out.error)}${out.message ? ` (${String(out.message)})` : ""}`];
+    const lines = [refusedLine(out)];
     for (const p of (out.details as { path?: string; message?: string }[] | undefined) ?? [])
-      lines.push(`  ${p.path ?? ""}: ${p.message ?? ""}`);
+      lines.push(`  ${shown(p.path)}: ${shown(p.message)}`);
     return { ok: false, lines };
   }
   return { ok: true, out };
@@ -289,7 +298,7 @@ export async function roleCommand(
   if (!res.ok) {
     return {
       ok: false,
-      lines: [`core-api refused: ${String(out.error)}${out.message ? ` (${String(out.message)})` : ""}`],
+      lines: [refusedLine(out)],
     };
   }
   const changed = action === "grant" ? out.granted : out.revoked;

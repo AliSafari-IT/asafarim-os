@@ -15,6 +15,10 @@
  */
 import { adminEndpoint } from "./app.ts";
 import { commonRefusal, formatDate, request } from "./retention.ts";
+import { clean } from "./text.ts";
+
+// `clean` lived here first; the other read commands still import it from this module.
+export { clean };
 
 type Result = { ok: boolean; lines: string[]; stdout?: boolean };
 
@@ -73,16 +77,6 @@ export interface AlertHistory {
   webhook: boolean;
   downRounds: number | null;
   alerts: AlertRecord[];
-}
-
-/**
- * Text from core-api for a terminal. Names come from app manifests, so control characters (an ANSI
- * escape could rewrite the screen) are replaced, and anything not a string becomes "?".
- */
-export function clean(v: unknown): string {
-  if (typeof v !== "string") return "?";
-  // eslint-disable-next-line no-control-regex
-  return v.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?");
 }
 
 /** Every polled entry is live and ready, after at least one finished round. */
