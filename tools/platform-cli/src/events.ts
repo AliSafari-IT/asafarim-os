@@ -74,6 +74,7 @@ export function asCatalog(out: unknown): CatalogEntry[] | null {
     (e) =>
       isObject(e) &&
       typeof e.type === "string" &&
+      typeof e.schemaStatus === "string" &&
       Array.isArray(e.subscribers) &&
       e.subscribers.every((s) => isObject(s)) &&
       (e.publisher === null || isObject(e.publisher)),
@@ -146,7 +147,7 @@ export function formatSchema(entries: CatalogEntry[], type: string): Result {
   const e = entries.find((x) => x.type === type);
   if (!e) return { ok: false, lines: [`core-api's catalog has no event type "${clean(type)}".`] };
   if (noPublisher(e)) return { ok: false, lines: [`No installed app publishes ${clean(type)}, so it has no schema.`] };
-  if (e.schema === null || e.schemaStatus !== "provided") {
+  if (!isObject(e.schema) || e.schemaStatus !== "provided") {
     return { ok: false, lines: [`${publisherCell(e)} publishes ${clean(type)} but hasn't uploaded a schema.`] };
   }
   const from = `${clean(type)}: uploaded by ${clean(e.publisher?.appId)}@${clean(e.schemaAppVersion ?? "?")}, ${clean(

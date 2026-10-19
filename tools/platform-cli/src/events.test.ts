@@ -203,6 +203,16 @@ describe("platform events schema", () => {
     });
   });
 
+  it("fails, instead of throwing, when a provided schema isn't an object", () => {
+    for (const schema of [undefined, "x", ["a"]]) {
+      const r = formatSchema([{ ...CREATED, schema }] as never, "notes.note.created.v1");
+      expect(r).toEqual({
+        ok: false,
+        lines: ["notes@1.2.0 publishes notes.note.created.v1 but hasn't uploaded a schema."],
+      });
+    }
+  });
+
   it("replaces C1 control characters JSON.stringify leaves in schema text", () => {
     const evil = { ...CREATED, schema: { description: "a\u009bb\u001bc" } };
     const r = formatSchema([evil] as never, "notes.note.created.v1");
@@ -242,6 +252,7 @@ describe("platform events: refusals", () => {
       { events: [{ type: "a.b" }] },
       { events: [{ type: "a.b", subscribers: [null], publisher: null }] },
       { events: [{ type: "a.b", subscribers: [], publisher: "notes" }] },
+      { events: [{ type: "a.b", subscribers: [], publisher: null }] },
       { events: [null] },
     ];
     for (const body of bodies) {
