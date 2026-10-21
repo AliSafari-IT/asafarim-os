@@ -29,6 +29,10 @@
  * - `health-route-missing`: `runtime.health.live` or `.ready` is a path no route file (`app/**\/route.ts`)
  *   answers with `GET`. core-api's health poller calls both, so the app would never read as healthy.
  *   Pages don't count: a health check wants a route handler, not a rendered page.
+ * - `config-not-declared` / `config-type-mismatch`: the code reads a config key (a whole string literal
+ *   passed to `config.getString`, `getInt`, `getNumber` or `getBoolean`) that the manifest's `config`
+ *   doesn't declare, or declares with a type that getter refuses. The app SDK throws on both, so the
+ *   call fails at runtime, only when that code path runs.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -51,7 +55,9 @@ export type FindingKind =
   | "event-handler-missing"
   | "permission-not-declared"
   | "secret-never-read"
-  | "health-route-missing";
+  | "health-route-missing"
+  | "config-not-declared"
+  | "config-type-mismatch";
 
 export interface Finding {
   app: string;
@@ -72,7 +78,18 @@ export interface AppReview {
 }
 
 /** Folders that aren't the app's runtime code. */
-const SKIP_DIRS = new Set(["node_modules", ".next", "dist", "build", "coverage", "test", "e2e", "fixtures"]);
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".next",
+  "dist",
+  "build",
+  "coverage",
+  "test",
+  "tests",
+  "__tests__",
+  "e2e",
+  "fixtures",
+]);
 /** Folders skipped only at the app's root: `events/` holds the JSON schemas, but `app/events/` can hold handlers. */
 const SKIP_ROOT_DIRS = new Set(["events"]);
 const SOURCE_FILE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
@@ -322,6 +339,68 @@ export function mentionsName(text: string, name: string): boolean {
   return new RegExp(`(?<![\\w$])${n}(?![\\w$])`).test(stripComments(text));
 }
 
+/**
+ * The app SDK's typed config getters and the declared types each accepts (`@asafarim/app-sdk`'s
+ * `createConfig`; `getNumber` also reads an `int`). The CLI doesn't import the SDK, so this copies it.
+ */
+export const CONFIG_GETTERS: Record<string, readonly string[]> = {
+  getString: ["string"],
+  getBoolean: ["boolean"],
+  getInt: ["int"],
+  getNumber: ["int", "number"],
+};
+
+/**
+ * `text` with the contents of every string literal blanked (quotes, length and newlines kept), so code
+ * can be matched without matching what a string says. The same light scanner as `stripComments`.
+ */
+export function blankStrings(text: string): string {
+  let out = "";
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote) {
+      if (c === "\\" && i + 1 < text.length) {
+        out += "  ";
+        i++;
+      } else if (c === quote) {
+        quote = undefined;
+        out += c;
+      } else {
+        out += c === "\n" ? "\n" : " ";
+      }
+    } else {
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      out += c;
+    }
+  }
+  return out;
+}
+
+/**
+ * Config reads in `text` (comments ignored): a whole string literal, without interpolation, passed as
+ * the only argument of a `CONFIG_GETTERS` call on a receiver named for config (`config.getInt("…")`,
+ * `getPlatform().config.getString("…")`, `appConfig?.getBoolean('…')`). A call written inside a string
+ * (an example in help text) isn't one. In source order, repeats kept.
+ */
+export function configReadsIn(text: string): { getter: string; key: string }[] {
+  const code = stripComments(text);
+  const getters = Object.keys(CONFIG_GETTERS).join("|");
+  // Matched on the string-blanked text, so the call itself is code; the key is read back from `code`.
+  const re = new RegExp(
+    String.raw`(?<![\w$])[\w$]*[Cc]onfig\s*\??\.\s*(${getters})\s*\(\s*(["'\`])([^"'\`\n]*)\2\s*\)`,
+    "g",
+  );
+  const reads: { getter: string; key: string }[] = [];
+  for (const m of blankStrings(code).matchAll(re)) {
+    const start = m.index + m[0].indexOf(m[2]!, m[0].indexOf("(")) + 1;
+    const key = code.slice(start, start + m[3]!.length);
+    if (key === "" || /["'`\\\n]/.test(key) || (m[2] === "`" && key.includes("${"))) continue;
+    reads.push({ getter: m[1]!, key });
+  }
+  return reads;
+}
+
 /** Review one app folder. `rootDir` is only used to print file paths relative to the workspace. */
 export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string): AppReview {
   const app = manifest.id;
@@ -541,6 +620,33 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
         ? `${which} ${healthPath}, but its route file doesn't export GET, so core-api's health poll gets a 405 and the app never reads as healthy`
         : `${which} ${healthPath}, but no route file serves it, so core-api's health poll gets a 404 and the app never reads as healthy (fix the path, or add app${healthPath}/route.ts)`,
     });
+  }
+
+  // 9. Config keys the code reads are declared, with a type the getter accepts (the SDK throws otherwise).
+  const configTypes = new Map((manifest.config ?? []).map((c) => [c.key, c.type as string]));
+  const badReads = new Map<string, { kind: FindingKind; file: string; message: string }>(); // key → first
+  for (const f of files) {
+    for (const { getter, key } of configReadsIn(f.text)) {
+      if (badReads.has(key)) continue;
+      const type = configTypes.get(key);
+      const accepted = CONFIG_GETTERS[getter]!;
+      if (type === undefined) {
+        badReads.set(key, {
+          kind: "config-not-declared",
+          file: f.rel,
+          message: `the code reads config ${key} with ${getter}, but the manifest's config doesn't declare it, so the SDK throws when that code runs (a typo, or add it to config)`,
+        });
+      } else if (!accepted.includes(type)) {
+        badReads.set(key, {
+          kind: "config-type-mismatch",
+          file: f.rel,
+          message: `the code reads config ${key} with ${getter}, but the manifest declares it as ${type}, so the SDK throws when that code runs (use the getter for ${type}, or change its type)`,
+        });
+      }
+    }
+  }
+  for (const [key, bad] of [...badReads].sort(([a], [b]) => a.localeCompare(b))) {
+    findings.push({ app, kind: bad.kind, subject: key, file: rel(path.join(appDir, bad.file)), message: bad.message });
   }
 
   return { app, findings, handlers, plumbing };
