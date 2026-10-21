@@ -1,80 +1,76 @@
 /**
- * Regression test for the dev dependency build (asafarim-os#34).
- * Tests that workspaceBuildFilters() and uncoveredByFilters() correctly
- * cover all core services and apps, preventing "works locally, broken on a
- * clean checkout" incidents.
+ * Regression test for the dev dependency build (asafarim-os#34): the turbo filters
+ * buildWorkspaceDependencies() runs must cover every core service `pnpm dev` starts and every
+ * package under apps/, or a fresh clone breaks while a warm checkout still works (#31, #33).
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { test } from "node:test";
-import { fileURLToPath } from "node:url";
-import { DEV_SERVICES, APPS_FILTER, appPackages, uncoveredByFilters, workspaceBuildFilters } from "./infra.mjs";
+import { afterEach, test } from "node:test";
+import { APPS_FILTER, DEV_SERVICES, appPackages, uncoveredByFilters, workspaceBuildFilters } from "./infra.mjs";
+import { ROOT } from "./keys.mjs";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const fixtures = [];
+afterEach(() => {
+  for (const dir of fixtures.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
-function fixtureWith(files) {
+/** A temporary repo root with the given files (path → content). */
+function fixtureWith(files = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "infra-test-"));
-  for (const [name, content] of Object.entries(files)) {
-    const filePath = path.join(dir, name);
-    const parentDir = path.dirname(filePath);
-    mkdirSync(parentDir, { recursive: true });
-    writeFileSync(filePath, content);
-  }
+  fixtures.push(dir);
+  for (const [name, content] of Object.entries(files)) addFile(dir, name, content);
   return dir;
 }
 
-test("workspaceBuildFilters includes ^... for every DEV_SERVICES", () => {
-  const filters = workspaceBuildFilters(ROOT);
+function addFile(root, name, content) {
+  const file = path.join(root, name);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, content);
+}
+
+const pkg = (name) => `${JSON.stringify({ name })}\n`;
+
+test("the filters build the dependencies of every core service pnpm dev starts", () => {
+  assert.deepEqual(DEV_SERVICES, ["@asafarim/identity", "@asafarim/core-api", "@asafarim/dev-hub"]);
+  const filters = workspaceBuildFilters(fixtureWith());
   for (const service of DEV_SERVICES) {
-    assert.ok(filters.includes(`--filter=${service}^...`), `missing filter for ${service}`);
+    assert.ok(filters.includes(`--filter=${service}^...`), `no filter for ${service}: ${filters.join(" ")}`);
   }
 });
 
-test("workspaceBuildFilters includes ./apps/*^... when apps/ has packages", () => {
-  const filters = workspaceBuildFilters(ROOT);
-  const hasApps = appPackages(ROOT).length > 0;
-  assert.equal(filters.includes(APPS_FILTER), hasApps);
+test("the filters include ./apps/*^... when apps/ contains a package", () => {
+  const root = fixtureWith({ "apps/notes/package.json": pkg("@asafarim/notes") });
+  assert.deepEqual(appPackages(root), ["notes"]);
+  assert.ok(workspaceBuildFilters(root).includes(APPS_FILTER));
+  assert.deepEqual(uncoveredByFilters(workspaceBuildFilters(root), root), []);
 });
 
-test("uncoveredByFilters is empty when all core services and apps are covered", () => {
-  const filters = workspaceBuildFilters(ROOT);
-  const missing = uncoveredByFilters(filters, ROOT);
-  assert.deepEqual(missing, [], `uncovered: ${missing.join(", ")}`);
+test("the filters leave out ./apps/*^... when apps/ has no package", () => {
+  assert.ok(!workspaceBuildFilters(fixtureWith()).includes(APPS_FILTER), "no apps/ at all");
+  const root = fixtureWith({ "apps/README.md": "# apps\n", "apps/docs-assets/logo.svg": "<svg/>\n" });
+  assert.deepEqual(appPackages(root), []);
+  assert.ok(!workspaceBuildFilters(root).includes(APPS_FILTER), "apps/ without a package.json");
 });
 
-test("uncoveredByFilters reports a missing core service filter", () => {
-  const filters = workspaceBuildFilters(ROOT).filter((f) => !f.startsWith("--filter=@asafarim/identity"));
-  const missing = uncoveredByFilters(filters, ROOT);
-  assert.ok(missing.includes("@asafarim/identity"));
+test("a new apps/<x> package the filters don't cover is reported", () => {
+  const root = fixtureWith({ "apps/README.md": "# apps\n" });
+  const filters = workspaceBuildFilters(root); // computed while apps/ had no package
+  addFile(root, "apps/newapp/package.json", pkg("@asafarim/newapp"));
+  assert.deepEqual(uncoveredByFilters(filters, root), ["apps/newapp"]);
 });
 
-test("uncoveredByFilters reports all apps when APPS_FILTER is missing", () => {
-  const filters = workspaceBuildFilters(ROOT).filter((f) => f !== APPS_FILTER);
-  const missing = uncoveredByFilters(filters, ROOT);
+test("a core service missing from the filters is reported", () => {
+  const root = fixtureWith({ "apps/notes/package.json": pkg("@asafarim/notes") });
+  const filters = workspaceBuildFilters(root).filter((f) => f !== "--filter=@asafarim/identity^...");
+  assert.deepEqual(uncoveredByFilters(filters, root), ["@asafarim/identity"]);
+});
+
+test("this repository: every app and core service is covered", () => {
   const apps = appPackages(ROOT);
-  assert.equal(missing.length, apps.length);
-  for (const app of apps) {
-    assert.ok(missing.includes(`apps/${app}`));
-  }
-});
-
-test("uncoveredByFilters fails on a fixture with an uncovered app", () => {
-  const dir = fixtureWith({
-    "apps/newapp/package.json": '{ "name": "@asafarim/newapp" }\n',
-  });
-  try {
-    const filters = workspaceBuildFilters(ROOT); // real repo filters, no newapp
-    const missing = uncoveredByFilters(filters, dir);
-    assert.ok(missing.includes("apps/newapp"), `expected apps/newapp in uncovered: ${missing.join(", ")}`);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("this repository is covered (the real tree passes)", () => {
+  assert.ok(apps.length > 0, `found no app package under ${path.join(ROOT, "apps")}`);
   const filters = workspaceBuildFilters(ROOT);
-  const missing = uncoveredByFilters(filters, ROOT);
-  assert.deepEqual(missing, [], `real tree has uncovered packages: ${missing.join(", ")}`);
+  assert.ok(filters.includes(APPS_FILTER));
+  assert.deepEqual(uncoveredByFilters(filters, ROOT), []);
 });
