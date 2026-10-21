@@ -12,6 +12,7 @@ import {
   MARKDOWN_MARKER,
   markdownCell,
   mentionsKey,
+  mentionsName,
   renderMarkdown,
   eventTypesIn,
   resolveImport,
@@ -162,6 +163,16 @@ describe("helpers", () => {
       "shop.granted",
     ]);
     expect(checkedKeysIn(`gate("my-app.items.read")`, "my-app")).toEqual(["my-app.items.read"]);
+  });
+
+  it("matches a secret name as a whole word in code, not in a comment or inside a longer name", () => {
+    expect(mentionsName(`const t = process.env.SHOP_TOKEN;`, "SHOP_TOKEN")).toBe(true);
+    expect(mentionsName(`const t = env["SHOP_TOKEN"];`, "SHOP_TOKEN")).toBe(true);
+    expect(mentionsName(`const { SHOP_TOKEN } = process.env;`, "SHOP_TOKEN")).toBe(true);
+    expect(mentionsName(`const t = process.env.SHOP_TOKEN_OLD;`, "SHOP_TOKEN")).toBe(false);
+    expect(mentionsName(`const t = process.env.MY_SHOP_TOKEN;`, "SHOP_TOKEN")).toBe(false);
+    expect(mentionsName(`const $SHOP_TOKEN = 1;`, "SHOP_TOKEN")).toBe(false);
+    expect(mentionsName(`// reads SHOP_TOKEN\n/* SHOP_TOKEN */ const x = 1;`, "SHOP_TOKEN")).toBe(false);
   });
 
   it("blanks comments but leaves strings, and keeps line breaks", () => {
@@ -320,6 +331,29 @@ describe("platform manifest review", () => {
       "permission-not-declared shop.orders.wrte apps/shop/app/api/orders/route.ts",
       "permission-not-declared shop.owner apps/shop/app/page.tsx",
     ]);
+  });
+
+  it("reports a declared secret no code reads, skipping names a framework reads by itself", () => {
+    writeApp(
+      manifest({
+        secrets: ["SHOP_API_KEY", "SHOP_OLD_TOKEN", "SHOP_TEST_ONLY", "SHOP_COMMENTED", "AUTH_SECRET", "OTEL_HEADERS"],
+      }),
+    );
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";\nexport const key = process.env.SHOP_API_KEY;`);
+    put(
+      "apps/shop/lib/note.ts",
+      `// SHOP_COMMENTED used to be read here\nexport const t = process.env.SHOP_OLD_TOKEN_V2;`,
+    );
+    put("apps/shop/lib/x.test.ts", `process.env.SHOP_TEST_ONLY = "x";`);
+    expect(kinds()).toEqual([
+      "secret-never-read SHOP_COMMENTED",
+      "secret-never-read SHOP_OLD_TOKEN",
+      "secret-never-read SHOP_TEST_ONLY",
+    ]);
+    const text = review().lines.join("\n");
+    expect(text).toMatch(/\[secret-never-read\] secret SHOP_OLD_TOKEN is declared/);
+    const md = review(["--markdown"]).lines[0]!;
+    expect(md).toContain("| secret-never-read | SHOP\\_OLD\\_TOKEN |");
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {

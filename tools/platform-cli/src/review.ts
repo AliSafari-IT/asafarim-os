@@ -45,7 +45,8 @@ export type FindingKind =
   | "route-unguarded"
   | "event-not-declared"
   | "event-handler-missing"
-  | "permission-not-declared";
+  | "permission-not-declared"
+  | "secret-never-read";
 
 export interface Finding {
   app: string;
@@ -280,6 +281,15 @@ export function resolveImport(fromRel: string, spec: string, known: Set<string>)
 
 const SESSION_HANDOFF = /\bcreateSessionHandler\s*\(/;
 
+/** Secret names a framework reads from the environment by itself: Auth.js, Next.js, OpenTelemetry. */
+export const FRAMEWORK_SECRET = /^(?:AUTH|NEXT|OTEL)_/;
+
+/** True when `text` (comments ignored) names `name` as a whole word: `process.env.X`, `env["X"]`, `"X"`. */
+export function mentionsName(text: string, name: string): boolean {
+  const n = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\w$])${n}(?![\\w$])`).test(stripComments(text));
+}
+
 /** Review one app folder. `rootDir` is only used to print file paths relative to the workspace. */
 export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string): AppReview {
   const app = manifest.id;
@@ -458,6 +468,19 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
       file: rel(path.join(appDir, file)),
       message: `the code checks permission ${key}, but the manifest doesn't declare it, so nobody can be granted it and the check always refuses (a typo, or add it to permissions)`,
     });
+  }
+
+  // 7. Every declared secret is read somewhere in the app's code (framework-read names aside).
+  for (const name of [...(manifest.secrets ?? [])].sort()) {
+    if (FRAMEWORK_SECRET.test(name)) continue;
+    if (!files.some((f) => mentionsName(f.text, name))) {
+      findings.push({
+        app,
+        kind: "secret-never-read",
+        subject: name,
+        message: `secret ${name} is declared, so its value is handed to the app's containers, but no code reads it (remove it, or fix the name the code reads)`,
+      });
+    }
   }
 
   return { app, findings, handlers, plumbing };
