@@ -66,8 +66,10 @@ function manifest(over: Record<string, unknown> = {}) {
   };
 }
 
+/** Writes the manifest, and the `/api/health` route `manifest()` declares as its health paths. */
 function writeApp(m: Record<string, unknown>) {
   put("apps/shop/platform.app.json", JSON.stringify(m));
+  put("apps/shop/app/api/health/route.ts", "export function GET() {}");
 }
 
 const review = (args: string[] = []) => reviewCommand([...args, "--root", root], root, () => root)!;
@@ -362,6 +364,44 @@ describe("platform manifest review", () => {
     expect(text).toMatch(/\[secret-never-read\] secret SHOP_OLD_TOKEN is declared/);
     const md = review(["--markdown"]).lines[0]!;
     expect(md).toContain("| secret-never-read | SHOP\\_OLD\\_TOKEN |");
+  });
+
+  it("reports a health path no route file answers with GET, once per path", () => {
+    const health = (live: string, ready: string) =>
+      manifest({
+        runtime: { ...manifest().runtime, health: { live, ready } },
+        auth: { client: "oidc", publicPaths: ["/api/health", "/status/*", "/ready"] },
+      });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    // served by a static and by a dynamic route; /api/health comes from writeApp
+    writeApp(health("/api/health", "/status/ready"));
+    put("apps/shop/app/status/[probe]/route.ts", "export const GET = () => new Response();");
+    expect(kinds()).toEqual([]);
+
+    // a typo in both paths: one finding per distinct path, naming both probes when they share it
+    writeApp(health("/api/healht", "/api/healht"));
+    expect(kinds()).toEqual(["health-route-missing /api/healht"]);
+    const found = json().reviews[0]!.findings as unknown as { message: string; file?: string }[];
+    expect(found[0]!.message).toMatch(
+      /^runtime\.health\.live and runtime\.health\.ready are \/api\/healht, but no route file serves it/,
+    );
+    expect(found[0]!.file).toBeUndefined();
+
+    // a route that serves the path without GET, and a page (not a route handler) don't count
+    writeApp(health("/api/health", "/ready"));
+    put("apps/shop/app/api/health/route.ts", "export function POST() {}");
+    put("apps/shop/app/ready/page.tsx", "export default function Page() { return null; }");
+    const out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "health-route-missing /api/health",
+      "health-route-missing /ready",
+    ]);
+    const noGet = out.reviews[0]!.findings[0] as unknown as { message: string; file?: string };
+    expect(noGet.file).toBe("apps/shop/app/api/health/route.ts");
+    expect(noGet.message).toMatch(/^runtime\.health\.live is \/api\/health, but its route file doesn't export GET/);
+    expect(review(["--markdown"]).lines[0]).toContain(
+      "| health-route-missing | /ready |  | runtime.health.ready is /ready",
+    );
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {

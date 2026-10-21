@@ -25,6 +25,10 @@
  *   or `includes`/`has` on a permission or role collection) that the manifest declares neither as a
  *   permission nor as a role. Nobody
  *   can be granted it, so the check always refuses (often a typo).
+ * - `secret-never-read`: a declared secret that no runtime code names (framework-read names aside).
+ * - `health-route-missing`: `runtime.health.live` or `.ready` is a path no route file (`app/**\/route.ts`)
+ *   answers with `GET`. core-api's health poller calls both, so the app would never read as healthy.
+ *   Pages don't count: a health check wants a route handler, not a rendered page.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -46,7 +50,8 @@ export type FindingKind =
   | "event-not-declared"
   | "event-handler-missing"
   | "permission-not-declared"
-  | "secret-never-read";
+  | "secret-never-read"
+  | "health-route-missing";
 
 export interface Finding {
   app: string;
@@ -485,6 +490,30 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
         message: `secret ${name} is declared, so its value is handed to the app's containers, but no code reads it (remove it, or fix the name the code reads)`,
       });
     }
+  }
+
+  // 8. The health paths are served: a route file whose URL matches the path and that exports GET.
+  const healthPaths = [...new Set([manifest.runtime.health.live, manifest.runtime.health.ready])];
+  for (const healthPath of healthPaths) {
+    const serving = files.filter((f) => {
+      const url = routeUrl(f.rel);
+      return url !== undefined && routeUrlRegex(url).test(healthPath);
+    });
+    if (serving.some((f) => exportedMethods(f.text).includes("GET"))) continue;
+    const probes = [
+      manifest.runtime.health.live === healthPath ? "live" : undefined,
+      manifest.runtime.health.ready === healthPath ? "ready" : undefined,
+    ].filter(Boolean);
+    const which = `runtime.health.${probes.join(" and runtime.health.")} ${probes.length > 1 ? "are" : "is"}`;
+    findings.push({
+      app,
+      kind: "health-route-missing",
+      subject: healthPath,
+      ...(serving[0] ? { file: rel(path.join(appDir, serving[0].rel)) } : {}),
+      message: serving[0]
+        ? `${which} ${healthPath}, but its route file doesn't export GET, so core-api's health poll gets a 405 and the app never reads as healthy`
+        : `${which} ${healthPath}, but no route file serves it, so core-api's health poll gets a 404 and the app never reads as healthy (fix the path, or add app${healthPath}/route.ts)`,
+    });
   }
 
   return { app, findings, handlers, plumbing };
