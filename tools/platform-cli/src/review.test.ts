@@ -658,6 +658,45 @@ describe("platform manifest review", () => {
     expect(kinds().filter((k) => k.startsWith("route-not-served"))).toEqual(["route-not-served GET /api/items"]);
   });
 
+  it("reports a schema file in events/ that no published event points to", () => {
+    writeApp(
+      manifest({
+        events: {
+          publishes: [
+            { type: "shop.order.placed.v1", schema: "./events/placed.json" },
+            { type: "shop.order.paid.v1", schema: "./events/../events/paid.json" },
+          ],
+        },
+      }),
+    );
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write"; "shop.order.placed.v1"; "shop.order.paid.v1";`);
+    for (const name of ["placed", "paid", "placed-old", "sent"]) {
+      put(`apps/shop/events/${name}.json`, JSON.stringify({ type: "object" }));
+    }
+    put("apps/shop/events/README.md", "not a schema"); // only .json files are schemas
+    put("apps/shop/events/old/lost.json", "{}"); // only the top of events/ is checked
+    put("apps/shop/app/events/stale.json", "{}"); // app/events/ holds handlers, not schemas
+    expect(kinds().filter((k) => k.startsWith("event-schema"))).toEqual([
+      "event-schema-unused events/placed-old.json",
+      "event-schema-unused events/sent.json",
+    ]);
+    const found = (JSON.parse(review(["--json"]).lines[0]!) as { reviews: AppReview[] }).reviews[0]!.findings.filter(
+      (f) => f.kind === "event-schema-unused",
+    );
+    expect(found[0]!.file).toBe("apps/shop/events/placed-old.json");
+    expect(found[0]!.message).toMatch(/no published event in the manifest points to/);
+    expect(review().lines.join("\n")).toMatch(/\[event-schema-unused\] events\/sent\.json is an event schema/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| event-schema-unused | events/sent.json |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+  });
+
+  it("reports no unused event schema for an app without an events/ folder", () => {
+    writeApp(manifest());
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    expect(kinds()).toEqual([]);
+  });
+
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
     writeApp(
       manifest({
