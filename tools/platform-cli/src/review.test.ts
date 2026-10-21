@@ -144,8 +144,10 @@ describe("helpers", () => {
 
   it("finds exported HTTP methods in every export form", () => {
     expect(
-      exportedMethods("export async function GET() {}\nexport const POST = h;\nexport { PATCH, DELETE as X }"),
-    ).toEqual(["GET", "POST", "PATCH", "DELETE"]);
+      exportedMethods(
+        "export async function GET() {}\nexport const POST = h;\nexport { PATCH, DELETE as X, handler as PUT }",
+      ),
+    ).toEqual(["GET", "POST", "PUT", "PATCH"]);
     expect(exportedMethods("function GET() {}\nexport const dynamic = 1;")).toEqual([]);
   });
 
@@ -641,8 +643,19 @@ describe("platform manifest review", () => {
 
     // The handlers come back: no finding.
     put("apps/shop/app/api/old/[...rest]/route.ts", "export function POST() {}");
-    put("apps/shop/app/api/items/route.ts", `export function GET() { gate("shop.orders.read"); }\nexport { PUT };`);
+    put(
+      "apps/shop/app/api/items/route.ts",
+      `export function GET() { gate("shop.orders.read"); }\nconst update = () => 1;\nexport { update as PUT };`,
+    );
     expect(kinds().filter((k) => k.startsWith("route-not-served"))).toEqual([]);
+  });
+
+  it("checks only the file Next.js picks for a path: a static route file wins over a dynamic one", () => {
+    writeApp(manifest({ routes: [{ path: "/api/items", methods: ["GET"], permission: "shop.orders.read" }] }));
+    put("apps/shop/lib/x.ts", `"shop.orders.write"`);
+    put("apps/shop/app/api/items/route.ts", `export function POST() { gate("shop.orders.read"); }`);
+    put("apps/shop/app/api/[kind]/route.ts", `export function GET() { gate("shop.orders.read"); }`);
+    expect(kinds().filter((k) => k.startsWith("route-not-served"))).toEqual(["route-not-served GET /api/items"]);
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {

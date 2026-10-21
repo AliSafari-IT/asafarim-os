@@ -322,10 +322,10 @@ export function exportedMethods(text: string): string[] {
     const decl = new RegExp(`export\\s+(?:async\\s+)?(?:function|const|let|var)\\s+${m}\\b`);
     if (decl.test(text)) found.add(m);
   }
-  // `export { GET, POST as P }`: the local names in each export list.
+  // `export { GET, handler as POST }`: the exported names in each export list (after `as`, if any).
   for (const list of text.matchAll(/export\s*\{([^}]*)\}/g)) {
     for (const item of list[1]!.split(",")) {
-      const name = item.trim().split(/\s+/)[0];
+      const name = item.trim().split(/\s+/).at(-1);
       if (name && (HTTP_METHODS as readonly string[]).includes(name)) found.add(name);
     }
   }
@@ -770,9 +770,19 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
     if (r.permission === undefined || r.expose === false) continue;
     const glob = globRegex(r.path);
     const globPaths = globSamples(r.path);
-    const matching = served.filter(
-      (s) => samplePaths(s.url).some((p) => glob.test(p)) || globPaths.some((p) => routeUrlRegex(s.url).test(p)),
-    );
+    // The concrete paths the route covers, from both sides; for each, Next.js serves it from the most
+    // specific matching file only (static before dynamic before catch-all), so only that file's methods count.
+    const covered = new Set([...globPaths, ...served.flatMap((s) => samplePaths(s.url).filter((p) => glob.test(p)))]);
+    const matching = [
+      ...new Set(
+        [...covered].flatMap((p) => {
+          const winner = served
+            .filter((s) => routeUrlRegex(s.url).test(p))
+            .sort((a, b) => compareRouteSpecificity(a.url, b.url))[0];
+          return winner ? [winner] : [];
+        }),
+      ),
+    ];
     const methods = r.methods as readonly string[] | undefined;
     if (matching.some((s) => !methods || methods.some((m) => s.methods.has(m)))) continue;
     const subject = methods ? `${methods.join(",")} ${r.path}` : r.path;
