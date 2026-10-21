@@ -47,6 +47,9 @@
  * - `event-schema-unused`: a `.json` file at the top of the app's `events/` folder that no
  *   `events.publishes[].schema` points to. It is usually left behind by a renamed or removed event
  *   type, and reads as a contract the app no longer publishes.
+ * - `permission-not-granted`: a declared permission that no role in the manifest grants, neither by
+ *   name nor through `<id>.*`. core-api gives permissions only through roles, so nobody can hold it
+ *   and every check on it refuses. It is usually a permission added without updating `roles`.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -75,7 +78,8 @@ export type FindingKind =
   | "config-never-read"
   | "event-never-published"
   | "route-not-served"
-  | "event-schema-unused";
+  | "event-schema-unused"
+  | "permission-not-granted";
 
 export interface Finding {
   app: string;
@@ -822,6 +826,20 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
       file: rel(file),
       message: `events/${name} is an event schema no published event in the manifest points to, so it describes a contract the app doesn't publish (remove it, or point the event's schema at it)`,
     });
+  }
+
+  // 14. Every declared permission is granted by some role (by name or through `<id>.*`).
+  const granted = new Set((manifest.roles ?? []).flatMap((r) => r.grants));
+  if (!granted.has(`${app}.*`)) {
+    for (const key of keys) {
+      if (granted.has(key)) continue;
+      findings.push({
+        app,
+        kind: "permission-not-granted",
+        subject: key,
+        message: `permission ${key} is declared but no role grants it, so nobody can hold it and every check on it refuses (add it to a role's grants)`,
+      });
+    }
   }
 
   return { app, findings, handlers, plumbing };
