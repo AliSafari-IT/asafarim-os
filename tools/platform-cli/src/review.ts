@@ -36,6 +36,9 @@
  * - `config-never-read`: a key the manifest's `config` declares that no runtime code names as a whole
  *   string literal (comments ignored). Setting its `APP_CONFIG_<KEY>` changes nothing, often because
  *   the read was renamed. An app whose code calls `config.all()` may read every key, so it gets none.
+ * - `event-never-published`: a type in `events.publishes` that no runtime code names as a whole string
+ *   literal (comments ignored). Subscribers wait for an event that never comes, and a renamed type
+ *   leaves the old declaration and schema behind.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -61,7 +64,8 @@ export type FindingKind =
   | "health-route-missing"
   | "config-not-declared"
   | "config-type-mismatch"
-  | "config-never-read";
+  | "config-never-read"
+  | "event-never-published";
 
 export interface Finding {
   app: string;
@@ -672,6 +676,22 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
         kind: "config-never-read",
         subject: key,
         message: `config ${key} is declared, but no code reads it, so setting it changes nothing (remove it, or fix the key the code reads)`,
+      });
+    }
+  }
+
+  // 11. Every published event type is named somewhere in the code (comments ignored), so something can
+  // publish it. The manifest and the `events/` schemas aren't code (see `sourceFiles`).
+  const publishedTypes = [...published].sort();
+  if (publishedTypes.length > 0) {
+    const code = files.map((f) => stripComments(f.text));
+    for (const type of publishedTypes) {
+      if (code.some((t) => mentionsKey(t, type))) continue;
+      findings.push({
+        app,
+        kind: "event-never-published",
+        subject: type,
+        message: `the manifest publishes event ${type}, but no code names it, so subscribers wait for an event that never comes (remove it, or fix the type the code publishes)`,
       });
     }
   }
