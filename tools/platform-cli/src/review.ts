@@ -33,6 +33,9 @@
  *   passed to `config.getString`, `getInt`, `getNumber` or `getBoolean`) that the manifest's `config`
  *   doesn't declare, or declares with a type that getter refuses. The app SDK throws on both, so the
  *   call fails at runtime, only when that code path runs.
+ * - `config-never-read`: a key the manifest's `config` declares that no runtime code names as a whole
+ *   string literal (comments ignored). Setting its `APP_CONFIG_<KEY>` changes nothing, often because
+ *   the read was renamed. An app whose code calls `config.all()` may read every key, so it gets none.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -57,7 +60,8 @@ export type FindingKind =
   | "secret-never-read"
   | "health-route-missing"
   | "config-not-declared"
-  | "config-type-mismatch";
+  | "config-type-mismatch"
+  | "config-never-read";
 
 export interface Finding {
   app: string;
@@ -401,6 +405,15 @@ export function configReadsIn(text: string): { getter: string; key: string }[] {
   return reads;
 }
 
+/**
+ * True when `text` (comments ignored, string contents blanked) calls `all()` on a receiver named for
+ * config (`config.all()`, `getPlatform().config?.all()`): the SDK's every-key read, which can reach any
+ * declared key without naming it.
+ */
+export function readsAllConfig(text: string): boolean {
+  return /(?<![\w$])[\w$]*[Cc]onfig\s*\??\.\s*all\s*\(/.test(blankStrings(stripComments(text)));
+}
+
 /** Review one app folder. `rootDir` is only used to print file paths relative to the workspace. */
 export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string): AppReview {
   const app = manifest.id;
@@ -647,6 +660,20 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
   }
   for (const [key, bad] of [...badReads].sort(([a], [b]) => a.localeCompare(b))) {
     findings.push({ app, kind: bad.kind, subject: key, file: rel(path.join(appDir, bad.file)), message: bad.message });
+  }
+
+  // 10. Every declared config key is read somewhere, unless the code reads them all (`config.all()`).
+  if (!files.some((f) => readsAllConfig(f.text))) {
+    const code = files.map((f) => stripComments(f.text));
+    for (const key of [...configTypes.keys()].sort()) {
+      if (code.some((t) => mentionsKey(t, key))) continue;
+      findings.push({
+        app,
+        kind: "config-never-read",
+        subject: key,
+        message: `config ${key} is declared, but no code reads it, so setting it changes nothing (remove it, or fix the key the code reads)`,
+      });
+    }
   }
 
   return { app, findings, handlers, plumbing };

@@ -20,6 +20,7 @@ import {
   blankStrings,
   compareRouteSpecificity,
   configReadsIn,
+  readsAllConfig,
   routeUrl,
   routeUrlRegex,
   samplePaths,
@@ -206,6 +207,14 @@ describe("helpers", () => {
       { getter: "getNumber", key: "rate.limit" },
       { getter: "getInt", key: "limits.max" },
     ]);
+  });
+
+  it("finds the SDK's every-key config read in code only", () => {
+    expect(readsAllConfig(`const all = config.all();`)).toBe(true);
+    expect(readsAllConfig(`getPlatform().config?.all()`)).toBe(true);
+    expect(readsAllConfig(`appConfig . all ( )`)).toBe(true);
+    expect(readsAllConfig(`// config.all()\n/* config.all() */ const x = 1;`)).toBe(false);
+    expect(readsAllConfig(`log("config.all()"); items.all(); myconfigs.all;`)).toBe(false);
   });
 
   it("blanks comments but leaves strings, and keeps line breaks", () => {
@@ -488,6 +497,43 @@ describe("platform manifest review", () => {
     expect(review(["--markdown"]).lines[0]!).toContain("| config-not-declared | limits.maxx |");
     expect(review().ok).toBe(true);
     expect(review(["--strict"]).ok).toBe(false);
+  });
+
+  it("reports a declared config key no code reads, unless the code reads every key", () => {
+    writeApp(
+      manifest({
+        config: [
+          { key: "limits.max", type: "int", default: 10 },
+          { key: "limits.old", type: "int", default: 5 },
+          { key: "source.repo", type: "string", default: "a/b" },
+          { key: "flags.commented", type: "boolean", default: false },
+          { key: "flags.tested", type: "boolean", default: false },
+        ],
+      }),
+    );
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write";
+      config.getInt("limits.max"); const REPO = "source.repo"; config.getString(REPO);
+      config.getInt("limits.older");
+      // config.getBoolean("flags.commented")`,
+    );
+    put("apps/shop/lib/x.test.ts", `config.getBoolean("flags.tested");`);
+    const found = kinds().filter((k) => k.startsWith("config-never-read"));
+    expect(found).toEqual([
+      "config-never-read flags.commented",
+      "config-never-read flags.tested",
+      "config-never-read limits.old",
+    ]);
+    const text = review().lines.join("\n");
+    expect(text).toMatch(/\[config-never-read\] config limits\.old is declared, but no code reads it/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| config-never-read | limits.old |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // Reading every key at once may reach any of them: no finding.
+    put("apps/shop/lib/dump.ts", `export const dump = () => getPlatform().config.all();`);
+    expect(kinds().filter((k) => k.startsWith("config-never-read"))).toEqual([]);
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
