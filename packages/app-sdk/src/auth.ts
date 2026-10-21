@@ -44,7 +44,7 @@ export interface AuthConfigOptions {
 
 /**
  * How long identity's own session lasts (AUTH_SESSION_TTL_SECONDS in core/identity/src/auth-session.ts: keep the two
- * equal). An app's session ends no later, so an app never shows someone as signed in after the OS home page
+ * equal; scripts/session-ttl.test.mjs fails if they differ). An app's session ends no later, so an app never shows someone as signed in after the OS home page
  * (asafarim.site, which asks identity) and identity's account page no longer do.
  */
 export const IDENTITY_SESSION_SECONDS = 12 * 3600;

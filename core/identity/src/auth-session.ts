@@ -15,6 +15,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Redis } from "ioredis";
 import { KEY_PREFIX } from "./redis-adapter.ts";
 
+/** The app SDK copies this as IDENTITY_SESSION_SECONDS; scripts/session-ttl.test.mjs keeps the two equal. */
 export const AUTH_SESSION_TTL_SECONDS = 12 * 3600;
 export const LOGIN_FLOW_TTL_SECONDS = 15 * 60;
 
