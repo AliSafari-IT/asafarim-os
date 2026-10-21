@@ -22,6 +22,7 @@ import {
   configReadsIn,
   readsAllConfig,
   routeUrl,
+  stringLiterals,
   routeUrlRegex,
   samplePaths,
   sourceFiles,
@@ -91,6 +92,11 @@ const kinds = (args: string[] = []) =>
   json(args).reviews.flatMap((r) => r.findings.map((f) => `${f.kind} ${f.subject}`));
 
 describe("helpers", () => {
+  it("reads whole string literals only: not quotes inside another literal, not comments", () => {
+    const text = `a("x.y"); b('say "q.r" now'); c(\`t\\\`u\`); // "c.d"\n/* 'e.f' */ d("")`;
+    expect([...stringLiterals(text)]).toEqual(["x.y", 'say "q.r" now', "t\\`u", ""]);
+  });
+
   it("ranks matching route URLs the way Next.js picks one: static, dynamic, catch-all, optional catch-all", () => {
     const urls = ["/[[...all]]", "/status/[probe]", "/[...rest]", "/status/ready", "/[a]/ready"];
     expect([...urls].sort(compareRouteSpecificity)).toEqual([
@@ -285,6 +291,7 @@ describe("platform manifest review", () => {
       `import { gate } from "./gate";\nexport const check = () => gate("shop.orders.write");`,
     );
     put("apps/shop/lib/gate.ts", "export const gate = (p: string) => p;");
+    put("apps/shop/lib/events.ts", `export const PLACED = "shop.order.placed.v1";`);
     put("apps/shop/app/api/auth/[...nextauth]/route.ts", "export const GET = h; export const POST = h;");
     put("apps/shop/app/api/session/route.ts", "export const GET = createSessionHandler({});");
     const out = review();
@@ -309,7 +316,11 @@ describe("platform manifest review", () => {
     put("apps/shop/events/paid.json", "{ nope");
     put("apps/shop/events/sent.json", "[1]");
     mkdirSync(path.join(root, "apps/shop/events/lost.json"), { recursive: true }); // a folder, not a file
-    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write";
+      ["shop.order.placed.v1", "shop.order.paid.v1", "shop.order.sent.v1", "shop.order.lost.v1"];`,
+    );
     expect(kinds()).toEqual([
       "event-schema-missing shop.order.placed.v1",
       "event-schema-invalid shop.order.paid.v1",
@@ -534,6 +545,50 @@ describe("platform manifest review", () => {
     // Reading every key at once may reach any of them: no finding.
     put("apps/shop/lib/dump.ts", `export const dump = () => getPlatform().config.all();`);
     expect(kinds().filter((k) => k.startsWith("config-never-read"))).toEqual([]);
+  });
+
+  it("reports a published event type no code names; comments, tests, the manifest and its schema don't count", () => {
+    writeApp(
+      manifest({
+        events: {
+          publishes: [
+            { type: "shop.order.placed.v1", schema: "./events/placed.json" },
+            { type: "shop.order.paid.v1", schema: "./events/paid.json" },
+            { type: "shop.order.sent.v1", schema: "./events/sent.json" },
+            { type: "shop.order.lost.v1", schema: "./events/lost.json" },
+          ],
+        },
+      }),
+    );
+    for (const name of ["placed", "paid", "sent", "lost"]) {
+      put(`apps/shop/events/${name}.json`, JSON.stringify({ type: "object", title: `shop.order.${name}.v1` }));
+    }
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write";
+      export const PLACED = "shop.order.placed.v1";
+      publisher.publish('shop.order.paid.v1', payload);
+      /** Publishes \`shop.order.sent.v1\` once shipped. */
+      const help = 'publish("shop.order.sent.v1")';
+      // publish("shop.order.lost.v1")`,
+    );
+    put("apps/shop/lib/x.test.ts", `publish("shop.order.lost.v1");`);
+    put("apps/shop/platform.app.ts", `export default { events: { publishes: [{ type: "shop.order.lost.v1" }] } };`);
+    expect(kinds().filter((k) => k.startsWith("event-never-published"))).toEqual([
+      "event-never-published shop.order.lost.v1",
+      "event-never-published shop.order.sent.v1",
+    ]);
+    const text = review().lines.join("\n");
+    expect(text).toMatch(
+      /\[event-never-published\] the manifest publishes event shop\.order\.lost\.v1, but no code names it/,
+    );
+    expect(review(["--markdown"]).lines[0]!).toContain("| event-never-published | shop.order.lost.v1 |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // Named in code (as a template literal too): no finding.
+    put("apps/shop/lib/ship.ts", "send(`shop.order.sent.v1`); send('shop.order.lost.v1');");
+    expect(kinds().filter((k) => k.startsWith("event-never-published"))).toEqual([]);
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {

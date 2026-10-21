@@ -36,6 +36,9 @@
  * - `config-never-read`: a key the manifest's `config` declares that no runtime code names as a whole
  *   string literal (comments ignored). Setting its `APP_CONFIG_<KEY>` changes nothing, often because
  *   the read was renamed. An app whose code calls `config.all()` may read every key, so it gets none.
+ * - `event-never-published`: a type in `events.publishes` that no runtime code names as a whole string
+ *   literal (comments ignored). Subscribers wait for an event that never comes, and a renamed type
+ *   leaves the old declaration and schema behind.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -61,7 +64,8 @@ export type FindingKind =
   | "health-route-missing"
   | "config-not-declared"
   | "config-type-mismatch"
-  | "config-never-read";
+  | "config-never-read"
+  | "event-never-published";
 
 export interface Finding {
   app: string;
@@ -382,6 +386,32 @@ export function blankStrings(text: string): string {
 }
 
 /**
+ * The contents of every whole string literal in `text` (comments ignored), as written between the
+ * quotes. A quote inside another literal (`'publish("x")'`) is part of that literal, not a literal of
+ * its own. The same light scanner as `stripComments`.
+ */
+export function stringLiterals(text: string): Set<string> {
+  const code = stripComments(text);
+  const out = new Set<string>();
+  let quote: string | undefined;
+  let start = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i]!;
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) {
+        out.add(code.slice(start, i));
+        quote = undefined;
+      }
+    } else if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      start = i + 1;
+    }
+  }
+  return out;
+}
+
+/**
  * Config reads in `text` (comments ignored): a whole string literal, without interpolation, passed as
  * the only argument of a `CONFIG_GETTERS` call on a receiver named for config (`config.getInt("…")`,
  * `getPlatform().config.getString("…")`, `appConfig?.getBoolean('…')`). A call written inside a string
@@ -672,6 +702,23 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
         kind: "config-never-read",
         subject: key,
         message: `config ${key} is declared, but no code reads it, so setting it changes nothing (remove it, or fix the key the code reads)`,
+      });
+    }
+  }
+
+  // 11. Every published event type is named somewhere in the code as a whole string literal (comments
+  // ignored), so something can publish it. The manifest and the `events/` schemas aren't code (see
+  // `sourceFiles`).
+  const publishedTypes = [...published].sort();
+  if (publishedTypes.length > 0) {
+    const literals = files.map((f) => stringLiterals(f.text));
+    for (const type of publishedTypes) {
+      if (literals.some((l) => l.has(type))) continue;
+      findings.push({
+        app,
+        kind: "event-never-published",
+        subject: type,
+        message: `the manifest publishes event ${type}, but no code names it, so subscribers wait for an event that never comes (remove it, or fix the type the code publishes)`,
       });
     }
   }
