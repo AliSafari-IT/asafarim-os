@@ -7,6 +7,7 @@ import {
   checkedKeysIn,
   exportedMethods,
   globRegex,
+  globSamples,
   localImports,
   MARKDOWN_CLEAN_MARKER,
   MARKDOWN_MARKER,
@@ -21,6 +22,7 @@ import {
   compareRouteSpecificity,
   configReadsIn,
   readsAllConfig,
+  pageUrl,
   routeUrl,
   stringLiterals,
   routeUrlRegex,
@@ -114,6 +116,16 @@ describe("helpers", () => {
     expect(routeUrl("app/route.ts")).toBe("/");
     expect(routeUrl("app/api/orders/page.tsx")).toBeUndefined();
     expect(routeUrl("lib/route.ts")).toBeUndefined();
+  });
+
+  it("maps page files to URLs and turns globs into sample paths", () => {
+    expect(pageUrl("app/(site)/admin/[id]/page.tsx")).toBe("/admin/[id]");
+    expect(pageUrl("app/page.tsx")).toBe("/");
+    expect(pageUrl("app/api/orders/route.ts")).toBeUndefined();
+    expect(globSamples("/api/orders")).toEqual(["/api/orders"]);
+    expect(globSamples("/api/*/items")).toEqual(["/api/x/items"]);
+    expect(globSamples("/api/**")).toEqual(["/api", "/api/x"]);
+    expect(globSamples("/**")).toEqual(["/", "/x"]);
   });
 
   it("turns dynamic segments into sample paths", () => {
@@ -331,6 +343,7 @@ describe("platform manifest review", () => {
 
   it("reports a permission nothing asks for; a gateway route or a test doesn't count as code, but a route does count", () => {
     writeApp(manifest({ routes: [{ path: "/api/orders", permission: "shop.orders.write" }] }));
+    put("apps/shop/app/api/orders/route.ts", "export function POST() {}");
     put("apps/shop/lib/x.test.ts", `gate("shop.orders.read")`);
     expect(kinds()).toEqual(["permission-never-checked shop.orders.read"]);
   });
@@ -589,6 +602,47 @@ describe("platform manifest review", () => {
     // Named in code (as a template literal too): no finding.
     put("apps/shop/lib/ship.ts", "send(`shop.order.sent.v1`); send('shop.order.lost.v1');");
     expect(kinds().filter((k) => k.startsWith("event-never-published"))).toEqual([]);
+  });
+
+  it("reports a manifest route with a permission that no route file or page serves with its methods", () => {
+    writeApp(
+      manifest({
+        routes: [
+          { path: "/api/orders", methods: ["GET"], permission: "shop.orders.read" },
+          { path: "/api/orders/abc", methods: ["HEAD"], permission: "shop.orders.read" },
+          { path: "/admin/**", methods: ["GET"], permission: "shop.orders.write" },
+          { path: "/api/old/**", permission: "shop.orders.write" },
+          { path: "/api/items", methods: ["DELETE", "PUT"], permission: "shop.orders.write" },
+          { path: "/api/gone/**", expose: false },
+        ],
+      }),
+    );
+    put("apps/shop/app/api/orders/route.ts", "export function GET() {}");
+    put("apps/shop/app/api/orders/[id]/route.ts", "export function GET() {}");
+    put("apps/shop/app/(site)/admin/page.tsx", "export default function Page() {}");
+    put(
+      "apps/shop/app/api/items/route.ts",
+      `export function GET() { gate("shop.orders.read"); }\n// export function PUT() {}`,
+    );
+    expect(kinds().filter((k) => k.startsWith("route-not-served"))).toEqual([
+      "route-not-served /api/old/**",
+      "route-not-served DELETE,PUT /api/items",
+    ]);
+    const found = (JSON.parse(review(["--json"]).lines[0]!) as { reviews: AppReview[] }).reviews[0]!.findings.filter(
+      (f) => f.kind === "route-not-served",
+    );
+    expect(found[0]!.file).toBeUndefined();
+    expect(found[0]!.message).toMatch(/no route file or page serves it, so the check guards nothing/);
+    expect(found[1]!.file).toBe("apps/shop/app/api/items/route.ts");
+    expect(found[1]!.message).toMatch(/no file serving it answers DELETE or PUT/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| route-not-served | /api/old/\\*\\* |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // The handlers come back: no finding.
+    put("apps/shop/app/api/old/[...rest]/route.ts", "export function POST() {}");
+    put("apps/shop/app/api/items/route.ts", `export function GET() { gate("shop.orders.read"); }\nexport { PUT };`);
+    expect(kinds().filter((k) => k.startsWith("route-not-served"))).toEqual([]);
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {

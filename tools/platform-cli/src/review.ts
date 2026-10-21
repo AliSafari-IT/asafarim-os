@@ -39,6 +39,11 @@
  * - `event-never-published`: a type in `events.publishes` that no runtime code names as a whole string
  *   literal (comments ignored). Subscribers wait for an event that never comes, and a renamed type
  *   leaves the old declaration and schema behind.
+ * - `route-not-served`: a manifest route with a `permission` that no route file (`app/**\/route.ts`)
+ *   or page (`app/**\/page.tsx`) serves, or, when the route lists `methods`, none of the files that
+ *   serve it answers one of them (pages answer `GET` and `HEAD`; a route file exporting `GET` also
+ *   answers `HEAD`, and any route file answers `OPTIONS`). The gateway's check then guards nothing,
+ *   usually because the handler moved, and the moved handler may be left without it.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -65,7 +70,8 @@ export type FindingKind =
   | "config-not-declared"
   | "config-type-mismatch"
   | "config-never-read"
-  | "event-never-published";
+  | "event-never-published"
+  | "route-not-served";
 
 export interface Finding {
   app: string;
@@ -104,6 +110,7 @@ const SOURCE_FILE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const MANIFEST_SOURCE = /^platform\.app\.(?:ts|js|mjs|json)$/;
 const ROUTE_FILE = /^route\.[cm]?[jt]sx?$/;
+const PAGE_FILE = /^page\.[cm]?[jt]sx?$/;
 
 /** The app's runtime source files (no tests, no manifest), relative to `appDir`, sorted. */
 export function sourceFiles(appDir: string): string[] {
@@ -136,10 +143,33 @@ export function sourceFiles(appDir: string): string[] {
  * Undefined for a file outside `app/` or not named `route.*`.
  */
 export function routeUrl(relFile: string): string | undefined {
+  return appUrl(relFile, ROUTE_FILE);
+}
+
+/** The URL a page file (`app/**\/page.tsx`) renders, by the same rules as `routeUrl`. */
+export function pageUrl(relFile: string): string | undefined {
+  return appUrl(relFile, PAGE_FILE);
+}
+
+function appUrl(relFile: string, fileName: RegExp): string | undefined {
   const parts = relFile.split("/");
-  if (parts[0] !== "app" || !ROUTE_FILE.test(parts.at(-1) ?? "")) return undefined;
+  if (parts[0] !== "app" || !fileName.test(parts.at(-1) ?? "")) return undefined;
   const segments = parts.slice(1, -1).filter((s) => !(s.startsWith("(") && s.endsWith(")")) && !s.startsWith("@"));
   return `/${segments.join("/")}`;
+}
+
+/**
+ * Concrete paths a manifest route glob matches, for testing against route URLs: `*` → `x`, and each
+ * `/**` → nothing and one segment. With `samplePaths` the other way round, a glob and a route URL
+ * overlap when either side's samples match the other.
+ */
+export function globSamples(pattern: string): string[] {
+  let forms = [""];
+  pattern.split("/**").forEach((part, i) => {
+    const lit = part.replace(/\*/g, "x");
+    forms = i === 0 ? [lit] : forms.flatMap((f) => [f + lit, `${f}/x${lit}`]);
+  });
+  return [...new Set(forms.map((f) => f || "/"))];
 }
 
 /**
@@ -721,6 +751,40 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
         message: `the manifest publishes event ${type}, but no code names it, so subscribers wait for an event that never comes (remove it, or fix the type the code publishes)`,
       });
     }
+  }
+
+  // 12. Every manifest route with a permission is served: by a route file or a page whose URL overlaps
+  // its glob and that answers one of its methods. Otherwise the gateway's check guards nothing.
+  const served = files.flatMap((f) => {
+    const routeAt = routeUrl(f.rel);
+    if (routeAt !== undefined) {
+      const methods = new Set(exportedMethods(stripComments(f.text)));
+      if (methods.has("GET")) methods.add("HEAD"); // Next.js answers HEAD with GET
+      methods.add("OPTIONS"); // and OPTIONS for any route file
+      return [{ url: routeAt, file: f.rel, methods }];
+    }
+    const pageAt = pageUrl(f.rel);
+    return pageAt === undefined ? [] : [{ url: pageAt, file: f.rel, methods: new Set(["GET", "HEAD"]) }];
+  });
+  for (const r of routes) {
+    if (r.permission === undefined || r.expose === false) continue;
+    const glob = globRegex(r.path);
+    const globPaths = globSamples(r.path);
+    const matching = served.filter(
+      (s) => samplePaths(s.url).some((p) => glob.test(p)) || globPaths.some((p) => routeUrlRegex(s.url).test(p)),
+    );
+    const methods = r.methods as readonly string[] | undefined;
+    if (matching.some((s) => !methods || methods.some((m) => s.methods.has(m)))) continue;
+    const subject = methods ? `${methods.join(",")} ${r.path}` : r.path;
+    findings.push({
+      app,
+      kind: "route-not-served",
+      subject,
+      ...(matching[0] ? { file: rel(path.join(appDir, matching[0].file)) } : {}),
+      message: matching[0]
+        ? `the manifest guards ${subject} with ${r.permission}, but no file serving it answers ${methods!.join(" or ")}, so the check guards nothing (fix the route's methods, or the handler's)`
+        : `the manifest guards ${r.path} with ${r.permission}, but no route file or page serves it, so the check guards nothing (the handler moved? point the route at its new path)`,
+    });
   }
 
   return { app, findings, handlers, plumbing };
