@@ -18,6 +18,7 @@ import {
   resolveImport,
   reviewCommand,
   compareRouteSpecificity,
+  configReadsIn,
   routeUrl,
   routeUrlRegex,
   samplePaths,
@@ -187,6 +188,22 @@ describe("helpers", () => {
     expect(mentionsName(`const t = process.env.MY_SHOP_TOKEN;`, "SHOP_TOKEN")).toBe(false);
     expect(mentionsName(`const $SHOP_TOKEN = 1;`, "SHOP_TOKEN")).toBe(false);
     expect(mentionsName(`// reads SHOP_TOKEN\n/* SHOP_TOKEN */ const x = 1;`, "SHOP_TOKEN")).toBe(false);
+  });
+
+  it("finds config reads: a whole literal key on a config receiver, not in a comment or interpolated", () => {
+    const text = `getPlatform().config.getInt("limits.max"); config.getString('source.repo');
+      appConfig?.getBoolean(\`flags.dark\`); config . getNumber ( "rate.limit" );
+      // config.getInt("in.comment")
+      /* config.getString("in.block") */ params.getString("not.config"); getInt("bare.call");
+      config.getString(\`source.\${x}\`); config.getString(name); config.getString("a", "b"); config.all();
+      config.getInt("limits.max");`;
+    expect(configReadsIn(text)).toEqual([
+      { getter: "getInt", key: "limits.max" },
+      { getter: "getString", key: "source.repo" },
+      { getter: "getBoolean", key: "flags.dark" },
+      { getter: "getNumber", key: "rate.limit" },
+      { getter: "getInt", key: "limits.max" },
+    ]);
   });
 
   it("blanks comments but leaves strings, and keeps line breaks", () => {
@@ -421,6 +438,45 @@ describe("platform manifest review", () => {
     put("apps/shop/app/status/ready/route.ts", "// export function GET() {}\nexport function POST() {}");
     expect(kinds()).toEqual(["health-route-missing /status/ready"]);
     expect((json().reviews[0]!.findings[0] as { file?: string }).file).toBe("apps/shop/app/status/ready/route.ts");
+  });
+
+  it("reports config the code reads that the manifest doesn't declare, or declares with another type", () => {
+    writeApp(
+      manifest({
+        config: [
+          { key: "limits.max", type: "int", default: 10 },
+          { key: "rate.factor", type: "number", default: 1.5 },
+          { key: "source.repo", type: "string", default: "a/b" },
+          { key: "flags.dark", type: "boolean", default: false },
+        ],
+      }),
+    );
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write";
+      getPlatform().config.getInt("limits.max"); config.getNumber("limits.max"); config.getNumber("rate.factor");
+      config.getString("source.repo"); config.getBoolean("flags.dark");`,
+    );
+    put(
+      "apps/shop/app/page.tsx",
+      `config.getInt("limits.maxx"); config.getInt("rate.factor"); config.getString("flags.dark");
+      // config.getInt("only.in.comment")`,
+    );
+    put("apps/shop/lib/y.ts", `config.getInt("limits.maxx"); config.getBoolean("source.repo");`);
+    put("apps/shop/lib/x.test.ts", `config.getInt("tested.only");`);
+    const found = json().reviews[0]!.findings as { kind: string; subject: string; file?: string }[];
+    expect(found.map((f) => `${f.kind} ${f.subject} ${f.file}`)).toEqual([
+      "config-type-mismatch flags.dark apps/shop/app/page.tsx",
+      "config-not-declared limits.maxx apps/shop/app/page.tsx",
+      "config-type-mismatch rate.factor apps/shop/app/page.tsx",
+      "config-type-mismatch source.repo apps/shop/lib/y.ts",
+    ]);
+    const text = review().lines.join("\n");
+    expect(text).toMatch(/\[config-not-declared\] the code reads config limits\.maxx with getInt/);
+    expect(text).toMatch(/\[config-type-mismatch\] .*declares it as number/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| config-not-declared | limits.maxx |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
