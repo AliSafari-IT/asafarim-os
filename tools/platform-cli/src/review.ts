@@ -78,7 +78,18 @@ export interface AppReview {
 }
 
 /** Folders that aren't the app's runtime code. */
-const SKIP_DIRS = new Set(["node_modules", ".next", "dist", "build", "coverage", "test", "e2e", "fixtures"]);
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".next",
+  "dist",
+  "build",
+  "coverage",
+  "test",
+  "tests",
+  "__tests__",
+  "e2e",
+  "fixtures",
+]);
 /** Folders skipped only at the app's root: `events/` holds the JSON schemas, but `app/events/` can hold handlers. */
 const SKIP_ROOT_DIRS = new Set(["events"]);
 const SOURCE_FILE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
@@ -340,19 +351,54 @@ export const CONFIG_GETTERS: Record<string, readonly string[]> = {
 };
 
 /**
+ * `text` with the contents of every string literal blanked (quotes, length and newlines kept), so code
+ * can be matched without matching what a string says. The same light scanner as `stripComments`.
+ */
+export function blankStrings(text: string): string {
+  let out = "";
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote) {
+      if (c === "\\" && i + 1 < text.length) {
+        out += "  ";
+        i++;
+      } else if (c === quote) {
+        quote = undefined;
+        out += c;
+      } else {
+        out += c === "\n" ? "\n" : " ";
+      }
+    } else {
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      out += c;
+    }
+  }
+  return out;
+}
+
+/**
  * Config reads in `text` (comments ignored): a whole string literal, without interpolation, passed as
  * the only argument of a `CONFIG_GETTERS` call on a receiver named for config (`config.getInt("…")`,
- * `getPlatform().config.getString("…")`, `appConfig?.getBoolean('…')`). In source order, repeats kept.
+ * `getPlatform().config.getString("…")`, `appConfig?.getBoolean('…')`). A call written inside a string
+ * (an example in help text) isn't one. In source order, repeats kept.
  */
 export function configReadsIn(text: string): { getter: string; key: string }[] {
+  const code = stripComments(text);
   const getters = Object.keys(CONFIG_GETTERS).join("|");
+  // Matched on the string-blanked text, so the call itself is code; the key is read back from `code`.
   const re = new RegExp(
-    String.raw`(?<![\w$])[\w$]*[Cc]onfig\s*\??\.\s*(${getters})\s*\(\s*(["'\`])([^"'\`\\\n]+)\2\s*\)`,
+    String.raw`(?<![\w$])[\w$]*[Cc]onfig\s*\??\.\s*(${getters})\s*\(\s*(["'\`])([^"'\`\n]*)\2\s*\)`,
     "g",
   );
-  return [...stripComments(text).matchAll(re)]
-    .filter((m) => !(m[2] === "`" && m[3]!.includes("${")))
-    .map((m) => ({ getter: m[1]!, key: m[3]! }));
+  const reads: { getter: string; key: string }[] = [];
+  for (const m of blankStrings(code).matchAll(re)) {
+    const start = m.index + m[0].indexOf(m[2]!, m[0].indexOf("(")) + 1;
+    const key = code.slice(start, start + m[3]!.length);
+    if (key === "" || /["'`\\\n]/.test(key) || (m[2] === "`" && key.includes("${"))) continue;
+    reads.push({ getter: m[1]!, key });
+  }
+  return reads;
 }
 
 /** Review one app folder. `rootDir` is only used to print file paths relative to the workspace. */

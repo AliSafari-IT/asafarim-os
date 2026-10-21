@@ -17,6 +17,7 @@ import {
   eventTypesIn,
   resolveImport,
   reviewCommand,
+  blankStrings,
   compareRouteSpecificity,
   configReadsIn,
   routeUrl,
@@ -196,6 +197,7 @@ describe("helpers", () => {
       // config.getInt("in.comment")
       /* config.getString("in.block") */ params.getString("not.config"); getInt("bare.call");
       config.getString(\`source.\${x}\`); config.getString(name); config.getString("a", "b"); config.all();
+      const help = 'call config.getInt("in.string") to read it'; log(\`config.getString("in.template")\`);
       config.getInt("limits.max");`;
     expect(configReadsIn(text)).toEqual([
       { getter: "getInt", key: "limits.max" },
@@ -225,6 +227,13 @@ describe("helpers", () => {
     expect(resolveImport("app/api/x/route.ts", "../../../../outside", known)).toBeUndefined();
   });
 
+  it("blanks string contents but keeps quotes, length and line breaks", () => {
+    const text = `a("bc", 'd\\'e', \`f\ng\`) // "h"`;
+    const out = blankStrings(text);
+    expect(out).toBe(`a("  ", '    ', \` \n \`) // " "`);
+    expect(out).toHaveLength(text.length);
+  });
+
   it("reads runtime source only: no tests, e2e, fixtures, node_modules or the manifest", () => {
     put("apps/shop/platform.app.ts", "x");
     put("apps/shop/lib/a.ts", "x");
@@ -232,6 +241,8 @@ describe("helpers", () => {
     put("apps/shop/lib/types.d.ts", "x");
     put("apps/shop/e2e/b.spec.ts", "x");
     put("apps/shop/test/c.ts", "x");
+    put("apps/shop/tests/helper.ts", "x");
+    put("apps/shop/lib/__tests__/d.ts", "x");
     put("apps/shop/node_modules/p/index.js", "x");
     put("apps/shop/.next/server.js", "x");
     put("apps/shop/app/page.tsx", "x");
