@@ -6,7 +6,7 @@
  * left alone.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { readEnvFile } from "./bootstrap.mjs";
 import { DEV_DIR, ROOT } from "./keys.mjs";
