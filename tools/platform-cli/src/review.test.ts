@@ -22,6 +22,7 @@ import {
   configReadsIn,
   readsAllConfig,
   routeUrl,
+  stringLiterals,
   routeUrlRegex,
   samplePaths,
   sourceFiles,
@@ -91,6 +92,11 @@ const kinds = (args: string[] = []) =>
   json(args).reviews.flatMap((r) => r.findings.map((f) => `${f.kind} ${f.subject}`));
 
 describe("helpers", () => {
+  it("reads whole string literals only: not quotes inside another literal, not comments", () => {
+    const text = `a("x.y"); b('say "q.r" now'); c(\`t\\\`u\`); // "c.d"\n/* 'e.f' */ d("")`;
+    expect([...stringLiterals(text)]).toEqual(["x.y", 'say "q.r" now', "t\\`u", ""]);
+  });
+
   it("ranks matching route URLs the way Next.js picks one: static, dynamic, catch-all, optional catch-all", () => {
     const urls = ["/[[...all]]", "/status/[probe]", "/[...rest]", "/status/ready", "/[a]/ready"];
     expect([...urls].sort(compareRouteSpecificity)).toEqual([
@@ -563,6 +569,7 @@ describe("platform manifest review", () => {
       export const PLACED = "shop.order.placed.v1";
       publisher.publish('shop.order.paid.v1', payload);
       /** Publishes \`shop.order.sent.v1\` once shipped. */
+      const help = 'publish("shop.order.sent.v1")';
       // publish("shop.order.lost.v1")`,
     );
     put("apps/shop/lib/x.test.ts", `publish("shop.order.lost.v1");`);

@@ -386,6 +386,32 @@ export function blankStrings(text: string): string {
 }
 
 /**
+ * The contents of every whole string literal in `text` (comments ignored), as written between the
+ * quotes. A quote inside another literal (`'publish("x")'`) is part of that literal, not a literal of
+ * its own. The same light scanner as `stripComments`.
+ */
+export function stringLiterals(text: string): Set<string> {
+  const code = stripComments(text);
+  const out = new Set<string>();
+  let quote: string | undefined;
+  let start = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i]!;
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) {
+        out.add(code.slice(start, i));
+        quote = undefined;
+      }
+    } else if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      start = i + 1;
+    }
+  }
+  return out;
+}
+
+/**
  * Config reads in `text` (comments ignored): a whole string literal, without interpolation, passed as
  * the only argument of a `CONFIG_GETTERS` call on a receiver named for config (`config.getInt("…")`,
  * `getPlatform().config.getString("…")`, `appConfig?.getBoolean('…')`). A call written inside a string
@@ -680,13 +706,14 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
     }
   }
 
-  // 11. Every published event type is named somewhere in the code (comments ignored), so something can
-  // publish it. The manifest and the `events/` schemas aren't code (see `sourceFiles`).
+  // 11. Every published event type is named somewhere in the code as a whole string literal (comments
+  // ignored), so something can publish it. The manifest and the `events/` schemas aren't code (see
+  // `sourceFiles`).
   const publishedTypes = [...published].sort();
   if (publishedTypes.length > 0) {
-    const code = files.map((f) => stripComments(f.text));
+    const literals = files.map((f) => stringLiterals(f.text));
     for (const type of publishedTypes) {
-      if (code.some((t) => mentionsKey(t, type))) continue;
+      if (literals.some((l) => l.has(type))) continue;
       findings.push({
         app,
         kind: "event-never-published",
