@@ -1,6 +1,7 @@
+
 {
   "name": "asafarim-os",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "ASafariM OS — a small core platform and self-describing app plugins",
   "author": "Ali Safari",
