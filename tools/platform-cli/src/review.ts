@@ -149,6 +149,29 @@ export function routeUrlRegex(url: string): RegExp {
   return new RegExp(`^${re || "/"}$`);
 }
 
+/** How Next.js ranks a URL segment when several routes match: static, then `[x]`, `[...x]`, `[[...x]]`. */
+function segmentRank(seg: string): number {
+  if (/^\[\[\.\.\.[^\]]+\]\]$/.test(seg)) return 3;
+  if (/^\[\.\.\.[^\]]+\]$/.test(seg)) return 2;
+  if (/^\[[^\]]+\]$/.test(seg)) return 1;
+  return 0;
+}
+
+/**
+ * Orders two route URLs that match the same path, most specific first, the way Next.js picks the one
+ * that answers: segment by segment, a static segment beats a dynamic one, which beats a catch-all.
+ */
+export function compareRouteSpecificity(a: string, b: string): number {
+  const sa = a.split("/").filter(Boolean);
+  const sb = b.split("/").filter(Boolean);
+  for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
+    const ra = i < sa.length ? segmentRank(sa[i]!) : -1;
+    const rb = i < sb.length ? segmentRank(sb[i]!) : -1;
+    if (ra !== rb) return ra - rb;
+  }
+  return 0;
+}
+
 /** Event types in `namespace` (`<ns>.<entity>.<verb>.v<N>`) that `text` holds as whole string literals. */
 export function eventTypesIn(text: string, namespace: string): string[] {
   const ns = namespace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -495,11 +518,15 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
   // 8. The health paths are served: a route file whose URL matches the path and that exports GET.
   const healthPaths = [...new Set([manifest.runtime.health.live, manifest.runtime.health.ready])];
   for (const healthPath of healthPaths) {
-    const serving = files.filter((f) => {
-      const url = routeUrl(f.rel);
-      return url !== undefined && routeUrlRegex(url).test(healthPath);
-    });
-    if (serving.some((f) => exportedMethods(f.text).includes("GET"))) continue;
+    // Next.js serves a path from the most specific matching route (static before dynamic), so only that
+    // file's exports decide; a commented-out `GET` doesn't count.
+    const serving = files
+      .flatMap((f) => {
+        const url = routeUrl(f.rel);
+        return url !== undefined && routeUrlRegex(url).test(healthPath) ? [{ ...f, url }] : [];
+      })
+      .sort((a, b) => compareRouteSpecificity(a.url, b.url));
+    if (serving[0] && exportedMethods(stripComments(serving[0].text)).includes("GET")) continue;
     const probes = [
       manifest.runtime.health.live === healthPath ? "live" : undefined,
       manifest.runtime.health.ready === healthPath ? "ready" : undefined,

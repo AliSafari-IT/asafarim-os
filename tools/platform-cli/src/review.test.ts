@@ -17,6 +17,7 @@ import {
   eventTypesIn,
   resolveImport,
   reviewCommand,
+  compareRouteSpecificity,
   routeUrl,
   routeUrlRegex,
   samplePaths,
@@ -87,6 +88,17 @@ const kinds = (args: string[] = []) =>
   json(args).reviews.flatMap((r) => r.findings.map((f) => `${f.kind} ${f.subject}`));
 
 describe("helpers", () => {
+  it("ranks matching route URLs the way Next.js picks one: static, dynamic, catch-all, optional catch-all", () => {
+    const urls = ["/[[...all]]", "/status/[probe]", "/[...rest]", "/status/ready", "/[a]/ready"];
+    expect([...urls].sort(compareRouteSpecificity)).toEqual([
+      "/status/ready",
+      "/status/[probe]",
+      "/[a]/ready",
+      "/[...rest]",
+      "/[[...all]]",
+    ]);
+  });
+
   it("maps route files to URLs, dropping route groups and slots", () => {
     expect(routeUrl("app/api/orders/route.ts")).toBe("/api/orders");
     expect(routeUrl("app/(shop)/@modal/api/orders/[id]/route.ts")).toBe("/api/orders/[id]");
@@ -402,6 +414,13 @@ describe("platform manifest review", () => {
     expect(review(["--markdown"]).lines[0]).toContain(
       "| health-route-missing | /ready |  | runtime.health.ready is /ready",
     );
+
+    // the static route answers before the dynamic one, and a commented-out GET isn't an export
+    writeApp(health("/api/health", "/status/ready"));
+    put("apps/shop/app/status/[probe]/route.ts", "export const GET = () => new Response();");
+    put("apps/shop/app/status/ready/route.ts", "// export function GET() {}\nexport function POST() {}");
+    expect(kinds()).toEqual(["health-route-missing /status/ready"]);
+    expect((json().reviews[0]!.findings[0] as { file?: string }).file).toBe("apps/shop/app/status/ready/route.ts");
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
