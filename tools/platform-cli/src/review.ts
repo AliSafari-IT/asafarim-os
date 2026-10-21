@@ -281,8 +281,12 @@ export function resolveImport(fromRel: string, spec: string, known: Set<string>)
 
 const SESSION_HANDOFF = /\bcreateSessionHandler\s*\(/;
 
-/** Secret names a framework reads from the environment by itself: Auth.js, Next.js, OpenTelemetry. */
-export const FRAMEWORK_SECRET = /^(?:AUTH|NEXT|OTEL)_/;
+/**
+ * Secret names read from the environment by a framework or the platform's own SDK, not by the app's
+ * code: Auth.js, Next.js, OpenTelemetry, and `@asafarim/app-sdk` (`ASAFARIM_REGISTRY_CREDENTIAL`,
+ * `ASAFARIM_NATS_PASSWORD`, …).
+ */
+export const FRAMEWORK_SECRET = /^(?:AUTH|NEXT|OTEL|ASAFARIM)_/;
 
 /** True when `text` (comments ignored) names `name` as a whole word: `process.env.X`, `env["X"]`, `"X"`. */
 export function mentionsName(text: string, name: string): boolean {

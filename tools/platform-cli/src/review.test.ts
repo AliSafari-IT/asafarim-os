@@ -336,7 +336,15 @@ describe("platform manifest review", () => {
   it("reports a declared secret no code reads, skipping names a framework reads by itself", () => {
     writeApp(
       manifest({
-        secrets: ["SHOP_API_KEY", "SHOP_OLD_TOKEN", "SHOP_TEST_ONLY", "SHOP_COMMENTED", "AUTH_SECRET", "OTEL_HEADERS"],
+        secrets: [
+          "SHOP_API_KEY",
+          "SHOP_OLD_TOKEN",
+          "SHOP_TEST_ONLY",
+          "SHOP_COMMENTED",
+          "AUTH_SECRET",
+          "OTEL_HEADERS",
+          "ASAFARIM_NATS_PASSWORD",
+        ],
       }),
     );
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";\nexport const key = process.env.SHOP_API_KEY;`);
