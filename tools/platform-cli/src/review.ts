@@ -44,6 +44,9 @@
  *   serve it answers one of them (pages answer `GET` and `HEAD`; a route file exporting `GET` also
  *   answers `HEAD`, and any route file answers `OPTIONS`). The gateway's check then guards nothing,
  *   usually because the handler moved, and the moved handler may be left without it.
+ * - `event-schema-unused`: a `.json` file at the top of the app's `events/` folder that no
+ *   `events.publishes[].schema` points to. It is usually left behind by a renamed or removed event
+ *   type, and reads as a contract the app no longer publishes.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -71,7 +74,8 @@ export type FindingKind =
   | "config-type-mismatch"
   | "config-never-read"
   | "event-never-published"
-  | "route-not-served";
+  | "route-not-served"
+  | "event-schema-unused";
 
 export interface Finding {
   app: string;
@@ -794,6 +798,29 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
       message: matching[0]
         ? `the manifest guards ${subject} with ${r.permission}, but no file serving it answers ${methods!.join(" or ")}, so the check guards nothing (fix the route's methods, or the handler's)`
         : `the manifest guards ${r.path} with ${r.permission}, but no route file or page serves it, so the check guards nothing (the handler moved? point the route at its new path)`,
+    });
+  }
+
+  // 13. Every schema file at the top of the app's `events/` folder belongs to a published event type.
+  const schemaFiles = new Set((manifest.events?.publishes ?? []).map((ev) => path.resolve(appDir, ev.schema)));
+  let eventFiles: string[] = [];
+  try {
+    eventFiles = readdirSync(path.join(appDir, "events"), { withFileTypes: true })
+      .filter((d) => d.isFile() && d.name.endsWith(".json"))
+      .map((d) => d.name)
+      .sort();
+  } catch {
+    eventFiles = []; // no events/ folder (or not a folder)
+  }
+  for (const name of eventFiles) {
+    const file = path.resolve(appDir, "events", name);
+    if (schemaFiles.has(file)) continue;
+    findings.push({
+      app,
+      kind: "event-schema-unused",
+      subject: `events/${name}`,
+      file: rel(file),
+      message: `events/${name} is an event schema no published event in the manifest points to, so it describes a contract the app doesn't publish (remove it, or point the event's schema at it)`,
     });
   }
 
