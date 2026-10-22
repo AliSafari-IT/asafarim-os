@@ -50,6 +50,9 @@
  * - `permission-not-granted`: a declared permission that no role in the manifest grants, neither by
  *   name nor through `<id>.*`. core-api gives permissions only through roles, so nobody can hold it
  *   and every check on it refuses. It is usually a permission added without updating `roles`.
+ * - `nav-target-missing`: a `ui.nav[].href` that no page (`app/**\/page.tsx`) serves and no route file
+ *   answers with `GET` (the most specific match decides, as Next.js picks it). Launchers and the app's
+ *   own navigation show the link, and it answers 404 (or 405), usually because the page moved.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -79,7 +82,8 @@ export type FindingKind =
   | "event-never-published"
   | "route-not-served"
   | "event-schema-unused"
-  | "permission-not-granted";
+  | "permission-not-granted"
+  | "nav-target-missing";
 
 export interface Finding {
   app: string;
@@ -840,6 +844,33 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
         message: `permission ${key} is declared but no role grants it, so nobody can hold it and every check on it refuses (add it to a role's grants)`,
       });
     }
+  }
+
+  // 15. Every nav link is served: by a page, or a route file that exports GET. Next.js serves a path
+  // from the most specific matching file only (static before dynamic before catch-all).
+  const navServed = files.flatMap((f) => {
+    const routeAt = routeUrl(f.rel);
+    if (routeAt !== undefined)
+      return [{ url: routeAt, file: f.rel, get: exportedMethods(stripComments(f.text)).includes("GET") }];
+    const pageAt = pageUrl(f.rel);
+    return pageAt === undefined ? [] : [{ url: pageAt, file: f.rel, get: true }];
+  });
+  for (const href of [...new Set(manifest.ui.nav.map((n) => n.href))]) {
+    const target = href.replace(/\/+$/, "") || "/"; // Next.js drops a trailing slash
+    const winner = navServed
+      .filter((s) => routeUrlRegex(s.url).test(target))
+      .sort((a, b) => compareRouteSpecificity(a.url, b.url))[0];
+    if (winner?.get) continue;
+    const labels = manifest.ui.nav.filter((n) => n.href === href).map((n) => `"${n.label}"`);
+    findings.push({
+      app,
+      kind: "nav-target-missing",
+      subject: href,
+      ...(winner ? { file: rel(path.join(appDir, winner.file)) } : {}),
+      message: winner
+        ? `the nav link ${labels.join(", ")} points to ${href}, but the route file serving it doesn't export GET, so the link answers 405 (export GET, or fix the href)`
+        : `the nav link ${labels.join(", ")} points to ${href}, but no page or route file serves it, so the link answers 404 (the page moved? fix the href)`,
+    });
   }
 
   return { app, findings, handlers, plumbing };

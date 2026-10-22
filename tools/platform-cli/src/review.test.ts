@@ -736,6 +736,46 @@ describe("platform manifest review", () => {
     expect(kinds()).toEqual([]);
   });
 
+  it("reports a nav link no page or GET route file serves, once per href", () => {
+    const nav = (...links: [string, string][]) =>
+      manifest({ ui: { ...manifest().ui, nav: links.map(([label, href]) => ({ label, href })) } });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put("apps/shop/app/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/(shop)/orders/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/items/[id]/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/export/route.ts", `import "@/lib/x";\nexport const GET = () => new Response();`);
+    // served by the root page, a page in a route group (with a trailing slash), a dynamic page, and a GET route
+    writeApp(nav(["Home", "/"], ["Orders", "/orders/"], ["Item", "/items/42"], ["Export", "/export"]));
+    expect(kinds()).toEqual([]);
+
+    // a moved page, twice under two labels: one finding naming both; a route file without GET
+    put("apps/shop/app/upload/route.ts", `import "@/lib/x";\n// export function GET() {}\nexport function POST() {}`);
+    writeApp(nav(["Old orders", "/order"], ["Orders", "/order"], ["Upload", "/upload"], ["Home", "/"]));
+    const out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "nav-target-missing /order",
+      "nav-target-missing /upload",
+    ]);
+    const [moved, noGet] = out.reviews[0]!.findings as unknown as { message: string; file?: string }[];
+    expect(moved!.file).toBeUndefined();
+    expect(moved!.message).toMatch(
+      /^the nav link "Old orders", "Orders" points to \/order, but no page or route file serves it/,
+    );
+    expect(noGet!.file).toBe("apps/shop/app/upload/route.ts");
+    expect(noGet!.message).toMatch(/doesn't export GET, so the link answers 405/);
+    expect(review().lines.join("\n")).toMatch(
+      /\[nav-target-missing\] the nav link "Old orders", "Orders" points to \/order/,
+    );
+    expect(review(["--markdown"]).lines[0]!).toContain("| nav-target-missing | /upload |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // the static route answers before the dynamic page
+    put("apps/shop/app/items/new/route.ts", `import "@/lib/x";\nexport function POST() {}`);
+    writeApp(nav(["New item", "/items/new"]));
+    expect(kinds()).toEqual(["nav-target-missing /items/new"]);
+  });
+
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
     writeApp(
       manifest({
