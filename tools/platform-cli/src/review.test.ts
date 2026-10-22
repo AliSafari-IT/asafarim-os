@@ -67,7 +67,7 @@ function manifest(over: Record<string, unknown> = {}) {
       { key: "shop.orders.read", description: "See orders" },
       { key: "shop.orders.write", description: "Change orders" },
     ],
-    roles: [],
+    roles: [{ key: "shop.staff", grants: ["shop.orders.read", "shop.orders.write"], description: "Staff" }],
     ui: { glyph: "SH", color: "#2563eb", nav: [], status: "active" },
     ...over,
   };
@@ -391,7 +391,11 @@ describe("platform manifest review", () => {
   });
 
   it("reports a permission the code checks that the manifest declares neither as a permission nor a role", () => {
-    writeApp(manifest({ roles: [{ key: "shop.clerk", grants: ["shop.orders.read"], description: "Clerk" }] }));
+    writeApp(
+      manifest({
+        roles: [{ key: "shop.clerk", grants: ["shop.orders.read", "shop.orders.write"], description: "Clerk" }],
+      }),
+    );
     put("apps/shop/lib/gate.ts", `export async function gate(p: string) { return p; }`);
     put(
       "apps/shop/app/api/orders/route.ts",
@@ -697,6 +701,41 @@ describe("platform manifest review", () => {
     expect(kinds()).toEqual([]);
   });
 
+  it("reports a declared permission that no role grants", () => {
+    writeApp(
+      manifest({
+        permissions: [
+          { key: "shop.orders.read", description: "See orders" },
+          { key: "shop.orders.write", description: "Change orders" },
+          { key: "shop.orders.refund", description: "Refund orders" },
+        ],
+        roles: [
+          { key: "shop.clerk", grants: ["shop.orders.read"], description: "Clerk" },
+          { key: "shop.viewer", grants: ["shop.orders.read"], description: "Viewer" },
+        ],
+      }),
+    );
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write"; "shop.orders.refund";`);
+    expect(kinds()).toEqual(["permission-not-granted shop.orders.write", "permission-not-granted shop.orders.refund"]);
+    const found = (JSON.parse(review(["--json"]).lines[0]!) as { reviews: AppReview[] }).reviews[0]!.findings.filter(
+      (f) => f.kind === "permission-not-granted",
+    );
+    expect(found[0]!.file).toBeUndefined();
+    expect(found[0]!.message).toMatch(/no role grants it, so nobody can hold it/);
+    expect(review().lines.join("\n")).toMatch(/\[permission-not-granted\] permission shop\.orders\.refund is declared/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| permission-not-granted | shop.orders.refund |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+  });
+
+  it("counts the app's wildcard grant as granting every permission, and reports none without permissions", () => {
+    writeApp(manifest({ roles: [{ key: "shop.owner", grants: ["shop.*"], description: "Owner" }] }));
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    expect(kinds()).toEqual([]);
+    writeApp(manifest({ permissions: [], roles: [] }));
+    expect(kinds()).toEqual([]);
+  });
+
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
     writeApp(
       manifest({
@@ -732,7 +771,7 @@ describe("platform manifest review", () => {
     put(
       "apps/other/platform.app.json",
       JSON.stringify({
-        ...manifest({ id: "other", permissions: [] }),
+        ...manifest({ id: "other", permissions: [], roles: [] }),
         runtime: { ...manifest().runtime, image: "other" },
       }),
     );
