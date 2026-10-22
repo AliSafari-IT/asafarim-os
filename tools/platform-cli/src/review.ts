@@ -53,6 +53,10 @@
  * - `nav-target-missing`: a `ui.nav[].href` that no page (`app/**\/page.tsx`) serves and no route file
  *   answers with `GET` (the most specific match decides, as Next.js picks it). Launchers and the app's
  *   own navigation show the link, and it answers 404 (or 405), usually because the page moved.
+ * - `public-path-not-served`: an `auth.publicPaths` glob that no route file, page or file in `public/`
+ *   serves (overlap by the same rule as `route-not-served`). Nothing answers there today, but any
+ *   handler added at that path later is public without anyone deciding it. It is usually left behind
+ *   when a public page or health route moves.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -83,7 +87,8 @@ export type FindingKind =
   | "route-not-served"
   | "event-schema-unused"
   | "permission-not-granted"
-  | "nav-target-missing";
+  | "nav-target-missing"
+  | "public-path-not-served";
 
 export interface Finding {
   app: string;
@@ -873,7 +878,52 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
     });
   }
 
+  // 16. Every public path is served: by a route file, a page, or a static file in `public/`. A stale
+  // entry makes whatever is added there later public without anyone deciding it.
+  const publicServed = [
+    ...files.flatMap((f) => {
+      const url = routeUrl(f.rel) ?? pageUrl(f.rel);
+      return url === undefined ? [] : [url];
+    }),
+    ...staticFiles(path.join(appDir, "public")),
+  ];
+  for (const glob of [...new Set(manifest.auth.publicPaths)]) {
+    const re = globRegex(glob);
+    const samples = globSamples(glob);
+    const overlaps = publicServed.some(
+      (url) => samplePaths(url).some((p) => re.test(p)) || samples.some((p) => routeUrlRegex(url).test(p)),
+    );
+    if (overlaps) continue;
+    findings.push({
+      app,
+      kind: "public-path-not-served",
+      subject: glob,
+      message: `auth.publicPaths lists ${glob}, but no route file, page or public/ file serves it, so anything added there later is public without anyone deciding it (remove it, or point it at the path that moved)`,
+    });
+  }
+
   return { app, findings, handlers, plumbing };
+}
+
+/** URLs of the static files under `dir` (an app's `public/` folder), as Next.js serves them; none if it's missing. */
+export function staticFiles(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (cur: string, prefix: string) => {
+    let entries;
+    try {
+      entries = readdirSync(cur, { withFileTypes: true });
+    } catch {
+      return; // missing, or not a folder
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const url = `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) walk(path.join(cur, entry.name), url);
+      else if (entry.isFile()) out.push(url);
+    }
+  };
+  walk(dir, "");
+  return out.sort();
 }
 
 export interface ReviewOptions {

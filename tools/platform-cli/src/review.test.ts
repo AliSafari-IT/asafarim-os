@@ -449,7 +449,7 @@ describe("platform manifest review", () => {
     const health = (live: string, ready: string) =>
       manifest({
         runtime: { ...manifest().runtime, health: { live, ready } },
-        auth: { client: "oidc", publicPaths: ["/api/health", "/status/*", "/ready"] },
+        auth: { client: "oidc", publicPaths: ["/api/health", "/status/*"] },
       });
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
     // served by a static and by a dynamic route; /api/health comes from writeApp
@@ -774,6 +774,37 @@ describe("platform manifest review", () => {
     put("apps/shop/app/items/new/route.ts", `import "@/lib/x";\nexport function POST() {}`);
     writeApp(nav(["New item", "/items/new"]));
     expect(kinds()).toEqual(["nav-target-missing /items/new"]);
+  });
+
+  it("reports a public path no route file, page or public/ file serves, once per glob", () => {
+    const pub = (...paths: string[]) => manifest({ auth: { client: "oidc", publicPaths: paths } });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put("apps/shop/app/(site)/about/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/docs/[...slug]/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/hooks/[name]/route.ts", `import "@/lib/x";\nexport function POST() {}`);
+    put("apps/shop/public/robots.txt", "User-agent: *");
+    put("apps/shop/public/img/logo.svg", "<svg/>");
+    // a page in a route group, a catch-all page under a glob, a dynamic POST-only route, static files
+    writeApp(pub("/api/health", "/about", "/docs/**", "/hooks/github", "/robots.txt", "/img/*"));
+    expect(kinds()).toEqual([]);
+
+    // a moved page and a removed webhook folder, the first listed twice: one finding per glob
+    writeApp(pub("/api/health", "/pricing", "/pricing", "/webhooks/**", "/favicon.ico"));
+    const out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "public-path-not-served /pricing",
+      "public-path-not-served /webhooks/**",
+      "public-path-not-served /favicon.ico",
+    ]);
+    const found = out.reviews[0]!.findings[0] as unknown as { message: string; file?: string };
+    expect(found.file).toBeUndefined();
+    expect(found.message).toMatch(
+      /^auth\.publicPaths lists \/pricing, but no route file, page or public\/ file serves it/,
+    );
+    expect(review().lines.join("\n")).toMatch(/\[public-path-not-served\] auth\.publicPaths lists \/webhooks\/\*\*/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| public-path-not-served | /pricing |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
