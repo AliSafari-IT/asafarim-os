@@ -880,19 +880,20 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
 
   // 16. Every public path is served: by a route file, a page, or a static file in `public/`. A stale
   // entry makes whatever is added there later public without anyone deciding it.
-  const publicServed = [
-    ...files.flatMap((f) => {
-      const url = routeUrl(f.rel) ?? pageUrl(f.rel);
-      return url === undefined ? [] : [url];
-    }),
-    ...staticFiles(path.join(appDir, "public")),
-  ];
+  const publicServed = files.flatMap((f) => {
+    const url = routeUrl(f.rel) ?? pageUrl(f.rel);
+    return url === undefined ? [] : [url];
+  });
+  // Static files are served at their literal path: a `[x]` in a file name is not a dynamic segment.
+  const publicStatic = staticFiles(path.join(appDir, "public"));
   for (const glob of [...new Set(manifest.auth.publicPaths)]) {
     const re = globRegex(glob);
     const samples = globSamples(glob);
-    const overlaps = publicServed.some(
-      (url) => samplePaths(url).some((p) => re.test(p)) || samples.some((p) => routeUrlRegex(url).test(p)),
-    );
+    const overlaps =
+      publicStatic.some((url) => re.test(url)) ||
+      publicServed.some(
+        (url) => samplePaths(url).some((p) => re.test(p)) || samples.some((p) => routeUrlRegex(url).test(p)),
+      );
     if (overlaps) continue;
     findings.push({
       app,

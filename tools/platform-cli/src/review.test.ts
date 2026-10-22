@@ -805,6 +805,11 @@ describe("platform manifest review", () => {
     expect(review(["--markdown"]).lines[0]!).toContain("| public-path-not-served | /pricing |");
     expect(review().ok).toBe(true);
     expect(review(["--strict"]).ok).toBe(false);
+
+    // a static file is served at its literal path: a [slug] in its name isn't a dynamic segment
+    put("apps/shop/public/files/[slug]/a.txt", "a");
+    writeApp(pub("/api/health", "/files/secret/a.txt", "/files/[slug]/a.txt"));
+    expect(kinds()).toEqual(["public-path-not-served /files/secret/a.txt"]);
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
