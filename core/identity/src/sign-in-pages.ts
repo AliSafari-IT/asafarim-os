@@ -28,15 +28,24 @@ color:var(--ink);text-decoration:none}.tile:hover{border-color:var(--accent)}
 .tile small{display:block;color:var(--muted)}
 .glyph{flex:none;display:grid;place-items:center;width:36px;height:36px;border-radius:10px;background:var(--accent-soft);
 color:var(--accent);font-weight:700;font-size:.8rem;letter-spacing:.04em}
-table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:.92rem}
-th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
-th{color:var(--muted);font-weight:600}
+.os-table-wrap{margin:0 0 20px}.os-table td{vertical-align:middle}
+.details{color:var(--muted);font-size:.85em;overflow-wrap:anywhere}
 h2{font-size:1.05rem;margin:22px 0 8px}
 .small{font-size:.85rem}
 button.danger{background:var(--bad);color:var(--bad-ink)}
 </style>`;
 
-const when = (d: Date | null) => (d ? escapeHtml(d.toISOString().replace("T", " ").slice(0, 16)) + " UTC" : "—");
+const when = (d: Date | null) =>
+  d ? `<span class="os-nowrap">${escapeHtml(d.toISOString().replace("T", " ").slice(0, 16))} UTC</span>` : "—";
+
+/** A data table in @asafarim/theme's style: it scrolls on its own, and on a phone each row is a card. */
+const table = (columns: string[], rows: string) =>
+  `<div class="os-table-wrap"><table class="os-table os-table--stack"><thead><tr>${columns
+    .map((c) => `<th scope="col">${c}</th>`)
+    .join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
+/** A cell with its column's name, shown in front of it when the row is a card. */
+const cell = (label: string, html: string, className = "") =>
+  `<td${className ? ` class="${className}"` : ""}${label ? ` data-label="${label}"` : ""}>${html}</td>`;
 const csrfField = (csrf: string) => `<input type="hidden" name="csrf" value="${escapeHtml(csrf)}">`;
 const err = (message?: string) => (message ? `<p class="error" role="alert">${escapeHtml(message)}</p>` : "");
 
@@ -158,12 +167,18 @@ export function accountPage(opts: {
 }): string {
   const csrf = csrfField(opts.csrf);
   const list = opts.passkeys.length
-    ? `<table><thead><tr><th>Passkey</th><th>Added</th><th>Last used</th><th></th></tr></thead><tbody>${opts.passkeys
-        .map(
-          (k) => `<tr><td>${escapeHtml(k.name)}</td><td>${when(k.createdAt)}</td><td>${when(k.lastUsedAt)}</td><td>
-<form class="inline" method="post" action="/account/passkeys/remove">${csrf}<input type="hidden" name="id" value="${escapeHtml(k.credentialId)}"><button class="secondary" type="submit">Remove</button></form></td></tr>`,
-        )
-        .join("")}</tbody></table>`
+    ? table(
+        ["Passkey", "Added", "Last used", ""],
+        opts.passkeys
+          .map(
+            (k) =>
+              `<tr>${cell("Passkey", escapeHtml(k.name))}${cell("Added", when(k.createdAt))}${cell("Last used", when(k.lastUsedAt))}${cell(
+                "",
+                `<form class="inline" method="post" action="/account/passkeys/remove">${csrf}<input type="hidden" name="id" value="${escapeHtml(k.credentialId)}"><button class="secondary" type="submit">Remove</button></form>`,
+              )}</tr>`,
+          )
+          .join(""),
+      )
     : "<p>No passkeys yet.</p>";
   return page(
     "Your account",
@@ -237,44 +252,66 @@ export function adminPage(opts: {
 }): string {
   const csrf = csrfField(opts.csrf);
   const requests = opts.requests.length
-    ? `<table><thead><tr><th>Who</th><th>Requested</th><th></th></tr></thead><tbody>${opts.requests
-        .map(
-          (r) => `<tr><td>${labelCell(r.label)}</td><td>${when(r.createdAt)}</td><td class="row">
+    ? table(
+        ["Who", "Requested", ""],
+        opts.requests
+          .map(
+            (r) =>
+              `<tr>${cell("Who", labelCell(r.label))}${cell("Requested", when(r.createdAt))}${cell(
+                "",
+                `<div class="row">
 <form class="inline" method="post" action="/admin/requests/${escapeHtml(r.id)}/approve">${csrf}<button type="submit">Approve</button></form>
 <form class="inline" method="post" action="/admin/requests/${escapeHtml(r.id)}/reject">${csrf}<button class="secondary" type="submit">Reject</button></form>
-</td></tr>`,
-        )
-        .join("")}</tbody></table>`
+</div>`,
+              )}</tr>`,
+          )
+          .join(""),
+      )
     : "<p>No pending requests.</p>";
 
   const connections = opts.connections.length
-    ? `<table><thead><tr><th>Who</th><th>Status</th><th>Granted</th><th>Last sign-in</th><th></th></tr></thead><tbody>${opts.connections
-        .map((c) => {
-          const self = c.principalId === opts.me;
-          const action =
-            c.status === "active" && !self
-              ? `<form class="inline" method="post" action="/admin/connections/${escapeHtml(c.principalId)}/revoke">${csrf}<button class="danger" type="submit">Revoke</button></form>`
-              : c.status === "revoked" && c.label
-                ? `<form class="inline" method="post" action="/admin/connections">${csrf}<input type="hidden" name="identifier" value="${escapeHtml(c.label)}"><button class="secondary" type="submit" style="margin-left:0">Reconnect</button></form>`
-                : self
-                  ? `<span class="small">you</span>`
-                  : "";
-          return `<tr><td>${labelCell(c.label)}${c.isAdmin ? ' <span class="small">(admin)</span>' : ""}</td><td>${escapeHtml(c.status)}${c.revokedAt ? ` <span class="small">${when(c.revokedAt)}</span>` : ""}</td><td>${when(c.grantedAt)}</td><td>${when(c.lastLoginAt)}</td><td>${action}</td></tr>`;
-        })
-        .join("")}</tbody></table>`
+    ? table(
+        ["Who", "Status", "Granted", "Last sign-in", ""],
+        opts.connections
+          .map((c) => {
+            const self = c.principalId === opts.me;
+            const action =
+              c.status === "active" && !self
+                ? `<form class="inline" method="post" action="/admin/connections/${escapeHtml(c.principalId)}/revoke">${csrf}<button class="danger" type="submit">Revoke</button></form>`
+                : c.status === "revoked" && c.label
+                  ? `<form class="inline" method="post" action="/admin/connections">${csrf}<input type="hidden" name="identifier" value="${escapeHtml(c.label)}"><button class="secondary" type="submit" style="margin-left:0">Reconnect</button></form>`
+                  : self
+                    ? `<span class="small">you</span>`
+                    : "";
+            return `<tr>${cell("Who", `${labelCell(c.label)}${c.isAdmin ? ' <span class="small">(admin)</span>' : ""}`)}${cell(
+              "Status",
+              `${escapeHtml(c.status)}${c.revokedAt ? ` <span class="small">${when(c.revokedAt)}</span>` : ""}`,
+            )}${cell("Granted", when(c.grantedAt))}${cell("Last sign-in", when(c.lastLoginAt))}${cell("", action)}</tr>`;
+          })
+          .join(""),
+      )
     : "<p>No connections.</p>";
 
   const audit = opts.audit.length
-    ? `<table class="small"><thead><tr><th>When</th><th>Event</th><th>Who</th><th>Details</th></tr></thead><tbody>${opts.audit
-        .map(
-          (a) =>
-            `<tr><td>${when(a.at)}</td><td>${escapeHtml(a.event)}</td><td>${a.label ? escapeHtml(a.label) : "—"}</td><td>${escapeHtml(
-              Object.entries(a.detail)
-                .map(([k, v]) => `${k}=${String(v)}`)
-                .join(" "),
-            )}</td></tr>`,
-        )
-        .join("")}</tbody></table>`
+    ? table(
+        ["When", "Event", "Who", "Details"],
+        opts.audit
+          .map(
+            (a) =>
+              `<tr>${cell("When", when(a.at))}${cell("Event", `<span class="os-nowrap">${escapeHtml(a.event)}</span>`)}${cell(
+                "Who",
+                a.label ? escapeHtml(a.label) : "—",
+              )}${cell(
+                "Details",
+                `<span class="details">${escapeHtml(
+                  Object.entries(a.detail)
+                    .map(([k, v]) => `${k}=${String(v)}`)
+                    .join(" "),
+                )}</span>`,
+              )}</tr>`,
+          )
+          .join(""),
+      )
     : "<p>Nothing yet.</p>";
 
   return page(

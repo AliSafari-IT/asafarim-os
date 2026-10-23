@@ -144,8 +144,8 @@ export default async function RolesPage({
               id below.
             </p>
           ) : (
-            <div className="table-wrap">
-              <table>
+            <div className="table-wrap os-table-wrap">
+              <table className="os-table os-table--stack">
                 <caption>People (the seeded local users)</caption>
                 <thead>
                   <tr>
@@ -163,7 +163,7 @@ export default async function RolesPage({
                         </div>
                         {u.isActive ? null : <span className="badge warn">inactive: can&apos;t sign in</span>}
                       </th>
-                      <td>
+                      <td data-label="Role to grant">
                         <form action={grantRole} className="row" aria-label={`Grant a role to ${u.name}`}>
                           <input type="hidden" name="subject" value={u.id} />
                           <input type="hidden" name="next" value={here} />

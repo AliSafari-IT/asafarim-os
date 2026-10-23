@@ -135,44 +135,26 @@ h3 {
   margin: 12px 0;
   box-shadow: var(--shadow);
 }
+/* Tables are @asafarim/theme's .os-table (cards on a phone); these are the console's extras. */
+.table-wrap + .table-wrap,
 .table-wrap {
-  overflow-x: auto;
+  margin: 8px 0 16px;
 }
-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--card);
+.copy {
+  margin-left: 4px;
+  padding: 1px 6px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-}
-caption {
-  text-align: left;
-  padding: 0 0 8px;
+  border-radius: 6px;
+  background: transparent;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  vertical-align: bottom;
+  cursor: pointer;
 }
-th,
-td {
-  text-align: left;
-  vertical-align: top;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-}
-th {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
-tr:last-child td,
-tr:last-child th {
-  border-bottom: 0;
-}
-/* Row headers (an app's or person's name) are content, not column headings. */
-tbody th {
-  font-size: inherit;
-  text-transform: none;
-  letter-spacing: normal;
+main button.copy:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
   color: var(--ink);
 }
 .chips a {
