@@ -76,9 +76,13 @@ test("every link goes to this site or an allowed host, over https", async ({ pag
   }
 });
 
-test("the top bar links to sign-in and to the docs", async ({ page }) => {
+test("the top bar links to sign-in, the docs and Breinhap", async ({ page }) => {
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Main" });
+  await expect(nav.getByRole("link", { name: "Breinhap" })).toHaveAttribute(
+    "href",
+    "https://breinhap.asafarim.site/en/",
+  );
   await expect(nav.getByRole("link", { name: "Docs" })).toHaveAttribute("href", "https://docs.asafarim.site/");
   await expect(nav.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "https://id.asafarim.site/login");
 });

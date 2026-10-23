@@ -46,7 +46,7 @@ describe("renderPage", () => {
     expect(html.match(/<script\b[^>]*>/gi)).toEqual(['<script src="theme.js">', '<script src="session.js" defer>']);
     expect(html).not.toMatch(/<script[^>]*>[^<]|\sstyle=|<style|\son[a-z]+=/i);
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
-      expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|((docs|id)\.)?asafarim\.site)\//);
+      expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|((docs|id|breinhap)\.)?asafarim\.site)\//);
     }
     // Stylesheet and icon are this origin's own; only the canonical link names a full URL.
     expect(html).not.toMatch(/<link rel="(?!canonical")[^"]+" [^>]*href="https?:/);
@@ -55,6 +55,7 @@ describe("renderPage", () => {
   it("has a top bar with the way to sign in and to the docs, on allowed hosts", () => {
     const nav = /<nav class="topbar" aria-label="Main">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
     expect(nav).toContain('<a href="https://docs.asafarim.site/">Docs</a>');
+    expect(nav).toContain('<a href="https://breinhap.asafarim.site/en/">Breinhap</a>');
     expect(nav).toContain('<a href="https://id.asafarim.site/login" class="btn btn-small">Sign in</a>');
     // session.js swaps the "Sign in" slot for the avatar, asking identity at this origin.
     expect(nav).toContain('<li id="account">');
@@ -72,6 +73,12 @@ describe("renderPage", () => {
     expect(themed).toMatch(/<div class="os-topbar">\s*<nav class="topbar"/);
     expect(themed.indexOf('href="theme.css"')).toBeLessThan(themed.indexOf('href="styles.css"'));
     expect(html).not.toContain("os-theme-toggle"); // none given, none drawn
+  });
+
+  it("links Breinhap's English page from the top bar, a section of its own and the footer", () => {
+    expect(html).toMatch(/<section id="more"[\s\S]*?<a href="https:\/\/breinhap\.asafarim\.site\/en\/">Breinhap<\/a>/);
+    const footer = /<footer>([\s\S]*?)<\/footer>/.exec(html)?.[1] ?? "";
+    expect(footer).toContain('<a href="https://breinhap.asafarim.site/en/">Breinhap</a>');
   });
 
   it("frames the OS as a new base platform, not a migration", () => {
