@@ -17,7 +17,7 @@ const nextConfig: NextConfig = {
   devIndicators: false,
   // pg and the OpenTelemetry SDK (@asafarim/telemetry) use Node APIs; keep them out of the bundler.
   serverExternalPackages: ["pg", "@asafarim/telemetry"],
-  transpilePackages: ["@asafarim/app-sdk"],
+  transpilePackages: ["@asafarim/app-sdk", "@asafarim/theme"],
 };
 
 export default nextConfig;

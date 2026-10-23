@@ -16,6 +16,7 @@
     "@asafarim/app-sdk": "workspace:*",
     "@asafarim/event-catalog": "workspace:*",
     "@asafarim/telemetry": "workspace:*",
+    "@asafarim/theme": "workspace:*",
     "next": "^16.4.0",
     "next-auth": "5.0.0-beta.32",
     "react": "^19.3.0",

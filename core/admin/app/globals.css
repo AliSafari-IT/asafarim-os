@@ -1,44 +1,12 @@
-:root {
-  color-scheme: light dark;
-  /* The ASafariM brand tokens, as on asafarim.site (core/site) and id.asafarim.site. */
-  --bg: #f6f1e7;
-  --card: #fdfaf3;
-  --ink: #211d18;
-  --muted: #6e6557;
-  --accent: #9f4a07;
-  --accent-ink: #fdfaf3;
-  --accent-soft: rgba(180, 83, 9, 0.1);
-  --accent-glow: #d97706;
-  --line: #e4dccb;
-  --bad: #b91c1c;
-  --good: #166534;
-  --warn: #92400e;
-  --warn-bg: #fef3c7;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #17130d;
-    --card: #201a12;
-    --ink: #ece3d5;
-    --muted: #a99e8c;
-    --accent: #f59e0b;
-    --accent-ink: #1c1917;
-    --accent-soft: rgba(245, 158, 11, 0.12);
-    --accent-glow: #fbbf24;
-    --line: #3a3127;
-    --bad: #f87171;
-    --good: #86efac;
-    --warn: #fcd34d;
-    --warn-bg: #3a2e0c;
-  }
-}
+/* The Admin console's own styles. The tokens, the top bar and the theme toggle are @asafarim/theme's
+   (theme.css, loaded first by app/layout.tsx). */
 * {
   box-sizing: border-box;
 }
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(48rem 30rem at 12% -10%, var(--accent-soft), transparent 65%), var(--bg);
+  background: var(--bg);
   color: var(--ink);
   font:
     16px/1.5 system-ui,
@@ -65,19 +33,19 @@ body {
   outline-offset: 2px;
 }
 .shell {
-  max-width: 1040px;
+  max-width: 1080px;
   margin: 0 auto;
-  padding: 16px;
+  padding: 24px 16px 48px;
 }
-.top {
+.top-inner {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 10px 16px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px 24px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 20px;
+  gap: 10px 24px;
 }
 .top .brand {
   display: flex;
@@ -85,7 +53,7 @@ body {
   gap: 12px;
 }
 .top h1 {
-  font-size: 1.15rem;
+  font-size: 1.1rem;
   margin: 0;
 }
 .wordmark {
@@ -118,11 +86,16 @@ body {
 .top nav a {
   display: inline-block;
   padding: 6px 12px;
-  border-radius: 8px;
-  color: var(--ink);
+  border-radius: 6px;
+  color: var(--muted);
   text-decoration: none;
+  font-weight: 500;
+  transition:
+    color 0.15s,
+    background-color 0.15s;
 }
 .top nav a:hover {
+  color: var(--ink);
   background: var(--card);
 }
 .top nav a[aria-current="page"] {
@@ -136,6 +109,11 @@ body {
   gap: 12px;
   color: var(--muted);
   font-size: 0.9rem;
+}
+.center-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
 }
 h2 {
   font-size: 1.25rem;
@@ -155,6 +133,7 @@ h3 {
   border-radius: 12px;
   padding: 16px;
   margin: 12px 0;
+  box-shadow: var(--shadow);
 }
 .table-wrap {
   overflow-x: auto;
@@ -308,6 +287,26 @@ button {
   background: var(--accent);
   color: var(--accent-ink);
   cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+main button:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+main button.secondary:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+main button.danger:hover:not(:disabled) {
+  background: var(--bad);
+  border-color: var(--bad);
+  filter: brightness(1.1);
+}
+main button.secondary.danger:hover:not(:disabled) {
+  background: transparent;
+  filter: none;
 }
 button.secondary {
   background: transparent;
@@ -317,7 +316,7 @@ button.secondary {
 button.danger {
   background: var(--bad);
   border-color: var(--bad);
-  color: #fff;
+  color: var(--bad-ink);
 }
 button.secondary.danger {
   background: transparent;
@@ -402,14 +401,14 @@ dialog.confirm .actions {
   overflow: visible;
 }
 .admin-logo-stop-a {
-  stop-color: var(--accent-glow);
+  stop-color: var(--brand-a);
 }
 .admin-logo-stop-b {
-  stop-color: var(--accent);
+  stop-color: var(--brand-b);
 }
 .admin-logo-pulse {
   fill: none;
-  stroke: var(--accent-glow);
+  stroke: var(--brand-a);
   stroke-width: 1.5;
   opacity: 0;
   transform-origin: 24px 24px;
@@ -417,7 +416,7 @@ dialog.confirm .actions {
 }
 .admin-logo-ring {
   fill: none;
-  stroke: var(--accent);
+  stroke: var(--brand-b);
   stroke-opacity: 0.4;
   stroke-width: 1.2;
   stroke-dasharray: 2.5 4.5;
@@ -425,12 +424,12 @@ dialog.confirm .actions {
   animation: admin-logo-spin 40s linear infinite reverse;
 }
 .admin-logo-orbit {
-  fill: var(--accent-glow);
+  fill: var(--brand-a);
   transform-origin: 24px 24px;
   animation: admin-logo-spin 7s linear infinite;
 }
 .admin-logo-orbit-slow {
-  fill: var(--accent);
+  fill: var(--brand-b);
   opacity: 0.65;
   animation-duration: 12s;
   animation-direction: reverse;
@@ -447,13 +446,13 @@ dialog.confirm .actions {
 }
 .admin-logo-tracks {
   fill: none;
-  stroke: var(--accent-ink);
+  stroke: #fff;
   stroke-opacity: 0.45;
   stroke-width: 1.6;
   stroke-linecap: round;
 }
 .admin-logo-knob {
-  fill: var(--accent-ink);
+  fill: #fff;
   animation: admin-logo-slide 4.8s ease-in-out infinite alternate;
 }
 .admin-logo-knob-1 {

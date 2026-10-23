@@ -21,7 +21,15 @@ import type { OidcClient } from "./clients.ts";
 import { HandoffError, issueTicket, verifyAssertion, type ReplayGuard } from "./handoff.ts";
 import { type HttpContext, readForm, sendHtml } from "./http.ts";
 import type { Logger } from "./log.ts";
-import { CONTINUE_PAGE_CSP, FAVICON_SVG, continuePage, errorPage, loggedOutPage, logoutPage } from "./pages.ts";
+import {
+  CONTINUE_PAGE_CSP,
+  FAVICON_SVG,
+  THEME_JS,
+  continuePage,
+  errorPage,
+  loggedOutPage,
+  logoutPage,
+} from "./pages.ts";
 import { PENDING_TTL_SECONDS, hashSecret, type PendingLogins } from "./pending.ts";
 import type { SignIn } from "./sign-in.ts";
 
@@ -225,6 +233,15 @@ export function createProvider(deps: ProviderDeps): Provider {
       ctx.set("Cache-Control", "public, max-age=86400");
       ctx.set("X-Content-Type-Options", "nosniff");
       ctx.body = FAVICON_SVG;
+      return;
+    }
+
+    // @asafarim/theme's light/dark script, which every page but the hand-off runs in <head>.
+    if (path === "/static/theme.js" && ctx.method === "GET") {
+      ctx.type = "application/javascript";
+      ctx.set("Cache-Control", "public, max-age=300");
+      ctx.set("X-Content-Type-Options", "nosniff");
+      ctx.body = THEME_JS;
       return;
     }
 

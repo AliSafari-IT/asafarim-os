@@ -8,6 +8,7 @@ import {
   MAX_SCREENSHOT_BYTES,
   buildSite,
   defaultSchemaFile,
+  defaultThemeDir,
   loadProgress,
   pngSize,
 } from "../src/build.ts";
@@ -58,9 +59,12 @@ describe("buildSite", () => {
     expect(written).toContain("styles.css");
     // The page's one script ships beside it (the CSP allows only this origin's).
     expect(written).toContain("session.js");
+    // @asafarim/theme's stylesheet and script, and its toggle in the top bar.
+    expect(written).toEqual(expect.arrayContaining(["theme.css", "theme.js"]));
     const html = readFileSync(path.join(out, "index.html"), "utf8");
     for (const [, src] of html.matchAll(/<img src="([^"]+)"/g)) expect(written).toContain(src);
     for (const [, src] of html.matchAll(/<script src="([^"]+)"/g)) expect(written).toContain(src);
+    expect(html).toContain('data-testid="theme-toggle"');
   });
 
   it("serves the app manifest JSON Schema at its $id and at the versioned path, byte for byte (#87)", () => {
@@ -87,7 +91,9 @@ describe("buildSite", () => {
     const dir = siteCopy();
     const first = loadProgress(path.join(dir, "src", "progress.json")).screenshots[0]!.file;
     rmSync(path.join(dir, "public", "screenshots", first));
-    expect(() => buildSite(dir, temp(), { schemaFile: defaultSchemaFile(siteDir) })).toThrow(/pnpm screenshots/);
+    expect(() =>
+      buildSite(dir, temp(), { schemaFile: defaultSchemaFile(siteDir), themeDir: defaultThemeDir(siteDir) }),
+    ).toThrow(/pnpm screenshots/);
   });
 
   it("refuses a screenshot over the 300 KB budget", () => {
@@ -95,7 +101,9 @@ describe("buildSite", () => {
     const first = loadProgress(path.join(dir, "src", "progress.json")).screenshots[0]!.file;
     const file = path.join(dir, "public", "screenshots", first);
     writeFileSync(file, Buffer.concat([readFileSync(file), Buffer.alloc(MAX_SCREENSHOT_BYTES)]));
-    expect(() => buildSite(dir, temp(), { schemaFile: defaultSchemaFile(siteDir) })).toThrow(/300 KB/);
+    expect(() =>
+      buildSite(dir, temp(), { schemaFile: defaultSchemaFile(siteDir), themeDir: defaultThemeDir(siteDir) }),
+    ).toThrow(/300 KB/);
   });
 });
 

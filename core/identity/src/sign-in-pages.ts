@@ -1,24 +1,24 @@
 /**
  * The HTML of the SMS sign-in and of the connections admin. Server-rendered,
- * no script, every value escaped; each form carries its CSRF token.
+ * no inline script (only the theme's and passkey's own files), every value escaped; each form carries its CSRF token.
  */
 import type { AppLink } from "./clients.ts";
 import { type NavLink, escapeHtml, homeHref, homeLink, page } from "./pages.ts";
 import type { AuditRow, ConnectionRequestRow, ConnectionRow } from "./store.ts";
 
-/** Pages that post forms to this origin only. */
+/** Pages that post forms to this origin only, and run only this origin's scripts (the theme's). */
 export const PAGE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
-/** Pages with passkey buttons: our one script, and fetch to our own origin. */
-export const PASSKEY_PAGE_CSP = `${PAGE_CSP}; script-src 'self'; connect-src 'self'`;
+/** Pages with passkey buttons: also fetch to our own origin. */
+export const PASSKEY_PAGE_CSP = `${PAGE_CSP}; connect-src 'self'`;
 
 const EXTRA_STYLE = `<style>
 label{display:block;font-weight:600;margin:0 0 6px}
-input[type=tel],input[type=text]{width:100%;font:inherit;font-size:1.15rem;padding:10px 12px;border:1px solid var(--line);
-border-radius:10px;background:var(--bg);color:var(--ink);margin:0 0 14px}
+input[type=tel],input[type=text],input[type=email]{width:100%;font:inherit;font-size:1.15rem;padding:10px 12px;border:1px solid var(--line);
+border-radius:10px;background:var(--card-2);color:var(--ink);margin:0 0 14px}
 input.code{letter-spacing:.35em;text-align:center;font-variant-numeric:tabular-nums}
-.error{color:#b42318;font-weight:600}@media (prefers-color-scheme:dark){.error{color:#f97066}}
+.error{color:var(--bad);font-weight:600}
 .notice{border-left:3px solid var(--accent);padding-left:10px}
 form.inline{display:inline;margin:0}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -33,7 +33,7 @@ th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertic
 th{color:var(--muted);font-weight:600}
 h2{font-size:1.05rem;margin:22px 0 8px}
 .small{font-size:.85rem}
-button.danger{background:#b42318}
+button.danger{background:var(--bad);color:var(--bad-ink)}
 </style>`;
 
 const when = (d: Date | null) => (d ? escapeHtml(d.toISOString().replace("T", " ").slice(0, 16)) + " UTC" : "—");

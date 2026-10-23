@@ -41,8 +41,9 @@ describe("renderPage", () => {
     for (const img of html.match(/<img [^>]*>/g) ?? []) expect(img).toMatch(/ alt="[^"]+"/);
   });
 
-  it("has one script of its own and no inline scripts, inline styles or third-party assets (the CSP allows none)", () => {
-    expect(html.match(/<script\b[^>]*>/gi)).toEqual(['<script src="session.js" defer>']);
+  it("has its own scripts only and no inline scripts, inline styles or third-party assets (the CSP allows none)", () => {
+    // theme.js runs before paint (no flash of the other theme); session.js after parsing.
+    expect(html.match(/<script\b[^>]*>/gi)).toEqual(['<script src="theme.js">', '<script src="session.js" defer>']);
     expect(html).not.toMatch(/<script[^>]*>[^<]|\sstyle=|<style|\son[a-z]+=/i);
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
       expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|((docs|id)\.)?asafarim\.site)\//);
@@ -61,6 +62,16 @@ describe("renderPage", () => {
     expect(script).toContain(`const identity = "${IDENTITY_ORIGIN}";`);
     for (const link of Object.values(APP_LINKS)) expect(isAllowedLink(link.href)).toBe(true);
     expect(html).toMatch(/Request connection/);
+  });
+
+  it("puts the light/dark toggle in the top bar and loads the shared theme before its own styles", () => {
+    const toggle = '<button type="button" class="os-theme-toggle" data-theme-toggle>T</button>';
+    const themed = renderPage(progress, { imageSizes, themeToggle: toggle });
+    const nav = /<nav class="topbar" aria-label="Main">([\s\S]*?)<\/nav>/.exec(themed)?.[1] ?? "";
+    expect(nav).toContain(`<li>${toggle}</li>`);
+    expect(themed).toMatch(/<div class="os-topbar">\s*<nav class="topbar"/);
+    expect(themed.indexOf('href="theme.css"')).toBeLessThan(themed.indexOf('href="styles.css"'));
+    expect(html).not.toContain("os-theme-toggle"); // none given, none drawn
   });
 
   it("frames the OS as a new base platform, not a migration", () => {

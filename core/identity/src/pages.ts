@@ -1,32 +1,44 @@
 /**
  * The service's own HTML: the shared layout every page uses (header, footer, favicon), the error
  * page (oidc-provider's renderError and every hand-off failure), the logout confirmation and the
- * logged-out page. Small, self-contained (no external fonts or scripts), in the asafarim.site
- * tokens (core/site/public/styles.css) so the two hosts look like one product.
+ * logged-out page. Small, self-contained (no external fonts; one script of its own, the theme's), in
+ * @asafarim/theme's tokens, like asafarim.site and every app, so the hosts look like one product.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+/**
+ * @asafarim/theme, shared with asafarim.site and every app: its tokens and top bar (theme.css, inlined into
+ * the page's style), its light/dark script (theme.js, served at /static/theme.js and run in <head>, so a
+ * remembered choice applies before paint) and the toggle's markup. Read once, at startup.
+ */
+const themeFile = (name: string) => readFileSync(fileURLToPath(import.meta.resolve(`@asafarim/theme/${name}`)), "utf8");
+// Comments stripped: every page carries it inline.
+const THEME_CSS = themeFile("theme.css").replace(/\/\*[\s\S]*?\*\//g, "");
+export const THEME_JS = themeFile("theme.js");
+const THEME_TOGGLE = themeFile("toggle.html").trim();
+
 const STYLE = `
-:root{color-scheme:light dark;--bg:#f6f1e7;--card:#fdfaf3;--ink:#211d18;--muted:#6e6557;--accent:#9f4a07;--accent-ink:#fdfaf3;
---accent-soft:rgba(180,83,9,.1);--line:rgba(33,29,24,.12)}
-@media (prefers-color-scheme:dark){:root{--bg:#17130d;--card:#201a12;--ink:#ece3d5;--muted:#a99e8c;--accent:#f59e0b;
---accent-ink:#1c1917;--accent-soft:rgba(245,158,11,.12);--line:rgba(236,227,213,.12)}}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;flex-direction:column;color:var(--ink);
-background:radial-gradient(48rem 30rem at 12% -10%,var(--accent-soft),transparent 65%),var(--bg);
+background:var(--bg);
 font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{color:var(--accent)}a:focus-visible,button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 .topbar,.foot{width:100%;max-width:60rem;margin:0 auto;padding:14px 16px;display:flex;align-items:center;
 justify-content:space-between;gap:12px;flex-wrap:wrap}
-.topbar{border-bottom:1px solid var(--line)}
+.topbar{padding-top:10px;padding-bottom:10px}.tools{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
 .brand{display:inline-flex;align-items:center;gap:.55rem;color:var(--ink);text-decoration:none;font-weight:700;letter-spacing:-.01em}
-.brand span span{color:var(--accent)}.mark{flex:none}.mark rect,.mark circle{fill:var(--accent)}.mark .soft{opacity:.6}
+.brand span span{color:var(--accent)}.mark{flex:none}.mark rect{fill:var(--brand-b)}.mark circle{fill:var(--brand-a)}.mark .soft{opacity:.6}
 .nav{display:flex;gap:16px;margin:0;padding:0;list-style:none}.nav a{font-weight:600;text-decoration:none}
 .nav a[aria-current]{color:var(--ink)}
 main{flex:1;width:100%;display:flex;justify-content:center;align-items:flex-start;padding:32px 16px}
-.card{max-width:440px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px}
+.card{max-width:440px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px;
+box-shadow:var(--shadow)}
 .foot{border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}.foot p{margin:0}
 h1{font-size:1.35rem;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted)}
 button,.button{display:inline-block;border:0;border-radius:10px;background:var(--accent);color:var(--accent-ink);font:inherit;
 font-weight:600;padding:10px 16px;cursor:pointer;text-decoration:none}
-.secondary{background:transparent;color:var(--muted);border:1px solid var(--line);margin-left:8px}
+button:hover,.button:hover{background:var(--accent-hover)}
+.secondary,.secondary:hover{background:transparent;color:var(--muted);border:1px solid var(--line);margin-left:8px}
+.secondary:hover{border-color:var(--accent);color:var(--ink)}
 code{font-size:.85em;color:var(--muted)}`;
 
 /** The brand mark of asafarim.site (core/site), still: the OS core with two apps around it. Decorative. */
@@ -67,6 +79,8 @@ export interface PageOptions {
   head?: string;
   /** The header's links. Default: Home only. */
   nav?: NavLink[];
+  /** The light/dark toggle and its script. Default true; false for a page whose CSP allows no script. */
+  themeToggle?: boolean;
 }
 
 /** The header's "Home" link, first on every page. */
@@ -77,7 +91,11 @@ export const homeLink = (): NavLink => ({ href: homeUrl, label: "Home" });
  * footer, so no page here is a dead end. `head` may also be passed as a string (the old signature).
  */
 export function page(title: string, body: string, options: PageOptions | string = {}): string {
-  const { head = "", nav = [homeLink()] } = typeof options === "string" ? { head: options } : options;
+  const {
+    head = "",
+    nav = [homeLink()],
+    themeToggle = true,
+  } = typeof options === "string" ? { head: options } : options;
   const home = escapeHtml(homeUrl);
   const links = nav
     .map(
@@ -87,9 +105,9 @@ export function page(title: string, body: string, options: PageOptions | string 
     .join("");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><link rel="icon" href="/favicon.svg" type="image/svg+xml">
-${head}<title>${escapeHtml(title)} · ASafariM</title><style>${STYLE}</style></head>
-<body><header class="topbar"><a class="brand" href="${home}">${BRAND_MARK}<span>ASafariM <span>OS</span></span></a>
-<nav aria-label="Main"><ul class="nav">${links}</ul></nav></header>
+${themeToggle ? '<script src="/static/theme.js"></script>' : ""}${head}<title>${escapeHtml(title)} · ASafariM</title><style>${THEME_CSS}${STYLE}</style></head>
+<body><header class="os-topbar"><div class="topbar"><a class="brand" href="${home}">${BRAND_MARK}<span>ASafariM <span>OS</span></span></a>
+<div class="tools"><nav aria-label="Main"><ul class="nav">${links}</ul></nav>${themeToggle ? THEME_TOGGLE : ""}</div></div></header>
 <main><div class="card">${body}</div></main>
 <footer class="foot"><p>ASafariM OS · sign-in and accounts for ASafariM apps</p><p><a href="${home}">${escapeHtml(new URL(homeUrl).host)}</a></p></footer>
 </body></html>`;
@@ -139,7 +157,7 @@ export function continuePage(uid: string): string {
     "Signing you in",
     `<h1>Signing you in…</h1><p>Taking you back to the app.</p>
 <p><a class="button" href="${next}">Continue</a></p>`,
-    `<meta http-equiv="refresh" content="0;url=${next}">`,
+    { head: `<meta http-equiv="refresh" content="0;url=${next}">`, themeToggle: false },
   );
 }
 

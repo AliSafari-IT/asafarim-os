@@ -1,3 +1,4 @@
+import { ThemeToggle } from "@asafarim/theme/react";
 import { AdminLogo } from "@/components/AdminLogo";
 import { signOut } from "@/lib/auth";
 
@@ -10,6 +11,7 @@ async function signOutAction() {
 export default function Forbidden() {
   return (
     <main className="center" id="main">
+      <ThemeToggle className="center-toggle" />
       <div className="center-mark">
         <AdminLogo size={72} />
       </div>

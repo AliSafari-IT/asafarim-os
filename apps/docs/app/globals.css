@@ -1,17 +1,9 @@
 /* Docs: the OS palette (as in Admin and Notes), tuned for long-form reading. */
 :root {
-  color-scheme: light dark;
-  --bg: #f6f4ef;
-  --card: #ffffff;
-  --ink: #1d1b16;
-  --muted: #5d584d;
-  --accent: #0f766e;
-  --accent-ink: #ffffff;
-  --line: #e4dfd3;
-  --warn: #92400e;
-  --warn-bg: #fef3c7;
-  --danger: #b91c1c;
-  --danger-ink: #ffffff;
+  /* The colours, the top bar and the theme toggle are @asafarim/theme's (theme.css, loaded first by
+     app/layout.tsx). These are the reader's own. */
+  --danger: var(--bad);
+  --danger-ink: var(--bad-ink);
   --note-hl: #fde68a;
   --note-hl-active: #fbbf24;
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -19,21 +11,14 @@
   --mono: ui-monospace, "SF Mono", "Cascadia Code", monospace;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #15130f;
-    --card: #1f1c17;
-    --ink: #f1ece2;
-    --muted: #b3ab9b;
-    --accent: #5eead4;
-    --accent-ink: #15130f;
-    --line: #37322a;
-    --warn: #fcd34d;
-    --warn-bg: #3a2e0c;
-    --danger: #fca5a5;
-    --danger-ink: #15130f;
+  :root:not([data-theme="light"]) {
     --note-hl: #4a3b0a;
     --note-hl-active: #7a5c0d;
   }
+}
+:root[data-theme="dark"] {
+  --note-hl: #4a3b0a;
+  --note-hl-active: #7a5c0d;
 }
 * {
   box-sizing: border-box;
@@ -106,6 +91,12 @@ a.button {
   padding: 24px 16px;
   text-align: center;
 }
+/* The theme toggle on pages without a top bar (sign-in, 403). */
+.corner-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+}
 .signin h1 {
   font-family: var(--serif);
   font-size: 2.4rem;
@@ -156,14 +147,7 @@ button.wide {
   justify-content: space-between;
   gap: 16px;
   padding: 10px 24px;
-  border-bottom: 1px solid var(--line);
-  background: var(--card);
-}
-@supports (backdrop-filter: blur(8px)) {
-  .topbar {
-    background: color-mix(in srgb, var(--card) 92%, transparent);
-    backdrop-filter: saturate(1.4) blur(10px);
-  }
+  background: var(--top-bg);
 }
 
 .brand,
@@ -179,8 +163,8 @@ button.wide {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: #0f766e;
-  color: #ffffff;
+  background: var(--accent);
+  color: var(--accent-ink);
   font-weight: 700;
   font-size: 0.8rem;
 }
@@ -441,11 +425,16 @@ button.wide {
   background-color: var(--shiki-light-bg);
 }
 @media (prefers-color-scheme: dark) {
-  .prose .shiki,
-  .prose .shiki span {
+  :root:not([data-theme="light"]) .prose .shiki,
+  :root:not([data-theme="light"]) .prose .shiki span {
     color: var(--shiki-dark);
     background-color: var(--shiki-dark-bg);
   }
+}
+:root[data-theme="dark"] .prose .shiki,
+:root[data-theme="dark"] .prose .shiki span {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
 }
 .prose .shiki span {
   background-color: transparent;
