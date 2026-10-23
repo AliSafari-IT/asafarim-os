@@ -62,6 +62,12 @@
  *   `auth.publicPaths` glob covers `/`, the page the tile opens. The manifest contradicts itself: a
  *   signed-out visitor is sent to sign-in. Make `/` public, or set the tile to `"authenticated"`
  *   (with `requiresAccountToUse` for a site whose other pages are public).
+ * - `public-path-guarded`: an `auth.publicPaths` glob where every path it covers is behind a manifest
+ *   route with a `permission` for every method (no `methods` limit, not `expose: false`). core-api's
+ *   gateway doesn't read `publicPaths`, so it still asks for the permission there, and a signed-out
+ *   visitor gets 401 or sign-in. The manifest contradicts itself. Partial overlaps (`/**` public with
+ *   guarded API routes, `/orders/*` public with only `/orders/1` guarded) are a valid design and aren't
+ *   reported, nor is a path a route hides (`expose: false`) for every method.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -94,7 +100,8 @@ export type FindingKind =
   | "permission-not-granted"
   | "nav-target-missing"
   | "public-path-not-served"
-  | "launcher-not-public";
+  | "launcher-not-public"
+  | "public-path-guarded";
 
 export interface Finding {
   app: string;
@@ -925,7 +932,53 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
     });
   }
 
+  // 18. A public path is reachable without sign-in: not every path it covers may need a permission at
+  // the gateway, which doesn't read `publicPaths`. Only a glob the guarded routes provably cover counts
+  // (see `coverSamples`); a route hidden for every method answers 404 there instead.
+  const guards = routes.filter((r) => r.expose !== false && r.permission !== undefined && !r.methods);
+  const hiders = routes.filter((r) => r.expose === false && !r.methods).map((r) => globRegex(r.path));
+  for (const glob of [...new Set(manifest.auth.publicPaths)]) {
+    const by = new Set<string>();
+    const guarded = coverSamples(glob).every(({ path: p, deep }) => {
+      if (hiders.some((re) => re.test(p))) return false;
+      const hit = guards.filter((r) => (!deep || r.path.includes("/**")) && globRegex(r.path).test(p));
+      for (const r of hit) by.add(r.permission!);
+      return hit.length > 0;
+    });
+    if (!guarded) continue;
+    const perms = [...by].sort();
+    findings.push({
+      app,
+      kind: "public-path-guarded",
+      subject: glob,
+      message: `auth.publicPaths lists ${glob}, but manifest routes put ${perms.length === 1 ? `the permission ${perms[0]}` : `a permission (${perms.join(", ")})`} on every path it covers, and the gateway asks for it whatever publicPaths says, so a signed-out visitor gets 401 or sign-in (remove the entry, or take the permission off the route)`,
+    });
+  }
+
   return { app, findings, handlers, plumbing };
+}
+
+/**
+ * Paths that stand for every path a public glob covers, for proving that routes cover all of it:
+ * each `*` becomes a segment no literal route names, and each `/**` becomes nothing, one segment, or
+ * two segments marked `deep`. Only a route glob with its own `/**` may cover a deep sample, since one
+ * without it matches a fixed depth.
+ */
+export function coverSamples(pattern: string): { path: string; deep: boolean }[] {
+  const ANY = "~any~";
+  let forms = [{ path: "", deep: false }];
+  pattern.split("/**").forEach((part, i) => {
+    const lit = part.replace(/\*/g, ANY);
+    forms =
+      i === 0
+        ? [{ path: lit, deep: false }]
+        : forms.flatMap((f) => [
+            { path: f.path + lit, deep: f.deep },
+            { path: `${f.path}/${ANY}${lit}`, deep: f.deep },
+            { path: `${f.path}/${ANY}/${ANY}${lit}`, deep: true },
+          ]);
+  });
+  return forms.map((f) => ({ path: f.path || "/", deep: f.deep }));
 }
 
 /** URLs of the static files under `dir` (an app's `public/` folder), as Next.js serves them; none if it's missing. */
