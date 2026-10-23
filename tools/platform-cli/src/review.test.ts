@@ -1018,6 +1018,84 @@ describe("platform manifest review", () => {
     expect(review(["--strict"]).ok).toBe(false);
   });
 
+  it("reports a nav link a hidden route covers for GET, once per href", () => {
+    const app = (nav: [string, string][], routes: unknown[]) =>
+      manifest({ routes, ui: { ...manifest().ui, nav: nav.map(([label, href]) => ({ label, href })) } });
+    const hide = (p: string, over: Record<string, unknown> = {}) => ({ path: p, expose: false, ...over });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put("apps/shop/app/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/orders/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/internal/jobs/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/internal/stats/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/admin/page.tsx", "export default function Page() { return null; }");
+
+    // not hidden: no hidden route, a hidden route elsewhere, hidden only for other methods, a guarded
+    // (not hidden) route, and a hidden child of the link
+    writeApp(
+      app(
+        [
+          ["Home", "/"],
+          ["Orders", "/orders"],
+        ],
+        [],
+      ),
+    );
+    expect(kinds()).toEqual([]);
+    writeApp(
+      app(
+        [
+          ["Home", "/"],
+          ["Orders", "/orders"],
+          ["Admin", "/admin"],
+        ],
+        [
+          hide("/internal/**"),
+          hide("/orders", { methods: ["POST", "DELETE"] }),
+          { path: "/admin", permission: "shop.orders.write" },
+          hide("/admin/secret"),
+        ],
+      ),
+    );
+    expect(kinds()).toEqual([]);
+
+    // hidden: under "/**" (twice under two labels, one with a trailing slash), exactly with GET among
+    // its methods, and by two globs
+    writeApp(
+      app(
+        [
+          ["Jobs", "/internal/jobs"],
+          ["Old jobs", "/internal/jobs"],
+          ["Stats", "/internal/stats/"],
+          ["Admin", "/admin"],
+          ["Home", "/"],
+        ],
+        [
+          hide("/internal/**"),
+          hide("/internal/stats"),
+          hide("/admin", { methods: ["GET", "POST"] }),
+          { path: "/admin", permission: "shop.orders.write" },
+        ],
+      ),
+    );
+    const out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "nav-target-hidden /internal/jobs",
+      "nav-target-hidden /internal/stats/",
+      "nav-target-hidden /admin",
+    ]);
+    const [jobs, stats, admin] = out.reviews[0]!.findings as unknown as { message: string; file?: string }[];
+    expect(jobs!.file).toBeUndefined();
+    expect(jobs!.message).toMatch(
+      /^the nav link "Jobs", "Old jobs" points to \/internal\/jobs, but \/internal\/\*\* hides it \(expose: false\), so the gateway answers 404 there/,
+    );
+    expect(stats!.message).toMatch(/but \/internal\/\*\* and \/internal\/stats hide it/);
+    expect(admin!.message).toMatch(/^the nav link "Admin" points to \/admin, but \/admin hides it/);
+    expect(review().lines.join("\n")).toMatch(/\[nav-target-hidden\] the nav link "Stats" points to/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| nav-target-hidden | /internal/jobs |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+  });
+
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
     writeApp(
       manifest({
