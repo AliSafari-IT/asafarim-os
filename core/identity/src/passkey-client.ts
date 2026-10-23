@@ -37,13 +37,13 @@ export const PASSKEY_JS = `"use strict";
     if (el) el.textContent = msg;
   };
   var login = function (csrf) {
-    return post("/passkeys/login/options", csrf).then(function (o) {
+    return post("/login/passkey/options", csrf).then(function (o) {
       return navigator.credentials.get({
         publicKey: { challenge: dec(o.challenge), rpId: o.rpId, timeout: o.timeout, userVerification: o.userVerification }
       });
     }).then(function (c) {
       var r = c.response;
-      return post("/passkeys/login/verify", csrf, {
+      return post("/login/passkey/verify", csrf, {
         id: c.id, rawId: enc(c.rawId), type: c.type,
         response: {
           clientDataJSON: enc(r.clientDataJSON),

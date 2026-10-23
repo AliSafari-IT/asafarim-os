@@ -375,9 +375,10 @@ export class CapturingSender implements SmsSender {
   }
 }
 
-/** A browser: cookies by name (paths ignored), like the integration tests' jar. */
+/** A browser: cookies by name, each sent only on requests under the path it was set for. */
 export class Browser {
   readonly cookies = new Map<string, string>();
+  readonly cookiePaths = new Map<string, string>();
   ip = "203.0.113.7";
 }
 
@@ -386,6 +387,13 @@ export interface Reply {
   location: string | undefined;
   body: string;
   headers: Record<string, string>;
+}
+
+/** RFC 6265 path-match: `/login` covers `/login` and `/login/…`, not `/passkeys/…` or `/loginx`. */
+function onPath(requestPath: string, cookiePath = "/"): boolean {
+  if (requestPath === cookiePath) return true;
+  if (!requestPath.startsWith(cookiePath)) return false;
+  return cookiePath.endsWith("/") || requestPath[cookiePath.length] === "/";
 }
 
 /** Runs one request through `handler` with a context built for `browser`. */
@@ -415,10 +423,16 @@ export async function request(
       if (body) yield Buffer.from(body);
     })(),
     cookies: {
-      get: (name: string) => browser.cookies.get(name),
-      set: (name: string, value?: string | null, _opts?: CookieOptions) => {
-        if (value) browser.cookies.set(name, value);
-        else browser.cookies.delete(name);
+      get: (name: string) =>
+        onPath(u.pathname, browser.cookiePaths.get(name)) ? browser.cookies.get(name) : undefined,
+      set: (name: string, value?: string | null, opts?: CookieOptions) => {
+        if (value) {
+          browser.cookies.set(name, value);
+          browser.cookiePaths.set(name, opts?.path ?? "/");
+        } else {
+          browser.cookies.delete(name);
+          browser.cookiePaths.delete(name);
+        }
       },
     },
     is: (type: string) => (contentType === type ? type : false),
