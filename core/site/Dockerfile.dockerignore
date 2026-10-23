@@ -1,7 +1,10 @@
 # Build context filter for core/site/Dockerfile: the image needs core/site's sources and the app manifest's
-# JSON Schema (served under /schemas/, #87) only.
+# JSON Schema (served under /schemas/, #87) and @asafarim/theme's browser files only.
 *
 !core/site/src
 !core/site/public
 !core/site/nginx.conf
 !packages/app-manifest/schema/app-manifest.schema.json
+!packages/theme/theme.css
+!packages/theme/theme.js
+!packages/theme/toggle.html
