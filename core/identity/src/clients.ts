@@ -10,7 +10,9 @@
  *     "redirect_uris": ["https://testora.cloud/api/auth/callback/asafarim"],
  *     "post_logout_redirect_uris": ["https://testora.cloud/"],
  *     "backchannel_logout_uri": "https://testora.cloud/api/auth/backchannel-logout",
- *     "client_secret_env": "IDENTITY_CLIENT_SECRET_TESTORA"     // omit for a public client
+ *     "client_secret_env": "IDENTITY_CLIENT_SECRET_TESTORA",    // omit for a public client
+ *     "name": "Testora",                                        // optional: list it on /account
+ *     "description": "Generate and run test plans."            // optional, with name
  *   }]
  * }
  */
@@ -21,6 +23,16 @@ export interface ClientEntry {
   post_logout_redirect_uris?: string[];
   backchannel_logout_uri?: string;
   client_secret_env?: string;
+  /** Shown on the account page's "Where to next" when set. A client without one (a test client) isn't listed. */
+  name?: string;
+  description?: string;
+}
+
+/** An app a signed-in person can go on to from the account page. */
+export interface AppLink {
+  name: string;
+  href: string;
+  description?: string;
 }
 
 export interface ClientConfigFile {
@@ -113,4 +125,28 @@ export function loadClients(
       id_token_signed_response_alg: "ES256",
     };
   });
+}
+
+/**
+ * The apps the account page offers ("Where to next"): every client with a `name`, in file order, at its
+ * first post-logout URI (its home page) or else https://<primary_domain>/. Call after loadClients, which
+ * has already checked those URIs. Listing grants nothing: whether the person may open an app is core-api's.
+ */
+export function appLinks(file: ClientConfigFile): AppLink[] {
+  const links: AppLink[] = [];
+  for (const c of file.clients) {
+    if (c.name === undefined) continue;
+    if (typeof c.name !== "string" || !c.name.trim() || c.name.length > 60) {
+      throw new ClientConfigError(`${c.client_id}: name must be 1 to 60 characters`);
+    }
+    if (c.description !== undefined && (typeof c.description !== "string" || c.description.length > 160)) {
+      throw new ClientConfigError(`${c.client_id}: description must be at most 160 characters`);
+    }
+    links.push({
+      name: c.name.trim(),
+      href: c.post_logout_redirect_uris?.[0] ?? `https://${c.primary_domain}/`,
+      ...(c.description ? { description: c.description } : {}),
+    });
+  }
+  return links;
 }

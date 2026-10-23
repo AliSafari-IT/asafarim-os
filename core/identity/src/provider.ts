@@ -21,7 +21,7 @@ import type { OidcClient } from "./clients.ts";
 import { HandoffError, issueTicket, verifyAssertion, type ReplayGuard } from "./handoff.ts";
 import { type HttpContext, readForm, sendHtml } from "./http.ts";
 import type { Logger } from "./log.ts";
-import { CONTINUE_PAGE_CSP, continuePage, errorPage, loggedOutPage, logoutPage } from "./pages.ts";
+import { CONTINUE_PAGE_CSP, FAVICON_SVG, continuePage, errorPage, loggedOutPage, logoutPage } from "./pages.ts";
 import { PENDING_TTL_SECONDS, hashSecret, type PendingLogins } from "./pending.ts";
 import type { SignIn } from "./sign-in.ts";
 
@@ -217,6 +217,14 @@ export function createProvider(deps: ProviderDeps): Provider {
 
     if (path === "/healthz" && ctx.method === "GET") {
       ctx.body = { ok: true };
+      return;
+    }
+
+    if (path === "/favicon.svg" && ctx.method === "GET") {
+      ctx.type = "image/svg+xml";
+      ctx.set("Cache-Control", "public, max-age=86400");
+      ctx.set("X-Content-Type-Options", "nosniff");
+      ctx.body = FAVICON_SVG;
       return;
     }
 

@@ -269,6 +269,10 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     const jwks = (await (await fetch(d.jwks_uri as string)).json()) as { keys: Record<string, unknown>[] };
     expect(jwks.keys.map((k) => [k.kid, k.d])).toEqual([["k1", undefined]]);
     expect((await fetch(`${issuer}/healthz`)).status).toBe(200);
+    const icon = await fetch(`${issuer}/favicon.svg`);
+    expect(icon.status).toBe(200);
+    expect(icon.headers.get("content-type")).toContain("image/svg+xml");
+    expect(await icon.text()).toContain("<svg");
     expect(await (await fetch(`${issuer}/readyz`)).json()).toEqual({
       ok: true,
       checks: { redis: true, database: true },
@@ -409,11 +413,11 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     expect(html).not.toMatch(/<script/i);
     expect(html).not.toMatch(/<form/i);
 
-    // Headers: not cached, no referrer, and a CSP that allows nothing but its own styles.
+    // Headers: not cached, no referrer, and a CSP that allows nothing but its own styles and favicon.
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
     expect(res.headers.get("content-security-policy")).toBe(
-      "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
     );
   });
 

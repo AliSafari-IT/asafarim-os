@@ -21,7 +21,9 @@ It runs [`oidc-provider`](https://github.com/panva/node-oidc-provider) (major ve
 | Accounts          | `hub`: the platform's `identity_accounts_v` view, read-only. `sms`: a principal with an **active connection** in the service's own database. Either way, an inactive or unknown account gets no tokens |
 | Outbound requests | oidc-provider's SSRF guard stays on: back-channel logout never calls loopback or private addresses                                                                                                     |
 
-Endpoints: discovery (`/.well-known/openid-configuration`), `/jwks`, `/auth`, `/token`, `/me` (userinfo), `/session/end`, `/token/revocation`, plus `/healthz` (live) and `/readyz` (Redis and accounts DB).
+Endpoints: discovery (`/.well-known/openid-configuration`), `/jwks`, `/auth`, `/token`, `/me` (userinfo), `/session/end`, `/token/revocation`, plus `/healthz` (live), `/readyz` (Redis and accounts DB) and `/favicon.svg`.
+
+Every page the service renders shares one layout (`src/pages.ts`): a header whose brand goes back to the OS home (`IDENTITY_HOME_URL`, asafarim.site with the hub method), the favicon, and a footer, so no page is a dead end.
 
 ## Login hand-off (ADR 0002, A2)
 
@@ -176,6 +178,7 @@ age -d -i .age/key.txt core/identity/.env.production.age > .env.identity   # the
 - `client_id`: the app id (`[a-z][a-z0-9-]*`), unique.
 - Every redirect, post-logout and back-channel URI must be `https` on **exactly** `primary_domain` (no subdomains, no fragments).
 - `client_secret_env` names the env var holding the secret; omit it for a public client (PKCE still required).
+- `name` (optional, with an optional `description`) lists the app under **Where to next** on `/account`, linked to its first post-logout URI (else `https://<primary_domain>/`). A client without a `name`, such as a test client, isn't listed. Listing grants nothing: core-api still decides who may open the app.
 - Later (P3) this file is generated from the app manifests.
 
 See `clients.example.json`.

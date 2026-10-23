@@ -6,7 +6,8 @@ import { maskEmail, normalizeEmail } from "../src/email.ts";
 import { blindHandle, generateCode, hashCode, isCodeShaped } from "../src/otp.ts";
 import { maskPhone, normalizePhone, parsePrefixes, prefixAllowed } from "../src/phone.ts";
 import { DevLogSmsSender, SmsError, TwilioSmsSender, codeMessage } from "../src/sms.ts";
-import { adminPage, codePage, loginPage } from "../src/sign-in-pages.ts";
+import { FAVICON_SVG, errorPage, loggedOutPage, page, setHomeUrl } from "../src/pages.ts";
+import { PAGE_CSP, accountPage, adminPage, codePage, loginPage } from "../src/sign-in-pages.ts";
 import { MailError, SmtpMailer, addressOf, buildMessage } from "../src/smtp.ts";
 import { encodeCbor } from "./authenticator.ts";
 
@@ -349,5 +350,63 @@ describe("pages", () => {
     expect(html).toContain("/admin/requests/22222222-2222-2222-2222-222222222222/approve");
     expect(html.match(/name="csrf" value="tok"/g)!.length).toBe(html.match(/<form /g)!.length);
     expect(html).not.toContain("11111111-1111-1111-1111-111111111111/revoke");
+    expect(html).toContain('<a href="/admin" aria-current="page">Connections</a>');
+  });
+
+  it("every page has the header (brand to the OS home), the favicon and the footer: no dead ends", () => {
+    setHomeUrl("https://home.example.test/");
+    try {
+      for (const html of [
+        page("T", "<h1>T</h1>"),
+        loginPage({ csrf: "x", email: true, sms: false, passkey: false }),
+        errorPage({ message: "m", code: "c" }),
+        loggedOutPage(),
+      ]) {
+        expect(html).toContain('<a class="brand" href="https://home.example.test/">');
+        expect(html).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml">');
+        expect(html).toMatch(/<footer class="foot">[\s\S]*home\.example\.test<\/a>/);
+        expect(html).toContain('<a href="https://home.example.test/">Home</a>');
+      }
+      expect(errorPage({ message: "m" })).toContain('class="button" href="https://home.example.test/"');
+      expect(loggedOutPage()).toContain('class="button" href="https://home.example.test/"');
+    } finally {
+      setHomeUrl("https://asafarim.site/");
+    }
+    // The favicon is an image of this origin's own, which the pages' CSP must let load.
+    expect(PAGE_CSP).toContain("img-src 'self'");
+    expect(FAVICON_SVG).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+  });
+
+  it("the account page says where to go next: the OS home, then the named apps", () => {
+    const html = accountPage({
+      csrf: "tok",
+      apps: [{ name: "Docs <x>", href: "https://docs.example.test/" }],
+      accountId: "11111111-1111-1111-1111-111111111111",
+      label: "ali@example.test",
+      connected: true,
+      isAdmin: false,
+      passkeys: [],
+    });
+    expect(html).toContain("<h2>Where to next</h2>");
+    expect(html).toContain('<a class="tile" href="https://asafarim.site/">');
+    expect(html).toContain('<a class="tile" href="https://docs.example.test/">');
+    expect(html).toContain("<strong>Docs &lt;x&gt;</strong><small>docs.example.test</small>");
+    expect(html).toContain("an admin has given your account access");
+    expect(html).toContain('<a href="/account" aria-current="page">Account</a>');
+    expect(html).not.toContain(">Connections</a></li>");
+  });
+
+  it("the account page without named apps still offers the OS home, and no access note", () => {
+    const html = accountPage({
+      csrf: "tok",
+      apps: [],
+      accountId: "a",
+      label: null,
+      connected: false,
+      isAdmin: false,
+      passkeys: [],
+    });
+    expect(html).toContain('<a class="tile" href="https://asafarim.site/">');
+    expect(html).not.toContain("given your account access");
   });
 });

@@ -5,7 +5,7 @@
  */
 import { readFileSync } from "node:fs";
 import { importJWK, type CryptoKey, type JWK, type KeyObject } from "jose";
-import { loadClients, type ClientConfigFile, type OidcClient } from "./clients.ts";
+import { appLinks, loadClients, type AppLink, type ClientConfigFile, type OidcClient } from "./clients.ts";
 import { normalizeEmail } from "./email.ts";
 import { isE164, normalizePhone, parsePrefixes } from "./phone.ts";
 import type { TwilioConfig } from "./sms.ts";
@@ -49,6 +49,8 @@ export interface IdentityConfig {
   jwks: { keys: JWK[] };
   cookieKeys: string[];
   clients: OidcClient[];
+  /** The named clients, offered on the account page. */
+  apps: AppLink[];
   trustProxy: boolean;
   login: HubLoginConfig | LocalLoginConfig;
 }
@@ -168,6 +170,7 @@ export async function loadConfig(env: Env = process.env): Promise<IdentityConfig
     jwks: parseSigningJwks(env),
     cookieKeys,
     clients: loadClients(clientConfig, env, { allowLocalhost: local }),
+    apps: appLinks(clientConfig),
     trustProxy: env.IDENTITY_TRUST_PROXY !== "false",
     login,
   };
