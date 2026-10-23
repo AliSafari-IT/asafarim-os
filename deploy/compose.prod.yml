@@ -1,6 +1,6 @@
 # ASafariM OS production stack: the identity service (id.asafarim.site) and its own Redis
 # (asafarim-os#45, part of #22, P2.3), the asafarim.site landing page, os-site (#70), and docs.asafarim.site, os-docs
-# (#83). The owner deploys it with deploy/vps-deploy.sh; nothing else runs this file. See deploy/README.md for the
+# (#83). Also breinhap.asafarim.site, breinhap-site (a landing page built in AliSafari-IT/breinhap). The owner deploys it with deploy/vps-deploy.sh; nothing else runs this file. See deploy/README.md for the
 # deploy, the rollback and the network rules.
 #
 #   IMAGE_TAG=<sha> SITE_IMAGE_TAG=<sha> DOCS_IMAGE_TAG=<sha> CORE_API_IMAGE_TAG=<sha> ADMIN_IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
@@ -96,6 +96,30 @@ services:
         # Unique on the shared edge_net; sites/asafarim-os.caddy proxies asafarim.site to it.
         aliases:
           - os-site
+
+  breinhap-site:
+    # breinhap.asafarim.site: the Breinhap landing page, static files behind unprivileged nginx. It is built in its
+    # own repository (AliSafari-IT/breinhap, apps/site) and published by that repository's "Site image" workflow
+    # as ghcr.io/alisafari-it/breinhap:site-<full commit sha>. The sha is pinned HERE: to ship a new version of
+    # the page, change it to the sha of the newest successful "Site image" run in breinhap, in a PR (the deploy
+    # after that merge pulls it). Like os-site, it holds no secrets.
+    image: ghcr.io/alisafari-it/breinhap:site-0000000000000000000000000000000000000000
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=4m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 32m
+    cpus: 0.25
+    environment:
+      NGINX_ENTRYPOINT_QUIET_LOGS: "1"
+    networks:
+      edge_net:
+        # Unique on the shared edge_net; sites/asafarim-os.caddy proxies breinhap.asafarim.site to it.
+        aliases:
+          - breinhap-site
 
   os-docs:
     # docs.asafarim.site: the Docs app's Next.js server (apps/docs/Dockerfile), published by

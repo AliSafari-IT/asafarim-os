@@ -80,12 +80,34 @@ assert.equal(
   `docker compose config failed (is the docker CLI installed?):\n${rendered.stderr}${rendered.error ?? ""}`,
 );
 const config = JSON.parse(rendered.stdout);
-const { identity, "os-redis": redis, "os-site": site, "os-docs": docs } = config.services;
+const { identity, "os-redis": redis, "os-site": site, "os-docs": docs, "breinhap-site": breinhap } = config.services;
 const networkNames = (service) => Object.keys(service.networks ?? {}).sort();
 
-test("the file renders as the asafarim-os project with exactly identity, os-redis, os-site and os-docs", () => {
+test("the file renders as the asafarim-os project with exactly identity, os-redis, os-site, os-docs and breinhap-site", () => {
   assert.equal(config.name, "asafarim-os");
-  assert.deepEqual(Object.keys(config.services).sort(), ["identity", "os-docs", "os-redis", "os-site"]);
+  assert.deepEqual(Object.keys(config.services).sort(), [
+    "breinhap-site",
+    "identity",
+    "os-docs",
+    "os-redis",
+    "os-site",
+  ]);
+});
+
+test("breinhap-site runs the Breinhap site image pinned to one full commit sha, never a moving tag", () => {
+  assert.match(breinhap.image, /^ghcr\.io\/alisafari-it\/breinhap:site-[0-9a-f]{40}$/);
+});
+
+test("breinhap-site is small and hardened like os-site, holds no secrets, and is on edge_net ONLY as breinhap-site", () => {
+  assert.equal(breinhap.read_only, true);
+  assert.deepEqual(breinhap.cap_drop, ["ALL"]);
+  assert.ok(breinhap.security_opt.includes("no-new-privileges:true"));
+  assert.ok(Number(breinhap.mem_limit) > 0 && Number(breinhap.mem_limit) <= 32 * 1024 * 1024);
+  assert.ok(breinhap.cpus > 0 && breinhap.cpus <= 0.5);
+  assert.ok(breinhap.tmpfs?.some((t) => t.startsWith("/tmp")));
+  assert.ok(!breinhap.env_file, "breinhap-site holds no secrets");
+  assert.deepEqual(networkNames(breinhap), ["edge_net"]);
+  assert.deepEqual(breinhap.networks.edge_net.aliases, ["breinhap-site"]);
 });
 
 test("the image tag comes from IMAGE_TAG, and there is no default", () => {
@@ -236,11 +258,12 @@ test("the secrets come from ../.env.identity (decrypted at the repo root by vps-
   assert.match(composeText, /env_file:\n\s+- \.\.\/\.env\.identity\n/);
 });
 
-test("the site file serves id.asafarim.site, asafarim.site and its www redirect, docs.asafarim.site and admin.asafarim.site, nothing else", () => {
+test("the site file serves id.asafarim.site, asafarim.site and its www redirect, docs.asafarim.site, admin.asafarim.site and breinhap.asafarim.site, nothing else", () => {
   const sites = [...activeSite.matchAll(/^([a-z0-9.*-]+)(?:, [a-z0-9.*-]+)*\s*\{/gm)].map((m) => m[1]);
   assert.deepEqual(sites.sort(), [
     "admin.asafarim.site",
     "asafarim.site",
+    "breinhap.asafarim.site",
     "docs.asafarim.site",
     "id.asafarim.site",
     "www.asafarim.site",
@@ -315,6 +338,36 @@ test("docs.asafarim.site has the landing page's HSTS, nosniff, no Referer, noind
   assert.doesNotMatch(block, /Content-Security-Policy/i);
 });
 
+test("breinhap.asafarim.site proxies to breinhap-site's edge_net alias on port 8080", () => {
+  const upstream = /reverse_proxy ([\w-]+):(\d+)/.exec(siteBlock("breinhap.asafarim.site"));
+  assert.ok(upstream, "breinhap.asafarim.site must reverse_proxy to breinhap-site");
+  assert.ok(
+    breinhap.networks.edge_net.aliases.includes(upstream[1]),
+    `${upstream[1]} is not breinhap-site's edge_net alias`,
+  );
+  assert.equal(upstream[2], "8080");
+});
+
+test("breinhap.asafarim.site has the landing page's HSTS and nosniff, and a strict CSP that allows no other origin", () => {
+  const block = siteBlock("breinhap.asafarim.site");
+  const hsts = /Strict-Transport-Security "([^"]+)"/;
+  assert.equal(hsts.exec(block)?.[1], hsts.exec(siteBlock("asafarim.site"))?.[1]);
+  assert.match(block, /X-Content-Type-Options nosniff/);
+  assert.match(block, /^\s*defer$/m);
+  const csp = /Content-Security-Policy "([^"]+)"/.exec(block)?.[1] ?? "";
+  for (const directive of [
+    "default-src 'none'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+  ]) {
+    assert.ok(csp.split("; ").includes(directive), `the CSP needs ${directive}`);
+  }
+  assert.doesNotMatch(csp, /https?:|\*|'unsafe-/, "no other origins, wildcards or unsafe-* sources");
+});
+
 test("id.asafarim.site has no Content-Security-Policy of its own (identity sets a strict one per page)", () => {
   const active = siteBlock("id.asafarim.site");
   assert.doesNotMatch(active, /Content-Security-Policy/i);
@@ -322,16 +375,21 @@ test("id.asafarim.site has no Content-Security-Policy of its own (identity sets 
   assert.match(active, /X-Content-Type-Options nosniff/);
 });
 
-test("the site-only file serves asafarim.site, its www redirect and docs.asafarim.site: no id.asafarim.site (#97, #83)", () => {
+test("the site-only file serves asafarim.site, its www redirect, docs.asafarim.site and breinhap.asafarim.site: no id.asafarim.site (#97, #83)", () => {
   const sites = [...activeSiteOnly.matchAll(/^([a-z0-9.*-]+)(?:, [a-z0-9.*-]+)*\s*\{/gm)].map((m) => m[1]);
-  assert.deepEqual(sites.sort(), ["asafarim.site", "docs.asafarim.site", "www.asafarim.site"]);
+  assert.deepEqual(sites.sort(), [
+    "asafarim.site",
+    "breinhap.asafarim.site",
+    "docs.asafarim.site",
+    "www.asafarim.site",
+  ]);
   // No block or upstream for identity (the landing page's CSP may still name it as connect-src).
   assert.doesNotMatch(activeSiteOnly, /^\s*id\.asafarim\.site\b/m);
   assert.doesNotMatch(activeSiteOnly, /os-identity/);
 });
 
-test("the site-only file's landing and docs blocks are identical to the full site file's (#97, #83)", () => {
-  for (const address of ["asafarim.site", "www.asafarim.site", "docs.asafarim.site"]) {
+test("the site-only file's landing, docs and Breinhap blocks are identical to the full site file's (#97, #83)", () => {
+  for (const address of ["asafarim.site", "www.asafarim.site", "docs.asafarim.site", "breinhap.asafarim.site"]) {
     assert.equal(
       siteBlock(address, activeSiteOnly),
       siteBlock(address),
@@ -359,6 +417,7 @@ test("the Admin console links (core-api's launcher tile, identity's header) poin
 
 test("the core profile adds exactly os-core-api and os-postgres", () => {
   assert.deepEqual(Object.keys(coreConfig.services).sort(), [
+    "breinhap-site",
     "identity",
     "os-core-api",
     "os-docs",
