@@ -955,6 +955,8 @@ describe("platform manifest review", () => {
     put("apps/shop/app/internal/jobs/[id]/route.ts", `import "@/lib/x";\nexport function GET() {}`);
     put("apps/shop/app/orders/page.tsx", "export default function Page() { return null; }");
     put("apps/shop/app/admin/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/reports/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/exports/page.tsx", "export default function Page() { return null; }");
 
     // partial overlaps: a hidden child, fixed depths under "/**", a hidden glob limited to other
     // methods, a guarded route with no methods limit hidden only for some, and no overlap at all
@@ -968,6 +970,8 @@ describe("platform manifest review", () => {
     expect(kinds()).toEqual([]);
     writeApp(app([guard("/orders"), hide("/internal/**")]));
     expect(kinds()).toEqual([]);
+    writeApp(app([guard("/orders"), hide("/orders", { methods: ["GET"] }), hide("/orders", { methods: ["POST"] })]));
+    expect(kinds()).toEqual([]);
 
     // fully hidden: under a "/**" prefix, by methods that include the route's, exactly, and by two globs
     writeApp(
@@ -976,11 +980,17 @@ describe("platform manifest review", () => {
         guard("/internal/jobs/*"),
         guard("/orders", { permission: "shop.orders.write" }),
         guard("/admin/**"),
+        guard("/reports", { methods: ["GET", "POST"] }),
+        guard("/exports"),
         hide("/internal/**", { methods: ["GET", "POST"] }),
         hide("/internal/jobs/**"),
         hide("/orders"),
         hide("/admin"),
         hide("/admin/**"),
+        hide("/reports", { methods: ["GET"] }),
+        hide("/reports", { methods: ["POST", "DELETE"] }),
+        hide("/exports", { methods: ["GET", "HEAD", "POST", "PUT"] }),
+        hide("/exports", { methods: ["PATCH", "DELETE", "OPTIONS"] }),
       ]),
     );
     const out = json();
@@ -989,13 +999,15 @@ describe("platform manifest review", () => {
       "route-hidden /internal/jobs/*",
       "route-hidden /orders",
       "route-hidden /admin/**",
+      "route-hidden GET,POST /reports",
+      "route-hidden /exports",
     ]);
     const [one, two, three] = out.reviews[0]!.findings as unknown as { message: string; file?: string }[];
     expect(one!.file).toBeUndefined();
     expect(one!.message).toMatch(
       /^the manifest guards POST \/internal\/sync with shop\.orders\.read, but \/internal\/\*\* hides it \(expose: false\), and the gateway answers 404 there/,
     );
-    expect(two!.message).toMatch(/but \/internal\/jobs\/\*\* hides it/);
+    expect(two!.message).toMatch(/but \/internal\/\*\* and \/internal\/jobs\/\*\* hide it/);
     expect(three!.message).toMatch(/^the manifest guards \/orders with shop\.orders\.write, but \/orders hides it/);
     expect((out.reviews[0]!.findings[3] as unknown as { message: string }).message).toMatch(
       /but \/admin and \/admin\/\*\* hide it/,

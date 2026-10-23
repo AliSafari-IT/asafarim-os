@@ -76,9 +76,9 @@
  *   Publishers outside this repo and `core.*` types aren't checked. It reads every app's manifest,
  *   also when only some ids are reviewed.
  * - `route-hidden`: a manifest route with a `permission` where every path and method it covers is also
- *   matched by an `expose: false` route (one with no `methods` limit, or whose `methods` include all
- *   of the guarded route's). core-api's gateway answers 404 for a hidden path before it asks for any
- *   permission, so the guarded route is dead and its handler can't be reached through the gateway,
+ *   matched by `expose: false` routes (hidden routes limited to different methods may cover it
+ *   together; a guarded route without `methods` answers every method). core-api's gateway answers
+ *   404 for a hidden path before it asks for any permission, so the guarded route is dead and its handler can't be reached through the gateway,
  *   usually because it was declared under a hidden prefix such as `/internal/**`. Partial overlaps
  *   aren't reported. Coverage is proved the same way as for `public-path-guarded`.
  *
@@ -994,18 +994,24 @@ export function reviewApp(
   for (const r of routes) {
     if (r.permission === undefined || r.expose === false) continue;
     const methods = r.methods as readonly string[] | undefined;
-    const hiding = routes.filter(
-      (h) =>
-        h.expose === false &&
-        (!h.methods || (methods !== undefined && methods.every((m) => (h.methods as readonly string[]).includes(m)))),
-    );
+    const hiding = routes.filter((h) => h.expose === false);
     if (hiding.length === 0) continue;
+    // Every method the route answers (all of them without a `methods` limit) must be hidden on every
+    // path it covers; hidden routes limited to different methods may share the work.
+    const asked: readonly string[] = methods ?? HTTP_METHODS;
     const by = new Set<string>();
-    const hidden = coverSamples(r.path).every(({ path: p, deep }) => {
-      const hit = hiding.filter((h) => (!deep || h.path.includes("/**")) && globRegex(h.path).test(p));
-      for (const h of hit) by.add(h.path);
-      return hit.length > 0;
-    });
+    const hidden = coverSamples(r.path).every(({ path: p, deep }) =>
+      asked.every((m) => {
+        const hit = hiding.filter(
+          (h) =>
+            (!h.methods || (h.methods as readonly string[]).includes(m)) &&
+            (!deep || h.path.includes("/**")) &&
+            globRegex(h.path).test(p),
+        );
+        for (const h of hit) by.add(h.path);
+        return hit.length > 0;
+      }),
+    );
     if (!hidden) continue;
     const subject = methods ? `${methods.join(",")} ${r.path}` : r.path;
     findings.push({
