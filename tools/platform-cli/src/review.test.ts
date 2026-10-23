@@ -812,6 +812,56 @@ describe("platform manifest review", () => {
     expect(kinds()).toEqual(["public-path-not-served /files/secret/a.txt"]);
   });
 
+  it("reports a public launcher tile whose start page needs sign-in", () => {
+    const tile = (access: string) => ({ description: "Shop", meta: "shop.asafarim.site", access, order: 10 });
+    const app = (access: string | undefined, publicPaths: string[], over: Record<string, unknown> = {}) =>
+      manifest({
+        auth: { client: "oidc", publicPaths },
+        ui: {
+          glyph: "SH",
+          color: "#2563eb",
+          nav: [],
+          status: "active",
+          ...(access ? { launcher: tile(access) } : {}),
+          ...over,
+        },
+      });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put("apps/shop/app/page.tsx", "export default function Page() { return null; }");
+
+    // no tile, an authenticated tile, "/" public exactly or through "/**"
+    writeApp(app(undefined, ["/api/health"]));
+    expect(kinds()).toEqual([]);
+    writeApp(app("authenticated", ["/api/health"]));
+    expect(kinds()).toEqual([]);
+    writeApp(app("public", ["/api/health", "/"]));
+    expect(kinds()).toEqual([]);
+    writeApp(app("public", ["/**"]));
+    expect(kinds()).toEqual([]);
+    // a tile that can't be opened yet, and an app that never signs anyone in
+    writeApp(app("public", ["/api/health"], { status: "coming-soon" }));
+    expect(kinds()).toEqual([]);
+    writeApp(manifest({ auth: { client: "none", publicPaths: ["/api/health"] }, ui: app("public", []).ui }));
+    expect(kinds()).toEqual([]);
+
+    // "/about" doesn't cover "/"
+    writeApp(app("public", ["/api/health", "/about"]));
+    put("apps/shop/app/about/page.tsx", "export default function Page() { return null; }");
+    const out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "launcher-not-public ui.launcher.access",
+    ]);
+    const found = out.reviews[0]!.findings[0] as unknown as { message: string; file?: string };
+    expect(found.file).toBeUndefined();
+    expect(found.message).toMatch(
+      /^the launcher tile says anyone may open shop \(access "public"\), but no auth\.publicPaths entry covers \//,
+    );
+    expect(review().lines.join("\n")).toMatch(/\[launcher-not-public\] the launcher tile says anyone may open shop/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| launcher-not-public | ui.launcher.access |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+  });
+
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
     writeApp(
       manifest({
