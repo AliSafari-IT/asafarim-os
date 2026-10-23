@@ -75,6 +75,12 @@
  *   publisher's side. When the publisher has the same type at another version, the message names it.
  *   Publishers outside this repo and `core.*` types aren't checked. It reads every app's manifest,
  *   also when only some ids are reviewed.
+ * - `route-hidden`: a manifest route with a `permission` where every path and method it covers is also
+ *   matched by an `expose: false` route (one with no `methods` limit, or whose `methods` include all
+ *   of the guarded route's). core-api's gateway answers 404 for a hidden path before it asks for any
+ *   permission, so the guarded route is dead and its handler can't be reached through the gateway,
+ *   usually because it was declared under a hidden prefix such as `/internal/**`. Partial overlaps
+ *   aren't reported. Coverage is proved the same way as for `public-path-guarded`.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -109,7 +115,8 @@ export type FindingKind =
   | "public-path-not-served"
   | "launcher-not-public"
   | "public-path-guarded"
-  | "subscription-not-published";
+  | "subscription-not-published"
+  | "route-hidden";
 
 export interface Finding {
   app: string;
@@ -979,6 +986,33 @@ export function reviewApp(
       kind: "public-path-guarded",
       subject: glob,
       message: `auth.publicPaths lists ${glob}, but manifest routes put ${perms.length === 1 ? `the permission ${perms[0]}` : `a permission (${perms.join(", ")})`} on every path it covers, and the gateway asks for it whatever publicPaths says, so a signed-out visitor gets 401 or sign-in (remove the entry, or take the permission off the route)`,
+    });
+  }
+
+  // 19. A guarded route that a hidden route covers for every path and method it names is dead: the
+  // gateway answers 404 for a hidden path before it asks for a permission.
+  for (const r of routes) {
+    if (r.permission === undefined || r.expose === false) continue;
+    const methods = r.methods as readonly string[] | undefined;
+    const hiding = routes.filter(
+      (h) =>
+        h.expose === false &&
+        (!h.methods || (methods !== undefined && methods.every((m) => (h.methods as readonly string[]).includes(m)))),
+    );
+    if (hiding.length === 0) continue;
+    const by = new Set<string>();
+    const hidden = coverSamples(r.path).every(({ path: p, deep }) => {
+      const hit = hiding.filter((h) => (!deep || h.path.includes("/**")) && globRegex(h.path).test(p));
+      for (const h of hit) by.add(h.path);
+      return hit.length > 0;
+    });
+    if (!hidden) continue;
+    const subject = methods ? `${methods.join(",")} ${r.path}` : r.path;
+    findings.push({
+      app,
+      kind: "route-hidden",
+      subject,
+      message: `the manifest guards ${subject} with ${r.permission}, but ${[...by].sort().join(" and ")} ${by.size === 1 ? "hides" : "hide"} it (expose: false), and the gateway answers 404 there before it asks for any permission, so the route can't be reached (move it out of the hidden path, or drop it)`,
     });
   }
 

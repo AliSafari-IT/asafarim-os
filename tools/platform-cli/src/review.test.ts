@@ -886,11 +886,11 @@ describe("platform manifest review", () => {
     expect(kinds()).toEqual([]);
     writeApp(app(["/api/health", "/orders/**"], [guard("/orders", "shop.orders.read")]));
     expect(kinds()).toEqual([]);
-    // a hidden route (expose: false) answers 404, not sign-in
+    // a hidden route (expose: false) answers 404, not sign-in (the guarded route is dead instead)
     writeApp(
       app(["/api/health", "/orders"], [guard("/orders", "shop.orders.read"), { path: "/orders", expose: false }]),
     );
-    expect(kinds()).toEqual([]);
+    expect(kinds()).toEqual(["route-hidden /orders"]);
     // a wildcard only partly guarded: one concrete child, or fixed depths under "/**"
     writeApp(app(["/api/health", "/orders/*"], [guard("/orders/1", "shop.orders.read")]));
     expect(kinds()).toEqual([]);
@@ -935,6 +935,73 @@ describe("platform manifest review", () => {
     expect(two!.message).toMatch(/put a permission \(shop\.orders\.read, shop\.orders\.write\) on every path/);
     expect(review().lines.join("\n")).toMatch(/\[public-path-guarded\] auth\.publicPaths lists \/orders\/\*\*/);
     expect(review(["--markdown"]).lines[0]!).toContain("| public-path-guarded | /api/orders |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+  });
+
+  it("reports a guarded route that a hidden route covers for every path and method", () => {
+    const app = (routes: unknown[]) => manifest({ routes });
+    const guard = (p: string, over: Record<string, unknown> = {}) => ({
+      path: p,
+      permission: "shop.orders.read",
+      ...over,
+    });
+    const hide = (p: string, over: Record<string, unknown> = {}) => ({ path: p, expose: false, ...over });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put(
+      "apps/shop/app/internal/sync/route.ts",
+      `import "@/lib/x";\nexport function GET() {}\nexport function POST() {}`,
+    );
+    put("apps/shop/app/internal/jobs/[id]/route.ts", `import "@/lib/x";\nexport function GET() {}`);
+    put("apps/shop/app/orders/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/admin/page.tsx", "export default function Page() { return null; }");
+
+    // partial overlaps: a hidden child, fixed depths under "/**", a hidden glob limited to other
+    // methods, a guarded route with no methods limit hidden only for some, and no overlap at all
+    writeApp(app([guard("/internal/**"), hide("/internal/sync")]));
+    expect(kinds()).toEqual([]);
+    writeApp(app([guard("/internal/**"), hide("/internal/*")]));
+    expect(kinds()).toEqual([]);
+    writeApp(app([guard("/internal/sync", { methods: ["GET", "POST"] }), hide("/internal/**", { methods: ["POST"] })]));
+    expect(kinds()).toEqual([]);
+    writeApp(app([guard("/internal/sync"), hide("/internal/**", { methods: ["GET", "POST"] })]));
+    expect(kinds()).toEqual([]);
+    writeApp(app([guard("/orders"), hide("/internal/**")]));
+    expect(kinds()).toEqual([]);
+
+    // fully hidden: under a "/**" prefix, by methods that include the route's, exactly, and by two globs
+    writeApp(
+      app([
+        guard("/internal/sync", { methods: ["POST"] }),
+        guard("/internal/jobs/*"),
+        guard("/orders", { permission: "shop.orders.write" }),
+        guard("/admin/**"),
+        hide("/internal/**", { methods: ["GET", "POST"] }),
+        hide("/internal/jobs/**"),
+        hide("/orders"),
+        hide("/admin"),
+        hide("/admin/**"),
+      ]),
+    );
+    const out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "route-hidden POST /internal/sync",
+      "route-hidden /internal/jobs/*",
+      "route-hidden /orders",
+      "route-hidden /admin/**",
+    ]);
+    const [one, two, three] = out.reviews[0]!.findings as unknown as { message: string; file?: string }[];
+    expect(one!.file).toBeUndefined();
+    expect(one!.message).toMatch(
+      /^the manifest guards POST \/internal\/sync with shop\.orders\.read, but \/internal\/\*\* hides it \(expose: false\), and the gateway answers 404 there/,
+    );
+    expect(two!.message).toMatch(/but \/internal\/jobs\/\*\* hides it/);
+    expect(three!.message).toMatch(/^the manifest guards \/orders with shop\.orders\.write, but \/orders hides it/);
+    expect((out.reviews[0]!.findings[3] as unknown as { message: string }).message).toMatch(
+      /but \/admin and \/admin\/\*\* hide it/,
+    );
+    expect(review().lines.join("\n")).toMatch(/\[route-hidden\] the manifest guards \/admin\/\*\* with/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| route-hidden | POST /internal/sync |");
     expect(review().ok).toBe(true);
     expect(review(["--strict"]).ok).toBe(false);
   });
