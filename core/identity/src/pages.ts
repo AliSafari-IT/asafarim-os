@@ -1,30 +1,98 @@
 /**
- * The service's own HTML: the error page (oidc-provider's renderError and
- * every hand-off failure), the logout confirmation and the logged-out page.
- * Small, self-contained (no external fonts or scripts), ASafariM-styled.
+ * The service's own HTML: the shared layout every page uses (header, footer, favicon), the error
+ * page (oidc-provider's renderError and every hand-off failure), the logout confirmation and the
+ * logged-out page. Small, self-contained (no external fonts or scripts), in the asafarim.site
+ * tokens (core/site/public/styles.css) so the two hosts look like one product.
  */
 const STYLE = `
-:root{color-scheme:light dark;--bg:#f6f4ef;--card:#fff;--ink:#1d1b16;--muted:#5d584d;--accent:#9f4a07;--line:#e4dfd3}
-@media (prefers-color-scheme:dark){:root{--bg:#15130f;--card:#1f1c17;--ink:#f1ece2;--muted:#b3ab9b;--accent:#e08a3c;--line:#37322a}}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);
-font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px}
-main{max-width:440px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px}
-.brand{font-weight:700;letter-spacing:.02em;color:var(--accent);margin:0 0 18px}
+:root{color-scheme:light dark;--bg:#f6f1e7;--card:#fdfaf3;--ink:#211d18;--muted:#6e6557;--accent:#9f4a07;--accent-ink:#fdfaf3;
+--accent-soft:rgba(180,83,9,.1);--line:rgba(33,29,24,.12)}
+@media (prefers-color-scheme:dark){:root{--bg:#17130d;--card:#201a12;--ink:#ece3d5;--muted:#a99e8c;--accent:#f59e0b;
+--accent-ink:#1c1917;--accent-soft:rgba(245,158,11,.12);--line:rgba(236,227,213,.12)}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;flex-direction:column;color:var(--ink);
+background:radial-gradient(48rem 30rem at 12% -10%,var(--accent-soft),transparent 65%),var(--bg);
+font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}a:focus-visible,button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.topbar,.foot{width:100%;max-width:60rem;margin:0 auto;padding:14px 16px;display:flex;align-items:center;
+justify-content:space-between;gap:12px;flex-wrap:wrap}
+.topbar{border-bottom:1px solid var(--line)}
+.brand{display:inline-flex;align-items:center;gap:.55rem;color:var(--ink);text-decoration:none;font-weight:700;letter-spacing:-.01em}
+.brand span span{color:var(--accent)}.mark{flex:none}.mark rect,.mark circle{fill:var(--accent)}.mark .soft{opacity:.6}
+.nav{display:flex;gap:16px;margin:0;padding:0;list-style:none}.nav a{font-weight:600;text-decoration:none}
+.nav a[aria-current]{color:var(--ink)}
+main{flex:1;width:100%;display:flex;justify-content:center;align-items:flex-start;padding:32px 16px}
+.card{max-width:440px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px}
+.foot{border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}.foot p{margin:0}
 h1{font-size:1.35rem;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted)}
-button,.button{display:inline-block;border:0;border-radius:10px;background:var(--accent);color:#fff;font:inherit;font-weight:600;
-padding:10px 16px;cursor:pointer;text-decoration:none}
+button,.button{display:inline-block;border:0;border-radius:10px;background:var(--accent);color:var(--accent-ink);font:inherit;
+font-weight:600;padding:10px 16px;cursor:pointer;text-decoration:none}
 .secondary{background:transparent;color:var(--muted);border:1px solid var(--line);margin-left:8px}
 code{font-size:.85em;color:var(--muted)}`;
+
+/** The brand mark of asafarim.site (core/site), still: the OS core with two apps around it. Decorative. */
+const BRAND_MARK = `<svg class="mark" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true" focusable="false">
+<rect x="8" y="8" width="16" height="16" rx="5"/><circle cx="16" cy="2.5" r="2.5"/><circle class="soft" cx="29.5" cy="16" r="1.75"/></svg>`;
+
+/** The favicon, the same as asafarim.site's (core/site/public/favicon.svg). Served at /favicon.svg. */
+export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#9f4a07"/><text x="16" y="22" font-family="system-ui,sans-serif" font-size="15" font-weight="700" text-anchor="middle" fill="#fdfaf3">OS</text></svg>`;
+
+const DEFAULT_HOME_URL = "https://asafarim.site/";
+let homeUrl = DEFAULT_HOME_URL;
+
+/**
+ * Where the header's brand and "Home" link go: the OS home page (IDENTITY_HOME_URL). Set once at
+ * startup; the hub login method has no home URL of its own and keeps asafarim.site.
+ */
+export function setHomeUrl(url: string): void {
+  homeUrl = url;
+}
+
+export function homeHref(): string {
+  return homeUrl;
+}
 
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
-/** `head` is extra, already-safe markup for the document head (the hand-off's meta refresh). */
-export function page(title: string, body: string, head = ""): string {
+/** A link in the header. `current` marks the page you're on. */
+export interface NavLink {
+  href: string;
+  label: string;
+  current?: boolean;
+}
+
+export interface PageOptions {
+  /** Extra, already-safe markup for the document head (styles, the passkey script, a meta refresh). */
+  head?: string;
+  /** The header's links. Default: Home only. */
+  nav?: NavLink[];
+}
+
+/** The header's "Home" link, first on every page. */
+export const homeLink = (): NavLink => ({ href: homeUrl, label: "Home" });
+
+/**
+ * Every page: a header with the brand (back to the OS home) and its links, the page's card, and a
+ * footer, so no page here is a dead end. `head` may also be passed as a string (the old signature).
+ */
+export function page(title: string, body: string, options: PageOptions | string = {}): string {
+  const { head = "", nav = [homeLink()] } = typeof options === "string" ? { head: options } : options;
+  const home = escapeHtml(homeUrl);
+  const links = nav
+    .map(
+      (l) =>
+        `<li><a href="${escapeHtml(l.href)}"${l.current ? ' aria-current="page"' : ""}>${escapeHtml(l.label)}</a></li>`,
+    )
+    .join("");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex">${head}<title>${escapeHtml(title)} · ASafariM</title><style>${STYLE}</style></head>
-<body><main><p class="brand">ASafariM</p>${body}</main></body></html>`;
+<meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><link rel="icon" href="/favicon.svg" type="image/svg+xml">
+${head}<title>${escapeHtml(title)} · ASafariM</title><style>${STYLE}</style></head>
+<body><header class="topbar"><a class="brand" href="${home}">${BRAND_MARK}<span>ASafariM <span>OS</span></span></a>
+<nav aria-label="Main"><ul class="nav">${links}</ul></nav></header>
+<main><div class="card">${body}</div></main>
+<footer class="foot"><p>ASafariM OS · sign-in and accounts for ASafariM apps</p><p><a href="${home}">${escapeHtml(new URL(homeUrl).host)}</a></p></footer>
+</body></html>`;
 }
 
 /** A sign-in failure. Shows a code, never token contents or account data. */
@@ -33,7 +101,8 @@ export function errorPage(opts: { title?: string; message: string; code?: string
   return page(
     opts.title ?? "Sign-in didn't complete",
     `<h1>${escapeHtml(opts.title ?? "Sign-in didn't complete")}</h1><p>${escapeHtml(opts.message)}</p>${code}
-<p>Go back to the app and start signing in again.</p>`,
+<p>Go back to the app and start signing in again.</p>
+<p><a class="button" href="${escapeHtml(homeUrl)}">Go to ASafariM OS home</a></p>`,
   );
 }
 
@@ -48,7 +117,11 @@ export function logoutPage(form: string): string {
 }
 
 export function loggedOutPage(): string {
-  return page("Signed out", "<h1>You're signed out</h1><p>You can close this tab.</p>");
+  return page(
+    "Signed out",
+    `<h1>You're signed out</h1><p>You can close this tab, or carry on to the ASafariM OS home page.</p>
+<p><a class="button" href="${escapeHtml(homeUrl)}">Go to ASafariM OS home</a></p>`,
+  );
 }
 
 /**
@@ -72,4 +145,4 @@ export function continuePage(uid: string): string {
 
 /** This page runs no script and starts no form: nothing but its own navigation, and nobody may frame it. */
 export const CONTINUE_PAGE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";

@@ -6,8 +6,10 @@ import { Redis } from "ioredis";
 import { PgAccountStore, type AccountStore } from "./accounts.ts";
 import { RedisAuthSessions, RedisEphemeral, RedisLoginFlows } from "./auth-session.ts";
 import { ConfigError, loadConfig, type LocalLoginConfig } from "./config.ts";
+import type { AppLink } from "./clients.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { RedisOtpChallenges, RedisRateLimiter } from "./otp.ts";
+import { setHomeUrl } from "./pages.ts";
 import { createProvider, type ProviderDeps } from "./provider.ts";
 import { RedisPendingLogins } from "./pending.ts";
 import { RedisReplayGuard, endSessionsOfAccount, redisAdapterFactory } from "./redis-adapter.ts";
@@ -19,7 +21,7 @@ import { PgIdentityStore, PrincipalAccounts } from "./store.ts";
 const log = createLogger();
 
 /** The local sign-in's pieces: its database (migrated, first admin bootstrapped) and its routes. */
-async function localSignIn(config: LocalLoginConfig, issuer: string, redis: Redis, logger: Logger) {
+async function localSignIn(config: LocalLoginConfig, issuer: string, apps: AppLink[], redis: Redis, logger: Logger) {
   const store = new PgIdentityStore(config.databaseUrl, (err) =>
     logger.warn("database.idle_error", { errorCode: (err as { code?: string }).code ?? err.name }),
   );
@@ -33,6 +35,7 @@ async function localSignIn(config: LocalLoginConfig, issuer: string, redis: Redi
   const signIn = createSignIn({
     issuer,
     homeUrl: config.homeUrl,
+    apps,
     otpSecret: config.otpSecret,
     ...(config.email
       ? {
@@ -84,7 +87,8 @@ async function main() {
     "loginMethod" | "handoffPrivateKey" | "hubPublicKey" | "hubContinueUrl" | "replay" | "pending" | "signIn"
   >;
   if (config.login.method === "local") {
-    const { store, signIn } = await localSignIn(config.login, config.issuer, redis, log);
+    setHomeUrl(config.login.homeUrl);
+    const { store, signIn } = await localSignIn(config.login, config.issuer, config.apps, redis, log);
     accounts = new PrincipalAccounts(store);
     closeDatabase = () => store.close();
     method = { loginMethod: "local", signIn };

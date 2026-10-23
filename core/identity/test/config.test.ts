@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { accountFromRow } from "../src/accounts.ts";
-import { ClientConfigError, loadClients } from "../src/clients.ts";
+import { ClientConfigError, appLinks, loadClients } from "../src/clients.ts";
 import { ConfigError, isLoopbackHost, parseSigningJwks, refuseLoopbackOutsideDevelopment } from "../src/config.ts";
 import { createLogger, safe } from "../src/log.ts";
 
@@ -39,6 +39,23 @@ describe("client config", () => {
     expect(() => loadClients({ clients: [{ ...base, client_secret_env: "S" }] }, { S: "short" })).toThrow(/32/);
     expect(() => loadClients({ clients: [base, base] }, {})).toThrow(/duplicate/);
     expect(() => loadClients({ clients: [{ ...base, client_id: "Bad_Id" }] }, {})).toThrow(/invalid client_id/);
+  });
+
+  it("lists only the named clients on the account page, at their home page", () => {
+    const named = {
+      ...base,
+      name: " Testora ",
+      description: "Test plans.",
+      post_logout_redirect_uris: ["https://testora.cloud/home"],
+    };
+    const docs = { ...base, client_id: "docs", primary_domain: "docs.example.test", name: "Docs" };
+    expect(appLinks({ clients: [base, named, docs] })).toEqual([
+      { name: "Testora", href: "https://testora.cloud/home", description: "Test plans." },
+      { name: "Docs", href: "https://docs.example.test/" },
+    ]);
+    expect(() => appLinks({ clients: [{ ...base, name: " " }] })).toThrow(ClientConfigError);
+    expect(() => appLinks({ clients: [{ ...base, name: "x".repeat(61) }] })).toThrow(/60/);
+    expect(() => appLinks({ clients: [{ ...base, name: "T", description: "x".repeat(161) }] })).toThrow(/160/);
   });
 
   it("allows http://localhost only when asked (local development)", () => {

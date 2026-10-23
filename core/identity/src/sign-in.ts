@@ -23,6 +23,7 @@ import {
   newToken,
   sameToken,
 } from "./auth-session.ts";
+import type { AppLink } from "./clients.ts";
 import { maskEmail, normalizeEmail } from "./email.ts";
 import { type HttpContext, clientIp, queryValue, readForm, readJson, sendHtml } from "./http.ts";
 import type { Logger } from "./log.ts";
@@ -73,6 +74,8 @@ export interface SignInDeps {
   issuer: string;
   /** Where a sign-in that didn't come from an app continues (the QR code's destination). */
   homeUrl: string;
+  /** The apps the account page offers (the named clients). Default: none. */
+  apps?: readonly AppLink[];
   /** HMAC key for codes, rate-limit keys and audit handles (IDENTITY_OTP_SECRET). */
   otpSecret: string;
   /** Email codes, when on: the mailer and the most emails per 24 h, all addresses together. */
@@ -671,6 +674,7 @@ export function createSignIn(d: SignInDeps): SignIn {
       200,
       accountPage({
         csrf: me.session.csrf,
+        apps: d.apps ?? [],
         accountId: me.principal.id,
         label: me.principal.label,
         connected: me.principal.connection === "active",

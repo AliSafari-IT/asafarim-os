@@ -112,6 +112,8 @@ describe("local sign-in", () => {
     const id = /<code data-account-id>([^<]+)<\/code>/.exec(page)?.[1];
     expect(id).toBeTruthy();
     expect((await store.principal(id!))?.id).toBe(id);
+    // An admin reaches the connections from the header.
+    expect(page).toContain('<a href="/admin">Connections</a>');
   });
 
   it("/whoami: signed out, or who is signed in; CORS only for the home page's origin", async () => {

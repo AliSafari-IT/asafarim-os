@@ -2,12 +2,13 @@
  * The HTML of the SMS sign-in and of the connections admin. Server-rendered,
  * no script, every value escaped; each form carries its CSRF token.
  */
-import { escapeHtml, page } from "./pages.ts";
+import type { AppLink } from "./clients.ts";
+import { type NavLink, escapeHtml, homeHref, homeLink, page } from "./pages.ts";
 import type { AuditRow, ConnectionRequestRow, ConnectionRow } from "./store.ts";
 
 /** Pages that post forms to this origin only. */
 export const PAGE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 /** Pages with passkey buttons: our one script, and fetch to our own origin. */
 export const PASSKEY_PAGE_CSP = `${PAGE_CSP}; script-src 'self'; connect-src 'self'`;
@@ -21,7 +22,12 @@ input.code{letter-spacing:.35em;text-align:center;font-variant-numeric:tabular-n
 .notice{border-left:3px solid var(--accent);padding-left:10px}
 form.inline{display:inline;margin:0}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.wide main{max-width:880px}
+.apps{list-style:none;margin:0 0 12px;padding:0;display:grid;gap:8px}
+.tile{display:flex;gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:12px;
+color:var(--ink);text-decoration:none}.tile:hover{border-color:var(--accent)}
+.tile small{display:block;color:var(--muted)}
+.glyph{flex:none;display:grid;place-items:center;width:36px;height:36px;border-radius:10px;background:var(--accent-soft);
+color:var(--accent);font-weight:700;font-size:.8rem;letter-spacing:.04em}
 table{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:.92rem}
 th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
 th{color:var(--muted);font-weight:600}
@@ -98,8 +104,44 @@ ${csrfField(opts.csrf)}
   );
 }
 
+/** The header of a signed-in page: Home, the account, and Connections for an admin. */
+function signedInNav(current: "account" | "admin", isAdmin: boolean): NavLink[] {
+  return [
+    homeLink(),
+    { href: "/account", label: "Account", current: current === "account" },
+    ...(isAdmin ? [{ href: "/admin", label: "Connections", current: current === "admin" }] : []),
+  ];
+}
+
+/** Up to two letters for a tile: "Docs" → "DO", "Core admin" → "CA". */
+function glyphOf(name: string): string {
+  const words = name.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const first = words[0] ?? "?";
+  return (words[1] ? first[0]! + words[1][0]! : first.slice(0, 2)).toUpperCase();
+}
+
+const tile = (href: string, glyph: string, name: string, description: string) =>
+  `<li><a class="tile" href="${escapeHtml(href)}"><span class="glyph" aria-hidden="true">${escapeHtml(glyph)}</span>
+<span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(description)}</small></span></a></li>`;
+
+/** "Where to next": the OS home page, then the apps that sign in here. Access is still an admin's grant. */
+function nextSteps(apps: readonly AppLink[], connected: boolean): string {
+  const tiles = [
+    tile(homeHref(), "OS", "ASafariM OS", "The home page: what the OS is, and what's new."),
+    ...apps.map((a) => tile(a.href, glyphOf(a.name), a.name, a.description ?? new URL(a.href).host)),
+  ].join("");
+  const note = !apps.length
+    ? ""
+    : connected
+      ? '<p class="small">An app opens once an admin has given your account access to it.</p>'
+      : '<p class="small">Apps open once your account is connected and an admin has given it access.</p>';
+  return `<h2>Where to next</h2><ul class="apps">${tiles}</ul>${note}`;
+}
+
 export function accountPage(opts: {
   csrf: string;
+  /** The apps that sign in here and have a name in the client config. */
+  apps: readonly AppLink[];
   /** The principal id: the `sub` every app sees, and what an admin grants an app's role to. */
   accountId: string;
   label: string | null;
@@ -123,14 +165,17 @@ export function accountPage(opts: {
 ${opts.notice ? `<p class="notice">${escapeHtml(opts.notice)}</p>` : ""}
 <p>Signed in as <strong>${escapeHtml(opts.label ?? "—")}</strong>${opts.connected ? "" : " (not connected yet)"}.</p>
 <p class="small">Account id: <code data-account-id>${escapeHtml(opts.accountId)}</code>. An admin uses it to give you access to an app.</p>
+${nextSteps(opts.apps, opts.connected)}
 <h2>Passkeys</h2>
 <p class="small">A passkey lets you sign in with your fingerprint, face or device PIN instead of a code.</p>
 ${list}
 <p><button type="button" data-passkey="register" data-csrf="${escapeHtml(opts.csrf)}" hidden>Add a passkey</button></p>
 <p class="small" data-passkey-status role="status"></p>
-${opts.isAdmin ? '<p><a class="button secondary" href="/admin" style="margin-left:0">Connections (admin)</a></p>' : ""}
 <form method="post" action="/logout">${csrf}<button class="secondary" type="submit" style="margin-left:0">Sign out</button></form>`,
-    `${EXTRA_STYLE}<style>main{max-width:640px}</style><script src="/static/passkey.js" defer></script>`,
+    {
+      head: `${EXTRA_STYLE}<style>.card{max-width:640px}</style><script src="/static/passkey.js" defer></script>`,
+      nav: signedInNav("account", opts.isAdmin),
+    },
   );
 }
 
@@ -236,6 +281,6 @@ ${opts.notice ? `<p class="notice">${escapeHtml(opts.notice)}</p>` : ""}${err(op
 <h2>Connections</h2>${connections}
 <h2>Recent activity</h2>${audit}
 <form method="post" action="/logout">${csrf}<button class="secondary" type="submit" style="margin-left:0">Sign out</button></form>`,
-    `${EXTRA_STYLE}<style>main{max-width:880px}</style>`,
+    { head: `${EXTRA_STYLE}<style>.card{max-width:880px}</style>`, nav: signedInNav("admin", true) },
   );
 }
