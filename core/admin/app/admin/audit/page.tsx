@@ -1,7 +1,8 @@
 import Link from "next/link";
+import { JsonDetail, ShortId, When } from "@/components/Cells";
 import { coreApi } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
-import { formatTime, isAppId } from "@/lib/util";
+import { isAppId } from "@/lib/util";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Audit · Admin · ASafariM OS" };
@@ -69,8 +70,8 @@ export default async function AuditPage({
           No events match.
         </p>
       ) : (
-        <div className="table-wrap">
-          <table>
+        <div className="table-wrap os-table-wrap">
+          <table className="os-table os-table--stack">
             <caption>
               {events.length} event{events.length === 1 ? "" : "s"}
               {app ? ` for ${app}` : ""}
@@ -88,16 +89,20 @@ export default async function AuditPage({
             <tbody>
               {events.map((e) => (
                 <tr key={e.id} data-testid="audit-row">
-                  <td className="mono">{formatTime(e.at)}</td>
-                  <td className="mono" data-testid="audit-actor">
-                    {e.actor}
+                  <td data-label="When">
+                    <When iso={e.at} />
                   </td>
-                  <td className="mono" data-testid="audit-action">
+                  <td data-label="Actor">
+                    <ShortId value={e.actor} testId="audit-actor" />
+                  </td>
+                  <td className="mono os-nowrap" data-label="Action" data-testid="audit-action">
                     {e.action}
                   </td>
-                  <td className="mono">{e.appId ?? "—"}</td>
-                  <td>
-                    <code>{JSON.stringify(e.detail)}</code>
+                  <td className="mono" data-label="App">
+                    {e.appId ?? "—"}
+                  </td>
+                  <td className="os-fill" data-label="Detail">
+                    <JsonDetail value={e.detail} />
                   </td>
                 </tr>
               ))}

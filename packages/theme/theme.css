@@ -180,3 +180,169 @@
     transition: none !important;
   }
 }
+
+/*
+ * Data tables, the same in every app: <div class="os-table-wrap"><table class="os-table">…</table></div>.
+ * The wrap scrolls sideways when a wide table can't fit, so the page never does. With os-table--stack,
+ * each row becomes a card on a narrow screen: give every <td> a data-label (its column's name), which is
+ * shown in front of the value; a row header (<th scope="row">) becomes the card's title.
+ */
+.os-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.os-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+.os-table caption {
+  caption-side: top;
+  padding: 12px 14px 4px;
+  text-align: left;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.os-table th,
+.os-table td {
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+.os-table thead th {
+  background: var(--card-2);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.os-table tbody th {
+  color: var(--ink);
+  font-weight: 600;
+}
+.os-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.os-table tbody tr:hover > * {
+  background: var(--accent-soft);
+}
+/* Cells that read best on one line (dates, short codes) and ids that are long and alike. */
+.os-nowrap {
+  white-space: nowrap;
+}
+.os-id {
+  display: inline-block;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  font-size: 0.85em;
+}
+/* A cell that takes the room the others leave (a detail column), its content clipped to it, not widening the table. */
+.os-table .os-fill {
+  width: 100%;
+  max-width: 0;
+}
+/* A JSON value: one clipped line, the whole of it (wrapped, never wider than the cell) when opened. */
+.os-json {
+  min-width: 10rem;
+}
+.os-json summary {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  font-size: 0.82rem;
+  list-style: none;
+}
+.os-json summary::-webkit-details-marker {
+  display: none;
+}
+.os-json summary::before {
+  content: "▸ ";
+  color: var(--accent);
+}
+.os-json[open] summary::before {
+  content: "▾ ";
+}
+.os-json pre {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-2);
+  color: var(--ink);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 720px) {
+  .os-table--stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .os-table--stack,
+  .os-table--stack caption,
+  .os-table--stack tbody,
+  .os-table--stack tr,
+  .os-table--stack tbody th,
+  .os-table--stack td {
+    display: block;
+    width: 100%;
+  }
+  .os-table--stack tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .os-table--stack tbody tr:last-child {
+    border-bottom: 0;
+  }
+  .os-table--stack tbody th,
+  .os-table--stack td {
+    padding: 4px 14px;
+    border: 0;
+  }
+  /* The label sits in a left column; the cell's own content flows as it is beside it. */
+  .os-table--stack td[data-label] {
+    position: relative;
+    padding-left: calc(14px + max(6rem, 30%));
+  }
+  .os-table--stack td[data-label]::before {
+    content: attr(data-label);
+    position: absolute;
+    left: 14px;
+    top: 6px;
+    width: calc(max(6rem, 30%) - 10px);
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .os-table--stack tbody tr:hover > * {
+    background: transparent;
+  }
+  .os-table .os-fill {
+    max-width: none;
+  }
+  .os-json {
+    min-width: 0;
+  }
+}

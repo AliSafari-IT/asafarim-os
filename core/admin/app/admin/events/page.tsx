@@ -96,8 +96,8 @@ export default async function EventsPage({
               : "No app publishes or subscribes to any event yet."}
         </p>
       ) : (
-        <div className="table-wrap">
-          <table>
+        <div className="table-wrap os-table-wrap">
+          <table className="os-table os-table--stack">
             <caption>
               {entries.length} event type{entries.length === 1 ? "" : "s"}
               {app ? ` that ${app} publishes or subscribes to` : ""}
@@ -124,7 +124,7 @@ export default async function EventsPage({
                         </div>
                       ) : null}
                     </th>
-                    <td data-testid={`publisher-${e.type}`}>
+                    <td data-label="Publisher" data-testid={`publisher-${e.type}`}>
                       {e.publisher ? (
                         <span className="mono">
                           {e.publisher.appId} · v{e.publisher.version}
@@ -133,7 +133,7 @@ export default async function EventsPage({
                         <span className="badge warn">No publisher</span>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Schema">
                       <span
                         className={e.schemaStatus === "provided" ? "" : "muted"}
                         data-testid={`schema-status-${e.type}`}
@@ -152,7 +152,7 @@ export default async function EventsPage({
                         </details>
                       ) : null}
                     </td>
-                    <td>
+                    <td data-label="Subscribers">
                       {e.subscribers.length === 0 ? (
                         <span className="muted">None</span>
                       ) : (

@@ -79,6 +79,16 @@ describe("the theme tokens", () => {
       expect(css).toContain(`${token}:`);
     }
     expect(css).toContain(".os-topbar {");
+    // Tables: their own scroll, cards on a phone (labels from data-label), one-line ids and JSON.
+    for (const rule of [
+      ".os-table-wrap {",
+      ".os-table {",
+      ".os-id {",
+      ".os-json summary {",
+      "content: attr(data-label);",
+    ])
+      expect(css).toContain(rule);
+    expect(css).toMatch(/@media \(max-width: 720px\) \{\s*\.os-table--stack thead/);
     expect(css).toContain("prefers-reduced-motion");
   });
 });

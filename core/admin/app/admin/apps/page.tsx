@@ -150,8 +150,8 @@ export default async function AppsPage({
           The backup check failed: {checkError}
         </div>
       ) : null}
-      <div className="table-wrap">
-        <table>
+      <div className="table-wrap os-table-wrap">
+        <table className="os-table os-table--stack">
           <caption>Every app core-api knows, with its state</caption>
           <thead>
             <tr>
@@ -171,17 +171,17 @@ export default async function AppsPage({
                     {app.id} · v{app.version}
                   </div>
                 </th>
-                <td>
+                <td data-label="State">
                   <span className={`badge ${app.state}`} data-testid={`state-${app.id}`}>
                     {app.state}
                   </span>
                 </td>
-                <td>
+                <td data-label="Install status">
                   {installStatus(app)}
                   <RetentionInfo app={app} verdict={verdicts.get(app.id)} />
                   <EventsWarning appId={app.id} types={app.waitingForPublisher ?? []} />
                 </td>
-                <td className="muted">
+                <td className="muted" data-label="Declares">
                   {app.permissions} permission{app.permissions === 1 ? "" : "s"}, {app.roles} role
                   {app.roles === 1 ? "" : "s"}
                   <div>
@@ -194,7 +194,7 @@ export default async function AppsPage({
                     </Link>
                   </div>
                 </td>
-                <td>
+                <td data-label="Action">
                   {app.system ? (
                     <span className="muted">Always active</span>
                   ) : app.state === "removed" ? (
