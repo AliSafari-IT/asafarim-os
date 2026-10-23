@@ -3,6 +3,7 @@ import {
   adminTokenMatches,
   appDatabasePort,
   decodeSubject,
+  parseAdminConsoleUrl,
   parseBusConfig,
   parseTokenKey,
   parsePurgeBody,
@@ -53,6 +54,18 @@ describe("decodeSubject (subjects arrive percent-encoded)", () => {
   it("refuses bad percent-encoding, a '/' hiding in an escape, spaces and over-long subjects", () => {
     for (const bad of ["%E0%A4%A", "a%2Fb", "a%20b", "%00", "x".repeat(129), ""]) {
       expect(() => decodeSubject(bad), bad).toThrow(/bad_request|subject/);
+    }
+  });
+});
+
+describe("the Admin console's URL (the launcher's Admin tile)", () => {
+  it("is optional, https, or http on localhost only", () => {
+    expect(parseAdminConsoleUrl(undefined)).toBeUndefined();
+    expect(parseAdminConsoleUrl("")).toBeUndefined();
+    expect(parseAdminConsoleUrl("https://admin.asafarim.site")).toBe("https://admin.asafarim.site/");
+    expect(parseAdminConsoleUrl("http://core.localhost:8080")).toBe("http://core.localhost:8080/");
+    for (const bad of ["http://admin.asafarim.site/", "javascript:alert(1)", "nope", "http://localhost.evil.test/"]) {
+      expect(() => parseAdminConsoleUrl(bad), bad).toThrow(/CORE_API_ADMIN_CONSOLE_URL/);
     }
   });
 });

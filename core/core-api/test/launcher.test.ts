@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appHref, launcherFor, type LauncherApp } from "../src/launcher.ts";
+import { adminTile, appHref, launcherFor, type LauncherApp } from "../src/launcher.ts";
 
 function app(
   id: string,
@@ -76,5 +76,15 @@ describe("the launcher", () => {
     );
     const noHome = app("lost", "active", { access: "public" });
     expect(launcherFor([noHome], new Set(), {})).toEqual([]);
+  });
+
+  it("the Admin console's tile: a valid tile that sorts after every app, opening the configured URL", () => {
+    expect(adminTile("https://admin.example.test/")).toMatchObject({
+      key: "admin",
+      glyph: "AD",
+      meta: "admin.example.test",
+      href: "https://admin.example.test/",
+      order: Number.MAX_SAFE_INTEGER,
+    });
   });
 });

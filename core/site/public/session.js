@@ -13,6 +13,8 @@
 
   const DOCS = "https://docs.asafarim.site/";
   const ACCOUNT = identity + "/account";
+  // The Admin console, offered only when identity says this person is an admin (it checks core.admin itself).
+  const ADMIN = "https://admin.asafarim.site/";
 
   const el = (tag, attrs, ...children) => {
     const node = document.createElement(tag);
@@ -39,6 +41,7 @@
     docs: "M5 2.5h6.5L15 6v11.5H5zM11 2.5V6.5h4M7.5 10h5M7.5 13h5",
     account: "M10 10.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5zM3.5 17c.9-3.2 3.4-5 6.5-5s5.6 1.8 6.5 5",
     request: "M10 3.5v13M3.5 10h13",
+    admin: "M10 2.5l6 2.25v4.5c0 3.9-2.55 6.9-6 8.25-3.45-1.35-6-4.35-6-8.25v-4.5zM7.25 10l2 2 3.5-3.75",
   };
 
   function render(me) {
@@ -80,6 +83,7 @@
       me.connected
         ? item(DOCS, "Open Docs", "docs", "user-docs")
         : item(identity + "/connect", "Request access", "request", "user-request"),
+      ...(me.admin === true ? [item(ADMIN, "Admin console", "admin", "user-admin")] : []),
       item(ACCOUNT, "Account and sign out", "account", "user-account"),
     );
     const root = el("div", { class: "user", "data-testid": "user" }, button, menu);

@@ -104,12 +104,16 @@ ${csrfField(opts.csrf)}
   );
 }
 
-/** The header of a signed-in page: Home, the account, and Connections for an admin. */
-function signedInNav(current: "account" | "admin", isAdmin: boolean): NavLink[] {
+/**
+ * The header of a signed-in page: Home, the account, and for an admin Connections and, when it is
+ * configured, the Admin console (admin.asafarim.site, which still checks core.admin itself).
+ */
+function signedInNav(current: "account" | "admin", isAdmin: boolean, adminConsoleUrl?: string): NavLink[] {
   return [
     homeLink(),
     { href: "/account", label: "Account", current: current === "account" },
     ...(isAdmin ? [{ href: "/admin", label: "Connections", current: current === "admin" }] : []),
+    ...(isAdmin && adminConsoleUrl ? [{ href: adminConsoleUrl, label: "Admin console" }] : []),
   ];
 }
 
@@ -147,6 +151,8 @@ export function accountPage(opts: {
   label: string | null;
   connected: boolean;
   isAdmin: boolean;
+  /** Linked in the header for an admin. */
+  adminConsoleUrl?: string;
   passkeys: { credentialId: string; name: string; createdAt: Date; lastUsedAt: Date | null }[];
   notice?: string;
 }): string {
@@ -174,7 +180,7 @@ ${list}
 <form method="post" action="/logout">${csrf}<button class="secondary" type="submit" style="margin-left:0">Sign out</button></form>`,
     {
       head: `${EXTRA_STYLE}<style>.card{max-width:640px}</style><script src="/static/passkey.js" defer></script>`,
-      nav: signedInNav("account", opts.isAdmin),
+      nav: signedInNav("account", opts.isAdmin, opts.adminConsoleUrl),
     },
   );
 }
@@ -224,6 +230,8 @@ export function adminPage(opts: {
   requests: ConnectionRequestRow[];
   connections: ConnectionRow[];
   audit: AuditRow[];
+  /** Linked in the header. */
+  adminConsoleUrl?: string;
   notice?: string;
   error?: string;
 }): string {
@@ -281,6 +289,9 @@ ${opts.notice ? `<p class="notice">${escapeHtml(opts.notice)}</p>` : ""}${err(op
 <h2>Connections</h2>${connections}
 <h2>Recent activity</h2>${audit}
 <form method="post" action="/logout">${csrf}<button class="secondary" type="submit" style="margin-left:0">Sign out</button></form>`,
-    { head: `${EXTRA_STYLE}<style>.card{max-width:880px}</style>`, nav: signedInNav("admin", true) },
+    {
+      head: `${EXTRA_STYLE}<style>.card{max-width:880px}</style>`,
+      nav: signedInNav("admin", true, opts.adminConsoleUrl),
+    },
   );
 }

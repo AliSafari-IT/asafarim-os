@@ -29,6 +29,8 @@ services:
       IDENTITY_ISSUER: https://id.asafarim.site
       IDENTITY_HUB_CONTINUE_URL: https://hub.asafarim.com/oidc/continue
       IDENTITY_CLIENTS_FILE: /etc/identity/clients.json
+      # Linked in an identity admin's header (local sign-in). The console still checks core.admin itself.
+      IDENTITY_ADMIN_CONSOLE_URL: https://admin.asafarim.site/
       # Logical DB 3 is reserved for the identity service (oidc: keys only). This stack's OWN Redis:
       # it never uses asafarim-com's (stacks share nothing but the edge).
       IDENTITY_REDIS_URL: redis://os-redis:6379/3
@@ -188,6 +190,8 @@ services:
     environment:
       # The Admin console's people are verified against this stack's identity (when the console goes live).
       CORE_API_IDENTITY_ISSUER: https://id.asafarim.site
+      # Where the launcher's Admin tile opens, for core.admin holders only (every app's app switcher).
+      CORE_API_ADMIN_CONSOLE_URL: https://admin.asafarim.site/
       # An installed app's DATABASE_URL points at os-postgres, by its name on os_core.
       CORE_API_APP_DB_HOST: os-postgres
       CORE_API_APP_DB_PORT: "5432"

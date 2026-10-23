@@ -118,6 +118,7 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
       },
       appDatabaseHost: { host: url.hostname, port: Number(url.port) },
       appUrlTemplate: "http://{id}.localhost:8080",
+      adminConsoleUrl: "http://core.localhost:8080/",
       onLifecycleChange: () => {
         snapshot.invalidate();
         void poller.refresh();
@@ -464,14 +465,24 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
       const body = await json<{ subject: string; apps: { key: string; href: string }[] }>(r);
       expect(body.subject).toBe("dev-admin");
       expect(body.apps).toEqual((await launcher(NOTES, "dev-admin")).body.apps);
-      expect(body.apps.map((a) => a.key)).toEqual([NOTES, DOCS]);
+      expect(body.apps.map((a) => a.key)).toEqual([NOTES, DOCS, "admin"]);
       expect(body.apps[0]!.href).toBe(`http://${NOTES}.localhost:8080`);
       await cli("DELETE", `/admin/v1/roles/${NOTES}.viewer/grants/dev-admin`);
       expect(
         (await json<{ apps: { key: string }[] }>(await as("dev-admin", "GET", "/admin/v1/launcher"))).apps.map(
           (a) => a.key,
         ),
-      ).toEqual([DOCS]);
+      ).toEqual([DOCS, "admin"]);
+    });
+
+    it("a core.admin holder gets the Admin console's tile last; nobody else does, and it goes with the grant", async () => {
+      const admin = (await launcher(NOTES, "dev-admin")).body.apps!.at(-1);
+      expect(admin).toMatchObject({ key: "admin", name: "Admin", glyph: "AD", href: "http://core.localhost:8080/" });
+      expect((await launcher(NOTES, "dev-member")).body.apps!.map((a) => a.key)).not.toContain("admin");
+      await cli("PUT", "/admin/v1/roles/core.admin/grants/second-admin");
+      expect((await launcher(NOTES, "second-admin")).body.apps!.map((a) => a.key)).toEqual([DOCS, "admin"]);
+      await cli("DELETE", "/admin/v1/roles/core.admin/grants/second-admin");
+      expect((await launcher(NOTES, "second-admin")).body.apps!.map((a) => a.key)).toEqual([DOCS]);
     });
 
     it("GET /admin/v1/launcher: the CLI token (no person) gets an empty list; a non-admin 403; no token 401", async () => {

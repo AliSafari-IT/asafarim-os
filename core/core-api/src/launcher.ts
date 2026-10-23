@@ -52,3 +52,24 @@ export function launcherFor(
   }
   return tiles;
 }
+
+/** The Admin console's tile key: the console marks itself current with it (`<AppSwitcher current="admin">`). */
+export const ADMIN_TILE_KEY = "admin";
+
+/**
+ * The Admin console's tile, for a person who holds `core.admin`. The console is a core service, not a
+ * manifest app, so it has no launcher block of its own; it goes last, after every app.
+ */
+export function adminTile(href: string): LauncherTile {
+  return {
+    key: ADMIN_TILE_KEY,
+    name: "Admin",
+    description: "Manage apps, roles and access across ASafariM OS.",
+    glyph: "AD",
+    meta: new URL(href).host,
+    status: "active",
+    access: "authenticated",
+    order: Number.MAX_SAFE_INTEGER,
+    href,
+  };
+}

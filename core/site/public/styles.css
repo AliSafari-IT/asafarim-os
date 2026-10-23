@@ -512,6 +512,9 @@ footer p {
 .topbar .user-item:nth-of-type(2) {
   animation-delay: 40ms;
 }
+.topbar .user-item:nth-of-type(3) {
+  animation-delay: 80ms;
+}
 .topbar .user-item:hover {
   background: var(--accent-soft);
   transform: translateX(2px);
