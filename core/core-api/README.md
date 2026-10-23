@@ -23,6 +23,7 @@ node --env-file=../../.dev/core-api.env src/server.ts
 | `CORE_API_TOKEN_SIGNING_JWK`        | an Ed25519 private JWK with a `kid`: signs the access tokens (P3.3a)                                                      |
 | `CORE_API_ACCESS_TOKEN_TTL_SECONDS` | 5 to 300, default 60: the access token's lifetime                                                                         |
 | `CORE_API_APP_URL_TEMPLATE`         | where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset → `https://<its primary domain>`           |
+| `CORE_API_ADMIN_CONSOLE_URL`        | the Admin console: a `core.admin` holder gets its tile last in the launcher (every app's switcher); unset → no tile       |
 | `PORT`                              | default `4020`                                                                                                            |
 | `CORE_API_APP_DB_HOST` / `_PORT`    | host and port put into an installed app's `DATABASE_URL` (default: the provisioner's)                                     |
 | `CORE_API_NATS_URL`                 | the event bus (P4.1): streams for publishers, durable consumers for subscribers, `DEADLETTER`. Unset = none               |

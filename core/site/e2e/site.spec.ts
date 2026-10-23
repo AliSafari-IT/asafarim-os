@@ -98,6 +98,8 @@ test("signed in, the top bar shows the person's avatar and menu instead of Sign 
   await expect(page.getByTestId("user-name")).toHaveText("ali@example.test");
   await expect(page.getByTestId("user-docs")).toHaveAttribute("href", "https://docs.asafarim.site/");
   await expect(page.getByTestId("user-account")).toHaveAttribute("href", "https://id.asafarim.site/account");
+  // Not an admin: no Admin console.
+  await expect(page.getByTestId("user-admin")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("user-name")).toBeHidden();
 
@@ -110,6 +112,17 @@ test("signed in, the top bar shows the person's avatar and menu instead of Sign 
   // A click outside closes it.
   await page.getByRole("heading", { level: 1 }).click();
   await expect(page.getByTestId("user-name")).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
+test("signed in as an admin, the menu also offers the Admin console", async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.unroute("https://id.asafarim.site/whoami");
+  await whoami(page, { signedIn: true, label: "ali@example.test", initials: "AL", connected: true, admin: true });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Your account menu: ali@example.test" }).click();
+  await expect(page.getByTestId("user-admin")).toHaveAttribute("href", "https://admin.asafarim.site/");
+  await expect(page.getByTestId("user-admin")).toHaveText("Admin console");
   expect(errors).toEqual([]);
 });
 

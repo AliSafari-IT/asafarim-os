@@ -568,6 +568,22 @@ export async function loadGatewayApps(pool: pg.Pool): Promise<GatewayApp[]> {
 }
 
 /** CORE_API_ACCESS_TOKEN_TTL_SECONDS: 5–300, default 60. */
+/** CORE_API_ADMIN_CONSOLE_URL: where the launcher's Admin tile opens (http only on localhost). Unset = no tile. */
+export function parseAdminConsoleUrl(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error("CORE_API_ADMIN_CONSOLE_URL must be a URL");
+  }
+  const local = u.hostname === "localhost" || u.hostname.endsWith(".localhost");
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && local)) {
+    throw new Error("CORE_API_ADMIN_CONSOLE_URL must be https (http only on localhost)");
+  }
+  return u.href;
+}
+
 export function parseTokenTtl(raw: string | undefined): number | undefined {
   if (raw === undefined || raw === "") return undefined;
   const n = Number(raw);
@@ -720,6 +736,7 @@ async function main() {
     tokenKey,
     accessTokenTtlSeconds: parseTokenTtl(process.env.CORE_API_ACCESS_TOKEN_TTL_SECONDS),
     appUrlTemplate: process.env.CORE_API_APP_URL_TEMPLATE || undefined,
+    adminConsoleUrl: parseAdminConsoleUrl(process.env.CORE_API_ADMIN_CONSOLE_URL),
     onLifecycleChange: () => {
       snapshot.invalidate();
       void health.refresh();

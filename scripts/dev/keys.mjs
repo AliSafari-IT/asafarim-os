@@ -87,6 +87,8 @@ function coreApiAdminLines() {
     line("CORE_API_IDENTITY_ISSUER", ISSUER),
     line("CORE_API_ADMIN_CLIENT_ID", DEV.adminClientId),
     line("CORE_API_APP_URL_TEMPLATE", `http://{id}.localhost:${DEV.gatewayPort}`),
+    // The launcher's Admin tile for core.admin holders: the console is core.localhost on the dev gateway.
+    line("CORE_API_ADMIN_CONSOLE_URL", `http://core.localhost:${DEV.gatewayPort}/`),
     // P4.1: install creates the stream of an app that publishes events.
     line("CORE_API_NATS_URL", DEV.natsUrl),
   ];

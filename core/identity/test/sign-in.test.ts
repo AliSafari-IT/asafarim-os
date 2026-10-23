@@ -49,6 +49,7 @@ describe("local sign-in", () => {
     signIn = createSignIn({
       issuer: ISSUER,
       homeUrl: "https://home.example.test/",
+      adminConsoleUrl: "https://admin.example.test/",
       otpSecret: "o".repeat(40),
       email: { mailer, dailyLimit: 100 },
       sms: { sender: sms, allowedPrefixes: ["+32"], dailyLimit: 100 },
@@ -112,8 +113,18 @@ describe("local sign-in", () => {
     const id = /<code data-account-id>([^<]+)<\/code>/.exec(page)?.[1];
     expect(id).toBeTruthy();
     expect((await store.principal(id!))?.id).toBe(id);
-    // An admin reaches the connections from the header.
+    // An admin reaches the connections and the Admin console from the header.
     expect(page).toContain('<a href="/admin">Connections</a>');
+    expect(page).toContain('<a href="https://admin.example.test/">Admin console</a>');
+  });
+
+  it("someone who isn't an admin gets no Connections or Admin console link", async () => {
+    const b = new Browser();
+    await emailSignIn(b, OTHER);
+    const page = (await go(b, "GET", "/account")).body;
+    expect(page).toContain("Your account");
+    expect(page).not.toContain("Admin console");
+    expect(page).not.toContain('href="/admin"');
   });
 
   it("/whoami: signed out, or who is signed in; CORS only for the home page's origin", async () => {
@@ -129,7 +140,10 @@ describe("local sign-in", () => {
     const b = new Browser();
     await emailSignIn(b, ADMIN);
     const me = await go(b, "GET", "/whoami", undefined, { headers: { origin: "https://home.example.test" } });
-    expect(JSON.parse(me.body)).toEqual({ signedIn: true, label: ADMIN, initials: "AL", connected: true });
+    expect(JSON.parse(me.body)).toEqual({ signedIn: true, label: ADMIN, initials: "AL", connected: true, admin: true });
+    const other = new Browser();
+    await emailSignIn(other, OTHER);
+    expect(JSON.parse((await go(other, "GET", "/whoami")).body)).toMatchObject({ signedIn: true, admin: false });
     expect(me.body).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/); // never the principal id
 
     const evil = await go(b, "GET", "/whoami", undefined, { headers: { origin: "https://evil.example" } });

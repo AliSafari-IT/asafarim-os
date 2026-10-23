@@ -221,6 +221,7 @@ test("identity's fixed settings point at this stack's own Redis (logical DB 3) a
   assert.equal(identity.environment.IDENTITY_ISSUER, "https://id.asafarim.site");
   assert.equal(identity.environment.IDENTITY_HUB_CONTINUE_URL, "https://hub.asafarim.com/oidc/continue");
   assert.equal(identity.environment.IDENTITY_CLIENTS_FILE, "/etc/identity/clients.json");
+  assert.equal(identity.environment.IDENTITY_ADMIN_CONSOLE_URL, "https://admin.asafarim.site/");
 });
 
 test("the client config is mounted read-only from deploy/identity/clients.json, which is not in git", () => {
@@ -350,6 +351,11 @@ const coreRendered = render({
 assert.equal(coreRendered.status, 0, coreRendered.stderr);
 const coreConfig = JSON.parse(coreRendered.stdout);
 const { "os-core-api": coreApi, "os-postgres": postgres } = coreConfig.services;
+
+test("the Admin console links (core-api's launcher tile, identity's header) point at the same admin.asafarim.site", () => {
+  assert.equal(coreApi.environment.CORE_API_ADMIN_CONSOLE_URL, "https://admin.asafarim.site/");
+  assert.equal(coreApi.environment.CORE_API_ADMIN_CONSOLE_URL, identity.environment.IDENTITY_ADMIN_CONSOLE_URL);
+});
 
 test("the core profile adds exactly os-core-api and os-postgres", () => {
   assert.deepEqual(Object.keys(coreConfig.services).sort(), [

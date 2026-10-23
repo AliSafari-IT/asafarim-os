@@ -14,6 +14,7 @@ import { randomBytes } from "node:crypto";
 import { validateManifest, type AppManifest } from "@asafarim/app-manifest";
 import { signAccessToken, type SigningKey } from "@asafarim/registry-protocol";
 import type pg from "pg";
+import { CORE_ADMIN_ROLE } from "./admin-auth.ts";
 import { ApiError } from "./errors.ts";
 import {
   NONCE_PATTERN,
@@ -35,7 +36,7 @@ import {
   type RemovalPlan,
 } from "./event-plumbing.ts";
 import { DEFAULT_RETENTION_DAYS, purgeAfter, type BackupFile, type DatabaseBackups } from "./backup.ts";
-import { launcherFor, type LauncherApp } from "./launcher.ts";
+import { adminTile, launcherFor, type LauncherApp } from "./launcher.ts";
 import {
   appDatabaseNames,
   dropDatabaseAndRole,
@@ -70,6 +71,8 @@ export interface RegistryDeps {
   plumbingLockTimeoutMs?: number;
   /** Where an app opens in the launcher: `http://{id}.localhost:8080` in dev; unset = https://<primary domain>. */
   appUrlTemplate?: string;
+  /** The Admin console's URL: a person who holds `core.admin` gets its tile at the end of their launcher. Unset = no tile. */
+  adminConsoleUrl?: string;
   /** Called after every change that the gateway must see at once (install, activate, deactivate, remove). */
   onLifecycleChange?: () => void;
   /**
@@ -1016,7 +1019,16 @@ export function createRegistry(deps: RegistryDeps) {
         )
       ).rows.map((r) => r.app_id),
     );
-    return { subject, apps: launcherFor(apps, held, { urlTemplate: deps.appUrlTemplate }) };
+    const tiles = launcherFor(apps, held, { urlTemplate: deps.appUrlTemplate });
+    if (deps.adminConsoleUrl && held.has("core")) {
+      const admin = await deps.pool.query(
+        `SELECT 1 FROM role_grants g JOIN roles r ON r.key = g.role_key
+          WHERE g.subject = $1 AND g.role_key = $2 AND r.deprecated_at IS NULL LIMIT 1`,
+        [subject, CORE_ADMIN_ROLE],
+      );
+      if (admin.rowCount) tiles.push(adminTile(deps.adminConsoleUrl));
+    }
+    return { subject, apps: tiles };
   }
 
   /** Admin: give a subject a role (an app's declared role). Idempotent; audited. */

@@ -35,6 +35,7 @@ async function localSignIn(config: LocalLoginConfig, issuer: string, apps: AppLi
   const signIn = createSignIn({
     issuer,
     homeUrl: config.homeUrl,
+    ...(config.adminConsoleUrl ? { adminConsoleUrl: config.adminConsoleUrl } : {}),
     apps,
     otpSecret: config.otpSecret,
     ...(config.email

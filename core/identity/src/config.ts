@@ -27,6 +27,8 @@ export interface LocalLoginConfig {
   databaseUrl: string;
   otpSecret: string;
   homeUrl: string;
+  /** The Admin console (IDENTITY_ADMIN_CONSOLE_URL), linked in an identity admin's header. Optional. */
+  adminConsoleUrl?: string;
   /** The first admin's identities, connected only while no admin is. Empty when unset. */
   bootstrapAdmin: Identity[];
   passkeys: boolean;
@@ -153,6 +155,7 @@ export async function loadConfig(env: Env = process.env): Promise<IdentityConfig
     IDENTITY_ISSUER: issuer,
     ...(login.method === "hub" ? { IDENTITY_HUB_CONTINUE_URL: login.hubContinueUrl } : {}),
     ...(login.method === "local" ? { IDENTITY_HOME_URL: login.homeUrl } : {}),
+    ...(login.method === "local" && login.adminConsoleUrl ? { IDENTITY_ADMIN_CONSOLE_URL: login.adminConsoleUrl } : {}),
   });
 
   const clientsFile = required(env, "IDENTITY_CLIENTS_FILE");
@@ -235,6 +238,19 @@ export function parseLocalLogin(env: Env, opts: { local: boolean }): LocalLoginC
   if (home.protocol !== "https:" && !(opts.local && isLoopbackHost(home.hostname)))
     throw new ConfigError("IDENTITY_HOME_URL must be https");
 
+  let adminConsoleUrl: string | undefined;
+  if (env.IDENTITY_ADMIN_CONSOLE_URL) {
+    let admin: URL;
+    try {
+      admin = new URL(env.IDENTITY_ADMIN_CONSOLE_URL);
+    } catch {
+      throw new ConfigError("IDENTITY_ADMIN_CONSOLE_URL must be a URL");
+    }
+    if (admin.protocol !== "https:" && !(opts.local && isLoopbackHost(admin.hostname)))
+      throw new ConfigError("IDENTITY_ADMIN_CONSOLE_URL must be https");
+    adminConsoleUrl = admin.href;
+  }
+
   const bootstrapAdmin: Identity[] = [];
   if (env.IDENTITY_BOOTSTRAP_ADMIN_EMAIL) {
     const email = normalizeEmail(env.IDENTITY_BOOTSTRAP_ADMIN_EMAIL);
@@ -314,6 +330,7 @@ export function parseLocalLogin(env: Env, opts: { local: boolean }): LocalLoginC
     databaseUrl: required(env, "IDENTITY_DATABASE_URL"),
     otpSecret,
     homeUrl: home.href,
+    ...(adminConsoleUrl ? { adminConsoleUrl } : {}),
     bootstrapAdmin,
     passkeys: methods.has("passkey"),
     email,

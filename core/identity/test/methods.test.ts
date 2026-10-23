@@ -297,6 +297,12 @@ describe("local sign-in config", () => {
     ]);
   });
 
+  it("takes the Admin console's URL when set, and none otherwise", () => {
+    expect(parseLocalLogin(base, { local: false }).adminConsoleUrl).toBeUndefined();
+    const c = parseLocalLogin({ ...base, IDENTITY_ADMIN_CONSOLE_URL: "https://admin.asafarim.site" }, { local: false });
+    expect(c.adminConsoleUrl).toBe("https://admin.asafarim.site/");
+  });
+
   it("refuses bad settings", () => {
     const bad = (over: Record<string, string | undefined>) => () =>
       parseLocalLogin({ ...base, ...over }, { local: false });
@@ -307,6 +313,7 @@ describe("local sign-in config", () => {
     expect(bad({ IDENTITY_SMTP_PASSWORD: undefined })).toThrow(/both or neither/);
     expect(bad({ IDENTITY_SMTP_FROM: "nobody" })).toThrow(/IDENTITY_SMTP_FROM/);
     expect(bad({ IDENTITY_HOME_URL: "http://asafarim.site/" })).toThrow(/https/);
+    expect(bad({ IDENTITY_ADMIN_CONSOLE_URL: "http://admin.asafarim.site/" })).toThrow(/IDENTITY_ADMIN_CONSOLE_URL/);
     expect(bad({ IDENTITY_EMAIL_PROVIDER: "dev-log" })).toThrow(/development/);
   });
 });
@@ -351,6 +358,7 @@ describe("pages", () => {
     expect(html.match(/name="csrf" value="tok"/g)!.length).toBe(html.match(/<form /g)!.length);
     expect(html).not.toContain("11111111-1111-1111-1111-111111111111/revoke");
     expect(html).toContain('<a href="/admin" aria-current="page">Connections</a>');
+    expect(html).not.toContain("Admin console"); // none configured
   });
 
   it("every page has the header (brand to the OS home), the favicon and the footer: no dead ends", () => {

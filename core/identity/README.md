@@ -136,6 +136,7 @@ With `IDENTITY_LOGIN_METHOD=sms`:
 | `IDENTITY_SMS_DAILY_LIMIT`       | default `200`: SMS per 24 h, all numbers together (a cost cap)                                                         |
 | `IDENTITY_HOME_URL`              | where a sign-in that didn't come from an app goes (the QR code's destination); https, default `https://asafarim.site/` |
 | `IDENTITY_BOOTSTRAP_ADMIN_PHONE` | optional: the first admin's number, used only while no admin is connected (above)                                      |
+| `IDENTITY_ADMIN_CONSOLE_URL`     | optional: the Admin console, linked in an identity admin's header (it checks `core.admin` itself)                      |
 
 All of these live in the deployment's **encrypted** env file. A missing or malformed variable stops the service at startup with the variable's name (never its value).
 

@@ -74,6 +74,8 @@ export interface SignInDeps {
   issuer: string;
   /** Where a sign-in that didn't come from an app continues (the QR code's destination). */
   homeUrl: string;
+  /** The Admin console, linked in an identity admin's header. Default: none. */
+  adminConsoleUrl?: string;
   /** The apps the account page offers (the named clients). Default: none. */
   apps?: readonly AppLink[];
   /** HMAC key for codes, rate-limit keys and audit handles (IDENTITY_OTP_SECRET). */
@@ -607,6 +609,8 @@ export function createSignIn(d: SignInDeps): SignIn {
       label: me.principal.label,
       initials: initialsOf(me.principal.label),
       connected: me.principal.connection === "active",
+      // The home page offers the Admin console to an identity admin (the console checks core.admin itself).
+      admin: me.principal.isAdmin && me.principal.connection === "active",
     });
   }
 
@@ -679,6 +683,7 @@ export function createSignIn(d: SignInDeps): SignIn {
         label: me.principal.label,
         connected: me.principal.connection === "active",
         isAdmin: me.principal.isAdmin && me.principal.connection === "active",
+        ...(d.adminConsoleUrl ? { adminConsoleUrl: d.adminConsoleUrl } : {}),
         passkeys: d.passkeys ? await d.store.passkeysOf(me.principal.id) : [],
         ...(done === "removed" ? { notice: "Passkey removed." } : {}),
       }),
@@ -777,6 +782,7 @@ export function createSignIn(d: SignInDeps): SignIn {
         requests,
         connections,
         audit: recent,
+        ...(d.adminConsoleUrl ? { adminConsoleUrl: d.adminConsoleUrl } : {}),
         ...(done && NOTICES[done] ? { notice: NOTICES[done] } : {}),
         ...(error ? { error } : {}),
       }),
