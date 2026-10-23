@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { AdminLogo } from "@/components/AdminLogo";
 import { signIn } from "@/lib/auth";
 import { adminState } from "@/lib/session";
 
@@ -13,6 +14,9 @@ export default async function SignIn() {
   if ((await adminState()).state === "ok") redirect("/admin");
   return (
     <main className="center" id="main">
+      <div className="center-mark">
+        <AdminLogo size={72} />
+      </div>
       <h1>ASafariM OS Admin</h1>
       <div className="card">
         <p>Sign in with your ASafariM account. Only platform administrators can use the console.</p>

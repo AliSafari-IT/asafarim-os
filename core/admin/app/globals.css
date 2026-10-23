@@ -1,12 +1,15 @@
 :root {
   color-scheme: light dark;
-  --bg: #f6f4ef;
-  --card: #ffffff;
-  --ink: #1d1b16;
-  --muted: #5d584d;
-  --accent: #6d28d9;
-  --accent-ink: #ffffff;
-  --line: #e4dfd3;
+  /* The ASafariM brand tokens, as on asafarim.site (core/site) and id.asafarim.site. */
+  --bg: #f6f1e7;
+  --card: #fdfaf3;
+  --ink: #211d18;
+  --muted: #6e6557;
+  --accent: #9f4a07;
+  --accent-ink: #fdfaf3;
+  --accent-soft: rgba(180, 83, 9, 0.1);
+  --accent-glow: #d97706;
+  --line: #e4dccb;
   --bad: #b91c1c;
   --good: #166534;
   --warn: #92400e;
@@ -14,13 +17,15 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #15130f;
-    --card: #1f1c17;
-    --ink: #f1ece2;
-    --muted: #b3ab9b;
-    --accent: #a78bfa;
-    --accent-ink: #15130f;
-    --line: #37322a;
+    --bg: #17130d;
+    --card: #201a12;
+    --ink: #ece3d5;
+    --muted: #a99e8c;
+    --accent: #f59e0b;
+    --accent-ink: #1c1917;
+    --accent-soft: rgba(245, 158, 11, 0.12);
+    --accent-glow: #fbbf24;
+    --line: #3a3127;
     --bad: #f87171;
     --good: #86efac;
     --warn: #fcd34d;
@@ -32,7 +37,8 @@
 }
 body {
   margin: 0;
-  background: var(--bg);
+  min-height: 100vh;
+  background: radial-gradient(48rem 30rem at 12% -10%, var(--accent-soft), transparent 65%), var(--bg);
   color: var(--ink);
   font:
     16px/1.5 system-ui,
@@ -81,6 +87,25 @@ body {
 .top h1 {
   font-size: 1.15rem;
   margin: 0;
+}
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.wordmark > span > span {
+  color: var(--accent);
+}
+.center-mark {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+.center h1 {
+  text-align: center;
 }
 .top nav ul {
   display: flex;
@@ -369,4 +394,141 @@ dialog.confirm .actions {
 }
 .backup-check {
   margin-top: 4px;
+}
+
+/* The Admin console's mark (components/AdminLogo.tsx). Every motion stops with "reduce motion". */
+.admin-logo {
+  flex: none;
+  overflow: visible;
+}
+.admin-logo-stop-a {
+  stop-color: var(--accent-glow);
+}
+.admin-logo-stop-b {
+  stop-color: var(--accent);
+}
+.admin-logo-pulse {
+  fill: none;
+  stroke: var(--accent-glow);
+  stroke-width: 1.5;
+  opacity: 0;
+  transform-origin: 24px 24px;
+  animation: admin-logo-pulse 3.6s ease-out 1s infinite;
+}
+.admin-logo-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-opacity: 0.4;
+  stroke-width: 1.2;
+  stroke-dasharray: 2.5 4.5;
+  transform-origin: 24px 24px;
+  animation: admin-logo-spin 40s linear infinite reverse;
+}
+.admin-logo-orbit {
+  fill: var(--accent-glow);
+  transform-origin: 24px 24px;
+  animation: admin-logo-spin 7s linear infinite;
+}
+.admin-logo-orbit-slow {
+  fill: var(--accent);
+  opacity: 0.65;
+  animation-duration: 12s;
+  animation-direction: reverse;
+}
+.admin-logo-core {
+  transform-origin: 24px 24px;
+  animation:
+    admin-logo-arrive 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both,
+    admin-logo-breathe 5s ease-in-out 0.7s infinite;
+}
+.admin-logo-sheen {
+  transform: translateX(0) skewX(-18deg);
+  animation: admin-logo-sheen 7s ease-in-out 1.4s infinite;
+}
+.admin-logo-tracks {
+  fill: none;
+  stroke: var(--accent-ink);
+  stroke-opacity: 0.45;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.admin-logo-knob {
+  fill: var(--accent-ink);
+  animation: admin-logo-slide 4.8s ease-in-out infinite alternate;
+}
+.admin-logo-knob-1 {
+  --from: -3.5px;
+  --to: 7px;
+}
+.admin-logo-knob-2 {
+  --from: 3.5px;
+  --to: -7px;
+  animation-duration: 3.9s;
+  animation-delay: -1.2s;
+}
+.admin-logo-knob-3 {
+  --from: -5.5px;
+  --to: 6px;
+  animation-duration: 5.6s;
+  animation-delay: -2.4s;
+}
+/* Hovering the console's name livens the mark up, like asafarim.site's. */
+.wordmark:hover .admin-logo-orbit {
+  animation-duration: 1.8s;
+}
+.wordmark:hover .admin-logo-knob {
+  animation-duration: 1.2s;
+}
+@keyframes admin-logo-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+@keyframes admin-logo-pulse {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.75);
+  }
+}
+@keyframes admin-logo-arrive {
+  from {
+    opacity: 0;
+    transform: scale(0.55) rotate(-12deg);
+  }
+}
+@keyframes admin-logo-breathe {
+  50% {
+    transform: scale(1.04);
+  }
+}
+@keyframes admin-logo-sheen {
+  0% {
+    transform: translateX(0) skewX(-18deg);
+  }
+  22%,
+  100% {
+    transform: translateX(52px) skewX(-18deg);
+  }
+}
+@keyframes admin-logo-slide {
+  from {
+    transform: translateX(var(--from));
+  }
+  to {
+    transform: translateX(var(--to));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-logo *,
+  .admin-logo-sheen {
+    animation: none !important;
+  }
+  .admin-logo-sheen {
+    display: none;
+  }
 }

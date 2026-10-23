@@ -1,3 +1,4 @@
+import { AdminLogo } from "@/components/AdminLogo";
 import { signOut } from "@/lib/auth";
 
 async function signOutAction() {
@@ -9,6 +10,9 @@ async function signOutAction() {
 export default function Forbidden() {
   return (
     <main className="center" id="main">
+      <div className="center-mark">
+        <AdminLogo size={72} />
+      </div>
       <h1>403: not allowed</h1>
       <div className="card" role="alert">
         <p>
