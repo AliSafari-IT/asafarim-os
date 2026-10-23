@@ -1,4 +1,6 @@
 import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import Link from "next/link";
+import { AdminLogo } from "@/components/AdminLogo";
 import { Nav } from "@/components/Nav";
 import { SignOutIcon } from "@/components/SignOutIcon";
 import { signOut } from "@/lib/auth";
@@ -29,7 +31,14 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <div className="brand">
             {/* The OS's app switcher: Admin isn't an app in the launcher, so its face is the fallback. */}
             <AppSwitcher apps={apps} current="admin" fallback={{ name: "Admin", glyph: "AD" }} />
-            <h1>ASafariM OS Admin</h1>
+            <h1>
+              <Link className="wordmark" href="/admin">
+                <AdminLogo />
+                <span>
+                  ASafariM OS <span>Admin</span>
+                </span>
+              </Link>
+            </h1>
           </div>
           <Nav />
           <div className="who" data-testid="who">

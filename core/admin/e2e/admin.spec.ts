@@ -115,6 +115,11 @@ test("signed out, /admin sends you to sign in; a signed-in non-admin gets a 403"
   await page.goto(`${ADMIN}/admin`);
   await expect(page).toHaveURL(/\/signin$/);
   await expect(page.getByRole("heading", { name: "ASafariM OS Admin" })).toBeVisible();
+  // The console's own mark and favicon (SVG, with the .ico and Apple touch icon as fallbacks).
+  await expect(page.getByTestId("admin-logo")).toBeVisible();
+  await expect(page.locator('link[rel="icon"][type="image/svg+xml"]')).toHaveCount(1);
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveCount(1);
+  expect((await page.request.get(`${ADMIN}/favicon.ico`)).status()).toBe(200);
 
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.getByRole("button", { name: /Dev Member/ }).click();
