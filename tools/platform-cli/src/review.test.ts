@@ -862,6 +862,65 @@ describe("platform manifest review", () => {
     expect(review(["--strict"]).ok).toBe(false);
   });
 
+  it("reports a public path the gateway still guards with a permission, once per glob", () => {
+    const app = (publicPaths: string[], routes: unknown[]) =>
+      manifest({ auth: { client: "oidc", publicPaths }, routes });
+    const guard = (p: string, permission: string, over: Record<string, unknown> = {}) => ({
+      path: p,
+      permission,
+      ...over,
+    });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put("apps/shop/app/orders/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/orders/[id]/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/about/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/api/orders/route.ts", `import "@/lib/x";\nexport function GET() {}\nexport function POST() {}`);
+
+    // "/**" public with guarded API routes (a partial overlap), a guard limited by methods, no overlap,
+    // and a guard that covers "/orders" but not "/orders/x"
+    writeApp(app(["/api/health", "/**"], [guard("/api/orders", "shop.orders.read")]));
+    expect(kinds()).toEqual([]);
+    writeApp(app(["/api/health", "/api/orders"], [guard("/api/orders", "shop.orders.write", { methods: ["POST"] })]));
+    expect(kinds()).toEqual([]);
+    writeApp(app(["/api/health", "/about"], [guard("/orders/**", "shop.orders.read")]));
+    expect(kinds()).toEqual([]);
+    writeApp(app(["/api/health", "/orders/**"], [guard("/orders", "shop.orders.read")]));
+    expect(kinds()).toEqual([]);
+    // a hidden route (expose: false) answers 404, not sign-in
+    writeApp(
+      app(["/api/health", "/orders"], [guard("/orders", "shop.orders.read"), { path: "/orders", expose: false }]),
+    );
+    expect(kinds()).toEqual([]);
+
+    // fully covered: exactly, through "/**", and by two routes; the first glob listed twice
+    writeApp(
+      app(
+        ["/api/health", "/api/orders", "/api/orders", "/orders/*", "/orders/**"],
+        [
+          guard("/api/orders", "shop.orders.read"),
+          guard("/orders", "shop.orders.write"),
+          guard("/orders/**", "shop.orders.read"),
+        ],
+      ),
+    );
+    const out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "public-path-guarded /api/orders",
+      "public-path-guarded /orders/*",
+      "public-path-guarded /orders/**",
+    ]);
+    const [one, , two] = out.reviews[0]!.findings as unknown as { message: string; file?: string }[];
+    expect(one!.file).toBeUndefined();
+    expect(one!.message).toMatch(
+      /^auth\.publicPaths lists \/api\/orders, but manifest routes put the permission shop\.orders\.read on every path it covers/,
+    );
+    expect(two!.message).toMatch(/put the permissions shop\.orders\.read, shop\.orders\.write on every path/);
+    expect(review().lines.join("\n")).toMatch(/\[public-path-guarded\] auth\.publicPaths lists \/orders\/\*\*/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| public-path-guarded | /api/orders |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+  });
+
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
     writeApp(
       manifest({

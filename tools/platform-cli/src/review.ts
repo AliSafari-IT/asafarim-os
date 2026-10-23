@@ -62,6 +62,11 @@
  *   `auth.publicPaths` glob covers `/`, the page the tile opens. The manifest contradicts itself: a
  *   signed-out visitor is sent to sign-in. Make `/` public, or set the tile to `"authenticated"`
  *   (with `requiresAccountToUse` for a site whose other pages are public).
+ * - `public-path-guarded`: an `auth.publicPaths` glob where every path it covers is behind a manifest
+ *   route with a `permission` for every method (no `methods` limit, not `expose: false`). core-api's
+ *   gateway doesn't read `publicPaths`, so it still asks for the permission there, and a signed-out
+ *   visitor gets 401 or sign-in. The manifest contradicts itself. Partial overlaps (`/**` public with
+ *   guarded API routes) are a valid design and aren't reported.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -94,7 +99,8 @@ export type FindingKind =
   | "permission-not-granted"
   | "nav-target-missing"
   | "public-path-not-served"
-  | "launcher-not-public";
+  | "launcher-not-public"
+  | "public-path-guarded";
 
 export interface Finding {
   app: string;
@@ -922,6 +928,28 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
       kind: "launcher-not-public",
       subject: "ui.launcher.access",
       message: `the launcher tile says anyone may open ${app} (access "public"), but no auth.publicPaths entry covers /, so a signed-out visitor is sent to sign-in (add "/" to auth.publicPaths, or set access to "authenticated")`,
+    });
+  }
+
+  // 18. A public path is reachable without sign-in: not every path it covers may need a permission at
+  // the gateway, which doesn't read `publicPaths`. Only a glob the guarded routes cover entirely counts.
+  const guards = routes.filter((r) => r.expose !== false && r.permission !== undefined && !r.methods);
+  const hiders = routes.filter((r) => r.expose === false).map((r) => globRegex(r.path));
+  for (const glob of [...new Set(manifest.auth.publicPaths)]) {
+    const by = new Set<string>();
+    const guarded = globSamples(glob).every((p) => {
+      if (hiders.some((re) => re.test(p))) return false;
+      const hit = guards.filter((r) => globRegex(r.path).test(p));
+      for (const r of hit) by.add(r.permission!);
+      return hit.length > 0;
+    });
+    if (!guarded) continue;
+    const perms = [...by].sort();
+    findings.push({
+      app,
+      kind: "public-path-guarded",
+      subject: glob,
+      message: `auth.publicPaths lists ${glob}, but manifest routes put ${perms.length === 1 ? "the permission" : "the permissions"} ${perms.join(", ")} on every path it covers, and the gateway asks for ${perms.length === 1 ? "it" : "them"} whatever publicPaths says, so a signed-out visitor gets 401 or sign-in (remove the entry, or take the permission off the route)`,
     });
   }
 
