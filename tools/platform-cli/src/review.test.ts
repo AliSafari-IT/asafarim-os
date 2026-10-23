@@ -891,6 +891,24 @@ describe("platform manifest review", () => {
       app(["/api/health", "/orders"], [guard("/orders", "shop.orders.read"), { path: "/orders", expose: false }]),
     );
     expect(kinds()).toEqual([]);
+    // a wildcard only partly guarded: one concrete child, or fixed depths under "/**"
+    writeApp(app(["/api/health", "/orders/*"], [guard("/orders/1", "shop.orders.read")]));
+    expect(kinds()).toEqual([]);
+    writeApp(
+      app(
+        ["/api/health", "/orders/**"],
+        [guard("/orders", "shop.orders.read"), guard("/orders/*", "shop.orders.read")],
+      ),
+    );
+    expect(kinds()).toEqual([]);
+    // a route hidden only for POST still leaves GET behind the permission
+    writeApp(
+      app(
+        ["/api/health", "/orders"],
+        [guard("/orders", "shop.orders.read"), { path: "/orders", expose: false, methods: ["POST"] }],
+      ),
+    );
+    expect(kinds()).toEqual(["public-path-guarded /orders"]);
 
     // fully covered: exactly, through "/**", and by two routes; the first glob listed twice
     writeApp(
@@ -914,7 +932,7 @@ describe("platform manifest review", () => {
     expect(one!.message).toMatch(
       /^auth\.publicPaths lists \/api\/orders, but manifest routes put the permission shop\.orders\.read on every path it covers/,
     );
-    expect(two!.message).toMatch(/put the permissions shop\.orders\.read, shop\.orders\.write on every path/);
+    expect(two!.message).toMatch(/put a permission \(shop\.orders\.read, shop\.orders\.write\) on every path/);
     expect(review().lines.join("\n")).toMatch(/\[public-path-guarded\] auth\.publicPaths lists \/orders\/\*\*/);
     expect(review(["--markdown"]).lines[0]!).toContain("| public-path-guarded | /api/orders |");
     expect(review().ok).toBe(true);
