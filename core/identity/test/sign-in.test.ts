@@ -286,9 +286,9 @@ describe("local sign-in", () => {
   async function passkeyLogin(b: Browser, key: SoftPasskey, over: { origin?: string; tamper?: boolean } = {}) {
     const csrf = csrfOf((await go(b, "GET", "/login")).body);
     const headers = { "x-csrf-token": csrf };
-    const options = JSON.parse((await go(b, "POST", "/passkeys/login/options", undefined, { json: {}, headers })).body);
+    const options = JSON.parse((await go(b, "POST", "/login/passkey/options", undefined, { json: {}, headers })).body);
     expect(options.userVerification).toBe("required");
-    return go(b, "POST", "/passkeys/login/verify", undefined, { json: key.get(options, over), headers });
+    return go(b, "POST", "/login/passkey/verify", undefined, { json: key.get(options, over), headers });
   }
 
   it("a signed-in person adds a passkey, then signs in with it and no code", async () => {
@@ -320,10 +320,10 @@ describe("local sign-in", () => {
     const c = new Browser();
     const csrf = csrfOf((await go(c, "GET", "/login")).body);
     const headers = { "x-csrf-token": csrf };
-    const options = JSON.parse((await go(c, "POST", "/passkeys/login/options", undefined, { json: {}, headers })).body);
+    const options = JSON.parse((await go(c, "POST", "/login/passkey/options", undefined, { json: {}, headers })).body);
     const answer = key.get(options);
-    expect((await go(c, "POST", "/passkeys/login/verify", undefined, { json: answer })).status).toBe(403);
-    expect((await go(c, "POST", "/passkeys/login/verify", undefined, { json: answer, headers })).status).toBe(200);
+    expect((await go(c, "POST", "/login/passkey/verify", undefined, { json: answer })).status).toBe(403);
+    expect((await go(c, "POST", "/login/passkey/verify", undefined, { json: answer, headers })).status).toBe(200);
     expect(store.events().filter((e) => e === "passkey.failed").length).toBeGreaterThan(1);
   });
 

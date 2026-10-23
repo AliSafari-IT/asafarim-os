@@ -66,6 +66,7 @@ import {
 
 export const AUTH_COOKIE = "identity_auth";
 export const FLOW_COOKIE = "identity_login";
+/** The browser sends the flow cookie only under this path, so every route that reads the flow lives under /login. */
 const FLOW_COOKIE_PATH = "/login";
 
 export interface SignInDeps {
@@ -885,10 +886,10 @@ export function createSignIn(d: SignInDeps): SignIn {
         case "/account/passkeys/remove":
           await removePasskey(ctx);
           return true;
-        case "/passkeys/login/options":
+        case "/login/passkey/options":
           await passkeyLoginOptions(ctx);
           return true;
-        case "/passkeys/login/verify":
+        case "/login/passkey/verify":
           await passkeyLoginVerify(ctx);
           return true;
         case "/passkeys/register/options":
