@@ -103,7 +103,7 @@ services:
     # as ghcr.io/alisafari-it/breinhap:site-<full commit sha>. The sha is pinned HERE: to ship a new version of
     # the page, change it to the sha of the newest successful "Site image" run in breinhap, in a PR (the deploy
     # after that merge pulls it). Like os-site, it holds no secrets.
-    image: ghcr.io/alisafari-it/breinhap:site-0000000000000000000000000000000000000000
+    image: ghcr.io/alisafari-it/breinhap:site-5d53fe63d5c24f109c12616e39ddfd15cd0f07c4
     restart: unless-stopped
     read_only: true
     tmpfs:
