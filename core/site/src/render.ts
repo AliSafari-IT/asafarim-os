@@ -55,6 +55,7 @@ const anchor = (href: string, label: string, extra = "") =>
 export const IDENTITY_ORIGIN = "https://id.asafarim.site";
 
 export const APP_LINKS = {
+  breinhap: { label: "Breinhap", href: "https://breinhap.asafarim.site/en/" },
   docs: { label: "Docs", href: "https://docs.asafarim.site/" },
   signIn: { label: "Sign in", href: "https://id.asafarim.site/login" },
 } as const;
@@ -93,6 +94,7 @@ function renderTopbar(themeToggle: string): string {
     <nav class="topbar" aria-label="Main">
       <a class="brand" href="./">${BRAND_MARK}<span class="brand-name">ASafariM <span>OS</span></span></a>
       <ul>
+        <li>${anchor(APP_LINKS.breinhap.href, APP_LINKS.breinhap.label)}</li>
         <li>${anchor(APP_LINKS.docs.href, APP_LINKS.docs.label)}</li>
 ${themeToggle ? `        <li>${themeToggle.trim()}</li>\n` : ""}        <li id="account">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
       </ul>
@@ -174,6 +176,20 @@ function renderRoadmap(progress: Progress): string {
       </section>`;
 }
 
+/** Products by ASafariM outside the OS's own apps. Breinhap's page is in Dutch with an English version; this page is English. */
+function renderMore(): string {
+  return `
+      <section id="more" aria-labelledby="more-title">
+        <h2 id="more-title">More from ASafariM</h2>
+        <ul class="roadmap">
+          <li>
+            <span class="tag">Android</span>
+            <div><h3>${anchor(APP_LINKS.breinhap.href, "Breinhap")}</h3><p>A study app for students in their 3rd year of secondary school in Flanders, designed with ADHD and AuDHD in mind: missions of 2 to 6 minutes, always in the same four steps. In development, coming to Google Play.</p></div>
+          </li>
+        </ul>
+      </section>`;
+}
+
 /** The whole page. */
 export function renderPage(progress: Progress, options: RenderOptions): string {
   const links = progress.links.map((l) => anchor(l.href, l.label, ' class="btn"')).join("\n          ");
@@ -210,10 +226,10 @@ export function renderPage(progress: Progress, options: RenderOptions): string {
           ${links}
       </nav>${renderAccess()}
     </header>
-    <main>${renderShipped(progress)}${renderScreenshots(progress, options.imageSizes)}${renderRoadmap(progress)}
+    <main>${renderShipped(progress)}${renderScreenshots(progress, options.imageSizes)}${renderRoadmap(progress)}${renderMore()}
     </main>
     <footer>
-      <p>ASafariM OS · ${anchor(progress.repo, "Source on GitHub")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
+      <p>ASafariM OS · ${anchor(progress.repo, "Source on GitHub")} · ${anchor(APP_LINKS.breinhap.href, "Breinhap")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
     </footer>
   </body>
 </html>
