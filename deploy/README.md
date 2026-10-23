@@ -10,7 +10,7 @@ holds a plaintext secret.
 
 | File                            | What it is                                                                                                                                |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `deploy/compose.prod.yml`       | `identity`, `os-redis`, `os-site` and `os-docs`, compose project `asafarim-os`.                                                           |
+| `deploy/compose.prod.yml`       | `identity`, `os-redis`, `os-site`, `os-docs` and `breinhap-site`, compose project `asafarim-os`.                                          |
 | `deploy/vps-deploy.sh`          | The deploy. Run it from the repository folder on the VPS.                                                                                 |
 | `deploy/redeploy.sh`            | `pnpm redeploy`: redeploy the landing page and docs with the newest builds, with no shas to look up.                                      |
 | `deploy/ci-deploy.sh`           | The one command the Deploy workflow's SSH key may run (`deploy <sha>`), as a forced command. It hands over to `redeploy.sh <sha>`.        |
@@ -63,7 +63,8 @@ nothing of identity's is checked, started or touched.
 - The repository is checked out on the VPS (normally `/var/repos/asafarim-os`). `age` is installed and `.age/key.txt`
   exists (mode 600): the docs env needs them. `identity_db` and `deploy/identity/clients.json` are not needed.
 - The shared edge is installed (`/var/repos/edge/scripts/edge-deploy-site.sh` exists) and `edge_net` exists.
-- The `os-site` and `os-docs` images can be pulled: the packages are public, or `docker login ghcr.io` was run on the VPS.
+- The `os-site`, `os-docs` and `breinhap` images can be pulled: the packages are public, or `docker login ghcr.io` was run
+  on the VPS.
 - The `docs` DNS record above exists (otherwise everything else works, and `docs.asafarim.site` gets its certificate
   once it does).
 - `asafarim.site` and `www.asafarim.site` are no longer in asafarim-platform's `asafarim-com.caddy` **and**
@@ -214,10 +215,29 @@ deploy, since identity runs: it starts `os-admin` and waits for its `/api/health
 `deploy/core-api/admin.sh apps` and `grants <account id>` show the state. The admin token is read from `.env.core-api`
 and never printed.
 
+## breinhap.asafarim.site
+
+`breinhap-site` serves the static landing page of Breinhap, an Android study app. Its source lives in the private
+repository [AliSafari-IT/breinhap](https://github.com/AliSafari-IT/breinhap) (`apps/site`); that repository's "Site
+image" workflow publishes `ghcr.io/alisafari-it/breinhap:site-<sha>` on every push to its main. This stack only runs
+it: nginx-unprivileged on port 8080, read-only, no capabilities, 32 MB, on `edge_net` only. The Caddy blocks in both
+site files are identical and carry the same strict CSP as the image's own nginx.
+
+- **The image is pinned in `compose.prod.yml`**, not passed as a sha to the scripts, because its commits live in
+  another repository. To ship a new version of the page: wait for the "Site image" run on breinhap's main, then open a
+  PR here that replaces the sha in `image: ghcr.io/alisafari-it/breinhap:site-<sha>`. `compose.prod.test.mjs` fails
+  unless it is a full 40-character sha. Once merged, the automatic deploy (or `pnpm redeploy`) pulls and starts it.
+- **DNS**: an `A` record `breinhap` → `82.25.116.73` in the `asafarim.site` zone. Without it everything else works, and
+  the edge gets the certificate once it exists.
+- **Pull access**: the `breinhap` GHCR package is private by default. Make the package public (Package settings →
+  Change visibility), or run `docker login ghcr.io` on the VPS with a token that has `read:packages`.
+- The deploy waits up to 30 seconds for its `/healthz` after `os-site`'s, in both modes.
+
 ## Networks: who can reach what
 
 - **`edge_net`** (shared by every stack): `identity` under the unique alias **`os-identity`**, `os-site` (alias
-  **`os-site`**, on no other network) and `os-docs` (alias **`os-docs`**). The edge's Caddy reaches them there. Redis,
+  **`os-site`**, on no other network), `os-docs` (alias **`os-docs`**) and `breinhap-site` (alias **`breinhap-site`**, on
+  no other network). The edge's Caddy reaches them there. Redis,
   core-api and its Postgres are never on it.
 - **`os_core`**: `os-core-api`, `os-postgres` and `os-docs` (the apps core-api serves). identity and `os-redis` are not
   on it.
