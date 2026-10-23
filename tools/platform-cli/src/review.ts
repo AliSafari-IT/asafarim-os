@@ -68,6 +68,13 @@
  *   visitor gets 401 or sign-in. The manifest contradicts itself. Partial overlaps (`/**` public with
  *   guarded API routes, `/orders/*` public with only `/orders/1` guarded) are a valid design and aren't
  *   reported, nor is a path a route hides (`expose: false`) for every method.
+ * - `subscription-not-published`: an `events.subscribes[].type` whose namespace names an app in this
+ *   repo (a valid `apps/<app>/platform.app.json`, the reviewed app included), when that app's
+ *   `events.publishes` doesn't list the type. The subscriber waits for an event that never comes
+ *   (core-api shows it as waiting for its publisher), usually after a version bump or a rename on the
+ *   publisher's side. When the publisher has the same type at another version, the message names it.
+ *   Publishers outside this repo and `core.*` types aren't checked. It reads every app's manifest,
+ *   also when only some ids are reviewed.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -101,7 +108,8 @@ export type FindingKind =
   | "nav-target-missing"
   | "public-path-not-served"
   | "launcher-not-public"
-  | "public-path-guarded";
+  | "public-path-guarded"
+  | "subscription-not-published";
 
 export interface Finding {
   app: string;
@@ -504,8 +512,27 @@ export function readsAllConfig(text: string): boolean {
   return /(?<![\w$])[\w$]*[Cc]onfig\s*\??\.\s*all\s*\(/.test(blankStrings(stripComments(text)));
 }
 
-/** Review one app folder. `rootDir` is only used to print file paths relative to the workspace. */
-export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string): AppReview {
+/**
+ * What each app in the repo publishes, by app id, for checks that look across apps
+ * (`subscription-not-published`). Only apps with a valid manifest are in it.
+ */
+export type Publishers = ReadonlyMap<string, readonly string[]>;
+
+/** An event type without its trailing `.v<N>`, so two versions of one type compare equal. */
+export function unversioned(type: string): string {
+  return type.replace(/\.v\d+$/, "");
+}
+
+/**
+ * Review one app folder. `rootDir` is only used to print file paths relative to the workspace;
+ * `publishers` is what the repo's apps publish (the reviewed app's own manifest always counts).
+ */
+export function reviewApp(
+  appDir: string,
+  manifest: AppManifest,
+  rootDir: string,
+  publishers: Publishers = new Map(),
+): AppReview {
   const app = manifest.id;
   const rel = (abs: string) => path.relative(rootDir, abs).split(path.sep).join("/");
   const findings: Finding[] = [];
@@ -955,6 +982,27 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
     });
   }
 
+  // A subscription to an app in this repo that doesn't publish the type: the subscriber waits forever.
+  const seenSubs = new Set<string>();
+  for (const sub of manifest.events?.subscribes ?? []) {
+    if (seenSubs.has(sub.type)) continue;
+    seenSubs.add(sub.type);
+    const owner = sub.type.slice(0, sub.type.indexOf("."));
+    if (owner === "core") continue;
+    const published = owner === app ? (manifest.events?.publishes ?? []).map((e) => e.type) : publishers.get(owner);
+    if (!published || published.includes(sub.type)) continue;
+    const base = unversioned(sub.type);
+    const others = published.filter((t) => unversioned(t) === base).sort();
+    findings.push({
+      app,
+      kind: "subscription-not-published",
+      subject: sub.type,
+      message: `subscribes to ${sub.type}, but ${owner}'s manifest doesn't publish it${
+        others.length > 0 ? ` (it publishes ${others.join(", ")})` : ""
+      }, so the subscription waits for an event that never comes (update the type, or drop the subscription)`,
+    });
+  }
+
   return { app, findings, handlers, plumbing };
 }
 
@@ -1126,22 +1174,44 @@ export function reviewCommand(args: string[], cwd: string, findRoot: () => strin
     return { ok: false, lines: [`✖ no apps/<id>/${MANIFEST_FILE} for: ${unknown.join(", ")}`] };
   }
 
-  const reviews: AppReview[] = [];
-  const errors: string[] = [];
-  for (const id of ids) {
+  // Every app's manifest is parsed and validated once, so cross-app checks see the apps not named too.
+  const parsed = new Map<string, { manifest: AppManifest } | { error: string }>();
+  for (const [id, text] of manifests) {
     let value: unknown;
     try {
-      value = JSON.parse(manifests.get(id)!);
+      value = JSON.parse(text);
     } catch (error) {
-      errors.push(`✖ apps/${id}/${MANIFEST_FILE}: not JSON (${(error as Error).message})`);
+      parsed.set(id, { error: `✖ apps/${id}/${MANIFEST_FILE}: not JSON (${(error as Error).message})` });
       continue;
     }
     const result = validateManifest(value);
-    if (!result.ok) {
-      errors.push(`✖ apps/${id}/${MANIFEST_FILE}: not a valid manifest; run platform manifest validate first`);
+    parsed.set(
+      id,
+      result.ok
+        ? { manifest: result.manifest }
+        : { error: `✖ apps/${id}/${MANIFEST_FILE}: not a valid manifest; run platform manifest validate first` },
+    );
+  }
+  // Keyed by the manifest's own id: that is the namespace its event types carry.
+  const publishers = new Map<string, string[]>();
+  for (const entry of parsed.values()) {
+    if ("manifest" in entry) {
+      publishers.set(
+        entry.manifest.id,
+        (entry.manifest.events?.publishes ?? []).map((e) => e.type),
+      );
+    }
+  }
+
+  const reviews: AppReview[] = [];
+  const errors: string[] = [];
+  for (const id of ids) {
+    const entry = parsed.get(id)!;
+    if ("error" in entry) {
+      errors.push(entry.error);
       continue;
     }
-    reviews.push(reviewApp(path.join(appsDir, id), result.manifest, root));
+    reviews.push(reviewApp(path.join(appsDir, id), entry.manifest, root, publishers));
   }
 
   const findings = reviews.flatMap((r) => r.findings);

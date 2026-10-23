@@ -961,6 +961,76 @@ describe("platform manifest review", () => {
     expect(kinds()).toEqual(["event-handler-missing crm.lead.lost.v1"]);
   });
 
+  it("reports a subscription to a type its publisher in this repo doesn't publish", () => {
+    writeApp(
+      manifest({
+        events: {
+          publishes: [{ type: "shop.order.placed.v1", schema: "./events/placed.json" }],
+          subscribes: [
+            { type: "billing.invoice.paid.v1", handler: "/events/a" },
+            { type: "billing.invoice.void.v1", handler: "/events/a" },
+            { type: "billing.invoice.void.v1", handler: "/events/b" },
+            { type: "billing.refund.issued.v1", handler: "/events/a" },
+            { type: "crm.lead.won.v1", handler: "/events/a" },
+            { type: "core.app.activated.v1", handler: "/events/a" },
+            { type: "shop.order.placed.v1", handler: "/events/a" },
+            { type: "shop.order.shipped.v1", handler: "/events/a" },
+          ],
+        },
+      }),
+    );
+    put("apps/shop/events/placed.json", JSON.stringify({ type: "object" }));
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write"; "shop.order.placed.v1";`);
+    put("apps/shop/app/events/a/route.ts", `import "@/lib/x";\nexport function POST() {}`);
+    put("apps/shop/app/events/b/route.ts", `import "@/lib/x";\nexport function POST() {}`);
+    // billing publishes paid.v1 and void.v2; crm is not in this repo
+    put(
+      "apps/billing/platform.app.json",
+      JSON.stringify({
+        ...manifest({
+          id: "billing",
+          permissions: [],
+          roles: [],
+          events: {
+            publishes: [
+              { type: "billing.invoice.paid.v1", schema: "./events/paid.json" },
+              { type: "billing.invoice.void.v2", schema: "./events/void.json" },
+            ],
+          },
+        }),
+        runtime: { ...manifest().runtime, image: "billing" },
+      }),
+    );
+    // only shop is reviewed, but billing's manifest is read for what it publishes
+    expect(kinds(["shop"])).toEqual([
+      "subscription-not-published billing.invoice.void.v1",
+      "subscription-not-published billing.refund.issued.v1",
+      "subscription-not-published shop.order.shipped.v1",
+    ]);
+    const found = (JSON.parse(review(["shop", "--json"]).lines[0]!) as { reviews: AppReview[] }).reviews[0]!.findings;
+    expect(found[0]!.file).toBeUndefined();
+    expect(found[0]!.message).toMatch(
+      /subscribes to billing\.invoice\.void\.v1, but billing's manifest doesn't publish it \(it publishes billing\.invoice\.void\.v2\)/,
+    );
+    expect(found[1]!.message).not.toMatch(/it publishes/);
+    expect(review(["shop"]).lines.join("\n")).toMatch(/\[subscription-not-published\] subscribes to billing\.refund/);
+    expect(review(["shop", "--markdown"]).lines[0]!).toContain(
+      "| subscription-not-published | billing.invoice.void.v1 |",
+    );
+    expect(review(["shop"]).ok).toBe(true);
+    expect(review(["shop", "--strict"]).ok).toBe(false);
+  });
+
+  it("skips publishers whose manifest is broken or invalid", () => {
+    writeApp(manifest({ events: { subscribes: [{ type: "billing.invoice.paid.v1", handler: "/events/a" }] } }));
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put("apps/shop/app/events/a/route.ts", `import "@/lib/x";\nexport function POST() {}`);
+    put("apps/billing/platform.app.json", JSON.stringify({ id: "billing" }));
+    expect(kinds(["shop"])).toEqual([]);
+    put("apps/billing/platform.app.json", "{ not json");
+    expect(kinds(["shop"])).toEqual([]);
+  });
+
   it("is advisory unless --strict", () => {
     writeApp(manifest());
     expect(review().ok).toBe(true);
