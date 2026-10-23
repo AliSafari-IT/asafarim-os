@@ -57,6 +57,11 @@
  *   serves (overlap by the same rule as `route-not-served`). Nothing answers there today, but any
  *   handler added at that path later is public without anyone deciding it. It is usually left behind
  *   when a public page or health route moves.
+ * - `launcher-not-public`: an active app whose launcher tile says anyone may open it
+ *   (`ui.launcher.access: "public"`) while it signs users in (`auth.client: "oidc"`) and no
+ *   `auth.publicPaths` glob covers `/`, the page the tile opens. The manifest contradicts itself: a
+ *   signed-out visitor is sent to sign-in. Make `/` public, or set the tile to `"authenticated"`
+ *   (with `requiresAccountToUse` for a site whose other pages are public).
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -88,7 +93,8 @@ export type FindingKind =
   | "event-schema-unused"
   | "permission-not-granted"
   | "nav-target-missing"
-  | "public-path-not-served";
+  | "public-path-not-served"
+  | "launcher-not-public";
 
 export interface Finding {
   app: string;
@@ -900,6 +906,22 @@ export function reviewApp(appDir: string, manifest: AppManifest, rootDir: string
       kind: "public-path-not-served",
       subject: glob,
       message: `auth.publicPaths lists ${glob}, but no route file, page or public/ file serves it, so anything added there later is public without anyone deciding it (remove it, or point it at the path that moved)`,
+    });
+  }
+
+  // 17. A launcher tile open to everyone needs a public start page: the tile opens `/`.
+  const launcher = manifest.ui.launcher;
+  if (
+    launcher?.access === "public" &&
+    manifest.ui.status === "active" &&
+    manifest.auth.client === "oidc" &&
+    !manifest.auth.publicPaths.some((glob) => globRegex(glob).test("/"))
+  ) {
+    findings.push({
+      app,
+      kind: "launcher-not-public",
+      subject: "ui.launcher.access",
+      message: `the launcher tile says anyone may open ${app} (access "public"), but no auth.publicPaths entry covers /, so a signed-out visitor is sent to sign-in (add "/" to auth.publicPaths, or set access to "authenticated")`,
     });
   }
 
