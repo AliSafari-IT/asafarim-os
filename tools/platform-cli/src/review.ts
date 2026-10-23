@@ -82,6 +82,10 @@
  *   can't be reached through the gateway, usually because it was declared under a hidden prefix such
  *   as `/internal/**`. Partial overlaps aren't reported. Coverage is proved the same way as for
  *   `public-path-guarded`.
+ * - `nav-target-hidden`: a `ui.nav[].href` that an `expose: false` manifest route matches for `GET`
+ *   (no `methods` limit, or `methods` including `GET`). core-api's gateway answers 404 for a hidden
+ *   path, so the link is dead even when a page serves it, usually because the page sits under a hidden
+ *   prefix such as `/internal/**`. A trailing slash is dropped, as the gateway does.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -117,7 +121,8 @@ export type FindingKind =
   | "launcher-not-public"
   | "public-path-guarded"
   | "subscription-not-published"
-  | "route-hidden";
+  | "route-hidden"
+  | "nav-target-hidden";
 
 export interface Finding {
   app: string;
@@ -1020,6 +1025,24 @@ export function reviewApp(
       kind: "route-hidden",
       subject,
       message: `the manifest guards ${subject} with ${r.permission}, but ${[...by].sort().join(" and ")} ${by.size === 1 ? "hides" : "hide"} it (expose: false), and the gateway answers 404 there before it asks for any permission, so the route can't be reached (move it out of the hidden path, or drop it)`,
+    });
+  }
+
+  // 20. A nav link the gateway hides: it answers 404 for an `expose: false` path before the app sees it.
+  const getHiders = routes.filter(
+    (h) => h.expose === false && (!h.methods || (h.methods as readonly string[]).includes("GET")),
+  );
+  for (const href of [...new Set(manifest.ui.nav.map((n) => n.href))]) {
+    const target = href.replace(/\/+$/, "") || "/";
+    const by = getHiders.filter((h) => globRegex(h.path).test(target)).map((h) => h.path);
+    if (by.length === 0) continue;
+    const labels = manifest.ui.nav.filter((n) => n.href === href).map((n) => `"${n.label}"`);
+    const hiders = [...new Set(by)].sort();
+    findings.push({
+      app,
+      kind: "nav-target-hidden",
+      subject: href,
+      message: `the nav link ${labels.join(", ")} points to ${href}, but ${hiders.join(" and ")} ${hiders.length === 1 ? "hides" : "hide"} it (expose: false), so the gateway answers 404 there whatever serves it (move the page out of the hidden path, or fix the href)`,
     });
   }
 
