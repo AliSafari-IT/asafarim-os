@@ -16,6 +16,11 @@ const imageSizes = new Map([["apps.png", { width: 1280, height: 800 }]]);
 describe("renderPage", () => {
   const html = renderPage(progress, { imageSizes });
 
+  it("links the privacy, cookie and terms pages from its footer", () => {
+    const footer = html.slice(html.indexOf("<footer>"));
+    for (const slug of ["privacy", "cookies", "terms"]) expect(footer).toContain(`<a href="/${slug}">`);
+  });
+
   it("has a title, a meta description, a viewport and a language", () => {
     expect(html).toContain(`<title>${escapeHtml(TITLE)}</title>`);
     expect(html).toContain(`<meta name="description" content="${escapeHtml(DESCRIPTION)}" />`);

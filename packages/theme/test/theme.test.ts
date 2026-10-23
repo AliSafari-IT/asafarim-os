@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { parseTheme, THEME_COOKIE, themeFromCookieHeader } from "../src/index.ts";
-import { ThemeToggle } from "../src/react.tsx";
+import { LEGAL_LINKS, parseTheme, PRIVACY_EMAIL, THEME_COOKIE, themeFromCookieHeader } from "../src/index.ts";
+import { LegalFooter, ThemeToggle } from "../src/react.tsx";
 
 const file = (name: string) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
 const css = file("theme.css");
@@ -158,5 +158,20 @@ describe("reading the choice on a server", () => {
     expect(themeFromCookieHeader("x=1; asafarim-theme=light; y=2")).toBe("light");
     expect(themeFromCookieHeader("asafarim-theme=evil")).toBeUndefined();
     expect(themeFromCookieHeader(undefined)).toBeUndefined();
+  });
+});
+
+describe("the legal footer", () => {
+  it("links the privacy, cookie and terms pages on asafarim.site and the privacy contact", () => {
+    expect(LEGAL_LINKS.map((l) => l.href)).toEqual([
+      "https://asafarim.site/privacy",
+      "https://asafarim.site/cookies",
+      "https://asafarim.site/terms",
+    ]);
+    const html = renderToStaticMarkup(createElement(LegalFooter, { app: "Docs" }));
+    expect(html).toContain('<footer class="os-legal"');
+    expect(html).toContain("Docs · ASafariM OS");
+    for (const { href, label } of LEGAL_LINKS) expect(html).toContain(`<a href="${href}">${label}</a>`);
+    expect(html).toContain(`href="mailto:${PRIVACY_EMAIL}"`);
   });
 });

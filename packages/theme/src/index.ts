@@ -24,3 +24,16 @@ export function themeFromCookieHeader(header: string | null | undefined): Theme 
   }
   return undefined;
 }
+
+/**
+ * The OS's legal pages, served by asafarim.site (core/site/src/legal.ts). Every OS host links them in its footer:
+ * the Next.js apps with `<LegalFooter />` from `@asafarim/theme/react`, identity in its own page layout.
+ */
+export const LEGAL_LINKS = [
+  { label: "Privacy", href: "https://asafarim.site/privacy" },
+  { label: "Cookies", href: "https://asafarim.site/cookies" },
+  { label: "Terms", href: "https://asafarim.site/terms" },
+] as const;
+
+/** Where to write about personal data. */
+export const PRIVACY_EMAIL = "privacy@asafarim.site";

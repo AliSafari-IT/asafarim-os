@@ -33,6 +33,7 @@ main{flex:1;width:100%;display:flex;justify-content:center;align-items:flex-star
 .card{max-width:440px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px;
 box-shadow:var(--shadow)}
 .foot{border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}.foot p{margin:0}
+.foot .legal{display:flex;flex-wrap:wrap;gap:4px 14px}.foot .legal a{white-space:nowrap}
 h1{font-size:1.35rem;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted)}
 button,.button{display:inline-block;border:0;border-radius:10px;background:var(--accent);color:var(--accent-ink);font:inherit;
 font-weight:600;padding:10px 16px;cursor:pointer;text-decoration:none}
@@ -83,6 +84,18 @@ export interface PageOptions {
   themeToggle?: boolean;
 }
 
+/**
+ * The privacy, cookie and terms pages (served by asafarim.site, the same links as @asafarim/theme's LEGAL_LINKS),
+ * in every page's footer.
+ */
+const LEGAL_FOOTER = [
+  ["Privacy", "https://asafarim.site/privacy"],
+  ["Cookies", "https://asafarim.site/cookies"],
+  ["Terms", "https://asafarim.site/terms"],
+]
+  .map(([label, href]) => `<a href="${href}">${label}</a>`)
+  .join("");
+
 /** The header's "Home" link, first on every page. */
 export const homeLink = (): NavLink => ({ href: homeUrl, label: "Home" });
 
@@ -109,7 +122,7 @@ ${themeToggle ? '<script src="/static/theme.js"></script>' : ""}${head}<title>${
 <body><header class="os-topbar"><div class="topbar"><a class="brand" href="${home}">${BRAND_MARK}<span>ASafariM <span>OS</span></span></a>
 <div class="tools"><nav aria-label="Main"><ul class="nav">${links}</ul></nav>${themeToggle ? THEME_TOGGLE : ""}</div></div></header>
 <main><div class="card">${body}</div></main>
-<footer class="foot"><p>ASafariM OS · sign-in and accounts for ASafariM apps</p><p><a href="${home}">${escapeHtml(new URL(homeUrl).host)}</a></p></footer>
+<footer class="foot"><p>ASafariM OS · sign-in and accounts for ASafariM apps</p><p class="legal">${LEGAL_FOOTER}<a href="${home}">${escapeHtml(new URL(homeUrl).host)}</a></p></footer>
 </body></html>`;
 }
 

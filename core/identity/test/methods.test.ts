@@ -389,6 +389,9 @@ describe("pages", () => {
         expect(html).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml">');
         expect(html).toMatch(/<footer class="foot">[\s\S]*home\.example\.test<\/a>/);
         expect(html).toContain('<a href="https://home.example.test/">Home</a>');
+        for (const slug of ["privacy", "cookies", "terms"]) {
+          expect(html).toContain(`<a href="https://asafarim.site/${slug}">`);
+        }
       }
       expect(errorPage({ message: "m" })).toContain('class="button" href="https://home.example.test/"');
       expect(loggedOutPage()).toContain('class="button" href="https://home.example.test/"');
