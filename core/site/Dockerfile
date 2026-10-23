@@ -9,6 +9,7 @@ WORKDIR /repo/core/site
 COPY core/site/src ./src
 COPY core/site/public ./public
 COPY packages/app-manifest/schema/app-manifest.schema.json /repo/packages/app-manifest/schema/
+COPY packages/theme/theme.css packages/theme/theme.js packages/theme/toggle.html /repo/packages/theme/
 RUN node src/build.ts
 
 FROM nginxinc/nginx-unprivileged:1.29-alpine

@@ -1,4 +1,5 @@
 import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import { ThemeToggle } from "@asafarim/theme/react";
 import { forbidden, unauthorized } from "next/navigation";
 import { signOutAction } from "../actions";
 import { SignOutIcon } from "@/components/SignOutIcon";
@@ -88,7 +89,7 @@ export default async function NotesPage({
       <a className="skip" href="#all-notes">
         Skip to the notes
       </a>
-      <header className="topbar">
+      <header className="topbar os-topbar">
         <div className="brand">
           <AppSwitcher apps={apps} current="docs" fallback={{ name: "Docs", glyph: "DC" }} />
         </div>
@@ -96,6 +97,7 @@ export default async function NotesPage({
           <a className="button secondary" href="/">
             Documents
           </a>
+          <ThemeToggle />
           <span data-testid="who">
             <UserMenu
               name={session?.user?.name}

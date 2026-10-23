@@ -1,4 +1,5 @@
 import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import { ThemeToggle } from "@asafarim/theme/react";
 import Link from "next/link";
 import { AdminLogo } from "@/components/AdminLogo";
 import { Nav } from "@/components/Nav";
@@ -26,8 +27,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       <a className="skip" href="#main">
         Skip to content
       </a>
-      <div className="shell">
-        <header className="top">
+      <header className="top os-topbar">
+        <div className="top-inner">
           <div className="brand">
             {/* The OS's app switcher: Admin isn't an app in the launcher, so its face is the fallback. */}
             <AppSwitcher apps={apps} current="admin" fallback={{ name: "Admin", glyph: "AD" }} />
@@ -42,6 +43,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           </div>
           <Nav />
           <div className="who" data-testid="who">
+            <ThemeToggle />
             <UserMenu
               name={admin.name}
               email={admin.email}
@@ -55,7 +57,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               }
             />
           </div>
-        </header>
+        </div>
+      </header>
+      <div className="shell">
         <main id="main" tabIndex={-1}>
           {children}
         </main>

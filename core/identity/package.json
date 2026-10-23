@@ -16,6 +16,7 @@
     "keys": "node scripts/generate-keys.ts"
   },
   "dependencies": {
+    "@asafarim/theme": "workspace:*",
     "ioredis": "^6.0.0",
     "jose": "^6.2.12",
     "oidc-provider": "^9.12.2",

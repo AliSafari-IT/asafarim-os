@@ -1,4 +1,5 @@
 import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import { ThemeToggle } from "@asafarim/theme/react";
 import Link from "next/link";
 import { forbidden, unauthorized } from "next/navigation";
 import { refreshAction, signOutAction } from "./actions";
@@ -49,6 +50,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
   if (!g.ok) {
     return (
       <div className="signin">
+        <ThemeToggle className="corner-toggle" />
         <h1>Docs</h1>
         <p className="notice" role="status" data-testid="state">
           {g.body.error === "app_inactive" ? (
@@ -134,7 +136,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
       <a className="skip" href="#document">
         Skip to the document
       </a>
-      <header className="topbar">
+      <header className="topbar os-topbar">
         <div className="brand">
           {/* The OS's app switcher: Docs and every other app this person can open (core-api's launcher). */}
           <AppSwitcher apps={apps} current="docs" fallback={{ name: "Docs", glyph: "DC" }} />
@@ -158,6 +160,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           <a className="button secondary" href="/notes" data-testid="all-notes">
             All notes
           </a>
+          <ThemeToggle />
           <span data-testid="who">
             <UserMenu
               name={session?.user?.name}

@@ -6,7 +6,7 @@ import { maskEmail, normalizeEmail } from "../src/email.ts";
 import { blindHandle, generateCode, hashCode, isCodeShaped } from "../src/otp.ts";
 import { maskPhone, normalizePhone, parsePrefixes, prefixAllowed } from "../src/phone.ts";
 import { DevLogSmsSender, SmsError, TwilioSmsSender, codeMessage } from "../src/sms.ts";
-import { FAVICON_SVG, errorPage, loggedOutPage, page, setHomeUrl } from "../src/pages.ts";
+import { FAVICON_SVG, THEME_JS, continuePage, errorPage, loggedOutPage, page, setHomeUrl } from "../src/pages.ts";
 import { PAGE_CSP, accountPage, adminPage, codePage, loginPage } from "../src/sign-in-pages.ts";
 import { MailError, SmtpMailer, addressOf, buildMessage } from "../src/smtp.ts";
 import { encodeCbor } from "./authenticator.ts";
@@ -359,6 +359,21 @@ describe("pages", () => {
     expect(html).not.toContain("11111111-1111-1111-1111-111111111111/revoke");
     expect(html).toContain('<a href="/admin" aria-current="page">Connections</a>');
     expect(html).not.toContain("Admin console"); // none configured
+  });
+
+  it("every page carries the shared theme and its light/dark toggle; the script-free hand-off page only the styles", () => {
+    for (const html of [page("T", "<h1>T</h1>"), loginPage({ csrf: "x", email: true, sms: false, passkey: false })]) {
+      expect(html).toContain('<script src="/static/theme.js"></script>');
+      expect(html).toContain('<header class="os-topbar">');
+      expect(html).toContain('data-testid="theme-toggle"');
+      expect(html).toContain("--top-bg:");
+    }
+    // A script of this origin's own, which the pages' CSP must let run.
+    expect(PAGE_CSP).toContain("script-src 'self'");
+    expect(THEME_JS).toContain("asafarim-theme");
+    const handOff = continuePage("abc");
+    expect(handOff).not.toMatch(/<script|data-theme-toggle/);
+    expect(handOff).toContain("--top-bg:");
   });
 
   it("every page has the header (brand to the OS home), the favicon and the footer: no dead ends", () => {

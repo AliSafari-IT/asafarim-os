@@ -147,6 +147,9 @@ importers:
       '@asafarim/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry
+      '@asafarim/theme':
+        specifier: workspace:*
+        version: link:../../packages/theme
       '@shikijs/rehype':
         specifier: 4.4.3
         version: 4.4.3
@@ -259,6 +262,9 @@ importers:
       '@asafarim/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry
+      '@asafarim/theme':
+        specifier: workspace:*
+        version: link:../../packages/theme
       next:
         specifier: ^16.4.0
         version: 16.4.0(@opentelemetry/api@1.9.1)(@playwright/test@1.64.0)(@types/node@24.19.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -323,6 +329,9 @@ importers:
       '@asafarim/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry
+      '@asafarim/theme':
+        specifier: workspace:*
+        version: link:../../packages/theme
       next:
         specifier: ^16.4.0
         version: 16.4.0(@opentelemetry/api@1.9.1)(@playwright/test@1.64.0)(@types/node@24.19.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -424,6 +433,9 @@ importers:
 
   core/identity:
     dependencies:
+      '@asafarim/theme':
+        specifier: workspace:*
+        version: link:../../packages/theme
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0(supports-color@7.2.0)
@@ -675,6 +687,36 @@ importers:
       eslint:
         specifier: ^9.39.5
         version: 9.39.5(supports-color@7.2.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^5.0.4
+        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@8.3.2(@types/node@24.19.2)(tsx@4.23.15))
+
+  packages/theme:
+    devDependencies:
+      '@asafarim/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^24.19.2
+        version: 24.19.2
+      '@types/react':
+        specifier: ^19.3.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.3.0
+        version: 19.3.0(@types/react@19.3.0)
+      eslint:
+        specifier: ^9.39.5
+        version: 9.39.5(supports-color@7.2.0)
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: ^19.3.0
+        version: 19.3.0(react@19.3.0)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

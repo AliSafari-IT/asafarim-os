@@ -18,7 +18,7 @@ const nextConfig: NextConfig = {
   // The fixtures are read at runtime in development only. Their path is dynamic, so nothing traces them
   // today; this keeps it that way if that ever changes (scripts/check-no-content.mjs checks the build).
   outputFileTracingExcludes: { "*": ["./fixtures/**"] },
-  transpilePackages: ["@asafarim/app-sdk"],
+  transpilePackages: ["@asafarim/app-sdk", "@asafarim/theme"],
   // pg (study notes, #81) and the OpenTelemetry SDK (@asafarim/telemetry) use Node APIs; keep them out of the bundler.
   serverExternalPackages: ["pg", "@asafarim/telemetry"],
   // unauthorized() and forbidden() answer 401 and 403 with app/unauthorized.tsx and app/forbidden.tsx (#79).

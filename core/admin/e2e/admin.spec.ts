@@ -621,3 +621,28 @@ for (const scheme of ["light", "dark"] as const) {
     await page.close();
   });
 }
+
+test("the theme toggle switches light and dark, remembers it, and the console keeps its contrast", async () => {
+  const page = await adminCtx.newPage();
+  await page.emulateMedia({ colorScheme: "light" });
+  await openApps(page);
+  const html = page.locator("html");
+  const toggle = page.getByRole("banner").getByRole("button", { name: "Dark theme" });
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await toggle.click();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  expect(await bg()).toBe("rgb(38, 38, 38)");
+  // The choice outlives a reload: the server puts it on <html> from the cookie (no flash).
+  await page.reload();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  const cookie = (await adminCtx.cookies()).find((c) => c.name === "asafarim-theme");
+  expect(cookie?.value).toBe("dark");
+  await page.getByRole("banner").getByRole("button", { name: "Dark theme" }).click();
+  await expect(html).toHaveAttribute("data-theme", "light");
+  expect(await bg()).toBe("rgb(216, 230, 241)");
+  await page.screenshot({ path: `${SHOTS}/c-toggle-light.png` });
+  await adminCtx.clearCookies({ name: "asafarim-theme" });
+  await page.close();
+});

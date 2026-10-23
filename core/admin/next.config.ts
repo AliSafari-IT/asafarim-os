@@ -14,7 +14,7 @@ for (const file of ["app.env", "admin.env"]) {
 const nextConfig: NextConfig = {
   output: process.env.BUILD_STANDALONE === "true" ? "standalone" : undefined,
   devIndicators: false,
-  transpilePackages: ["@asafarim/app-sdk"],
+  transpilePackages: ["@asafarim/app-sdk", "@asafarim/theme"],
   // The OpenTelemetry SDK (@asafarim/telemetry) uses Node APIs; keep it out of the bundler.
   serverExternalPackages: ["@asafarim/telemetry"],
   // forbidden() answers a real 403 for a signed-in person who isn't an administrator.

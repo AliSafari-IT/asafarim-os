@@ -1,0 +1,51 @@
+{
+  "name": "@asafarim/theme",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The ASafariM OS look, shared by every site and app: the light and dark theme tokens, the charcoal top bar, and the light/dark toggle (one choice across *.asafarim.site, kept in a cookie). Plain CSS and a plain browser script for static and server-rendered pages, and a React toggle for Next.js apps.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "default": "./dist/react.js"
+    },
+    "./theme.css": "./theme.css",
+    "./theme.js": "./theme.js",
+    "./toggle.html": "./toggle.html"
+  },
+  "files": [
+    "dist",
+    "theme.css",
+    "theme.js",
+    "toggle.html"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.5",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.4"
+  },
+  "peerDependencies": {
+    "react": ">=19"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}

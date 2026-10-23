@@ -6,7 +6,11 @@
  */
 import { useEffect, useId, useRef, useState } from "react";
 
-const dark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
+/** Dark when picked with the theme toggle (data-theme on <html>), else when the system is. */
+const dark = () => {
+  const picked = document.documentElement.dataset.theme;
+  return picked ? picked === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+};
 
 /** What a screen reader hears: the diagram's own `title`, if it has one. */
 export const mermaidLabel = (source: string) => {
@@ -21,7 +25,7 @@ export function Mermaid({ source, children }: { source: string; children: React.
 
   useEffect(() => {
     let cancelled = false;
-    // A colour-scheme change can start a draw while one is running: each gets its own id, and only
+    // A colour-scheme or theme change can start a draw while one is running: each gets its own id, and only
     // the latest one is shown.
     let latest = 0;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,9 +45,13 @@ export function Mermaid({ source, children }: { source: string; children: React.
     }
     void draw();
     media.addEventListener("change", draw);
+    // The theme toggle changes data-theme on <html>: redraw in the new colours.
+    const picked = new MutationObserver(() => void draw());
+    picked.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => {
       cancelled = true;
       media.removeEventListener("change", draw);
+      picked.disconnect();
     };
   }, [id, source]);
 

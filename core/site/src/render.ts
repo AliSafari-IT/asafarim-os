@@ -16,6 +16,8 @@ export interface ImageSize {
 export interface RenderOptions {
   /** Pixel size of each screenshot by file name, so the browser reserves the space (no layout shift). */
   imageSizes: ReadonlyMap<string, ImageSize>;
+  /** The light/dark toggle's markup (@asafarim/theme's toggle.html), put in the top bar. Default: none. */
+  themeToggle?: string;
 }
 
 export const SITE_URL = "https://asafarim.site/";
@@ -85,15 +87,17 @@ const HERO_ART = `
         <text class="core-text" x="120" y="129" text-anchor="middle">OS</text>
       </svg>`;
 
-function renderTopbar(): string {
+function renderTopbar(themeToggle: string): string {
   return `
+    <div class="os-topbar">
     <nav class="topbar" aria-label="Main">
       <a class="brand" href="./">${BRAND_MARK}<span class="brand-name">ASafariM <span>OS</span></span></a>
       <ul>
         <li>${anchor(APP_LINKS.docs.href, APP_LINKS.docs.label)}</li>
-        <li id="account">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
+${themeToggle ? `        <li>${themeToggle.trim()}</li>\n` : ""}        <li id="account">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
       </ul>
-    </nav>`;
+    </nav>
+    </div>`;
 }
 
 function renderAccess(): string {
@@ -184,10 +188,12 @@ export function renderPage(progress: Progress, options: RenderOptions): string {
     <meta name="color-scheme" content="light dark" />
     <link rel="canonical" href="${SITE_URL}" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="styles.css" />
+    <script src="theme.js"></script>
     <script src="session.js" defer></script>
   </head>
-  <body>${renderTopbar()}
+  <body>${renderTopbar(options.themeToggle ?? "")}
     <header class="hero">${HERO_ART}
       <span class="badge">In development · updated ${escapeHtml(formatDate(progress.updated))}</span>
       <h1>ASafariM <span>OS</span></h1>

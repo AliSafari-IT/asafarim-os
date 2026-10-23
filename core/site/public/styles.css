@@ -1,31 +1,12 @@
-/* asafarim.site. ASafariM tokens ("web" mood), the same values as the asafarim-platform design system.
-   No web fonts, no scripts, no third-party assets: the edge's CSP allows only this origin. */
+/* asafarim.site. The colours, the top bar and the theme toggle are @asafarim/theme's (theme.css, loaded
+   first); this file has the page's own type, spacing and pieces. No web fonts, no third-party assets: the
+   edge's CSP allows only this origin. */
 :root {
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
   --radius-md: 10px;
   --radius-lg: 16px;
   --radius-pill: 999px;
-  --bg: #f6f1e7;
-  --surface: #fdfaf3;
-  --ink: #211d18;
-  --muted: #6e6557;
-  --line: rgba(33, 29, 24, 0.12);
-  --accent: #9f4a07;
-  --accent-ink: #fdfaf3;
-  --accent-soft: rgba(180, 83, 9, 0.1);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #17130d;
-    --surface: #201a12;
-    --ink: #ece3d5;
-    --muted: #a99e8c;
-    --line: rgba(236, 227, 213, 0.12);
-    --accent: #f59e0b;
-    --accent-ink: #1c1917;
-    --accent-soft: rgba(245, 158, 11, 0.12);
-  }
 }
 * {
   box-sizing: border-box;
@@ -39,9 +20,7 @@ body {
   font-size: 1rem;
   line-height: 1.6;
   color: var(--ink);
-  background:
-    radial-gradient(48rem 30rem at 12% -10%, var(--accent-soft), transparent 65%),
-    radial-gradient(40rem 26rem at 100% 0%, var(--accent-soft), transparent 60%), var(--bg);
+  background: var(--bg);
 }
 a {
   color: var(--accent);
@@ -65,9 +44,8 @@ footer {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding-top: 1rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid var(--line);
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
 }
 .topbar ul {
   display: flex;
@@ -115,7 +93,7 @@ footer {
   padding: 0.3rem 0.8rem;
   border: 1px solid var(--line);
   border-radius: var(--radius-pill);
-  background: var(--surface);
+  background: var(--card);
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.72rem;
@@ -156,7 +134,7 @@ h1 span {
   padding: 0.25rem 0.75rem;
   border: 1px solid var(--line);
   border-radius: var(--radius-pill);
-  background: var(--surface);
+  background: var(--card);
   font-size: 0.9rem;
 }
 .note {
@@ -180,7 +158,7 @@ h1 span {
   font-weight: 600;
   text-decoration: none;
   color: var(--ink);
-  background: var(--surface);
+  background: var(--card);
 }
 .btn:first-child {
   border-color: transparent;
@@ -226,7 +204,7 @@ h3 {
   padding: 1.1rem 1.25rem;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: var(--surface);
+  background: var(--card);
 }
 .milestone-head {
   display: flex;
@@ -258,7 +236,7 @@ figure {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: var(--surface);
+  background: var(--card);
 }
 figure img {
   display: block;
@@ -300,10 +278,10 @@ footer p {
   overflow: visible;
 }
 .mark-core {
-  fill: var(--accent);
+  fill: var(--brand-b);
 }
 .mark-orbit {
-  fill: var(--accent);
+  fill: var(--brand-a);
   transform-origin: 16px 16px;
   animation: spin 6s linear infinite;
 }
@@ -357,7 +335,7 @@ footer p {
   fill-opacity: 0.45;
 }
 .hero-art .core {
-  fill: var(--surface);
+  fill: var(--card);
   stroke: var(--accent);
   stroke-width: 2;
   transform-origin: 120px 120px;
@@ -468,7 +446,7 @@ footer p {
   padding: 0.375rem;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: var(--surface);
+  background: var(--card);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22);
   transform-origin: top right;
   animation: pop 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);

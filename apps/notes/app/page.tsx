@@ -1,4 +1,5 @@
 import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import { ThemeToggle } from "@asafarim/theme/react";
 import { createNoteAction, signInAction, signOutAction } from "./actions";
 import { SignOutIcon } from "@/components/SignOutIcon";
 import { auth } from "@/lib/auth";
@@ -24,17 +25,22 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
 
   if (!subject) {
     return (
-      <main>
-        <header>
-          <h1>Notes</h1>
+      <>
+        <header className="os-topbar">
+          <div className="topbar-inner">
+            <h1>Notes</h1>
+            <ThemeToggle />
+          </div>
         </header>
-        <div className="card">
-          <p>Sign in with your ASafariM account to read and write notes.</p>
-          <form action={signInAction}>
-            <button type="submit">Sign in</button>
-          </form>
-        </div>
-      </main>
+        <main>
+          <div className="card">
+            <p>Sign in with your ASafariM account to read and write notes.</p>
+            <form action={signInAction}>
+              <button type="submit">Sign in</button>
+            </form>
+          </div>
+        </main>
+      </>
     );
   }
 
@@ -49,98 +55,103 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
   const notes = access.state === "active" && canRead ? await listNotes(100) : [];
 
   return (
-    <main>
-      <header className="topbar">
-        <div className="brand">
-          <h1 className="visually-hidden">Notes</h1>
-          {/* The OS's app switcher: Notes and every other app this person can open (core-api's launcher). */}
-          <AppSwitcher apps={apps} current="notes" fallback={{ name: "Notes", glyph: "NT" }} />
+    <>
+      <header className="topbar os-topbar">
+        <div className="topbar-inner">
+          <div className="brand">
+            <h1 className="visually-hidden">Notes</h1>
+            {/* The OS's app switcher: Notes and every other app this person can open (core-api's launcher). */}
+            <AppSwitcher apps={apps} current="notes" fallback={{ name: "Notes", glyph: "NT" }} />
+          </div>
+          <span className="tools" data-testid="who">
+            <ThemeToggle />
+            <UserMenu
+              name={session?.user?.name}
+              email={session?.user?.email}
+              signOut={
+                <form action={signOutAction}>
+                  <button type="submit" data-testid="sign-out">
+                    <SignOutIcon />
+                    Sign out
+                  </button>
+                </form>
+              }
+            />
+          </span>
         </div>
-        <span data-testid="who">
-          <UserMenu
-            name={session?.user?.name}
-            email={session?.user?.email}
-            signOut={
-              <form action={signOutAction}>
-                <button type="submit" data-testid="sign-out">
-                  <SignOutIcon />
-                  Sign out
-                </button>
-              </form>
-            }
-          />
-        </span>
       </header>
 
-      {error ? (
-        <div className="notice bad" role="alert" data-testid="error">
-          {MESSAGES[error] ?? error}
-          {permission ? (
-            <>
-              {" "}
-              <span className="perm">{permission}</span>
-            </>
-          ) : null}
-        </div>
-      ) : null}
-
-      {!access.available ? (
-        <div className="notice bad" data-testid="state">
-          Permissions can&apos;t be checked right now (core-api is unreachable).
-        </div>
-      ) : access.state !== "active" ? (
-        <div className="notice bad" data-testid="state">
-          This app is <strong>{access.state}</strong>. An admin has to activate it.
-        </div>
-      ) : (
-        <>
-          <p className="muted" data-testid="access">
-            Your roles: {access.roles.join(", ") || "none"} · permissions:{" "}
-            <span className="perm">{access.permissions.join(", ") || "none"}</span>
-          </p>
-
-          <form action={createNoteAction} className="card" data-testid="new-note">
-            <label>
-              Title
-              <input name="title" maxLength={200} required />
-            </label>
-            <label>
-              Note
-              <textarea name="body" rows={3} maxLength={10000} />
-            </label>
-            <button type="submit">Add note</button>
-            {!canWrite ? (
-              <span className="muted">
+      <main>
+        {error ? (
+          <div className="notice bad" role="alert" data-testid="error">
+            {MESSAGES[error] ?? error}
+            {permission ? (
+              <>
                 {" "}
-                Adding notes needs the permission <span className="perm">notes.write</span>.
-              </span>
+                <span className="perm">{permission}</span>
+              </>
             ) : null}
-          </form>
+          </div>
+        ) : null}
 
-          {canRead ? (
-            notes.length ? (
-              notes.map((n) => (
-                <article className="card" key={n.id} data-testid="note">
-                  <h2>{n.title}</h2>
-                  <span className="muted">
-                    {n.author} · {n.created_at.toISOString().slice(0, 16).replace("T", " ")}
-                  </span>
-                  {n.body ? <p>{n.body}</p> : null}
-                </article>
-              ))
+        {!access.available ? (
+          <div className="notice bad" data-testid="state">
+            Permissions can&apos;t be checked right now (core-api is unreachable).
+          </div>
+        ) : access.state !== "active" ? (
+          <div className="notice bad" data-testid="state">
+            This app is <strong>{access.state}</strong>. An admin has to activate it.
+          </div>
+        ) : (
+          <>
+            <p className="muted" data-testid="access">
+              Your roles: {access.roles.join(", ") || "none"} · permissions:{" "}
+              <span className="perm">{access.permissions.join(", ") || "none"}</span>
+            </p>
+
+            <form action={createNoteAction} className="card" data-testid="new-note">
+              <label>
+                Title
+                <input name="title" maxLength={200} required />
+              </label>
+              <label>
+                Note
+                <textarea name="body" rows={3} maxLength={10000} />
+              </label>
+              <button type="submit">Add note</button>
+              {!canWrite ? (
+                <span className="muted">
+                  {" "}
+                  Adding notes needs the permission <span className="perm">notes.write</span>.
+                </span>
+              ) : null}
+            </form>
+
+            {canRead ? (
+              notes.length ? (
+                notes.map((n) => (
+                  <article className="card" key={n.id} data-testid="note">
+                    <h2>{n.title}</h2>
+                    <span className="muted">
+                      {n.author} · {n.created_at.toISOString().slice(0, 16).replace("T", " ")}
+                    </span>
+                    {n.body ? <p>{n.body}</p> : null}
+                  </article>
+                ))
+              ) : (
+                <p className="muted" data-testid="empty">
+                  No notes yet.
+                </p>
+              )
             ) : (
-              <p className="muted" data-testid="empty">
-                No notes yet.
-              </p>
-            )
-          ) : (
-            <div className="notice" data-testid="no-read">
-              Reading notes needs the permission <span className="perm">notes.read</span>. Ask an admin for the{" "}
-              <span className="perm">notes.viewer</span> role.
-            </div>
-          )}
-        </>
-      )}
-    </main>
+              <div className="notice" data-testid="no-read">
+                Reading notes needs the permission <span className="perm">notes.read</span>. Ask an admin for the{" "}
+                <span className="perm">notes.viewer</span> role.
+              </div>
+            )}
+          </>
+        )}
+      </main>
+    </>
   );
 }

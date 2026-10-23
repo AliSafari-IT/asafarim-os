@@ -1,3 +1,4 @@
+import { ThemeToggle } from "@asafarim/theme/react";
 import { signOutAction } from "./actions";
 
 /**
@@ -7,6 +8,7 @@ import { signOutAction } from "./actions";
 export default function Forbidden() {
   return (
     <div className="signin" data-testid="forbidden">
+      <ThemeToggle className="corner-toggle" />
       <div className="signin-card">
         <h1>You don&apos;t have access</h1>
         <p className="muted">

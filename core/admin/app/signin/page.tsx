@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { ThemeToggle } from "@asafarim/theme/react";
 import { AdminLogo } from "@/components/AdminLogo";
 import { signIn } from "@/lib/auth";
 import { adminState } from "@/lib/session";
@@ -14,6 +15,7 @@ export default async function SignIn() {
   if ((await adminState()).state === "ok") redirect("/admin");
   return (
     <main className="center" id="main">
+      <ThemeToggle className="center-toggle" />
       <div className="center-mark">
         <AdminLogo size={72} />
       </div>

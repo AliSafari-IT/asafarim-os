@@ -1,6 +1,6 @@
 /**
- * `pnpm --filter @asafarim/site build`: progress.json → dist/ (index.html, styles.css, session.js, favicon.svg and the
- * screenshots the page uses), plus the app manifest's JSON Schema under /schemas/ (#87). Node built-ins
+ * `pnpm --filter @asafarim/site build`: progress.json → dist/ (index.html, theme.css, theme.js, styles.css,
+ * session.js, favicon.svg and the screenshots the page uses), plus the app manifest's JSON Schema under /schemas/ (#87). Node built-ins
  * only: the image build runs this with no `pnpm install`.
  */
 import { copyFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -32,6 +32,12 @@ export const MANIFEST_SCHEMA_PATHS = [
   "schemas/app-manifest.schema.json",
   `schemas/app-manifest/v${MANIFEST_SCHEMA_MAJOR}.json`,
 ] as const;
+/**
+ * @asafarim/theme (packages/theme): the shared tokens and top bar (theme.css), the light/dark script
+ * (theme.js, which runs in <head> so the page never flashes the other theme) and the toggle's markup.
+ * Read as files, from the same relative path in the repository and in the image build.
+ */
+export const defaultThemeDir = (siteDir: string) => path.join(siteDir, "..", "..", "packages", "theme");
 /** Where the schema is, from core/site: the same relative path in the repository and in the image build. */
 export const defaultSchemaFile = (siteDir: string) =>
   path.join(siteDir, "..", "..", "packages", "app-manifest", "schema", "app-manifest.schema.json");
@@ -41,8 +47,14 @@ export function loadProgress(file: string): Progress {
 }
 
 /** Build the site from `siteDir` (core/site) into `outDir`. Returns the files written, relative to outDir. */
-export function buildSite(siteDir: string, outDir: string, opts: { schemaFile?: string } = {}): string[] {
+export function buildSite(
+  siteDir: string,
+  outDir: string,
+  opts: { schemaFile?: string; themeDir?: string } = {},
+): string[] {
   const schemaFile = opts.schemaFile ?? defaultSchemaFile(siteDir);
+  const themeDir = opts.themeDir ?? defaultThemeDir(siteDir);
+  const themeToggle = readFileSync(path.join(themeDir, "toggle.html"), "utf8");
   let schema: string;
   try {
     schema = readFileSync(schemaFile, "utf8");
@@ -81,8 +93,10 @@ export function buildSite(siteDir: string, outDir: string, opts: { schemaFile?: 
     written.push(name);
   };
 
-  writeFileSync(path.join(outDir, "index.html"), renderPage(progress, { imageSizes }));
+  writeFileSync(path.join(outDir, "index.html"), renderPage(progress, { imageSizes, themeToggle }));
   written.push("index.html");
+  put("theme.css", path.join(themeDir, "theme.css"));
+  put("theme.js", path.join(themeDir, "theme.js"));
   put("styles.css", path.join(siteDir, "public", "styles.css"));
   put("favicon.svg", path.join(siteDir, "public", "favicon.svg"));
   put("robots.txt", path.join(siteDir, "public", "robots.txt"));
