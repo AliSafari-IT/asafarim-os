@@ -78,9 +78,9 @@
  * - `route-hidden`: a manifest route with a `permission` where every path and method it covers is also
  *   matched by `expose: false` routes (hidden routes limited to different methods may cover it
  *   together; a guarded route without `methods` answers every method). core-api's gateway answers
- *   404 for a hidden path before it asks for any permission, so the guarded route is dead and its handler can't be reached through the gateway,
- *   usually because it was declared under a hidden prefix such as `/internal/**`. Partial overlaps
- *   aren't reported. Coverage is proved the same way as for `public-path-guarded`.
+ *   404 for a hidden path before it asks for any permission, so the guarded route is dead and its
+ *   handler can't be reached through the gateway, usually because it was declared under a hidden
+ *   prefix such as `/internal/**`. Partial overlaps aren't reported. Coverage is proved the same way as for `public-path-guarded`.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
