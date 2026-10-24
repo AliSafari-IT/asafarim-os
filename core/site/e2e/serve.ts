@@ -29,8 +29,13 @@ createServer(async (req, res) => {
     return;
   }
   try {
-    const body = await readFile(file);
-    res.writeHead(200, { "content-type": TYPES[path.extname(file)] ?? "application/octet-stream" }).end(body);
+    // Like nginx's `try_files $uri $uri.html`: /privacy is privacy.html.
+    const body = await readFile(file).catch(() => readFile(`${file}.html`));
+    res
+      .writeHead(200, {
+        "content-type": TYPES[path.extname(file)] ?? (path.extname(file) ? "application/octet-stream" : TYPES[".html"]),
+      })
+      .end(body);
   } catch {
     res.writeHead(404, { "content-type": "text/plain" }).end("not found");
   }

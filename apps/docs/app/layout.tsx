@@ -1,4 +1,5 @@
 import { parseTheme, THEME_COOKIE } from "@asafarim/theme";
+import { LegalFooter } from "@asafarim/theme/react";
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import "@asafarim/theme/theme.css";
@@ -15,7 +16,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const theme = parseTheme((await cookies()).get(THEME_COOKIE)?.value);
   return (
     <html lang="en" data-theme={theme}>
-      <body>{children}</body>
+      <body>
+        {children}
+        <LegalFooter app="Docs" />
+      </body>
     </html>
   );
 }

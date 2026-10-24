@@ -1,5 +1,5 @@
 /**
- * `pnpm --filter @asafarim/site build`: progress.json → dist/ (index.html, theme.css, theme.js, styles.css,
+ * `pnpm --filter @asafarim/site build`: progress.json → dist/ (index.html, privacy.html, cookies.html, terms.html, theme.css, theme.js, styles.css,
  * session.js, favicon.svg and the screenshots the page uses), plus the app manifest's JSON Schema under /schemas/ (#87). Node built-ins
  * only: the image build runs this with no `pnpm install`.
  */
@@ -7,7 +7,8 @@ import { copyFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseProgress, type Progress } from "./progress.ts";
-import { renderPage, type ImageSize } from "./render.ts";
+import { LEGAL_DOCS } from "./legal.ts";
+import { renderLegalPage, renderPage, type ImageSize } from "./render.ts";
 
 /** Every screenshot the site ships stays under this size (the issue's budget). */
 export const MAX_SCREENSHOT_BYTES = 300 * 1024;
@@ -95,6 +96,12 @@ export function buildSite(
 
   writeFileSync(path.join(outDir, "index.html"), renderPage(progress, { imageSizes, themeToggle }));
   written.push("index.html");
+  // The legal pages, at /privacy, /cookies and /terms (nginx tries `$uri.html`).
+  for (const doc of LEGAL_DOCS) {
+    const name = `${doc.slug}.html`;
+    writeFileSync(path.join(outDir, name), renderLegalPage(doc, { repo: progress.repo, themeToggle }));
+    written.push(name);
+  }
   put("theme.css", path.join(themeDir, "theme.css"));
   put("theme.js", path.join(themeDir, "theme.js"));
   put("styles.css", path.join(siteDir, "public", "styles.css"));

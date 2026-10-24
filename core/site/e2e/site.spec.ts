@@ -71,6 +71,11 @@ test("every link goes to this site or an allowed host, over https", async ({ pag
     const url = new URL(href);
     // This page itself: relative URLs, and the canonical https://asafarim.site/.
     if (url.host === self || href === "https://asafarim.site/") continue;
+    // The footer's privacy contact.
+    if (url.protocol === "mailto:") {
+      expect(url.pathname, href).toBe("privacy@asafarim.site");
+      continue;
+    }
     expect(url.protocol, href).toBe("https:");
     expect(ALLOWED_LINK_HOSTS, href).toContain(url.hostname);
   }
@@ -177,4 +182,23 @@ test("the container sends the security headers", async ({ request }) => {
     expect(csp, path).toContain("connect-src https://id.asafarim.site");
     expect(csp, path).toContain("frame-ancestors 'none'");
   }
+});
+
+test("the privacy, cookie and terms pages load from the footer and fit a phone", async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  for (const [link, heading] of [
+    ["Privacy", "Privacy policy"],
+    ["Cookies", "Cookie policy"],
+    ["Terms", "Terms of use"],
+  ] as const) {
+    await page.locator("footer").getByRole("link", { name: link, exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
+    await expect(page.locator("footer")).toContainText("privacy@asafarim.site");
+    if (link === "Cookies") await expect(page.locator("table.os-table--stack tbody tr").first()).toBeVisible();
+    // No sideways scrolling, the cookie table included (its rows stack into cards).
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  }
+  expect(errors).toEqual([]);
 });

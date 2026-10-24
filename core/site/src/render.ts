@@ -6,6 +6,7 @@
  * web fonts, no third-party assets. That is what lets the edge serve it under a CSP with
  * `script-src 'self'` and `connect-src` identity only (sites/asafarim-os.caddy).
  */
+import { LEGAL_DOCS, LEGAL_UPDATED, type LegalBlock, type LegalDoc } from "./legal.ts";
 import { pullRequestUrl, type Progress } from "./progress.ts";
 
 export interface ImageSize {
@@ -88,11 +89,11 @@ const HERO_ART = `
         <text class="core-text" x="120" y="129" text-anchor="middle">OS</text>
       </svg>`;
 
-function renderTopbar(themeToggle: string): string {
+function renderTopbar(themeToggle: string, home = "./"): string {
   return `
     <div class="os-topbar">
     <nav class="topbar" aria-label="Main">
-      <a class="brand" href="./">${BRAND_MARK}<span class="brand-name">ASafariM <span>OS</span></span></a>
+      <a class="brand" href="${home}">${BRAND_MARK}<span class="brand-name">ASafariM <span>OS</span></span></a>
       <ul>
         <li>${anchor(APP_LINKS.breinhap.href, APP_LINKS.breinhap.label)}</li>
         <li>${anchor(APP_LINKS.docs.href, APP_LINKS.docs.label)}</li>
@@ -228,9 +229,75 @@ export function renderPage(progress: Progress, options: RenderOptions): string {
     </header>
     <main>${renderShipped(progress)}${renderScreenshots(progress, options.imageSizes)}${renderRoadmap(progress)}${renderMore()}
     </main>
-    <footer>
-      <p>ASafariM OS · ${anchor(progress.repo, "Source on GitHub")} · ${anchor(APP_LINKS.breinhap.href, "Breinhap")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
-    </footer>
+${renderFooter(progress.repo)}
+  </body>
+</html>
+`;
+}
+
+/** The footer of every page here: the project's links, then the legal pages. */
+function renderFooter(repo: string): string {
+  const legal = LEGAL_DOCS.map((d) => anchor(`/${d.slug}`, d.label)).join(" · ");
+  return `    <footer>
+      <p>ASafariM OS · ${anchor(repo, "Source on GitHub")} · ${anchor(APP_LINKS.breinhap.href, "Breinhap")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
+      <p class="legal-links">${legal} · ${anchor("mailto:privacy@asafarim.site", "privacy@asafarim.site")}</p>
+    </footer>`;
+}
+
+function renderBlock(block: LegalBlock): string {
+  if (typeof block === "string") return `<p>${block}</p>`;
+  if ("list" in block) return `<ul>${block.list.map((li) => `<li>${li}</li>`).join("")}</ul>`;
+  const { caption, head, rows } = block.table;
+  // A responsive table (@asafarim/theme): on a phone each row is a card, its cells labelled.
+  const body = rows
+    .map(
+      ([first, ...rest]) =>
+        `<tr><th scope="row">${first ?? ""}</th>${rest.map((cell, i) => `<td data-label="${escapeHtml(head[i + 1] ?? "")}">${cell}</td>`).join("")}</tr>`,
+    )
+    .join("");
+  return `<div class="os-table-wrap"><table class="os-table os-table--stack"><caption>${caption}</caption><thead><tr>${head
+    .map((h) => `<th scope="col">${escapeHtml(h)}</th>`)
+    .join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+/** A legal page (privacy, cookies, terms), served at /<slug>: the same top bar and footer as the home page. */
+export function renderLegalPage(doc: LegalDoc, options: { repo: string; themeToggle?: string }): string {
+  const toc = doc.sections.map((s) => `<li>${anchor(`#${s.id}`, s.heading)}</li>`).join("");
+  const sections = doc.sections
+    .map(
+      (s) => `
+        <section id="${escapeHtml(s.id)}" aria-labelledby="${escapeHtml(s.id)}-title">
+          <h2 id="${escapeHtml(s.id)}-title">${escapeHtml(s.heading)}</h2>
+          ${s.blocks.map(renderBlock).join("\n          ")}
+        </section>`,
+    )
+    .join("");
+  const others = LEGAL_DOCS.filter((d) => d.slug !== doc.slug)
+    .map((d) => anchor(`/${d.slug}`, d.title))
+    .join(" · ");
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(doc.title)} · ASafariM OS</title>
+    <meta name="description" content="${escapeHtml(doc.description)}" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="canonical" href="${SITE_URL}${doc.slug}" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/theme.css" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/theme.js"></script>
+    <script src="/session.js" defer></script>
+  </head>
+  <body>${renderTopbar(options.themeToggle ?? "", "/")}
+    <main class="legal">
+      <h1>${escapeHtml(doc.title)}</h1>
+      <p class="lead">${escapeHtml(doc.lead)}</p>
+      <nav class="legal-toc" aria-label="On this page"><ol>${toc}</ol></nav>${sections}
+      <p class="legal-meta">Last updated ${escapeHtml(formatDate(LEGAL_UPDATED))}. See also ${others}.</p>
+    </main>
+${renderFooter(options.repo)}
   </body>
 </html>
 `;

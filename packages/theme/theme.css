@@ -346,3 +346,30 @@
     min-width: 0;
   }
 }
+
+/*
+ * The legal footer every app ends with (<LegalFooter /> from @asafarim/theme/react): a quiet line of links to the
+ * privacy, cookie and terms pages on asafarim.site. It wraps on a phone.
+ */
+.os-legal {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.os-legal nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 1.1rem;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 14px 16px;
+}
+.os-legal a {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.os-legal a:hover,
+.os-legal a:focus-visible {
+  color: var(--accent);
+}

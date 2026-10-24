@@ -7,6 +7,7 @@
  */
 import { useEffect } from "react";
 import "../theme.js";
+import { LEGAL_LINKS, PRIVACY_EMAIL } from "./index.ts";
 
 /** What theme.js puts on window (the package has no DOM types, like @asafarim/app-sdk). */
 const themeScript = () => (globalThis as { asafarimTheme?: { sync(): void } }).asafarimTheme;
@@ -41,5 +42,25 @@ export function ThemeToggle({ className }: { className?: string }) {
         />
       </svg>
     </button>
+  );
+}
+
+/**
+ * The footer line every OS app ends with: the privacy, cookie and terms pages on asafarim.site and the privacy
+ * contact. Put it last in <body> (styled by theme.css, `.os-legal`).
+ */
+export function LegalFooter({ app }: { app?: string }) {
+  return (
+    <footer className="os-legal" data-testid="legal-footer">
+      <nav aria-label="Legal">
+        {app ? <span>{app} · ASafariM OS</span> : <span>ASafariM OS</span>}
+        {LEGAL_LINKS.map((l) => (
+          <a key={l.href} href={l.href}>
+            {l.label}
+          </a>
+        ))}
+        <a href={`mailto:${PRIVACY_EMAIL}`}>{PRIVACY_EMAIL}</a>
+      </nav>
+    </footer>
   );
 }
