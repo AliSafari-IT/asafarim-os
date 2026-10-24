@@ -1184,6 +1184,63 @@ describe("platform manifest review", () => {
     expect(review(["--strict"]).ok).toBe(false);
   });
 
+  it("reports a launcher tile whose start page the gateway hides", () => {
+    const tile = { description: "Shop", meta: "shop.asafarim.site", access: "authenticated", order: 10 };
+    const app = (routes: unknown[], ui: Record<string, unknown> = { launcher: tile }) =>
+      manifest({ routes, ui: { ...manifest().ui, ...ui } });
+    const hide = (p: string, over: Record<string, unknown> = {}) => ({ path: p, expose: false, ...over });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put("apps/shop/app/page.tsx", "export default function Page() { return null; }");
+
+    // not hidden: no hidden route, a hidden prefix that doesn't cover "/", "/*" (one segment, not "/"),
+    // hidden only for other methods, and a guarded (not hidden) "/"
+    writeApp(app([]));
+    expect(kinds()).toEqual([]);
+    writeApp(
+      app([
+        hide("/internal/**"),
+        hide("/*", { methods: ["DELETE"] }),
+        hide("/", { methods: ["POST", "PUT"] }),
+        { path: "/", methods: ["GET"], permission: "shop.orders.read" },
+      ]),
+    );
+    expect(kinds()).toEqual([]);
+    // hidden, but no tile, or a tile that can't be opened yet
+    writeApp(app([hide("/")], {}));
+    expect(kinds()).toEqual([]);
+    writeApp(app([hide("/")], { launcher: tile, status: "coming-soon" }));
+    expect(kinds()).toEqual([]);
+
+    // hidden exactly, for HEAD's GET, and through "/**"; one finding naming both globs
+    writeApp(app([hide("/", { methods: ["GET"] }), hide("/**"), hide("/")]));
+    let out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toContain(
+      "launcher-target-hidden ui.launcher",
+    );
+    const found = out.reviews[0]!.findings.find((f) => f.kind === "launcher-target-hidden") as unknown as {
+      message: string;
+      file?: string;
+    };
+    expect(found.file).toBeUndefined();
+    expect(found.message).toBe(
+      "the launcher tile opens shop at /, but / and /** hide it (expose: false), so the gateway answers 404 to everyone who opens the tile (narrow the hidden path, or drop the tile)",
+    );
+
+    // a single hiding route, limited to methods that include GET
+    writeApp(app([hide("/", { methods: ["GET", "POST"] })]));
+    out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "launcher-target-hidden ui.launcher",
+    ]);
+    expect(out.reviews[0]!.findings[0] as unknown as { message: string }).toMatchObject({
+      message: expect.stringMatching(/^the launcher tile opens shop at \/, but \/ hides it \(expose: false\)/),
+    });
+    expect(review().lines.join("\n")).toMatch(/\[launcher-target-hidden\] the launcher tile opens shop at \//);
+    expect(review(["--markdown"]).lines[0]!).toContain("| launcher-target-hidden | ui.launcher |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+  });
+
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
     writeApp(
       manifest({

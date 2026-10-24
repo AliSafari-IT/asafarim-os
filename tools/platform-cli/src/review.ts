@@ -93,6 +93,11 @@
  *   overlaps aren't reported; coverage is proved the same way as for `route-hidden`. A glob that covers
  *   `runtime.health.live` or `.ready` is skipped: the health poller calls the app directly, so hiding
  *   health from the internet while the app lets it through without sign-in is a valid design.
+ * - `launcher-target-hidden`: an active app with a launcher tile (`ui.launcher`) where an
+ *   `expose: false` manifest route matches `/` for `GET` (no `methods` limit, or `methods` including
+ *   `GET`). The tile opens the app's start page (`https://<primary>/`), and core-api's gateway answers
+ *   404 for a hidden path, so the tile is dead for everyone who opens it, usually because a hiding glob
+ *   such as `/**` was meant for a narrower prefix. Coming-soon apps and apps without a tile are skipped.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -133,7 +138,8 @@ export type FindingKind =
   | "subscription-not-published"
   | "route-hidden"
   | "nav-target-hidden"
-  | "public-path-hidden";
+  | "public-path-hidden"
+  | "launcher-target-hidden";
 
 export interface Finding {
   app: string;
@@ -1088,6 +1094,22 @@ export function reviewApp(
       subject: glob,
       message: `auth.publicPaths lists ${glob}, but ${hiders.join(" and ")} ${hiders.length === 1 ? "hides" : "hide"} every path it covers (expose: false), so the gateway answers 404 there for everyone (remove the entry, or move the public path out of the hidden one)`,
     });
+  }
+
+  // 22. A launcher tile the gateway hides: the tile opens `/`, and a hidden path answers 404 there.
+  if (launcher && manifest.ui.status === "active") {
+    const by = routes
+      .filter((h) => h.expose === false && methodCovered(h.methods, "GET") && globRegex(h.path).test("/"))
+      .map((h) => h.path);
+    if (by.length > 0) {
+      const hiders = [...new Set(by)].sort();
+      findings.push({
+        app,
+        kind: "launcher-target-hidden",
+        subject: "ui.launcher",
+        message: `the launcher tile opens ${app} at /, but ${hiders.join(" and ")} ${hiders.length === 1 ? "hides" : "hide"} it (expose: false), so the gateway answers 404 to everyone who opens the tile (narrow the hidden path, or drop the tile)`,
+      });
+    }
   }
 
   // A subscription to an app in this repo that doesn't publish the type: the subscriber waits forever.
