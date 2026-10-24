@@ -11,6 +11,7 @@ import {
   findRepoRoot,
   gatewayUpstreamVar,
   generatedFiles,
+  hiddenMatcherMethods,
   launcherRegistry,
   renderGatewayCaddyfile,
   sync,
@@ -245,9 +246,18 @@ describe("the dev gateway (P3.3a)", () => {
     expect(text).toContain(
       '\t@hidden1 {\n\t\tpath /internal /internal/*\n\t}\n\thandle @hidden1 {\n\t\trespond "Not found" 404\n\t}',
     );
-    expect(text).toContain("\t@hidden2 {\n\t\tpath /debug\n\t\tmethod GET POST\n\t}");
+    expect(text).toContain("\t@hidden2 {\n\t\tpath /debug\n\t\tmethod GET POST HEAD\n\t}"); // HEAD follows GET
     expect(text.indexOf("@hidden1")).toBeLessThan(text.indexOf("forward_auth {")); // 404s come first
     expect(text).not.toContain("notes.read"); // permission routes are core-api's decision, not Caddy's
+  });
+
+  it("a hidden route that lists GET also hides HEAD; other method lists are left as they are", () => {
+    expect(hiddenMatcherMethods(["GET"])).toEqual(["GET", "HEAD"]);
+    expect(hiddenMatcherMethods(["GET", "HEAD"])).toEqual(["GET", "HEAD"]);
+    expect(hiddenMatcherMethods(["HEAD"])).toEqual(["HEAD"]); // HEAD doesn't imply GET
+    expect(hiddenMatcherMethods(["POST", "DELETE"])).toEqual(["POST", "DELETE"]);
+    const text = renderGatewayCaddyfile([notes({ routes: [{ path: "/preview", methods: ["GET"], expose: false }] })]);
+    expect(text).toContain("\t@hidden1 {\n\t\tpath /preview\n\t\tmethod GET HEAD\n\t}");
   });
 
   it("is deterministic: apps sorted by id, the same input twice gives the same file", () => {

@@ -156,7 +156,7 @@ export function renderGatewayCaddyfile(manifests: AppManifest[]): string {
     const hidden = (m.routes ?? []).filter((r) => r.expose === false);
     hidden.forEach((r, i) => {
       out.push(`\t@hidden${i + 1} {`, `\t\tpath ${caddyPathPatterns(r.path).join(" ")}`);
-      if (r.methods) out.push(`\t\tmethod ${r.methods.join(" ")}`);
+      if (r.methods) out.push(`\t\tmethod ${hiddenMatcherMethods(r.methods).join(" ")}`);
       out.push("\t}", `\thandle @hidden${i + 1} {`, '\t\trespond "Not found" 404', "\t}");
     });
     out.push(
@@ -184,6 +184,15 @@ export function renderGatewayCaddyfile(manifests: AppManifest[]): string {
     "",
   );
   return out.join("\n");
+}
+
+/**
+ * The methods a hidden route's Caddy matcher lists. A route that lists `GET` also covers `HEAD`, the way
+ * core-api's gateway reads it (`methodCovered`) and the way Next.js answers `HEAD` (by running the `GET`
+ * handler), so Caddy 404s a `HEAD` there too instead of passing it on to forward_auth.
+ */
+export function hiddenMatcherMethods(methods: readonly string[]): string[] {
+  return methods.includes("GET") && !methods.includes("HEAD") ? [...methods, "HEAD"] : [...methods];
 }
 
 interface Loaded {
