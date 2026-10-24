@@ -328,6 +328,9 @@ test("the member's launcher shows Notes, and they can write", async () => {
     /^http:\/\/notes\.localhost:8080\/?$/,
   );
   await page.screenshot({ path: `${SHOTS}/a6-member-launcher.png` });
+  // Escape closes it again; open, it covers the top of the page (with "More from ASafariM" it reaches the form).
+  await page.keyboard.press("Escape");
+  await expect(launcher).toHaveCount(0);
 
   await page.getByLabel("Title").fill(`Written after the grant ${RUN}`);
   await page.getByRole("button", { name: "Add note" }).click();
