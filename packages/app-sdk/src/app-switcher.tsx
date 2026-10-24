@@ -7,7 +7,8 @@
  *
  *   <AppSwitcher apps={tiles} current="docs" />
  *
- * The list ends with a link back to the OS homepage (`home`). Opening animates, and the grid icon's
+ * After the apps come ASafariM's products outside the OS (`more`: Breinhap, IGS-Pharma), then a link back to the
+ * OS homepage (`home`). Opening animates, and the grid icon's
  * dots ripple on hover; with "reduce motion" nothing moves.
  *
  * Keyboard: Enter/Space/ArrowDown open it on the first app, ArrowUp on the last; ArrowUp/Down,
@@ -43,7 +44,39 @@ export interface AppSwitcherProps {
   label?: string;
   /** The link back to the OS homepage at the foot of the list (default: asafarim.site); null for none. */
   home?: { href: string; label: string } | null;
+  /** ASafariM's products outside the OS, listed after the apps (default: MORE_FROM_ASAFARIM); [] for none. */
+  more?: readonly MoreLink[];
 }
+
+/** A product with its own site, not an OS app: no access check, it opens for everyone. */
+export interface MoreLink {
+  key: string;
+  name: string;
+  glyph: string;
+  description: string;
+  href: string;
+}
+
+/**
+ * ASafariM's products outside the OS, in English like the OS (the same list as @asafarim/theme's PRODUCT_LINKS,
+ * which the footers use).
+ */
+export const MORE_FROM_ASAFARIM: readonly MoreLink[] = [
+  {
+    key: "breinhap",
+    name: "Breinhap",
+    glyph: "BH",
+    description: "Study app for Flemish students (Android)",
+    href: "https://breinhap.asafarim.site/en/",
+  },
+  {
+    key: "igs-pharma",
+    name: "IGS-Pharma",
+    glyph: "IG",
+    description: "Online pharmacy for Belgium, and its Android app",
+    href: "https://igs.asafarim.site/en/",
+  },
+];
 
 /** The next focused index for a key, or undefined when the key isn't a move. Wraps at both ends. */
 export function moveIndex(key: string, index: number, count: number): number | undefined {
@@ -145,11 +178,22 @@ export function HomeIcon() {
   );
 }
 
-export function AppSwitcher({ apps, current, fallback, label = "Your apps", home = OS_HOME }: AppSwitcherProps) {
+export function AppSwitcher({
+  apps,
+  current,
+  fallback,
+  label = "Your apps",
+  home = OS_HOME,
+  more = MORE_FROM_ASAFARIM,
+}: AppSwitcherProps) {
   const tiles = switcherTiles(apps);
+  const extras = more.flatMap((m) => {
+    const href = safeHref(m.href);
+    return href ? [{ ...m, href }] : [];
+  });
   const homeHref = home ? safeHref(home.href) : undefined;
-  // Keyboard order: the apps, then the home link.
-  const count = tiles.length + (homeHref ? 1 : 0);
+  // Keyboard order: the apps, then the other products, then the home link.
+  const count = tiles.length + extras.length + (homeHref ? 1 : 0);
   const face = tiles.find((t) => t.key === current) ?? { ...fallback, key: current };
   const [open, setOpen] = useState(false);
   const [focus, setFocus] = useState(-1);
@@ -278,11 +322,43 @@ export function AppSwitcher({ apps, current, fallback, label = "Your apps", home
               More apps appear here as you get access to them.
             </p>
           ) : null}
+          {extras.length ? (
+            <>
+              <div className="asafarim-switcher__heading" data-testid="app-switcher-more">
+                More from ASafariM
+              </div>
+              <ul className="asafarim-switcher__list">
+                {extras.map((m, j) => {
+                  const i = tiles.length + j;
+                  return (
+                    <li key={m.key} style={{ "--i": i } as object}>
+                      <a
+                        ref={(el) => {
+                          itemRefs.current[i] = el;
+                        }}
+                        className="asafarim-switcher__item"
+                        href={m.href}
+                        data-testid={`app-switcher-more-${m.key}`}
+                      >
+                        <span className="asafarim-switcher__glyph" aria-hidden="true">
+                          {m.glyph}
+                        </span>
+                        <span className="asafarim-switcher__text">
+                          <span className="asafarim-switcher__name">{m.name}</span>
+                          <span className="asafarim-switcher__desc">{m.description}</span>
+                        </span>
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          ) : null}
           {homeHref && home ? (
-            <div className="asafarim-switcher__foot" style={{ "--i": tiles.length } as object}>
+            <div className="asafarim-switcher__foot" style={{ "--i": tiles.length + extras.length } as object}>
               <a
                 ref={(el) => {
-                  itemRefs.current[tiles.length] = el;
+                  itemRefs.current[tiles.length + extras.length] = el;
                 }}
                 className="asafarim-switcher__item asafarim-switcher__home"
                 href={homeHref}

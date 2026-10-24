@@ -53,6 +53,8 @@ export const ALLOWED_LINK_HOSTS: readonly string[] = [
   "id.asafarim.site",
   // Breinhap's landing page (served by this stack, its source in AliSafari-IT/breinhap).
   "breinhap.asafarim.site",
+  // IGS-Pharma's landing page (served by this stack, its source in AliSafari-IT/igs-pharma, apps/site).
+  "igs.asafarim.site",
 ];
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;

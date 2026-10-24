@@ -453,7 +453,7 @@ function runDeploy(
 
 const compose = "docker compose -p asafarim-os -f deploy/compose.prod.yml";
 
-test("--site-only: decrypts the docs env only, never checks identity_db or clients.json, starts only os-site, os-docs and breinhap-site, publishes the site-only file", () => {
+test("--site-only: decrypts the docs env only, never checks identity_db or clients.json, starts only os-site, os-docs, breinhap-site and igs-site, publishes the site-only file", () => {
   const r = runDeploy(["--site-only", SHA, SITE_SHA, DOCS_SHA]);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(
@@ -469,11 +469,12 @@ test("--site-only: decrypts the docs env only, never checks identity_db or clien
   const composeCalls = r.calls.filter((c) => c.startsWith(compose)).map((c) => c.slice(compose.length + 1));
   assert.deepEqual(composeCalls, [
     "ps -q identity",
-    "config -q --no-env-resolution os-site os-docs breinhap-site",
-    "pull os-site os-docs breinhap-site",
-    "up -d --no-deps os-site os-docs breinhap-site",
+    "config -q --no-env-resolution os-site os-docs breinhap-site igs-site",
+    "pull os-site os-docs breinhap-site igs-site",
+    "up -d --no-deps os-site os-docs breinhap-site igs-site",
     "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
     "exec -T breinhap-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T igs-site wget -qO- http://127.0.0.1:8080/healthz",
     "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
   ]);
   assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os-site.caddy`));
@@ -520,7 +521,7 @@ test("--site-only takes at most three shas, each a full sha", () => {
   assert.match(runDeploy(["--site-only"]).stderr, /usage:/);
 });
 
-test("full mode still decrypts, checks, starts the whole stack, waits for all four and publishes the full site file", () => {
+test("full mode still decrypts, checks, starts the whole stack, waits for all five and publishes the full site file", () => {
   const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA], { full: true });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.calls.includes("age -d -i .age/key.txt core/identity/.env.production.age"));
@@ -535,6 +536,7 @@ test("full mode still decrypts, checks, starts the whole stack, waits for all fo
     "exec -T identity wget -qO- http://127.0.0.1:3000/readyz",
     "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
     "exec -T breinhap-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T igs-site wget -qO- http://127.0.0.1:8080/healthz",
     "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
   ]);
   assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os.caddy`));
@@ -648,6 +650,7 @@ test("full mode with core/core-api/.env.production.age: decrypts and checks it, 
       "exec -T os-core-api wget -qO- http://127.0.0.1:4020/readyz",
       "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
       "exec -T breinhap-site wget -qO- http://127.0.0.1:8080/healthz",
+      "exec -T igs-site wget -qO- http://127.0.0.1:8080/healthz",
       "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
     ],
   );
@@ -788,16 +791,16 @@ test("full mode: three failed pulls stop the deploy before anything starts or is
   assert.equal(r.liveSite, null);
 });
 
-test("--site-only: the os-site, os-docs and breinhap-site pull is tried again too", () => {
+test("--site-only: the os-site, os-docs, breinhap-site and igs-site pull is tried again too", () => {
   const ok = runDeploy(["--site-only", SHA, SITE_SHA, DOCS_SHA], { pullFails: 2 });
   assert.equal(ok.status, 0, ok.stderr);
   assert.deepEqual(
     composeCallsOf(ok).filter((c) => c.startsWith("pull") || c.startsWith("up")),
     [
-      "pull os-site os-docs breinhap-site",
-      "pull os-site os-docs breinhap-site",
-      "pull os-site os-docs breinhap-site",
-      "up -d --no-deps os-site os-docs breinhap-site",
+      "pull os-site os-docs breinhap-site igs-site",
+      "pull os-site os-docs breinhap-site igs-site",
+      "pull os-site os-docs breinhap-site igs-site",
+      "up -d --no-deps os-site os-docs breinhap-site igs-site",
     ],
   );
   const failed = runDeploy(["--site-only", SHA, SITE_SHA, DOCS_SHA], { pullFails: 3 });

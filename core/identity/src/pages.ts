@@ -96,6 +96,24 @@ const LEGAL_FOOTER = [
   .map(([label, href]) => `<a href="${href}">${label}</a>`)
   .join("");
 
+/**
+ * ASafariM's products outside the OS (the same as @asafarim/theme's PRODUCT_LINKS), in every page's footer and on
+ * the account page's "Where to next". English pages, like this service.
+ */
+export const PRODUCT_LINKS = [
+  {
+    name: "Breinhap",
+    href: "https://breinhap.asafarim.site/en/",
+    description: "Study app for Flemish students (Android).",
+  },
+  {
+    name: "IGS-Pharma",
+    href: "https://igs.asafarim.site/en/",
+    description: "Online pharmacy for Belgium, and its Android app.",
+  },
+] as const;
+const PRODUCT_FOOTER = PRODUCT_LINKS.map((p) => `<a href="${p.href}">${p.name}</a>`).join(" · ");
+
 /** The header's "Home" link, first on every page. */
 export const homeLink = (): NavLink => ({ href: homeUrl, label: "Home" });
 
@@ -122,7 +140,7 @@ ${themeToggle ? '<script src="/static/theme.js"></script>' : ""}${head}<title>${
 <body><header class="os-topbar"><div class="topbar"><a class="brand" href="${home}">${BRAND_MARK}<span>ASafariM <span>OS</span></span></a>
 <div class="tools"><nav aria-label="Main"><ul class="nav">${links}</ul></nav>${themeToggle ? THEME_TOGGLE : ""}</div></div></header>
 <main><div class="card">${body}</div></main>
-<footer class="foot"><p>ASafariM OS · sign-in and accounts for ASafariM apps</p><p class="legal">${LEGAL_FOOTER}<a href="${home}">${escapeHtml(new URL(homeUrl).host)}</a></p></footer>
+<footer class="foot"><p>ASafariM OS · sign-in and accounts for ASafariM apps · ${PRODUCT_FOOTER}</p><p class="legal">${LEGAL_FOOTER}<a href="${home}">${escapeHtml(new URL(homeUrl).host)}</a></p></footer>
 </body></html>`;
 }
 

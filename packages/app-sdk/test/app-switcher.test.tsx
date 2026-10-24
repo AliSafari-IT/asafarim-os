@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LauncherTile } from "../src/index.ts";
-import { AppSwitcher, moveIndex, OS_HOME, switcherTiles } from "../src/react.tsx";
+import { AppSwitcher, MORE_FROM_ASAFARIM, moveIndex, OS_HOME, switcherTiles } from "../src/react.tsx";
 
 const tile = (key: string, over: Partial<LauncherTile> = {}): LauncherTile => ({
   key,
@@ -75,5 +75,13 @@ describe("AppSwitcher: the way home and the single-app note", () => {
     );
     expect(html).toContain("asafarim-switcher__grid");
     expect(OS_HOME.href).toBe("https://asafarim.site/");
+  });
+
+  it("lists ASafariM's other products after the apps, in English: Breinhap and IGS-Pharma", () => {
+    expect(MORE_FROM_ASAFARIM.map((m) => m.href)).toEqual([
+      "https://breinhap.asafarim.site/en/",
+      "https://igs.asafarim.site/en/",
+    ]);
+    for (const m of MORE_FROM_ASAFARIM) expect(m.glyph).toMatch(/^[A-Z]{2}$/);
   });
 });

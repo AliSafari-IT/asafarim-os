@@ -58,6 +58,7 @@ export const IDENTITY_ORIGIN = "https://id.asafarim.site";
 export const APP_LINKS = {
   breinhap: { label: "Breinhap", href: "https://breinhap.asafarim.site/en/" },
   docs: { label: "Docs", href: "https://docs.asafarim.site/" },
+  igs: { label: "IGS-Pharma", href: "https://igs.asafarim.site/en/" },
   signIn: { label: "Sign in", href: "https://id.asafarim.site/login" },
 } as const;
 
@@ -96,6 +97,7 @@ function renderTopbar(themeToggle: string, home = "./"): string {
       <a class="brand" href="${home}">${BRAND_MARK}<span class="brand-name">ASafariM <span>OS</span></span></a>
       <ul>
         <li>${anchor(APP_LINKS.breinhap.href, APP_LINKS.breinhap.label)}</li>
+        <li>${anchor(APP_LINKS.igs.href, APP_LINKS.igs.label)}</li>
         <li>${anchor(APP_LINKS.docs.href, APP_LINKS.docs.label)}</li>
 ${themeToggle ? `        <li>${themeToggle.trim()}</li>\n` : ""}        <li id="account">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
       </ul>
@@ -177,7 +179,10 @@ function renderRoadmap(progress: Progress): string {
       </section>`;
 }
 
-/** Products by ASafariM outside the OS's own apps. Breinhap's page is in Dutch with an English version; this page is English. */
+/**
+ * Products by ASafariM outside the OS's own apps. Breinhap's page is in Dutch with an English version, IGS-Pharma's in
+ * Dutch, French, German and English; this page is English, so it links their English pages.
+ */
 function renderMore(): string {
   return `
       <section id="more" aria-labelledby="more-title">
@@ -186,6 +191,10 @@ function renderMore(): string {
           <li>
             <span class="tag">Android</span>
             <div><h3>${anchor(APP_LINKS.breinhap.href, "Breinhap")}</h3><p>A study app for students in their 3rd year of secondary school in Flanders, designed with ADHD and AuDHD in mind: missions of 2 to 6 minutes, always in the same four steps. In development, coming to Google Play.</p></div>
+          </li>
+          <li>
+            <span class="tag">Web + Android</span>
+            <div><h3>${anchor(APP_LINKS.igs.href, "IGS-Pharma")}</h3><p>An online pharmacy for Belgium, being built with a Belgian pharmacy: a webshop for non-prescription products with a pharmacist in the loop, and a free Android app to look up products and reach the pharmacy. Not open yet.</p></div>
           </li>
         </ul>
       </section>`;
@@ -239,7 +248,7 @@ ${renderFooter(progress.repo)}
 function renderFooter(repo: string): string {
   const legal = LEGAL_DOCS.map((d) => anchor(`/${d.slug}`, d.label)).join(" · ");
   return `    <footer>
-      <p>ASafariM OS · ${anchor(repo, "Source on GitHub")} · ${anchor(APP_LINKS.breinhap.href, "Breinhap")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
+      <p>ASafariM OS · ${anchor(repo, "Source on GitHub")} · ${anchor(APP_LINKS.breinhap.href, "Breinhap")} · ${anchor(APP_LINKS.igs.href, "IGS-Pharma")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
       <p class="legal-links">${legal} · ${anchor("mailto:privacy@asafarim.site", "privacy@asafarim.site")}</p>
     </footer>`;
 }

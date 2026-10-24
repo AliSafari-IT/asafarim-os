@@ -6,7 +6,7 @@
 # (there are no snippets here yet).
 #
 # id.asafarim.site (identity), since #70 the asafarim.site landing page (os-site), and since #83
-# docs.asafarim.site (os-docs), since #175 admin.asafarim.site (os-admin), and breinhap.asafarim.site (breinhap-site). Cutover: the asafarim.site and www.asafarim.site blocks must first be
+# docs.asafarim.site (os-docs), since #175 admin.asafarim.site (os-admin), breinhap.asafarim.site (breinhap-site) and igs.asafarim.site (igs-site). Cutover: the asafarim.site and www.asafarim.site blocks must first be
 # removed from asafarim-com.caddy; the edge validates the WHOLE config, so publishing this file while both
 # define asafarim.site fails safely.
 
@@ -84,6 +84,23 @@ breinhap.asafarim.site {
     -Server
   }
   reverse_proxy breinhap-site:8080
+}
+
+# The IGS-Pharma landing page: static files from igs-site:8080, an image built in AliSafari-IT/igs-pharma
+# (apps/site) and pinned in deploy/compose.prod.yml. Its scripts and stylesheet are this origin's own and it calls
+# nothing, so the CSP allows this origin's script, stylesheet and images only. The container sends the same headers
+# itself (igs-pharma's apps/site/nginx.conf); `defer` makes the edge's values replace the upstream's instead of
+# sending each header twice.
+igs.asafarim.site {
+  header {
+    defer
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options nosniff
+    Referrer-Policy strict-origin-when-cross-origin
+    Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    -Server
+  }
+  reverse_proxy igs-site:8080
 }
 
 # The Admin console (asafarim-os#175): a Next.js server at os-admin:3000 (core/admin). Private: every page but

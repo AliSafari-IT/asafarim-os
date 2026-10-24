@@ -388,6 +388,7 @@ describe("pages", () => {
         expect(html).toContain('<a class="brand" href="https://home.example.test/">');
         expect(html).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml">');
         expect(html).toMatch(/<footer class="foot">[\s\S]*home\.example\.test<\/a>/);
+        expect(html).toContain('<a href="https://igs.asafarim.site/en/">IGS-Pharma</a>');
         expect(html).toContain('<a href="https://home.example.test/">Home</a>');
         for (const slug of ["privacy", "cookies", "terms"]) {
           expect(html).toContain(`<a href="https://asafarim.site/${slug}">`);
@@ -417,6 +418,10 @@ describe("pages", () => {
     expect(html).toContain('<a class="tile" href="https://asafarim.site/">');
     expect(html).toContain('<a class="tile" href="https://docs.example.test/">');
     expect(html).toContain("<strong>Docs &lt;x&gt;</strong><small>docs.example.test</small>");
+    // Then ASafariM's products outside the OS, in English.
+    expect(html).toContain("<h3>More from ASafariM</h3>");
+    expect(html).toContain('<a class="tile" href="https://breinhap.asafarim.site/en/">');
+    expect(html).toContain('<a class="tile" href="https://igs.asafarim.site/en/">');
     expect(html).toContain("an admin has given your account access");
     expect(html).toContain('<a href="/account" aria-current="page">Account</a>');
     expect(html).not.toContain(">Connections</a></li>");
