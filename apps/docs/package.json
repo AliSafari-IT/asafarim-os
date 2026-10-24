@@ -43,7 +43,7 @@
   },
   "devDependencies": {
     "@asafarim/config": "workspace:*",
-    "@playwright/test": "^1.64.0",
+    "@playwright/test": "^1.64.1",
     "@types/hast": "^3.0.5",
     "@types/mdast": "4.0.4",
     "@types/node": "^24.19.2",
@@ -53,6 +53,6 @@
     "eslint": "^9.39.5",
     "lighthouse": "13.5.0",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.4"
+    "vitest": "^5.0.5"
   }
 }
