@@ -1121,7 +1121,8 @@ export function reviewApp(
  * without it matches a fixed depth.
  */
 export function coverSamples(pattern: string): { path: string; deep: boolean }[] {
-  const ANY = "~any~";
+  // A segment no route literal can name: manifest route paths can't contain `%` (routePath).
+  const ANY = "%any%";
   let forms = [{ path: "", deep: false }];
   pattern.split("/**").forEach((part, i) => {
     const lit = part.replace(/\*/g, ANY);

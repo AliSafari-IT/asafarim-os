@@ -1063,6 +1063,9 @@ describe("platform manifest review", () => {
     expect(kinds()).toEqual([]);
     writeApp(app(["/orders"], [hide("/internal/**")]));
     expect(kinds()).toEqual([]);
+    // a hidden literal can't stand in for every segment a "*" covers, whatever its name
+    writeApp(app(["/internal/x/*"], [hide("/internal/x/~any~")]));
+    expect(kinds()).toEqual([]);
     // a glob that covers a health path: the poller calls the app directly, so hiding it is fine
     writeApp(manifest({ auth: { client: "oidc", publicPaths: ["/api/**"] }, routes: [hide("/api/**")] }));
     expect(kinds()).toEqual([]);
