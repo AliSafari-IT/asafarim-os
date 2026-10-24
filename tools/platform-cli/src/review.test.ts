@@ -905,7 +905,7 @@ describe("platform manifest review", () => {
     writeApp(
       app(["/api/health", "/orders"], [guard("/orders", "shop.orders.read"), { path: "/orders", expose: false }]),
     );
-    expect(kinds()).toEqual(["route-hidden /orders"]);
+    expect(kinds()).toEqual(["route-hidden /orders", "public-path-hidden /orders"]);
     // a wildcard only partly guarded: one concrete child, or fixed depths under "/**"
     writeApp(app(["/api/health", "/orders/*"], [guard("/orders/1", "shop.orders.read")]));
     expect(kinds()).toEqual([]);
@@ -1035,6 +1035,73 @@ describe("platform manifest review", () => {
     );
     expect(review().lines.join("\n")).toMatch(/\[route-hidden\] the manifest guards \/admin\/\*\* with/);
     expect(review(["--markdown"]).lines[0]!).toContain("| route-hidden | POST /internal/sync |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+  });
+
+  it("reports a public path a hidden route covers for every path and method, once per glob", () => {
+    const app = (publicPaths: string[], routes: unknown[]) =>
+      manifest({ auth: { client: "oidc", publicPaths: ["/api/health", ...publicPaths] }, routes });
+    const hide = (p: string, over: Record<string, unknown> = {}) => ({ path: p, expose: false, ...over });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    for (const page of ["internal/about", "internal/x/[y]", "status", "reports", "exports", "orders"]) {
+      put(`apps/shop/app/${page}/page.tsx`, "export default function Page() { return null; }");
+    }
+
+    // no hidden route, a partial overlap (a hidden child, fixed depths under "/**"), hiding limited to
+    // some methods only, and no overlap at all
+    writeApp(app(["/internal/about"], []));
+    expect(kinds()).toEqual([]);
+    writeApp(app(["/internal/**"], [hide("/internal/about")]));
+    expect(kinds()).toEqual([]);
+    writeApp(app(["/internal/**"], [hide("/internal"), hide("/internal/*")]));
+    expect(kinds()).toEqual([]);
+    writeApp(app(["/status"], [hide("/status", { methods: ["GET"] })]));
+    expect(kinds()).toEqual([]);
+    // every method but GET (HEAD doesn't cover GET)
+    writeApp(app(["/status"], [hide("/status", { methods: ["HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] })]));
+    expect(kinds()).toEqual([]);
+    writeApp(app(["/orders"], [hide("/internal/**")]));
+    expect(kinds()).toEqual([]);
+    // a hidden literal can't stand in for every segment a "*" covers, whatever its name
+    writeApp(app(["/internal/x/*"], [hide("/internal/x/~any~")]));
+    expect(kinds()).toEqual([]);
+    // a glob that covers a health path: the poller calls the app directly, so hiding it is fine
+    writeApp(manifest({ auth: { client: "oidc", publicPaths: ["/api/**"] }, routes: [hide("/api/**")] }));
+    expect(kinds()).toEqual([]);
+
+    // fully hidden: under a "/**" prefix, exactly, by methods that add up (GET also covers HEAD), and
+    // by two globs; the first glob listed twice
+    writeApp(
+      app(
+        ["/internal/about", "/internal/about", "/internal/x/*", "/status", "/reports", "/exports/**"],
+        [
+          hide("/internal/**"),
+          hide("/status"),
+          hide("/reports", { methods: ["GET", "POST", "PUT"] }),
+          hide("/reports", { methods: ["PATCH", "DELETE", "OPTIONS"] }),
+          hide("/exports"),
+          hide("/exports/**"),
+        ],
+      ),
+    );
+    const out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "public-path-hidden /internal/about",
+      "public-path-hidden /internal/x/*",
+      "public-path-hidden /status",
+      "public-path-hidden /reports",
+      "public-path-hidden /exports/**",
+    ]);
+    const found = out.reviews[0]!.findings as unknown as { message: string; file?: string }[];
+    expect(found[0]!.file).toBeUndefined();
+    expect(found[0]!.message).toMatch(
+      /^auth\.publicPaths lists \/internal\/about, but \/internal\/\*\* hides every path it covers \(expose: false\), so the gateway answers 404 there for everyone/,
+    );
+    expect(found[3]!.message).toMatch(/but \/reports hides every path/);
+    expect(found[4]!.message).toMatch(/but \/exports and \/exports\/\*\* hide every path/);
+    expect(review().lines.join("\n")).toMatch(/\[public-path-hidden\] auth\.publicPaths lists \/status/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| public-path-hidden | /internal/about |");
     expect(review().ok).toBe(true);
     expect(review(["--strict"]).ok).toBe(false);
   });

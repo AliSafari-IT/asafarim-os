@@ -86,6 +86,13 @@
  *   (no `methods` limit, or `methods` including `GET`). core-api's gateway answers 404 for a hidden
  *   path, so the link is dead even when a page serves it, usually because the page sits under a hidden
  *   prefix such as `/internal/**`. A trailing slash is dropped, as the gateway does.
+ * - `public-path-hidden`: an `auth.publicPaths` glob where every path it covers is hidden
+ *   (`expose: false`) for every method (hidden routes limited to different methods may cover it
+ *   together). The manifest promises a public path, and core-api's gateway answers 404 there for
+ *   everyone, usually because the path sits under a hidden prefix such as `/internal/**`. Partial
+ *   overlaps aren't reported; coverage is proved the same way as for `route-hidden`. A glob that covers
+ *   `runtime.health.live` or `.ready` is skipped: the health poller calls the app directly, so hiding
+ *   health from the internet while the app lets it through without sign-in is a valid design.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -125,7 +132,8 @@ export type FindingKind =
   | "public-path-guarded"
   | "subscription-not-published"
   | "route-hidden"
-  | "nav-target-hidden";
+  | "nav-target-hidden"
+  | "public-path-hidden";
 
 export interface Finding {
   app: string;
@@ -1056,6 +1064,32 @@ export function reviewApp(
     });
   }
 
+  // 21. A public path the gateway hides for every method: nobody can reach it, signed in or not.
+  const allHiders = routes.filter((h) => h.expose === false);
+  const health = [manifest.runtime.health.live, manifest.runtime.health.ready];
+  for (const glob of allHiders.length === 0 ? [] : [...new Set(manifest.auth.publicPaths)]) {
+    const re = globRegex(glob);
+    if (health.some((h) => re.test(h))) continue;
+    const by = new Set<string>();
+    const hidden = coverSamples(glob).every(({ path: p, deep }) =>
+      HTTP_METHODS.every((m) => {
+        const hit = allHiders.filter(
+          (h) => methodCovered(h.methods, m) && (!deep || h.path.includes("/**")) && globRegex(h.path).test(p),
+        );
+        for (const h of hit) by.add(h.path);
+        return hit.length > 0;
+      }),
+    );
+    if (!hidden) continue;
+    const hiders = [...by].sort();
+    findings.push({
+      app,
+      kind: "public-path-hidden",
+      subject: glob,
+      message: `auth.publicPaths lists ${glob}, but ${hiders.join(" and ")} ${hiders.length === 1 ? "hides" : "hide"} every path it covers (expose: false), so the gateway answers 404 there for everyone (remove the entry, or move the public path out of the hidden one)`,
+    });
+  }
+
   // A subscription to an app in this repo that doesn't publish the type: the subscriber waits forever.
   const seenSubs = new Set<string>();
   for (const sub of manifest.events?.subscribes ?? []) {
@@ -1087,7 +1121,8 @@ export function reviewApp(
  * without it matches a fixed depth.
  */
 export function coverSamples(pattern: string): { path: string; deep: boolean }[] {
-  const ANY = "~any~";
+  // A segment no route literal can name: manifest route paths can't contain `%` (routePath).
+  const ANY = "%any%";
   let forms = [{ path: "", deep: false }];
   pattern.split("/**").forEach((part, i) => {
     const lit = part.replace(/\*/g, ANY);
