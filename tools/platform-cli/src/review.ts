@@ -93,6 +93,9 @@
  *
  * Sign-in plumbing is not a finding: Auth.js's own endpoints under `/api/auth/` and the SDK's session
  * hand-off (`createSessionHandler`).
+ *
+ * A route's `methods` limit is read the way core-api's gateway reads it (`methodCovered`): no limit
+ * covers every method, and `GET` also covers `HEAD`.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -364,6 +367,16 @@ export function globRegex(pattern: string): RegExp {
     )
     .join("(?:/.*)?");
   return new RegExp(`^${re}$`);
+}
+
+/**
+ * Whether a manifest route's `methods` limit covers a method, the way core-api's gateway reads it
+ * (`methodCovered` in `core/core-api/src/gateway.ts`): no limit covers every method, and a route that
+ * lists `GET` also covers `HEAD`, since Next.js answers `HEAD` by running the `GET` handler.
+ */
+export function methodCovered(methods: readonly string[] | undefined, method: string): boolean {
+  if (!methods) return true;
+  return methods.includes(method) || (method === "HEAD" && methods.includes("GET"));
 }
 
 /** The HTTP methods a route file exports (`export function GET`, `export const POST = …`, `export { GET }`). */
@@ -653,7 +666,7 @@ export function reviewApp(
           publicRes.some((re) => re.test(p)) ||
           routes.some(
             (r) =>
-              (!r.methods || r.methods.includes(method as never)) &&
+              methodCovered(r.methods, method) &&
               (r.expose === false || r.permission !== undefined) &&
               globRegex(r.path).test(p),
           ),
@@ -1009,10 +1022,7 @@ export function reviewApp(
     const hidden = coverSamples(r.path).every(({ path: p, deep }) =>
       asked.every((m) => {
         const hit = hiding.filter(
-          (h) =>
-            (!h.methods || (h.methods as readonly string[]).includes(m)) &&
-            (!deep || h.path.includes("/**")) &&
-            globRegex(h.path).test(p),
+          (h) => methodCovered(h.methods, m) && (!deep || h.path.includes("/**")) && globRegex(h.path).test(p),
         );
         for (const h of hit) by.add(h.path);
         return hit.length > 0;

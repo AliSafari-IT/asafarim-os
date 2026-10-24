@@ -359,6 +359,21 @@ describe("platform manifest review", () => {
     expect(kinds()).toEqual(["route-unguarded POST /api/admin", "route-unguarded DELETE /api/orders/[id]"]);
   });
 
+  it("reads a GET-limited route as covering HEAD, as the gateway does, but not the other way round", () => {
+    writeApp(
+      manifest({
+        routes: [
+          { path: "/api/orders", methods: ["GET"], permission: "shop.orders.read" },
+          { path: "/api/stock", methods: ["HEAD"], permission: "shop.orders.read" },
+        ],
+      }),
+    );
+    put("apps/shop/lib/x.ts", `"shop.orders.write"`);
+    put("apps/shop/app/api/orders/route.ts", "export function GET() {}\nexport function HEAD() {}");
+    put("apps/shop/app/api/stock/route.ts", "export function GET() {}\nexport function HEAD() {}");
+    expect(kinds()).toEqual(["route-unguarded GET /api/stock"]);
+  });
+
   it("guards a catch-all only when every depth is covered", () => {
     writeApp(manifest({ routes: [{ path: "/files/*", permission: "shop.orders.read" }] }));
     put("apps/shop/lib/x.ts", `"shop.orders.write"`);
@@ -957,6 +972,7 @@ describe("platform manifest review", () => {
     put("apps/shop/app/admin/page.tsx", "export default function Page() { return null; }");
     put("apps/shop/app/reports/page.tsx", "export default function Page() { return null; }");
     put("apps/shop/app/exports/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/status/page.tsx", "export default function Page() { return null; }");
 
     // partial overlaps: a hidden child, fixed depths under "/**", a hidden glob limited to other
     // methods, a guarded route with no methods limit hidden only for some, and no overlap at all
@@ -971,6 +987,8 @@ describe("platform manifest review", () => {
     writeApp(app([guard("/orders"), hide("/internal/**")]));
     expect(kinds()).toEqual([]);
     writeApp(app([guard("/orders"), hide("/orders", { methods: ["GET"] }), hide("/orders", { methods: ["POST"] })]));
+    expect(kinds()).toEqual([]);
+    writeApp(app([guard("/orders", { methods: ["GET"] }), hide("/orders", { methods: ["HEAD"] })]));
     expect(kinds()).toEqual([]);
 
     // fully hidden: under a "/**" prefix, by methods that include the route's, exactly, and by two globs
@@ -991,6 +1009,8 @@ describe("platform manifest review", () => {
         hide("/reports", { methods: ["POST", "DELETE"] }),
         hide("/exports", { methods: ["GET", "HEAD", "POST", "PUT"] }),
         hide("/exports", { methods: ["PATCH", "DELETE", "OPTIONS"] }),
+        guard("/status", { methods: ["GET", "HEAD"] }),
+        hide("/status", { methods: ["GET"] }),
       ]),
     );
     const out = json();
@@ -1001,6 +1021,7 @@ describe("platform manifest review", () => {
       "route-hidden /admin/**",
       "route-hidden GET,POST /reports",
       "route-hidden /exports",
+      "route-hidden GET,HEAD /status",
     ]);
     const [one, two, three] = out.reviews[0]!.findings as unknown as { message: string; file?: string }[];
     expect(one!.file).toBeUndefined();
