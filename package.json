@@ -44,7 +44,7 @@
     "@nats-io/nkeys": "^2.0.3",
     "pg": "^8.23.1",
     "prettier": "^3.9.10",
-    "turbo": "^2.11.8",
+    "turbo": "^2.11.10",
     "typescript": "^5.9.0"
   },
   "dependencies": {}
