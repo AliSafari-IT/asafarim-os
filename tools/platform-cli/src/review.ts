@@ -98,6 +98,12 @@
  *   `GET`). The tile opens the app's start page (`https://<primary>/`), and core-api's gateway answers
  *   404 for a hidden path, so the tile is dead for everyone who opens it, usually because a hiding glob
  *   such as `/**` was meant for a narrower prefix. Coming-soon apps and apps without a tile are skipped.
+ * - `launcher-target-missing`: an active app with a launcher tile (`ui.launcher`) where no page
+ *   (`app/**\/page.tsx`) serves `/` and no route file answers it with `GET` (the most specific match
+ *   decides, as for `nav-target-missing`). The tile opens the app's start page, so it answers 404 (or
+ *   405) to everyone who opens it, usually because the start page moved under a route group or a
+ *   prefix. Coming-soon apps, apps without a tile, and apps whose `ui.nav` already links `/` (reported
+ *   as `nav-target-missing`) are skipped. Redirects in `next.config` or middleware aren't read.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -139,7 +145,8 @@ export type FindingKind =
   | "route-hidden"
   | "nav-target-hidden"
   | "public-path-hidden"
-  | "launcher-target-hidden";
+  | "launcher-target-hidden"
+  | "launcher-target-missing";
 
 export interface Finding {
   app: string;
@@ -259,7 +266,7 @@ export function samplePaths(url: string): string[] {
 
 /**
  * The paths a Next.js route URL answers, as a regular expression: `[id]` → one segment, `[...x]` → one
- * or more, `[[...x]]` → none or more.
+ * or more, `[[...x]]` → none or more (`/[[...x]]` answers `/` too).
  */
 export function routeUrlRegex(url: string): RegExp {
   let re = "";
@@ -269,7 +276,9 @@ export function routeUrlRegex(url: string): RegExp {
     else if (/^\[[^\]]+\]$/.test(seg)) re += "/[^/]+";
     else re += `/${seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`;
   }
-  return new RegExp(`^${re || "/"}$`);
+  // An optional catch-all at the top (`/[[...x]]`) also answers `/` itself, the way Next.js serves it.
+  if (re === "") return /^\/$/;
+  return new RegExp(new RegExp(`^${re}$`).test("") ? `^(?:${re}|/)$` : `^${re}$`);
 }
 
 /** How Next.js ranks a URL segment when several routes match: static, then `[x]`, `[...x]`, `[[...x]]`. */
@@ -1108,6 +1117,25 @@ export function reviewApp(
         kind: "launcher-target-hidden",
         subject: "ui.launcher",
         message: `the launcher tile opens ${app} at /, but ${hiders.join(" and ")} ${hiders.length === 1 ? "hides" : "hide"} it (expose: false), so the gateway answers 404 to everyone who opens the tile (narrow the hidden path, or drop the tile)`,
+      });
+    }
+  }
+
+  // 23. A launcher tile needs a start page: the tile opens `/`, and nothing serving it answers 404.
+  const navLinksRoot = manifest.ui.nav.some((n) => (n.href.replace(/\/+$/, "") || "/") === "/");
+  if (launcher && manifest.ui.status === "active" && !navLinksRoot) {
+    const winner = navServed
+      .filter((s) => routeUrlRegex(s.url).test("/"))
+      .sort((a, b) => compareRouteSpecificity(a.url, b.url))[0];
+    if (!winner?.get) {
+      findings.push({
+        app,
+        kind: "launcher-target-missing",
+        subject: "ui.launcher",
+        ...(winner ? { file: rel(path.join(appDir, winner.file)) } : {}),
+        message: winner
+          ? `the launcher tile opens ${app} at /, but the route file serving / doesn't export GET, so the tile answers 405 to everyone who opens it (export GET, or serve / with a page)`
+          : `the launcher tile opens ${app} at /, but no page or route file serves /, so the tile answers 404 to everyone who opens it (add app/page.tsx, or drop the tile)`,
       });
     }
   }
