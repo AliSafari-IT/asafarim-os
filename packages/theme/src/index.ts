@@ -35,5 +35,15 @@ export const LEGAL_LINKS = [
   { label: "Terms", href: "https://asafarim.site/terms" },
 ] as const;
 
+/**
+ * ASafariM's products outside the OS (each with its own site and policies), linked from every OS footer. English
+ * pages, like the OS. A new one is added here, in core/site's top bar and "More from ASafariM", in identity's
+ * footer and "Where to next", and in @asafarim/app-sdk's MORE_FROM_ASAFARIM.
+ */
+export const PRODUCT_LINKS = [
+  { label: "Breinhap", href: "https://breinhap.asafarim.site/en/" },
+  { label: "IGS-Pharma", href: "https://igs.asafarim.site/en/" },
+] as const;
+
 /** Where to write about personal data. */
 export const PRIVACY_EMAIL = "privacy@asafarim.site";

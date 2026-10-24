@@ -18,10 +18,12 @@ export {
   AppSwitcher,
   APP_SWITCHER_CSS,
   HomeIcon,
+  MORE_FROM_ASAFARIM,
   moveIndex,
   OS_HOME,
   switcherTiles,
   type AppSwitcherProps,
+  type MoreLink,
 } from "./app-switcher.tsx";
 export { ACCOUNT_URL, hueOf, initialsOf, UserMenu, USER_MENU_CSS, type UserMenuProps } from "./user-menu.tsx";
 

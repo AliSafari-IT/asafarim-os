@@ -2,7 +2,14 @@ import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { LEGAL_LINKS, parseTheme, PRIVACY_EMAIL, THEME_COOKIE, themeFromCookieHeader } from "../src/index.ts";
+import {
+  LEGAL_LINKS,
+  parseTheme,
+  PRIVACY_EMAIL,
+  PRODUCT_LINKS,
+  THEME_COOKIE,
+  themeFromCookieHeader,
+} from "../src/index.ts";
 import { LegalFooter, ThemeToggle } from "../src/react.tsx";
 
 const file = (name: string) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
@@ -173,5 +180,15 @@ describe("the legal footer", () => {
     expect(html).toContain("Docs · ASafariM OS");
     for (const { href, label } of LEGAL_LINKS) expect(html).toContain(`<a href="${href}">${label}</a>`);
     expect(html).toContain(`href="mailto:${PRIVACY_EMAIL}"`);
+  });
+
+  it("links ASafariM's other products, Breinhap and IGS-Pharma, in English", () => {
+    expect(PRODUCT_LINKS.map((l) => l.href)).toEqual([
+      "https://breinhap.asafarim.site/en/",
+      "https://igs.asafarim.site/en/",
+    ]);
+    const html = renderToStaticMarkup(createElement(LegalFooter));
+    expect(html).toContain('<nav aria-label="More from ASafariM">');
+    for (const { href, label } of PRODUCT_LINKS) expect(html).toContain(`<a href="${href}">${label}</a>`);
   });
 });

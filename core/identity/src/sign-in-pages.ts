@@ -3,7 +3,7 @@
  * no inline script (only the theme's and passkey's own files), every value escaped; each form carries its CSRF token.
  */
 import type { AppLink } from "./clients.ts";
-import { type NavLink, escapeHtml, homeHref, homeLink, page } from "./pages.ts";
+import { type NavLink, escapeHtml, homeHref, homeLink, page, PRODUCT_LINKS } from "./pages.ts";
 import type { AuditRow, ConnectionRequestRow, ConnectionRow } from "./store.ts";
 
 /** Pages that post forms to this origin only, and run only this origin's scripts (the theme's). */
@@ -137,7 +137,10 @@ const tile = (href: string, glyph: string, name: string, description: string) =>
   `<li><a class="tile" href="${escapeHtml(href)}"><span class="glyph" aria-hidden="true">${escapeHtml(glyph)}</span>
 <span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(description)}</small></span></a></li>`;
 
-/** "Where to next": the OS home page, then the apps that sign in here. Access is still an admin's grant. */
+/**
+ * "Where to next": the OS home page, then the apps that sign in here (access is still an admin's grant), then
+ * ASafariM's products outside the OS, which open for everyone.
+ */
 function nextSteps(apps: readonly AppLink[], connected: boolean): string {
   const tiles = [
     tile(homeHref(), "OS", "ASafariM OS", "The home page: what the OS is, and what's new."),
@@ -148,7 +151,8 @@ function nextSteps(apps: readonly AppLink[], connected: boolean): string {
     : connected
       ? '<p class="small">An app opens once an admin has given your account access to it.</p>'
       : '<p class="small">Apps open once your account is connected and an admin has given it access.</p>';
-  return `<h2>Where to next</h2><ul class="apps">${tiles}</ul>${note}`;
+  const more = PRODUCT_LINKS.map((p) => tile(p.href, glyphOf(p.name), p.name, p.description)).join("");
+  return `<h2>Where to next</h2><ul class="apps">${tiles}</ul>${note}<h3>More from ASafariM</h3><ul class="apps">${more}</ul>`;
 }
 
 export function accountPage(opts: {
