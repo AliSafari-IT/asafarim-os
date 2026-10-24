@@ -60,6 +60,15 @@ footer {
 .topbar a {
   font-weight: 600;
 }
+/* Five items on a 375 px phone: tighter gaps keep them on one line under the brand. */
+@media (max-width: 26rem) {
+  .topbar ul {
+    gap: 0.5rem 0.7rem;
+  }
+  .topbar a {
+    font-size: 0.92rem;
+  }
+}
 .brand {
   display: inline-flex;
   align-items: center;

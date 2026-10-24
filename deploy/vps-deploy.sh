@@ -2,7 +2,8 @@
 #
 # Deploy the ASafariM OS stack on the VPS: identity (id.asafarim.site, asafarim-os#45, part of #22), the
 # asafarim.site landing page (os-site, #70), the Docs app (docs.asafarim.site, os-docs, #83) and the Breinhap landing
-# page (breinhap.asafarim.site, breinhap-site; its image is pinned in deploy/compose.prod.yml, not passed here).
+# page (breinhap.asafarim.site, breinhap-site) and the IGS-Pharma landing page (igs.asafarim.site, igs-site); their
+# images are pinned in deploy/compose.prod.yml, not passed here.
 # Run by the OWNER, from the repository folder (normally /var/repos/asafarim-os). Nothing else runs it.
 #
 #   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>]
@@ -22,7 +23,8 @@
 #   <admin-image-commit>  the commit whose Admin console image to run (default: <commit>), with the "Admin image"
 #                   workflow (#175). Used only when the console is part of the deploy (below).
 #   --site-only     the landing pages and docs, without identity (#97, #83): steps 1, 2 and 3 for the docs env
-#                   only, 4 (edge_net and the edge script only), 5 and 6 for os-site, os-docs and breinhap-site only, then
+#                   only, 4 (edge_net and the edge script only), 5 and 6 for os-site, os-docs, breinhap-site and igs-site
+#                   only, then
 #                   step 7 with sites/asafarim-os-site.caddy, and step 8: before the edge cutover, the same file
 #                   for the Caddy that serves 443 today. It never decrypts identity's env, needs no identity_db
 #                   and no clients.json, and never starts or touches identity or os-redis. It refuses to run
@@ -38,7 +40,7 @@
 #   4. check the networks and the client config it needs exist;
 #   5. `docker compose pull` (tried up to 3 times, 10s apart: DEPLOY_PULL_ATTEMPTS, DEPLOY_PULL_RETRY_DELAY), then
 #      `up -d`;
-#   6. wait for identity's /readyz, os-site's and breinhap-site's /healthz and os-docs's /api/health;
+#   6. wait for identity's /readyz, os-site's, breinhap-site's and igs-site's /healthz and os-docs's /api/health;
 #   7. publish sites/asafarim-os.caddy on the shared edge (validate -> swap -> reload -> verify).
 # Only step 7 makes id.asafarim.site, asafarim.site and docs.asafarim.site reachable, and only if every step before
 # it passed.
@@ -224,21 +226,21 @@ main() {
     identity_running="$("${compose[@]}" ps -q identity)" || fatal "could not list this stack's containers. Nothing changed."
     [[ -z "$identity_running" ]] \
       || fatal "identity is running. A site-only deploy would take id.asafarim.site off the edge; run the full deploy instead. Nothing changed."
-    # Only os-site, os-docs and breinhap-site, and without reading .env.identity (identity's env_file, which this mode
+    # Only os-site, os-docs, breinhap-site and igs-site, and without reading .env.identity (identity's env_file, which this mode
     # never creates).
-    log "Checking the compose file (os-site, os-docs and breinhap-site only)..."
-    "${compose[@]}" config -q --no-env-resolution os-site os-docs breinhap-site
-    log "Pulling ghcr.io/alisafari-it/asafarim-os:site-${SITE_IMAGE_TAG}, :docs-${DOCS_IMAGE_TAG} and the pinned Breinhap site image..."
-    pull_with_retry "${compose[@]}" pull os-site os-docs breinhap-site \
-      || fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${SITE_IMAGE_TAG} has no site image or ${DOCS_IMAGE_TAG} no docs image (see the 'Site image' and 'Docs image' workflow runs), or the Breinhap site image pinned in deploy/compose.prod.yml is not published (its 'Site image' run in AliSafari-IT/breinhap)."
-    log "Starting os-site, os-docs and breinhap-site..."
-    "${compose[@]}" up -d --no-deps os-site os-docs breinhap-site
+    log "Checking the compose file (os-site, os-docs, breinhap-site and igs-site only)..."
+    "${compose[@]}" config -q --no-env-resolution os-site os-docs breinhap-site igs-site
+    log "Pulling ghcr.io/alisafari-it/asafarim-os:site-${SITE_IMAGE_TAG}, :docs-${DOCS_IMAGE_TAG} and the pinned Breinhap and IGS-Pharma site images..."
+    pull_with_retry "${compose[@]}" pull os-site os-docs breinhap-site igs-site \
+      || fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${SITE_IMAGE_TAG} has no site image or ${DOCS_IMAGE_TAG} no docs image (see the 'Site image' and 'Docs image' workflow runs), or a landing page image pinned in deploy/compose.prod.yml is not published (the 'Site image' run in AliSafari-IT/breinhap, or the 'Landing page image' run in AliSafari-IT/igs-pharma)."
+    log "Starting os-site, os-docs, breinhap-site and igs-site..."
+    "${compose[@]}" up -d --no-deps os-site os-docs breinhap-site igs-site
   else
     log "Checking the compose file..."
     "${compose[@]}" config -q
     log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")$([[ "$with_admin" == true ]] && echo ", :admin-${ADMIN_IMAGE_TAG}")..."
     if ! pull_with_retry "${compose[@]}" pull; then
-      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image or ${ADMIN_IMAGE_TAG} no admin image (see the 'Identity image', 'Site image', 'Docs image', 'Core API image' and 'Admin image' workflow runs), or the Breinhap site image pinned in deploy/compose.prod.yml is not published (its 'Site image' run in AliSafari-IT/breinhap)."
+      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image or ${ADMIN_IMAGE_TAG} no admin image (see the 'Identity image', 'Site image', 'Docs image', 'Core API image' and 'Admin image' workflow runs), or a landing page image pinned in deploy/compose.prod.yml is not published (the 'Site image' run in AliSafari-IT/breinhap, or the 'Landing page image' run in AliSafari-IT/igs-pharma)."
     fi
     log "Starting the stack..."
     "${compose[@]}" up -d --remove-orphans
@@ -324,6 +326,21 @@ main() {
   fi
   log "breinhap-site is ready."
 
+  # igs-site (igs.asafarim.site) is static files too: ready as soon as nginx answers /healthz.
+  log "Waiting for igs-site's /healthz..."
+  local igs_ready=false
+  for _ in $(seq 1 15); do
+    if "${compose[@]}" exec -T igs-site wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+      igs_ready=true
+      break
+    fi
+    sleep 2
+  done
+  if [[ "$igs_ready" != true ]]; then
+    fatal "igs-site did not become ready within 30s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 igs-site"
+  fi
+  log "igs-site is ready."
+
   # os-docs (docs.asafarim.site) is a Next.js server: ready when it answers /api/health, its manifest's health path.
   log "Waiting for os-docs's /api/health..."
   local docs_ready=false
@@ -354,9 +371,9 @@ main() {
     || fatal "the live Caddy did not take ${site_file} (see above). The edge has it; the live Caddy is unchanged or restored."
 
   if [[ "$site_only" == true ]]; then
-    log "Done. Check: curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health && curl -fsSI https://breinhap.asafarim.site/"
+    log "Done. Check: curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health && curl -fsSI https://breinhap.asafarim.site/ && curl -fsSI https://igs.asafarim.site/"
   else
-    log "Done. Check: curl -fsS https://id.asafarim.site/.well-known/openid-configuration && curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health && curl -fsSI https://breinhap.asafarim.site/"
+    log "Done. Check: curl -fsS https://id.asafarim.site/.well-known/openid-configuration && curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health && curl -fsSI https://breinhap.asafarim.site/ && curl -fsSI https://igs.asafarim.site/"
   fi
 }
 

@@ -4,7 +4,7 @@
  *
  * The text must match what the code really does. The cookie table is an inventory of every cookie the OS sets:
  * add a row when a new one appears (packages/theme, core/identity, packages/app-sdk, Auth.js in the Next.js apps).
- * Breinhap has its own policies at breinhap.asafarim.site.
+ * Breinhap has its own policies at breinhap.asafarim.site, IGS-Pharma at igs.asafarim.site.
  *
  * Drafted for Ali's review (asafarim-os, October 2026): not legal advice. A lawyer should read it before it is relied on.
  *
@@ -51,7 +51,7 @@ const privacy: LegalDoc = {
       heading: "Who we are",
       blocks: [
         `ASafariM, in Belgium, runs ASafariM OS and is the controller of the personal data described here. For anything about your data, email ${mail}.`,
-        'This policy covers asafarim.site, id.asafarim.site (sign-in and accounts), admin.asafarim.site (the Admin console), docs.asafarim.site, Notes, and any other app on asafarim.site that links to it. Breinhap has <a href="https://breinhap.asafarim.site/en/privacy/">its own privacy policy</a>. The asafarim.com platform is a separate service with its own policy.',
+        'This policy covers asafarim.site, id.asafarim.site (sign-in and accounts), admin.asafarim.site (the Admin console), docs.asafarim.site, Notes, and any other app on asafarim.site that links to it. Breinhap has <a href="https://breinhap.asafarim.site/en/privacy/">its own privacy policy</a>, and so does IGS-Pharma (<a href="https://igs.asafarim.site/en/privacy/">its landing page and Android app</a>). The asafarim.com platform is a separate service with its own policy.',
       ],
     },
     {

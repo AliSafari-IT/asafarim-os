@@ -1,6 +1,7 @@
 # ASafariM OS production stack: the identity service (id.asafarim.site) and its own Redis
 # (asafarim-os#45, part of #22, P2.3), the asafarim.site landing page, os-site (#70), and docs.asafarim.site, os-docs
-# (#83). Also breinhap.asafarim.site, breinhap-site (a landing page built in AliSafari-IT/breinhap). The owner deploys it with deploy/vps-deploy.sh; nothing else runs this file. See deploy/README.md for the
+# (#83). Also breinhap.asafarim.site, breinhap-site (a landing page built in AliSafari-IT/breinhap), and
+# igs.asafarim.site, igs-site (a landing page built in AliSafari-IT/igs-pharma). The owner deploys it with deploy/vps-deploy.sh; nothing else runs this file. See deploy/README.md for the
 # deploy, the rollback and the network rules.
 #
 #   IMAGE_TAG=<sha> SITE_IMAGE_TAG=<sha> DOCS_IMAGE_TAG=<sha> CORE_API_IMAGE_TAG=<sha> ADMIN_IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
@@ -120,6 +121,29 @@ services:
         # Unique on the shared edge_net; sites/asafarim-os.caddy proxies breinhap.asafarim.site to it.
         aliases:
           - breinhap-site
+
+  igs-site:
+    # igs.asafarim.site: the IGS-Pharma landing page, static files behind unprivileged nginx. It is built in its own
+    # repository (AliSafari-IT/igs-pharma, apps/site) and published by that repository's "Landing page image" workflow
+    # as ghcr.io/alisafari-it/igs-pharma-site:<full commit sha>. Pinned HERE like breinhap-site: to ship a new
+    # version, change the sha in a PR. The storefront (igs-pharma.be) is a different stack (asafarim-platform).
+    image: ghcr.io/alisafari-it/igs-pharma-site:0000000000000000000000000000000000000000
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=4m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 32m
+    cpus: 0.25
+    environment:
+      NGINX_ENTRYPOINT_QUIET_LOGS: "1"
+    networks:
+      edge_net:
+        # Unique on the shared edge_net; sites/asafarim-os.caddy proxies igs.asafarim.site to it.
+        aliases:
+          - igs-site
 
   os-docs:
     # docs.asafarim.site: the Docs app's Next.js server (apps/docs/Dockerfile), published by
