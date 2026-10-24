@@ -111,13 +111,23 @@ export interface RouteVerdict {
   permissions: string[];
 }
 
+/**
+ * Whether a route's `methods` limit covers this request's method. A route that lists `GET` also
+ * covers `HEAD`: Next.js answers `HEAD` by running the `GET` handler (pages too), so a `HEAD` must be
+ * hidden or checked exactly like the `GET` it stands for.
+ */
+export function methodCovered(methods: readonly string[] | undefined, method: string): boolean {
+  if (!methods) return true;
+  return methods.includes(method) || (method === "HEAD" && methods.includes("GET"));
+}
+
 /** What the manifest's routes say about this request, over every reading of the path. */
 export function routeVerdict(routes: AppManifest["routes"], method: string, pathname: string): RouteVerdict {
   const permissions = new Set<string>();
   let hidden = false;
   for (const form of pathForms(pathname)) {
     for (const r of routes ?? []) {
-      if (r.methods && !r.methods.includes(method as never)) continue;
+      if (!methodCovered(r.methods, method)) continue;
       if (!regexFor(r.path).test(form)) continue;
       if (r.expose === false) hidden = true;
       else if (r.permission) permissions.add(r.permission);

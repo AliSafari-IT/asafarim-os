@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   createAppSnapshot,
   createGateway,
+  methodCovered,
   pathForms,
   routeRegex,
   routeVerdict,
@@ -80,6 +81,18 @@ describe("route globs", () => {
     expect(routeVerdict(ROUTES, "POST", "/api/notes").permissions).toEqual(["notes.write"]);
     expect(routeVerdict(ROUTES, "DELETE", "/api/notes").permissions).toEqual([]);
   });
+
+  it("a route that lists GET also covers HEAD (Next.js runs the GET handler for it)", () => {
+    expect(methodCovered(undefined, "HEAD")).toBe(true);
+    expect(methodCovered(["GET"], "HEAD")).toBe(true);
+    expect(methodCovered(["POST"], "HEAD")).toBe(false);
+    expect(methodCovered(["HEAD"], "GET")).toBe(false); // only HEAD follows GET, not the reverse
+    expect(methodCovered(["GET"], "OPTIONS")).toBe(false);
+    expect(routeVerdict(ROUTES, "HEAD", "/api/notes").permissions).toEqual(["notes.read"]);
+    const hiddenGet = [{ path: "/internal/**", methods: ["GET" as const], expose: false }];
+    expect(routeVerdict(hiddenGet, "HEAD", "/internal/x").hidden).toBe(true);
+    expect(routeVerdict(hiddenGet, "POST", "/internal/x").hidden).toBe(false);
+  });
 });
 
 describe("the gateway decision", () => {
@@ -120,6 +133,15 @@ describe("the gateway decision", () => {
     }
     // A method no rule covers is public too (the app re-checks).
     expect((await ask(gw, { method: "DELETE", uri: "/api/notes" })).status).toBe(200);
+  });
+
+  it("HEAD on a GET-only route is checked like GET: 401 without a token, 403 without the permission", async () => {
+    const gw = gatewayWith([app()]);
+    expect((await ask(gw, { method: "HEAD", uri: "/api/notes" })).status).toBe(401);
+    const writer = cookie(token(["notes.write"]));
+    expect((await ask(gw, { method: "HEAD", uri: "/api/notes", cookie: writer })).status).toBe(403);
+    const reader = cookie(token(["notes.read"]));
+    expect((await ask(gw, { method: "HEAD", uri: "/api/notes", cookie: reader })).status).toBe(200);
   });
 
   it("a marked route without a token: 401 JSON naming the refresh path; a browser page is redirected to it", async () => {
