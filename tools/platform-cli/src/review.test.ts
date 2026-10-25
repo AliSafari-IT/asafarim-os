@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,7 @@ import {
   blankStrings,
   compareRouteSpecificity,
   configReadsIn,
+  FINDING_KINDS,
   readsAllConfig,
   pageUrl,
   routeUrl,
@@ -1720,5 +1721,16 @@ describe("platform manifest review --markdown", () => {
   it("rejects --json together with --markdown", () => {
     expect(reviewCommand(["--json", "--markdown"], root, () => root)).toBeNull();
     expect(reviewCommand(["--markdown", "--json", "--root", root], root, () => root)).toBeNull();
+  });
+});
+
+describe("README findings table", () => {
+  it("has one row per finding kind, and no row for a kind review doesn't report", () => {
+    const readme = readFileSync(path.join(WORKSPACE, "tools/platform-cli/README.md"), "utf8");
+    const section = readme.split("## Manifest review (`manifest review`)")[1]?.split("\n## ")[0] ?? "";
+    const rows = [...section.matchAll(/^\| `([^`]+)`\s*\|/gm)].map((m) => m[1]);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(new Set(rows).size).toBe(rows.length);
+    expect([...rows].sort()).toEqual([...FINDING_KINDS].sort());
   });
 });
