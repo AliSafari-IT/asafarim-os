@@ -1199,7 +1199,7 @@ describe("platform manifest review", () => {
     put("apps/shop/app/page.tsx", "export default function Page() { return null; }");
 
     // not hidden: no hidden route, a hidden prefix that doesn't cover "/", "/*" (one segment, not "/"),
-    // hidden only for other methods, and a guarded (not hidden) "/"
+    // hidden only for other methods, and a guarded (not hidden) "/" (launcher-target-guarded reports it)
     writeApp(app([]));
     expect(kinds()).toEqual([]);
     writeApp(
@@ -1210,7 +1210,7 @@ describe("platform manifest review", () => {
         { path: "/", methods: ["GET"], permission: "shop.orders.read" },
       ]),
     );
-    expect(kinds()).toEqual([]);
+    expect(kinds()).toEqual(["launcher-target-guarded ui.launcher"]);
     // hidden, but no tile, or a tile that can't be opened yet
     writeApp(app([hide("/")], {}));
     expect(kinds()).toEqual([]);
@@ -1243,6 +1243,82 @@ describe("platform manifest review", () => {
     });
     expect(review().lines.join("\n")).toMatch(/\[launcher-target-hidden\] the launcher tile opens shop at \//);
     expect(review(["--markdown"]).lines[0]!).toContain("| launcher-target-hidden | ui.launcher |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+  });
+
+  it("reports a launcher tile whose start page the gateway guards with a permission", () => {
+    const tile = { description: "Shop", meta: "shop.asafarim.site", access: "authenticated", order: 10 };
+    const app = (routes: unknown[], ui: Record<string, unknown> = { launcher: tile }) =>
+      manifest({ routes, ui: { ...manifest().ui, ...ui } });
+    const guard = (p: string, permission: string, over: Record<string, unknown> = {}) => ({
+      path: p,
+      permission,
+      ...over,
+    });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put("apps/shop/app/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/api/orders/route.ts", `import "@/lib/x";\nexport function GET() {}\nexport function POST() {}`);
+
+    // not guarded: no routes, a guarded prefix that doesn't cover "/", a guard on "/" only for a
+    // method other than GET or HEAD, and an unguarded route at "/"
+    writeApp(app([]));
+    expect(kinds()).toEqual([]);
+    writeApp(
+      app([
+        guard("/api/orders/**", "shop.orders.read"),
+        guard("/**", "shop.orders.write", { methods: ["POST"] }),
+        { path: "/", methods: ["GET"] },
+      ]),
+    );
+    expect(kinds()).toEqual([]);
+    // guarded, but no tile, a tile that can't be opened yet, or "/" hidden (launcher-target-hidden reports it)
+    writeApp(app([guard("/", "shop.orders.read")], {}));
+    expect(kinds()).toEqual([]);
+    writeApp(app([guard("/", "shop.orders.read")], { launcher: tile, status: "coming-soon" }));
+    expect(kinds()).toEqual([]);
+    writeApp(app([guard("/", "shop.orders.read"), { path: "/", expose: false }]));
+    expect(kinds()).toEqual(["route-hidden /", "launcher-target-hidden ui.launcher"]);
+
+    // an authenticated tile: guarded exactly, for HEAD's GET, and through "/*" (the gateway's `*` also
+    // matches an empty segment); one finding naming both permissions
+    writeApp(
+      app([
+        guard("/", "shop.orders.read", { methods: ["GET"] }),
+        guard("/*", "shop.orders.write"),
+        guard("/", "shop.orders.read"),
+      ]),
+    );
+    let out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "launcher-target-guarded ui.launcher",
+    ]);
+    const authed = out.reviews[0]!.findings[0] as unknown as { message: string; file?: string };
+    expect(authed.file).toBeUndefined();
+    expect(authed.message).toBe(
+      'the launcher tile says any signed-in user may open shop (access "authenticated"), but manifest routes put permissions (shop.orders.read, shop.orders.write) on / for GET, and the gateway asks for them, so a signed-in user without them gets 403 (take the permission off /, for example by narrowing the route, or drop the tile)',
+    );
+
+    // a public tile on an app whose "/" is public to the app: the gateway still asks for the permission
+    // (here through "/**", which public-path-guarded also reports for the public globs it covers)
+    writeApp({
+      ...app([guard("/**", "shop.orders.read")], { launcher: { ...tile, access: "public" } }),
+      auth: { client: "oidc", publicPaths: ["/", "/api/health"] },
+    });
+    out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "public-path-guarded /",
+      "public-path-guarded /api/health",
+      "launcher-target-guarded ui.launcher",
+    ]);
+    expect(out.reviews[0]!.findings.find((f) => f.kind === "launcher-target-guarded")).toMatchObject({
+      message:
+        'the launcher tile says anyone may open shop (access "public"), but manifest routes put the permission shop.orders.read on / for GET, and the gateway asks for it, so a signed-out visitor is sent to sign-in and a signed-in user without it gets 403 (take the permission off /, for example by narrowing the route, or drop the tile)',
+    });
+    expect(review().lines.join("\n")).toMatch(
+      /\[launcher-target-guarded\] the launcher tile says anyone may open shop/,
+    );
+    expect(review(["--markdown"]).lines[0]!).toContain("| launcher-target-guarded | ui.launcher |");
     expect(review().ok).toBe(true);
     expect(review(["--strict"]).ok).toBe(false);
   });
