@@ -124,6 +124,12 @@
  *   read gets `undefined` and the code that needs the database fails at runtime. Usually the manifest
  *   was scaffolded without a database and the code added one later. An app that brings its own
  *   database lists `DATABASE_URL` in `secrets` and isn't reported.
+ * - `database-never-read`: the mirror case. The manifest says `database.engine: "postgres"`, but no
+ *   runtime code names `DATABASE_URL` as a whole word (comments ignored), and no Prisma schema in the
+ *   app (`*.prisma`, e.g. `url = env("DATABASE_URL")`) names it either. The platform provisions the
+ *   database, runs its migrations and hands the app `DATABASE_URL`, and nothing reads it. Usually the
+ *   code reads the URL under another name (and gets `undefined`), or the code stopped using the
+ *   database and the manifest kept it.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -170,7 +176,8 @@ export type FindingKind =
   | "launcher-target-hidden"
   | "launcher-target-missing"
   | "launcher-target-guarded"
-  | "database-not-declared";
+  | "database-not-declared"
+  | "database-never-read";
 
 export interface Finding {
   app: string;
@@ -206,13 +213,18 @@ const SKIP_DIRS = new Set([
 /** Folders skipped only at the app's root: `events/` holds the JSON schemas, but `app/events/` can hold handlers. */
 const SKIP_ROOT_DIRS = new Set(["events"]);
 const SOURCE_FILE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
+/** Prisma schema files: `prisma/schema.prisma`, or the multi-file `prisma/schema/*.prisma`. */
+const PRISMA_FILE = /\.prisma$/;
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const MANIFEST_SOURCE = /^platform\.app\.(?:ts|js|mjs|json)$/;
 const ROUTE_FILE = /^route\.[cm]?[jt]sx?$/;
 const PAGE_FILE = /^page\.[cm]?[jt]sx?$/;
 
-/** The app's runtime source files (no tests, no manifest), relative to `appDir`, sorted. */
-export function sourceFiles(appDir: string): string[] {
+/**
+ * The app's runtime source files (no tests, no manifest), relative to `appDir`, sorted. `fileName`
+ * picks other files under the same folder rules (`PRISMA_FILE`).
+ */
+export function sourceFiles(appDir: string, fileName: RegExp = SOURCE_FILE): string[] {
   const out: string[] = [];
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -223,7 +235,7 @@ export function sourceFiles(appDir: string): string[] {
         if (!skip && !entry.name.startsWith(".")) walk(full);
       } else if (
         entry.isFile() &&
-        SOURCE_FILE.test(entry.name) &&
+        fileName.test(entry.name) &&
         !TEST_FILE.test(entry.name) &&
         !entry.name.endsWith(".d.ts") &&
         !(dir === appDir && MANIFEST_SOURCE.test(entry.name))
@@ -1230,6 +1242,19 @@ export function reviewApp(
         subject: "DATABASE_URL",
         file: rel(path.join(appDir, reader.rel)),
         message: `the code reads DATABASE_URL, but the manifest says database.engine: "none", so the platform provisions no database and the read gets undefined at runtime (declare database.engine: "postgres" with its migrations, or list DATABASE_URL in secrets for a database the app brings itself)`,
+      });
+    }
+  }
+
+  // 26. A postgres database is read: the platform hands its URL only as DATABASE_URL.
+  if (manifest.database.engine === "postgres" && !files.some((f) => mentionsName(f.text, "DATABASE_URL"))) {
+    const prisma = sourceFiles(appDir, PRISMA_FILE).map((f) => readFileSync(path.join(appDir, f), "utf8"));
+    if (!prisma.some((text) => mentionsName(text, "DATABASE_URL"))) {
+      findings.push({
+        app,
+        kind: "database-never-read",
+        subject: "DATABASE_URL",
+        message: `the manifest says database.engine: "postgres", so the platform provisions a database and hands its URL as DATABASE_URL, but no code or Prisma schema reads DATABASE_URL (read process.env.DATABASE_URL where the code connects, or declare database.engine: "none" if the app no longer needs the database)`,
       });
     }
   }
