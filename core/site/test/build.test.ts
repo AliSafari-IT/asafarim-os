@@ -67,6 +67,23 @@ describe("buildSite", () => {
     expect(html).toContain('data-testid="theme-toggle"');
   });
 
+  it("ships robots.txt pointing at a sitemap of every page, and the 1200×630 share image", () => {
+    const out = temp();
+    const written = buildSite(siteDir, out);
+    expect(written).toEqual(expect.arrayContaining(["robots.txt", "sitemap.xml", "og.png"]));
+    expect(readFileSync(path.join(out, "robots.txt"), "utf8")).toContain("Sitemap: https://asafarim.site/sitemap.xml");
+    const sitemap = readFileSync(path.join(out, "sitemap.xml"), "utf8");
+    for (const url of [
+      "https://asafarim.site/",
+      "https://asafarim.site/privacy",
+      "https://asafarim.site/cookies",
+      "https://asafarim.site/terms",
+    ]) {
+      expect(sitemap).toContain(`<loc>${url}</loc>`);
+    }
+    expect(pngSize(readFileSync(path.join(out, "og.png")))).toEqual({ width: 1200, height: 630 });
+  });
+
   it("serves the app manifest JSON Schema at its $id and at the versioned path, byte for byte (#87)", () => {
     const out = temp();
     const written = buildSite(siteDir, out);

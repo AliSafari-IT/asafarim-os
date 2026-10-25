@@ -48,13 +48,26 @@ describe("renderPage", () => {
 
   it("has its own scripts only and no inline scripts, inline styles or third-party assets (the CSP allows none)", () => {
     // theme.js runs before paint (no flash of the other theme); session.js after parsing.
-    expect(html.match(/<script\b[^>]*>/gi)).toEqual(['<script src="theme.js">', '<script src="session.js" defer>']);
-    expect(html).not.toMatch(/<script[^>]*>[^<]|\sstyle=|<style|\son[a-z]+=/i);
+    // The JSON-LD block is data, not a script: the CSP does not apply to it and browsers never run it.
+    const scripts = html.match(/<script\b[^>]*>/gi)?.filter((tag) => !tag.includes('type="application/ld+json"'));
+    expect(scripts).toEqual(['<script src="theme.js">', '<script src="session.js" defer>']);
+    expect(html.replace(/<script type="application\/ld\+json">[^<]*<\/script>/, "")).not.toMatch(
+      /<script[^>]*>[^<]|\sstyle=|<style|\son[a-z]+=/i,
+    );
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
       expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|((docs|id|breinhap|igs)\.)?asafarim\.site)\//);
     }
     // Stylesheet and icon are this origin's own; only the canonical link names a full URL.
     expect(html).not.toMatch(/<link rel="(?!canonical")[^"]+" [^>]*href="https?:/);
+  });
+
+  it("has a share preview and structured data for search engines", () => {
+    expect(html).toContain('<meta property="og:url" content="https://asafarim.site/" />');
+    expect(html).toContain('<meta property="og:image" content="https://asafarim.site/og.png" />');
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image" />');
+    const json = /<script type="application\/ld\+json">([^<]*)<\/script>/.exec(html)?.[1] ?? "{}";
+    const graph = (JSON.parse(json) as { "@graph": { "@type": string }[] })["@graph"];
+    expect(graph.map((n) => n["@type"])).toEqual(["Organization", "WebSite"]);
   });
 
   it("has a top bar with the way to sign in and to the docs, on allowed hosts", () => {

@@ -33,6 +33,59 @@ export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ESCAPES[c] ?? c);
 }
 
+/** The share preview (1200×630, public/og.png): the top of the page, without its date or sign-in line. */
+export const OG_IMAGE = { file: "og.png", width: 1200, height: 630 } as const;
+
+/**
+ * Open Graph and Twitter card tags: how a link to the page looks when shared (LinkedIn, WhatsApp, Slack, X).
+ * Crawlers fetch the image themselves, so its full URL does not need the page's CSP.
+ */
+export function shareMeta(title: string, description: string, url: string): string {
+  return `
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ASafariM OS" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:url" content="${escapeHtml(url)}" />
+    <meta property="og:title" content="${escapeHtml(title)}" />
+    <meta property="og:description" content="${escapeHtml(description)}" />
+    <meta property="og:image" content="${SITE_URL}${OG_IMAGE.file}" />
+    <meta property="og:image:width" content="${OG_IMAGE.width}" />
+    <meta property="og:image:height" content="${OG_IMAGE.height}" />
+    <meta property="og:image:alt" content="${escapeHtml(TITLE)}" />
+    <meta name="twitter:card" content="summary_large_image" />`;
+}
+
+/**
+ * schema.org JSON-LD for the home page: the organisation and the site. A JSON data block, not a script: the
+ * CSP's script-src does not apply to it and browsers never run it. "<" is escaped so no text can close it.
+ */
+export function structuredData(repo: string): string {
+  const graph = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": `${SITE_URL}#org`,
+        name: "ASafariM",
+        url: SITE_URL,
+        logo: `${SITE_URL}favicon.svg`,
+        sameAs: [repo, "https://asafarim.com/"],
+      },
+      {
+        "@type": "WebSite",
+        "@id": `${SITE_URL}#website`,
+        url: SITE_URL,
+        name: "ASafariM OS",
+        description: DESCRIPTION,
+        inLanguage: "en",
+        publisher: { "@id": `${SITE_URL}#org` },
+      },
+    ],
+  };
+  return `
+    <script type="application/ld+json">${JSON.stringify(graph).replaceAll("<", "\\u003c")}</script>`;
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** "2026-10-03" → "3 Oct 2026", the same in every locale and time zone. */
@@ -212,7 +265,7 @@ export function renderPage(progress: Progress, options: RenderOptions): string {
     <title>${escapeHtml(TITLE)}</title>
     <meta name="description" content="${escapeHtml(DESCRIPTION)}" />
     <meta name="color-scheme" content="light dark" />
-    <link rel="canonical" href="${SITE_URL}" />
+    <link rel="canonical" href="${SITE_URL}" />${shareMeta(TITLE, DESCRIPTION, SITE_URL)}${structuredData(progress.repo)}
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="styles.css" />
@@ -292,7 +345,7 @@ export function renderLegalPage(doc: LegalDoc, options: { repo: string; themeTog
     <title>${escapeHtml(doc.title)} · ASafariM OS</title>
     <meta name="description" content="${escapeHtml(doc.description)}" />
     <meta name="color-scheme" content="light dark" />
-    <link rel="canonical" href="${SITE_URL}${doc.slug}" />
+    <link rel="canonical" href="${SITE_URL}${doc.slug}" />${shareMeta(`${doc.title} · ASafariM OS`, doc.description, `${SITE_URL}${doc.slug}`)}
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/theme.css" />
     <link rel="stylesheet" href="/styles.css" />
