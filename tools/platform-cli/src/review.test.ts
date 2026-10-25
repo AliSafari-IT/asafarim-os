@@ -349,6 +349,51 @@ describe("platform manifest review", () => {
     ]);
   });
 
+  it("reports an event schema that doesn't compile as the publisher compiles it (strict JSON Schema 2020-12)", () => {
+    writeApp(
+      manifest({
+        events: {
+          publishes: [
+            { type: "shop.order.placed.v1", schema: "./events/placed.json" },
+            { type: "shop.order.paid.v1", schema: "./events/paid.json" },
+            { type: "shop.order.sent.v1", schema: "./events/sent.json" },
+            { type: "shop.order.lost.v1", schema: "./events/lost.json" },
+          ],
+        },
+      }),
+    );
+    // Compiles: a plain object schema with a known format.
+    put(
+      "apps/shop/events/placed.json",
+      JSON.stringify({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        required: ["at"],
+        properties: { at: { type: "string", format: "date-time" } },
+      }),
+    );
+    // An unknown keyword (a typo of "required"): strict mode refuses it.
+    put("apps/shop/events/paid.json", JSON.stringify({ type: "object", requird: ["id"] }));
+    // An unknown format.
+    put("apps/shop/events/sent.json", JSON.stringify({ type: "string", format: "order-id" }));
+    // A $ref that resolves to nothing.
+    put("apps/shop/events/lost.json", JSON.stringify({ $ref: "#/$defs/nope" }));
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write";
+      ["shop.order.placed.v1", "shop.order.paid.v1", "shop.order.sent.v1", "shop.order.lost.v1"];`,
+    );
+    expect(kinds()).toEqual([
+      "event-schema-uncompilable shop.order.paid.v1",
+      "event-schema-uncompilable shop.order.sent.v1",
+      "event-schema-uncompilable shop.order.lost.v1",
+    ]);
+    const out = JSON.parse(review(["--json"]).lines[0]!) as { reviews: AppReview[] };
+    const paid = out.reviews[0]!.findings.find((f) => f.subject === "shop.order.paid.v1")!;
+    expect(paid.file).toBe("apps/shop/events/paid.json");
+    expect(paid.message).toMatch(/doesn't compile \(.*requird.*\), so the app's publisher throws when it starts/);
+  });
+
   it("reports a permission nothing asks for; a gateway route or a test doesn't count as code, but a route does count", () => {
     writeApp(manifest({ routes: [{ path: "/api/orders", permission: "shop.orders.write" }] }));
     put("apps/shop/app/api/orders/route.ts", "export function POST() {}");
