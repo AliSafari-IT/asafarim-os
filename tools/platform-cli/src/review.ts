@@ -117,6 +117,13 @@
  *   promises more than the gateway allows, usually because a guarding glob such as `/**` was meant for
  *   a narrower prefix. Coming-soon apps, apps without a tile, and apps where `/` is hidden (reported as
  *   `launcher-target-hidden`) are skipped.
+ * - `database-not-declared`: the manifest says `database.engine: "none"`, but the app's runtime code
+ *   names `DATABASE_URL` as a whole word (comments ignored, e.g. `process.env.DATABASE_URL`), and
+ *   `DATABASE_URL` isn't a declared secret. The platform provisions a database and hands the app
+ *   `DATABASE_URL` only for `engine: "postgres"` (`platform app install`, compose, core-api), so the
+ *   read gets `undefined` and the code that needs the database fails at runtime. Usually the manifest
+ *   was scaffolded without a database and the code added one later. An app that brings its own
+ *   database lists `DATABASE_URL` in `secrets` and isn't reported.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -162,7 +169,8 @@ export type FindingKind =
   | "public-path-hidden"
   | "launcher-target-hidden"
   | "launcher-target-missing"
-  | "launcher-target-guarded";
+  | "launcher-target-guarded"
+  | "database-not-declared";
 
 export interface Finding {
   app: string;
@@ -1210,6 +1218,20 @@ export function reviewApp(
         others.length > 0 ? ` (it publishes ${others.join(", ")})` : ""
       }, so the subscription waits for an event that never comes (update the type, or drop the subscription)`,
     });
+  }
+
+  // 25. Code that reads DATABASE_URL needs a database: the platform hands it only for postgres.
+  if (manifest.database.engine === "none" && !(manifest.secrets ?? []).includes("DATABASE_URL")) {
+    const reader = files.find((f) => mentionsName(f.text, "DATABASE_URL"));
+    if (reader) {
+      findings.push({
+        app,
+        kind: "database-not-declared",
+        subject: "DATABASE_URL",
+        file: rel(path.join(appDir, reader.rel)),
+        message: `the code reads DATABASE_URL, but the manifest says database.engine: "none", so the platform provisions no database and the read gets undefined at runtime (declare database.engine: "postgres" with its migrations, or list DATABASE_URL in secrets for a database the app brings itself)`,
+      });
+    }
   }
 
   return { app, findings, handlers, plumbing };

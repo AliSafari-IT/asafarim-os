@@ -1569,6 +1569,35 @@ describe("platform manifest review", () => {
     expect(reviews.map((r) => r.app)).toEqual(expect.arrayContaining(["docs", "notes"]));
     expect(reviews.flatMap((r) => r.findings)).toEqual([]);
   });
+  it("reports code that reads DATABASE_URL when the manifest declares no database", () => {
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    // no code names it, or only a comment, a test or a longer name does
+    writeApp(manifest());
+    put("apps/shop/lib/a.ts", `// DATABASE_URL comes later\nexport const u = process.env.SHOP_DATABASE_URL;`);
+    put("apps/shop/lib/db.test.ts", `process.env.DATABASE_URL = "postgres://x";`);
+    expect(kinds()).toEqual([]);
+
+    // the code reads it with engine "none": one finding, at the first file that names it
+    put("apps/shop/lib/db.ts", `export const url = process.env.DATABASE_URL;`);
+    put("apps/shop/lib/pool.ts", `const u = process.env["DATABASE_URL"];`);
+    expect(kinds()).toEqual(["database-not-declared DATABASE_URL"]);
+    const out = json();
+    expect(out.reviews[0]!.findings[0]).toMatchObject({
+      file: "apps/shop/lib/db.ts",
+      message:
+        'the code reads DATABASE_URL, but the manifest says database.engine: "none", so the platform provisions no database and the read gets undefined at runtime (declare database.engine: "postgres" with its migrations, or list DATABASE_URL in secrets for a database the app brings itself)',
+    });
+    expect(review().lines.join("\n")).toMatch(/\[database-not-declared\] the code reads DATABASE_URL/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| database-not-declared | DATABASE\\_URL |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // a postgres database, or DATABASE_URL as the app's own secret, provides it
+    writeApp(manifest({ database: { engine: "postgres", migrations: "sql" } }));
+    expect(kinds()).toEqual([]);
+    writeApp(manifest({ secrets: ["DATABASE_URL"] }));
+    expect(kinds()).toEqual([]);
+  });
 });
 
 describe("platform manifest review --markdown", () => {
