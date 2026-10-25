@@ -147,37 +147,41 @@ import { HTTP_METHODS, validateManifest, type AppManifest } from "@asafarim/app-
 import { compileEventSchema } from "@asafarim/events";
 import { MANIFEST_FILE } from "./sync.ts";
 
-export type FindingKind =
-  | "event-schema-missing"
-  | "event-schema-invalid"
-  | "event-schema-uncompilable"
-  | "permission-never-checked"
-  | "route-unguarded"
-  | "event-not-declared"
-  | "event-handler-missing"
-  | "permission-not-declared"
-  | "secret-never-read"
-  | "health-route-missing"
-  | "config-not-declared"
-  | "config-type-mismatch"
-  | "config-never-read"
-  | "event-never-published"
-  | "route-not-served"
-  | "event-schema-unused"
-  | "permission-not-granted"
-  | "nav-target-missing"
-  | "public-path-not-served"
-  | "launcher-not-public"
-  | "public-path-guarded"
-  | "subscription-not-published"
-  | "route-hidden"
-  | "nav-target-hidden"
-  | "public-path-hidden"
-  | "launcher-target-hidden"
-  | "launcher-target-missing"
-  | "launcher-target-guarded"
-  | "database-not-declared"
-  | "database-never-read";
+/** Every finding kind `review` reports, in the order the header above describes them. The README table lists each one. */
+export const FINDING_KINDS = [
+  "event-schema-missing",
+  "event-schema-invalid",
+  "event-schema-uncompilable",
+  "permission-never-checked",
+  "route-unguarded",
+  "event-not-declared",
+  "event-handler-missing",
+  "permission-not-declared",
+  "secret-never-read",
+  "health-route-missing",
+  "config-not-declared",
+  "config-type-mismatch",
+  "config-never-read",
+  "event-never-published",
+  "route-not-served",
+  "event-schema-unused",
+  "permission-not-granted",
+  "nav-target-missing",
+  "public-path-not-served",
+  "launcher-not-public",
+  "public-path-guarded",
+  "subscription-not-published",
+  "route-hidden",
+  "nav-target-hidden",
+  "public-path-hidden",
+  "launcher-target-hidden",
+  "launcher-target-missing",
+  "launcher-target-guarded",
+  "database-not-declared",
+  "database-never-read",
+] as const;
+
+export type FindingKind = (typeof FINDING_KINDS)[number];
 
 export interface Finding {
   app: string;
