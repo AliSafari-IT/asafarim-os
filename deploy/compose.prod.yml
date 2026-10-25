@@ -127,7 +127,7 @@ services:
     # repository (AliSafari-IT/igs-pharma, apps/site) and published by that repository's "Landing page image" workflow
     # as ghcr.io/alisafari-it/igs-pharma-site:<full commit sha>. Pinned HERE like breinhap-site: to ship a new
     # version, change the sha in a PR. The storefront (igs-pharma.be) is a different stack (asafarim-platform).
-    image: ghcr.io/alisafari-it/igs-pharma-site:6c136173db743b62b5634a92cbf7c0aeba227740
+    image: ghcr.io/alisafari-it/igs-pharma-site:4ef9dc3469f378badc3003a590766dfbeafef0b3
     restart: unless-stopped
     read_only: true
     tmpfs:
