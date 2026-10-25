@@ -250,16 +250,47 @@ const PRISMA_FILE = /\.prisma$/;
 const DRIZZLE_CONFIG = /^drizzle\.config\.(?:ts|js|mjs|cjs|mts|cts|json)$/;
 
 /**
+ * Splits `KEY=VALUE KEY2="VALUE 2"` the way a Dockerfile's `ENV` does: whitespace separates words unless it is
+ * quoted or escaped with `\`, and quotes and escapes are removed from the result.
+ */
+function dockerWords(text: string): string[] {
+  const words: string[] = [];
+  let word: string | undefined;
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote === undefined && /\s/.test(c)) {
+      if (word !== undefined) words.push(word);
+      word = undefined;
+      continue;
+    }
+    word ??= "";
+    if (c === "\\" && quote !== "'" && i + 1 < text.length) word += text[++i];
+    else if (quote === undefined && (c === '"' || c === "'")) quote = c;
+    else if (c === quote) quote = undefined;
+    else word += c;
+  }
+  if (word !== undefined) words.push(word);
+  return words;
+}
+
+/**
  * The `PORT` value a Dockerfile's final image runs with: the last `ENV PORT`
  * of the final stage, or of the earlier stage it is built `FROM` (an image inherits its base's `ENV`).
  * Returns the raw value; `undefined` when no stage in that chain sets it.
  */
 export function dockerfilePort(text: string): string | undefined {
   const stages: { base: string; alias?: string; port?: string }[] = [];
-  const lines = text.replace(/\\\r?\n/g, " ").split(/\r?\n/);
+  // Docker drops comment lines before it joins `\` continuations, so a comment can sit inside an instruction.
+  const lines = text
+    .split(/\r?\n/)
+    .filter((l) => !l.trimStart().startsWith("#"))
+    .join("\n")
+    .replace(/\\[ \t]*\r?\n/g, " ")
+    .split("\n");
   for (const raw of lines) {
     const line = raw.trim();
-    if (line === "" || line.startsWith("#")) continue;
+    if (line === "") continue;
     const [instruction = "", ...rest] = line.split(/\s+/);
     const args = rest.filter((a) => !a.startsWith("--")); // FROM --platform=…
     if (/^from$/i.test(instruction)) {
@@ -271,8 +302,7 @@ export function dockerfilePort(text: string): string | undefined {
     if (!stage || !/^env$/i.test(instruction)) continue;
     const body = line.slice(instruction.length).trim();
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(body)) {
-      for (const m of body.matchAll(/([A-Za-z_][A-Za-z0-9_]*)=("(?:[^"\\]|\\.)*"|'[^']*'|\S*)/g))
-        if (m[1] === "PORT") stage.port = m[2]!.replace(/^(["'])(.*)\1$/, "$2");
+      for (const word of dockerWords(body)) if (word.startsWith("PORT=")) stage.port = word.slice("PORT=".length);
     } else {
       const legacy = /^([A-Za-z_][A-Za-z0-9_]*)\s+(.*)$/.exec(body);
       if (legacy?.[1] === "PORT") stage.port = legacy[2]!.trim().replace(/^(["'])(.*)\1$/, "$2");

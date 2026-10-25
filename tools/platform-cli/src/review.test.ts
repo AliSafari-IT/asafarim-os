@@ -112,6 +112,10 @@ describe("helpers", () => {
     expect(
       dockerfilePort("FROM node AS base\nENV PORT=7000\nFROM base AS mid\nFROM --platform=linux/amd64 MID\n"),
     ).toBe("7000");
+    // a comment line inside a continued instruction doesn't end it; an escaped space keeps text in its value
+    expect(dockerfilePort("FROM node\nENV NODE_ENV=production \\\n# the port\n    PORT=8080\n")).toBe("8080");
+    expect(dockerfilePort("FROM node\nENV MESSAGE=hello\\ PORT=8080\n")).toBeUndefined();
+    expect(dockerfilePort("FROM node\nENV MESSAGE=\"a PORT=1\" PORT='2'\n")).toBe("2");
     // the raw value comes back: the caller decides what a literal number is
     expect(dockerfilePort("FROM node\nARG P=1\nENV PORT=${P}\n")).toBe("${P}");
     expect(dockerfilePort("ENV PORT=1\n")).toBeUndefined();
