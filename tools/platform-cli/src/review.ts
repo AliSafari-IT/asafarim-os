@@ -130,6 +130,13 @@
  *   database, runs its migrations and hands the app `DATABASE_URL`, and nothing reads it. Usually the
  *   code reads the URL under another name (and gets `undefined`), or the code stopped using the
  *   database and the manifest kept it.
+ * - `database-migrations-missing`: the manifest says `database.engine: "postgres"` with
+ *   `migrations: "prisma"` or `"drizzle"`, but the app has nothing for that tool's migrator command
+ *   (`prisma migrate deploy`, `drizzle-kit migrate`; `MIGRATE_COMMANDS` in `compose.ts`) to run: no
+ *   `*.prisma` schema anywhere in the app's source, or no `drizzle.config.*` at the app's root. The
+ *   command then fails, so installing the app stops at its migrations. Usually the manifest names the
+ *   wrong tool, or the schema or config sits outside the app folder. `migrations: "sql"` has no
+ *   standard command and isn't checked.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -179,6 +186,7 @@ export const FINDING_KINDS = [
   "launcher-target-guarded",
   "database-not-declared",
   "database-never-read",
+  "database-migrations-missing",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];
@@ -219,6 +227,8 @@ const SKIP_ROOT_DIRS = new Set(["events"]);
 const SOURCE_FILE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
 /** Prisma schema files: `prisma/schema.prisma`, or the multi-file `prisma/schema/*.prisma`. */
 const PRISMA_FILE = /\.prisma$/;
+/** drizzle-kit's default config file, which `drizzle-kit migrate` reads from the app's root. */
+const DRIZZLE_CONFIG = /^drizzle\.config\.(?:ts|js|mjs|cjs|mts|cts|json)$/;
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const MANIFEST_SOURCE = /^platform\.app\.(?:ts|js|mjs|json)$/;
 const ROUTE_FILE = /^route\.[cm]?[jt]sx?$/;
@@ -1259,6 +1269,30 @@ export function reviewApp(
         kind: "database-never-read",
         subject: "DATABASE_URL",
         message: `the manifest says database.engine: "postgres", so the platform provisions a database and hands its URL as DATABASE_URL, but no code or Prisma schema reads DATABASE_URL (read process.env.DATABASE_URL where the code connects, or declare database.engine: "none" if the app no longer needs the database)`,
+      });
+    }
+  }
+
+  // 27. The migrator's default command needs that tool's schema or config in the app.
+  if (manifest.database.engine === "postgres") {
+    const tool = manifest.database.migrations;
+    const missing =
+      tool === "prisma"
+        ? sourceFiles(appDir, PRISMA_FILE).length === 0
+          ? "no *.prisma schema in the app"
+          : undefined
+        : tool === "drizzle"
+          ? readdirSync(appDir, { withFileTypes: true }).some((e) => e.isFile() && DRIZZLE_CONFIG.test(e.name))
+            ? undefined
+            : "no drizzle.config.* at the app's root"
+          : undefined;
+    if (missing) {
+      const command = tool === "prisma" ? "prisma migrate deploy" : "drizzle-kit migrate";
+      findings.push({
+        app,
+        kind: "database-migrations-missing",
+        subject: `migrations: ${tool}`,
+        message: `the manifest says database.migrations: "${tool}", so the platform migrates the database with ${command}, but there is ${missing}, so the command fails and installing the app stops at its migrations (add it to the app, or declare the migrations the app really uses)`,
       });
     }
   }
