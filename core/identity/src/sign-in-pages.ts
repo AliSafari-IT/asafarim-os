@@ -29,6 +29,9 @@ color:var(--ink);text-decoration:none}.tile:hover{border-color:var(--accent)}
 .glyph{flex:none;display:grid;place-items:center;width:36px;height:36px;border-radius:10px;background:var(--accent-soft);
 color:var(--accent);font-weight:700;font-size:.8rem;letter-spacing:.04em}
 .os-table-wrap{margin:0 0 20px}.os-table td{vertical-align:middle}
+.keys{list-style:none;margin:0 0 16px;padding:0;display:grid;gap:8px}
+.key{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid var(--line);
+border-radius:12px}.key strong{overflow-wrap:anywhere}.key small{display:block;color:var(--muted)}
 .details{color:var(--muted);font-size:.85em;overflow-wrap:anywhere}
 h2{font-size:1.05rem;margin:22px 0 8px}
 .small{font-size:.85rem}
@@ -171,18 +174,13 @@ export function accountPage(opts: {
 }): string {
   const csrf = csrfField(opts.csrf);
   const list = opts.passkeys.length
-    ? table(
-        ["Passkey", "Added", "Last used", ""],
-        opts.passkeys
-          .map(
-            (k) =>
-              `<tr>${cell("Passkey", escapeHtml(k.name))}${cell("Added", when(k.createdAt))}${cell("Last used", when(k.lastUsedAt))}${cell(
-                "",
-                `<form class="inline" method="post" action="/account/passkeys/remove">${csrf}<input type="hidden" name="id" value="${escapeHtml(k.credentialId)}"><button class="secondary" type="submit">Remove</button></form>`,
-              )}</tr>`,
-          )
-          .join(""),
-      )
+    ? // A list, not a table: the account card is too narrow for four columns at any screen width.
+      `<ul class="keys">${opts.passkeys
+        .map(
+          (k) =>
+            `<li class="key"><div><strong>${escapeHtml(k.name)}</strong><small>Added ${when(k.createdAt)}</small><small>Last used ${when(k.lastUsedAt)}</small></div><form class="inline" method="post" action="/account/passkeys/remove">${csrf}<input type="hidden" name="id" value="${escapeHtml(k.credentialId)}"><button class="secondary" type="submit">Remove</button></form></li>`,
+        )
+        .join("")}</ul>`
     : "<p>No passkeys yet.</p>";
   return page(
     "Your account",

@@ -1,6 +1,6 @@
 /**
  * Who is looking at the console, and may they? Resolved once per request:
- *   signed-out  no session, or the ID token has expired → the sign-in page
+ *   signed-out  no session, or the ID token has expired → sign-in starts (/signin/start)
  *   forbidden   signed in, but core-api says they don't hold core.admin → a real 403
  *   ok          an administrator
  * The ID token stays on the server: it is read from the encrypted session cookie, never from
@@ -45,10 +45,13 @@ export const adminState = cache(async (): Promise<AdminState> => {
   };
 });
 
-/** For pages, layouts and server actions: an administrator, or a redirect to sign-in, or a 403. */
+/**
+ * For pages, layouts and server actions: an administrator, or a 403, or a redirect that starts sign-in
+ * (no click needed for someone already signed in to identity).
+ */
 export async function requireAdmin() {
   const s = await adminState();
-  if (s.state === "signed-out") redirect("/signin");
+  if (s.state === "signed-out") redirect("/signin/start");
   if (s.state === "forbidden") forbidden();
   return s;
 }

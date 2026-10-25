@@ -52,7 +52,9 @@ async function launcherFor(sub: string): Promise<string[]> {
  */
 async function signIn(page: Page, url: string, displayName: string) {
   await page.goto(url);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  // The console starts sign-in by itself; notes shows a Sign in button first.
+  const button = page.getByRole("button", { name: "Sign in" });
+  if (url.startsWith(NOTES)) await button.click();
   // Anchored: once signed in, the account menu's button ("Your account menu: <name>") also carries the name.
   const chooser = page.getByRole("button", { name: new RegExp(`^${displayName}`) });
   const signedIn = page.getByTestId("who");
@@ -110,10 +112,9 @@ test.afterAll(async () => {
   expect(nativeDialogs, "the console must never use window.alert/confirm/prompt").toBe(0);
 });
 
-test("signed out, /admin sends you to sign in; a signed-in non-admin gets a 403", async () => {
+test("signed out, /admin starts sign-in at once; a signed-in non-admin gets a 403", async () => {
   const page = await memberCtx.newPage();
-  await page.goto(`${ADMIN}/admin`);
-  await expect(page).toHaveURL(/\/signin$/);
+  await page.goto(`${ADMIN}/signin`);
   await expect(page.getByRole("heading", { name: "ASafariM OS Admin" })).toBeVisible();
   // The console's own mark and favicon (SVG, with the .ico and Apple touch icon as fallbacks).
   await expect(page.getByTestId("admin-logo")).toBeVisible();
@@ -121,7 +122,8 @@ test("signed out, /admin sends you to sign in; a signed-in non-admin gets a 403"
   await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveCount(1);
   expect((await page.request.get(`${ADMIN}/favicon.ico`)).status()).toBe(200);
 
-  await page.getByRole("button", { name: "Sign in" }).click();
+  // No Sign in button on the way: /admin goes straight to identity (the dev login stub's chooser).
+  await page.goto(`${ADMIN}/admin`);
   await page.getByRole("button", { name: /Dev Member/ }).click();
   // After sign-in the member lands on /admin: a real 403 with the reason, and no console.
   await expect(page.getByRole("heading", { name: /403/ })).toBeVisible();
