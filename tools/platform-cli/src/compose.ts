@@ -72,6 +72,19 @@ export function isPinnedImage(ref: string): boolean {
 }
 
 const variableName = (id: string, suffix: string) => `${id.toUpperCase().replace(/-/g, "_")}_${suffix}`;
+
+/**
+ * The database variables the file generates for a `postgres` app: what the app reads, the web service's and
+ * workers' DSN, and the migrator's DSN. A declared secret may not take any of these names.
+ */
+export function databaseVariableNames(id: string): { app: string; dsn: string; migratorDsn: string } {
+  return {
+    app: "DATABASE_URL",
+    dsn: variableName(id, "DATABASE_URL"),
+    migratorDsn: variableName(id, "MIGRATOR_DATABASE_URL"),
+  };
+}
+
 const ref = (name: string) => `\${${name}:?set ${name}}`;
 /**
  * Compose interpolates every service in the file, including ones in an inactive profile, so a required (`:?`)
@@ -125,11 +138,10 @@ export function buildCompose(manifest: AppManifest, options: ComposeOptions): Co
   }
   // The database and its migrator.
   const postgres = manifest.database.engine === "postgres" ? manifest.database : undefined;
-  const dsn = variableName(id, "DATABASE_URL");
-  const migratorDsn = variableName(id, "MIGRATOR_DATABASE_URL");
+  const { app: appDsn, dsn, migratorDsn } = databaseVariableNames(id);
   // A declared secret may not take the name of a variable this file generates: it would go to the web
   // service and the workers by default, and the migrator's DSN must never reach them.
-  const reserved = new Set(postgres ? ["DATABASE_URL", dsn, migratorDsn] : []);
+  const reserved = new Set(postgres ? [appDsn, dsn, migratorDsn] : []);
   for (const name of declared) {
     if (reserved.has(name))
       problems.push(`the secret ${name} would clash with a database variable of the generated file.`);

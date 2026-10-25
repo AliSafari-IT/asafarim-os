@@ -141,6 +141,12 @@
  *   accepts it, but those are the compose file's web service and migrator (`RESERVED_SERVICE_NAMES`
  *   in `compose.ts`), so `platform compose` refuses to write the app's file and the app can't be
  *   deployed until the worker is renamed. One finding per such worker.
+ * - `secret-name-reserved`: `database.engine` is `"postgres"` and a declared secret is named
+ *   `DATABASE_URL`, `<ID>_DATABASE_URL` or `<ID>_MIGRATOR_DATABASE_URL`, the database variables the
+ *   compose file generates (`databaseVariableNames` in `compose.ts`). The manifest schema accepts it,
+ *   but `platform compose` refuses to write the app's file, so the app can't be deployed until the
+ *   secret is renamed or dropped. One finding per such secret. With `engine: "none"` the app may bring
+ *   its own `DATABASE_URL` as a secret, and nothing is reported.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -156,7 +162,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { HTTP_METHODS, validateManifest, type AppManifest } from "@asafarim/app-manifest";
 import { compileEventSchema } from "@asafarim/events";
-import { RESERVED_SERVICE_NAMES } from "./compose.ts";
+import { RESERVED_SERVICE_NAMES, databaseVariableNames } from "./compose.ts";
 import { MANIFEST_FILE } from "./sync.ts";
 
 /** Every finding kind `review` reports, in the order the header above describes them. The README table lists each one. */
@@ -193,6 +199,7 @@ export const FINDING_KINDS = [
   "database-never-read",
   "database-migrations-missing",
   "worker-name-reserved",
+  "secret-name-reserved",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];
@@ -1312,6 +1319,25 @@ export function reviewApp(
       subject: `worker: ${w.name}`,
       message: `the worker "${w.name}" has the name of the compose file's ${w.name === "web" ? "web service" : "migrator"}, so platform compose refuses to write the app's compose file and the app can't be deployed (rename the worker)`,
     });
+  }
+
+  // 29. With postgres, a declared secret can't take the name of a database variable the compose file generates.
+  if (manifest.database.engine === "postgres") {
+    const { app: appDsn, dsn, migratorDsn } = databaseVariableNames(manifest.id);
+    const what = new Map([
+      [appDsn, "the database URL the platform hands the app"],
+      [dsn, "the web service's and workers' database URL"],
+      [migratorDsn, "the migrator's database URL"],
+    ]);
+    for (const name of manifest.secrets ?? []) {
+      if (!what.has(name)) continue;
+      findings.push({
+        app,
+        kind: "secret-name-reserved",
+        subject: `secret: ${name}`,
+        message: `the secret ${name} has the name of ${what.get(name)} in the generated compose file, so platform compose refuses to write the app's compose file and the app can't be deployed (rename the secret, or drop it: the platform provisions the database)`,
+      });
+    }
   }
 
   return { app, findings, handlers, plumbing };
