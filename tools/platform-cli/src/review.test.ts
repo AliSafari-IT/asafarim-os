@@ -168,6 +168,12 @@ describe("helpers", () => {
     expect(routeUrlRegex("/events/[...p]").test("/events")).toBe(false);
     expect(routeUrlRegex("/events/[[...p]]").test("/events")).toBe(true);
     expect(routeUrlRegex("/").test("/")).toBe(true);
+    expect(routeUrlRegex("/").test("/x")).toBe(false);
+    expect(routeUrlRegex("/[[...p]]").test("/")).toBe(true);
+    expect(routeUrlRegex("/[[...p]]").test("/a/b")).toBe(true);
+    expect(routeUrlRegex("/[[...p]]").test("")).toBe(true);
+    expect(routeUrlRegex("/[...p]").test("/")).toBe(false);
+    expect(routeUrlRegex("/[id]").test("/")).toBe(false);
   });
 
   it("finds event types in the app's own namespace, as whole string literals only", () => {
@@ -1239,6 +1245,63 @@ describe("platform manifest review", () => {
     expect(review(["--markdown"]).lines[0]!).toContain("| launcher-target-hidden | ui.launcher |");
     expect(review().ok).toBe(true);
     expect(review(["--strict"]).ok).toBe(false);
+  });
+
+  it("reports a launcher tile whose start page nothing serves", () => {
+    const tile = { description: "Shop", meta: "shop.asafarim.site", access: "authenticated", order: 10 };
+    const app = (ui: Record<string, unknown> = { launcher: tile }) => manifest({ ui: { ...manifest().ui, ...ui } });
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+
+    // nothing serves "/": no tile, a coming-soon tile, or a nav link to "/" (nav-target-missing reports it)
+    writeApp(app({}));
+    expect(kinds()).toEqual([]);
+    writeApp(app({ launcher: tile, status: "coming-soon" }));
+    expect(kinds()).toEqual([]);
+    writeApp(app({ launcher: tile, nav: [{ label: "Home", href: "/" }] }));
+    expect(kinds()).toEqual(["nav-target-missing /"]);
+
+    // an active tile and nothing at "/": a page elsewhere and "/*" (one segment) don't serve it
+    put("apps/shop/app/orders/page.tsx", "export default function Page() { return null; }");
+    put("apps/shop/app/[slug]/page.tsx", "export default function Page() { return null; }");
+    writeApp(app());
+    let out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toEqual([
+      "launcher-target-missing ui.launcher",
+    ]);
+    const missing = out.reviews[0]!.findings[0] as unknown as { message: string; file?: string };
+    expect(missing.file).toBeUndefined();
+    expect(missing.message).toBe(
+      "the launcher tile opens shop at /, but no page or route file serves /, so the tile answers 404 to everyone who opens it (add app/page.tsx, or drop the tile)",
+    );
+    expect(review().lines.join("\n")).toMatch(/\[launcher-target-missing\] the launcher tile opens shop at \//);
+    expect(review(["--markdown"]).lines[0]!).toContain("| launcher-target-missing | ui.launcher |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // a route file at "/" that doesn't answer GET: 405, naming the file
+    put("apps/shop/app/route.ts", `import "@/lib/x";\nexport function POST() {}`);
+    out = json();
+    expect(out.reviews[0]!.findings.map((f) => `${f.kind} ${f.subject}`)).toContain(
+      "launcher-target-missing ui.launcher",
+    );
+    const noGet = out.reviews[0]!.findings.find((f) => f.kind === "launcher-target-missing") as unknown as {
+      message: string;
+      file?: string;
+    };
+    expect(noGet.file).toBe("apps/shop/app/route.ts");
+    expect(noGet.message).toMatch(
+      /^the launcher tile opens shop at \/, but the route file serving \/ doesn't export GET/,
+    );
+
+    // served: a route file exporting GET, a page in a route group, or an optional catch-all page
+    put("apps/shop/app/route.ts", `import "@/lib/x";\nexport function GET() {}`);
+    expect(kinds()).not.toContain("launcher-target-missing ui.launcher");
+    rmSync(path.join(root, "apps/shop/app/route.ts"));
+    put("apps/shop/app/(site)/page.tsx", "export default function Page() { return null; }");
+    expect(kinds()).toEqual([]);
+    rmSync(path.join(root, "apps/shop/app/(site)"), { recursive: true });
+    put("apps/shop/app/[[...path]]/page.tsx", "export default function Page() { return null; }");
+    expect(kinds()).toEqual([]);
   });
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
