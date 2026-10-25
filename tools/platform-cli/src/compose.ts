@@ -52,6 +52,9 @@ export interface ComposeFile {
 
 export type ComposeResult = { ok: true; file: ComposeFile } | { ok: false; lines: string[] };
 
+/** The compose file's own services besides the workers; a worker may not take either name. */
+export const RESERVED_SERVICE_NAMES: readonly string[] = ["web", "migrate"];
+
 /** The command a migration tool is run with; `sql` migrations have no standard one, so the caller says. */
 export const MIGRATE_COMMANDS: Record<string, string[] | undefined> = {
   drizzle: ["drizzle-kit", "migrate"],
@@ -84,7 +87,7 @@ export function buildCompose(manifest: AppManifest, options: ComposeOptions): Co
   const problems: string[] = [];
   const workers = manifest.runtime.workers ?? [];
   const processes = ["web", ...workers.map((w) => w.name)];
-  if (new Set(processes).size !== processes.length || workers.some((w) => ["web", "migrate"].includes(w.name))) {
+  if (new Set(processes).size !== processes.length || workers.some((w) => RESERVED_SERVICE_NAMES.includes(w.name))) {
     problems.push(`a worker may not be called "web" or "migrate" (those are the other services of the file).`);
   }
 
