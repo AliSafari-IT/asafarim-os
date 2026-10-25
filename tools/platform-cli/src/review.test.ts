@@ -1598,6 +1598,42 @@ describe("platform manifest review", () => {
     writeApp(manifest({ secrets: ["DATABASE_URL"] }));
     expect(kinds()).toEqual([]);
   });
+
+  it("reports a postgres database that no code or Prisma schema reads", () => {
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    writeApp(manifest({ database: { engine: "postgres", migrations: "prisma" } }));
+    // a comment, a test, a longer name or a schema outside the app's source doesn't read it
+    put("apps/shop/lib/a.ts", `// DATABASE_URL comes later\nexport const u = process.env.SHOP_DATABASE_URL;`);
+    put("apps/shop/lib/db.test.ts", `process.env.DATABASE_URL = "postgres://x";`);
+    put("apps/shop/test/schema.prisma", `datasource db { url = env("DATABASE_URL") }`);
+    put("apps/shop/prisma/schema.prisma", `// url = env("DATABASE_URL")\ndatasource db { url = env("SHOP_DB") }`);
+    expect(kinds()).toEqual(["database-never-read DATABASE_URL"]);
+    const out = json();
+    expect(out.reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "database-never-read",
+      subject: "DATABASE_URL",
+      message:
+        'the manifest says database.engine: "postgres", so the platform provisions a database and hands its URL as DATABASE_URL, but no code or Prisma schema reads DATABASE_URL (read process.env.DATABASE_URL where the code connects, or declare database.engine: "none" if the app no longer needs the database)',
+    });
+    expect(review().lines.join("\n")).toMatch(/\[database-never-read\] the manifest says database\.engine: "postgres"/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| database-never-read | DATABASE\\_URL |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // a Prisma schema that reads it (also in the multi-file layout) is enough
+    put("apps/shop/prisma/schema/base.prisma", `datasource db {\n  url = env("DATABASE_URL")\n}`);
+    expect(kinds()).toEqual([]);
+    rmSync(path.join(root, "apps/shop/prisma"), { recursive: true });
+    expect(kinds()).toEqual(["database-never-read DATABASE_URL"]);
+
+    // so is runtime code that reads it, and engine "none" has nothing to read
+    put("apps/shop/lib/db.ts", `export const url = process.env["DATABASE_URL"];`);
+    expect(kinds()).toEqual([]);
+    rmSync(path.join(root, "apps/shop/lib/db.ts"));
+    writeApp(manifest());
+    expect(kinds()).toEqual([]);
+  });
 });
 
 describe("platform manifest review --markdown", () => {
