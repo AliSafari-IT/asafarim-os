@@ -137,6 +137,10 @@
  *   command then fails, so installing the app stops at its migrations. Usually the manifest names the
  *   wrong tool, or the schema or config sits outside the app folder. `migrations: "sql"` has no
  *   standard command and isn't checked.
+ * - `worker-name-reserved`: a `runtime.workers[].name` is `web` or `migrate`. The manifest schema
+ *   accepts it, but those are the compose file's web service and migrator (`RESERVED_SERVICE_NAMES`
+ *   in `compose.ts`), so `platform compose` refuses to write the app's file and the app can't be
+ *   deployed until the worker is renamed. One finding per such worker.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -152,6 +156,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { HTTP_METHODS, validateManifest, type AppManifest } from "@asafarim/app-manifest";
 import { compileEventSchema } from "@asafarim/events";
+import { RESERVED_SERVICE_NAMES } from "./compose.ts";
 import { MANIFEST_FILE } from "./sync.ts";
 
 /** Every finding kind `review` reports, in the order the header above describes them. The README table lists each one. */
@@ -187,6 +192,7 @@ export const FINDING_KINDS = [
   "database-not-declared",
   "database-never-read",
   "database-migrations-missing",
+  "worker-name-reserved",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];
@@ -1295,6 +1301,17 @@ export function reviewApp(
         message: `the manifest says database.migrations: "${tool}", so the platform migrates the database with ${command}, but there is ${missing}, so the command fails and installing the app stops at its migrations (add it to the app, or declare the migrations the app really uses)`,
       });
     }
+  }
+
+  // 28. A worker can't take the name of the compose file's web service or migrator.
+  for (const w of manifest.runtime.workers ?? []) {
+    if (!RESERVED_SERVICE_NAMES.includes(w.name)) continue;
+    findings.push({
+      app,
+      kind: "worker-name-reserved",
+      subject: `worker: ${w.name}`,
+      message: `the worker "${w.name}" has the name of the compose file's ${w.name === "web" ? "web service" : "migrator"}, so platform compose refuses to write the app's compose file and the app can't be deployed (rename the worker)`,
+    });
   }
 
   return { app, findings, handlers, plumbing };

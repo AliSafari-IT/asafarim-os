@@ -32,6 +32,7 @@ import {
   stripComments,
   type AppReview,
 } from "./review.ts";
+import { RESERVED_SERVICE_NAMES } from "./compose.ts";
 import { scaffoldApp } from "./scaffold.ts";
 
 const WORKSPACE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -1676,6 +1677,43 @@ describe("platform manifest review", () => {
     writeApp(manifest({ database: { engine: "postgres", migrations: "sql" } }));
     expect(kinds()).toEqual([]);
     writeApp(manifest({ secrets: ["DATABASE_URL"] }));
+    expect(kinds()).toEqual([]);
+  });
+
+  it("reports a worker named like the compose file's web service or migrator", () => {
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    const worker = (name: string) => ({
+      name,
+      image: "shop-worker",
+      network: "internal",
+      resources: { memory: "128m", cpus: 0.25 },
+    });
+    const withWorkers = (...names: string[]) => {
+      const m = manifest();
+      return { ...m, runtime: { ...m.runtime, workers: names.map(worker) } };
+    };
+    writeApp(withWorkers("mailer", "web", "migrate"));
+    expect(kinds()).toEqual(["worker-name-reserved worker: web", "worker-name-reserved worker: migrate"]);
+    expect(json().reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "worker-name-reserved",
+      subject: "worker: web",
+      message:
+        "the worker \"web\" has the name of the compose file's web service, so platform compose refuses to write the app's compose file and the app can't be deployed (rename the worker)",
+    });
+    expect(json().reviews[0]!.findings[1]).toMatchObject({
+      message: expect.stringContaining("the name of the compose file's migrator"),
+    });
+    expect(review().lines.join("\n")).toMatch(/\[worker-name-reserved\] the worker "web"/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| worker-name-reserved | worker: web |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // the review and compose refuse the same names
+    expect([...RESERVED_SERVICE_NAMES].sort()).toEqual(["migrate", "web"]);
+
+    // other names, also ones that only contain a reserved name, are fine
+    writeApp(withWorkers("mailer", "web-sync", "migrator"));
     expect(kinds()).toEqual([]);
   });
 });
