@@ -14,6 +14,7 @@ The ASafariM OS **Admin console** (P3.3b, ADR 0001 §3–4): the apps, who may d
 2. The **ID token stays on the server**, inside the encrypted session cookie. It is never in the session object the browser can read.
 3. Every page and every action sends that token to core-api's admin API as `Bearer`. **core-api** verifies it, checks `core.admin` **per request**, and audits the action as `user:<sub>`. The console holds **no admin secret** and does no authorisation of its own beyond asking: a revoked administrator is refused on their next click.
 4. The session is capped at the ID token's hour; an expired one sends the person to sign in.
+5. A signed-out visitor goes straight to identity (`/signin/start`), with no Sign in button to click: someone already signed in there (they came from the OS home page's menu, identity's header or the app switcher) is back in the console at once. If they come back signed out within a minute, they get `/signin` with its button instead of another round trip. `/signin` is also where signing out lands.
 
 **Bootstrap:** the first administrator is made with the CLI, never by the console: `pnpm platform role grant core.admin <sub>` (`pnpm dev` does it for `dev-admin`). An administrator can't revoke their own `core.admin`.
 
