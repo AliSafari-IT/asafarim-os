@@ -301,8 +301,14 @@ footer p {
   animation-duration: 11s;
   animation-direction: reverse;
 }
-.brand:hover .mark-orbit {
-  animation-duration: 1.6s;
+/* Hovering the brand gives the orbits one extra turn. A transition on a wrapper, not a faster animation:
+   changing a running animation's duration makes the dots jump to another angle on hover and back on leave. */
+.mark-spin {
+  transform-origin: 16px 16px;
+  transition: transform 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.brand:hover .mark-spin {
+  transform: rotate(1turn);
 }
 .hero-art {
   display: none;
