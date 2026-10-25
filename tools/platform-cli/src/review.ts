@@ -104,6 +104,14 @@
  *   405) to everyone who opens it, usually because the start page moved under a route group or a
  *   prefix. Coming-soon apps, apps without a tile, and apps whose `ui.nav` already links `/` (reported
  *   as `nav-target-missing`) are skipped. Redirects in `next.config` or middleware aren't read.
+ * - `launcher-target-guarded`: an active app with a launcher tile (`ui.launcher`) where a manifest
+ *   route that isn't hidden puts a `permission` on `/` for `GET` (no `methods` limit, or `methods`
+ *   including `GET`). core-api's gateway asks for the permissions of every route matching a path, so it
+ *   asks for this one when someone opens the tile: with `access: "public"` a signed-out visitor is sent
+ *   to sign-in, and with either access a signed-in user without the permission gets 403. The tile
+ *   promises more than the gateway allows, usually because a guarding glob such as `/**` was meant for
+ *   a narrower prefix. Coming-soon apps, apps without a tile, and apps where `/` is hidden (reported as
+ *   `launcher-target-hidden`) are skipped.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -146,7 +154,8 @@ export type FindingKind =
   | "nav-target-hidden"
   | "public-path-hidden"
   | "launcher-target-hidden"
-  | "launcher-target-missing";
+  | "launcher-target-missing"
+  | "launcher-target-guarded";
 
 export interface Finding {
   app: string;
@@ -1136,6 +1145,29 @@ export function reviewApp(
         message: winner
           ? `the launcher tile opens ${app} at /, but the route file serving / doesn't export GET, so the tile answers 405 to everyone who opens it (export GET, or serve / with a page)`
           : `the launcher tile opens ${app} at /, but no page or route file serves /, so the tile answers 404 to everyone who opens it (add app/page.tsx, or drop the tile)`,
+      });
+    }
+  }
+
+  // 24. A launcher tile the gateway guards: the tile opens `/`, and the gateway adds up the permissions
+  // of every route matching it (`routeVerdict`), so a permission there contradicts the tile's access.
+  // A hidden `/` answers 404 before any permission is asked (reported as `launcher-target-hidden`).
+  if (launcher && manifest.ui.status === "active") {
+    const atRoot = routes.filter((r) => methodCovered(r.methods, "GET") && globRegex(r.path).test("/"));
+    const perms = [...new Set(atRoot.filter((r) => r.expose !== false).flatMap((r) => r.permission ?? []))].sort();
+    if (perms.length > 0 && !atRoot.some((r) => r.expose === false)) {
+      const named = perms.length === 1 ? `the permission ${perms[0]}` : `permissions (${perms.join(", ")})`;
+      const them = perms.length === 1 ? "it" : "them";
+      const asked = `manifest routes put ${named} on / for GET, and the gateway asks for ${them}`;
+      const who =
+        launcher.access === "public"
+          ? `says anyone may open ${app} (access "public"), but ${asked}, so a signed-out visitor is sent to sign-in and a signed-in user without ${them} gets 403`
+          : `says any signed-in user may open ${app} (access "authenticated"), but ${asked}, so a signed-in user without ${them} gets 403`;
+      findings.push({
+        app,
+        kind: "launcher-target-guarded",
+        subject: "ui.launcher",
+        message: `the launcher tile ${who} (take the permission off /, for example by narrowing the route, or drop the tile)`,
       });
     }
   }
