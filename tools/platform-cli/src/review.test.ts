@@ -1626,13 +1626,56 @@ describe("platform manifest review", () => {
     put("apps/shop/prisma/schema/base.prisma", `datasource db {\n  url = env("DATABASE_URL")\n}`);
     expect(kinds()).toEqual([]);
     rmSync(path.join(root, "apps/shop/prisma"), { recursive: true });
-    expect(kinds()).toEqual(["database-never-read DATABASE_URL"]);
+    expect(kinds()).toEqual(["database-never-read DATABASE_URL", "database-migrations-missing migrations: prisma"]);
 
     // so is runtime code that reads it, and engine "none" has nothing to read
     put("apps/shop/lib/db.ts", `export const url = process.env["DATABASE_URL"];`);
-    expect(kinds()).toEqual([]);
+    expect(kinds()).toEqual(["database-migrations-missing migrations: prisma"]);
     rmSync(path.join(root, "apps/shop/lib/db.ts"));
     writeApp(manifest());
+    expect(kinds()).toEqual([]);
+  });
+
+  it("reports prisma or drizzle migrations with no schema or config for the migrator to run", () => {
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put("apps/shop/lib/db.ts", `export const url = process.env.DATABASE_URL;`);
+    writeApp(manifest({ database: { engine: "postgres", migrations: "prisma" } }));
+    // a schema under test/ or a non-schema file doesn't count
+    put("apps/shop/test/schema.prisma", `datasource db { url = env("DATABASE_URL") }`);
+    put("apps/shop/prisma/schema.prisma.bak", `datasource db { url = env("DATABASE_URL") }`);
+    expect(kinds()).toEqual(["database-migrations-missing migrations: prisma"]);
+    expect(json().reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "database-migrations-missing",
+      subject: "migrations: prisma",
+      message:
+        'the manifest says database.migrations: "prisma", so the platform migrates the database with prisma migrate deploy, but there is no *.prisma schema in the app, so the command fails and installing the app stops at its migrations (add it to the app, or declare the migrations the app really uses)',
+    });
+    expect(review().lines.join("\n")).toMatch(
+      /\[database-migrations-missing\] the manifest says database\.migrations: "prisma"/,
+    );
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // a schema anywhere in the app's source, also in the multi-file layout, is enough
+    put("apps/shop/prisma/schema/base.prisma", `datasource db {\n  url = env("DATABASE_URL")\n}`);
+    expect(kinds()).toEqual([]);
+
+    // drizzle needs drizzle.config.* at the app's root; one in a subfolder doesn't count
+    writeApp(manifest({ database: { engine: "postgres", migrations: "drizzle" } }));
+    put("apps/shop/lib/drizzle.config.ts", `export default {};`);
+    expect(kinds()).toEqual(["database-migrations-missing migrations: drizzle"]);
+    expect(json().reviews[0]!.findings[0]).toMatchObject({
+      message: expect.stringContaining("with drizzle-kit migrate, but there is no drizzle.config.* at the app's root"),
+    });
+    put("apps/shop/drizzle.config.mts", `export default {};`);
+    expect(kinds()).toEqual([]);
+
+    // sql migrations have no standard command, and engine "none" has nothing to migrate
+    rmSync(path.join(root, "apps/shop/drizzle.config.mts"));
+    writeApp(manifest({ database: { engine: "postgres", migrations: "sql" } }));
+    expect(kinds()).toEqual([]);
+    writeApp(manifest({ secrets: ["DATABASE_URL"] }));
     expect(kinds()).toEqual([]);
   });
 });
