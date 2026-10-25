@@ -9,6 +9,11 @@
  * Findings:
  * - `event-schema-missing` / `event-schema-invalid`: a published event's schema file isn't there, or
  *   isn't a JSON object.
+ * - `event-schema-uncompilable`: a published event's schema file is a JSON object that doesn't compile
+ *   with the publisher's own ajv setup (`compileEventSchema` from `@asafarim/events`: JSON Schema
+ *   2020-12, strict, ajv-formats), e.g. an unknown keyword or `format`, or a `$ref` that resolves to
+ *   nothing. `createPublisher` then throws when the app starts, and core-api refuses the app's whole
+ *   schema upload (`invalid_event_schemas`). The schema is compiled as data; no app code runs.
  * - `permission-never-checked`: a declared permission appears neither in the app's code nor on a
  *   manifest route, so nothing ever asks for it.
  * - `route-unguarded`: a Next.js route handler (`app/**\/route.ts`) answers a method that no manifest
@@ -126,11 +131,13 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { HTTP_METHODS, validateManifest, type AppManifest } from "@asafarim/app-manifest";
+import { compileEventSchema } from "@asafarim/events";
 import { MANIFEST_FILE } from "./sync.ts";
 
 export type FindingKind =
   | "event-schema-missing"
   | "event-schema-invalid"
+  | "event-schema-uncompilable"
   | "permission-never-checked"
   | "route-unguarded"
   | "event-not-declared"
@@ -595,7 +602,7 @@ export function reviewApp(
   const rel = (abs: string) => path.relative(rootDir, abs).split(path.sep).join("/");
   const findings: Finding[] = [];
 
-  // 1. Published event types have a schema file that is a JSON object.
+  // 1. Published event types have a schema file that is a JSON object and compiles as the publisher compiles it.
   for (const ev of manifest.events?.publishes ?? []) {
     const file = path.resolve(appDir, ev.schema);
     const inside = !path.relative(appDir, file).startsWith("..");
@@ -638,6 +645,18 @@ export function reviewApp(
         subject: ev.type,
         file: rel(file),
         message: `the schema of ${ev.type} isn't a JSON Schema object`,
+      });
+      continue;
+    }
+    try {
+      compileEventSchema(parsed);
+    } catch (error) {
+      findings.push({
+        app,
+        kind: "event-schema-uncompilable",
+        subject: ev.type,
+        file: rel(file),
+        message: `the schema of ${ev.type} doesn't compile (${(error as Error).message}), so the app's publisher throws when it starts and core-api refuses its schema upload`,
       });
     }
   }

@@ -12,6 +12,7 @@
   "dependencies": {
     "@asafarim/app-manifest": "workspace:*",
     "@asafarim/event-catalog": "workspace:*",
+    "@asafarim/events": "workspace:*",
     "yaml": "^2.9.1"
   },
   "devDependencies": {

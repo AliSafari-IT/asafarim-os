@@ -754,6 +754,9 @@ importers:
       '@asafarim/event-catalog':
         specifier: workspace:*
         version: link:../../packages/event-catalog
+      '@asafarim/events':
+        specifier: workspace:*
+        version: link:../../packages/events
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
