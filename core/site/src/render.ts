@@ -118,8 +118,10 @@ export const APP_LINKS = {
 /** The brand mark: the OS core with an app orbiting it (it turns slowly; still with "reduce motion"). */
 const BRAND_MARK = `<svg class="mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false">
         <rect class="mark-core" x="8" y="8" width="16" height="16" rx="5" />
-        <g class="mark-orbit"><circle cx="16" cy="2.5" r="2.5" /></g>
-        <g class="mark-orbit mark-orbit-slow"><circle cx="29.5" cy="16" r="1.75" /></g>
+        <g class="mark-spin">
+          <g class="mark-orbit"><circle cx="16" cy="2.5" r="2.5" /></g>
+          <g class="mark-orbit mark-orbit-slow"><circle cx="29.5" cy="16" r="1.75" /></g>
+        </g>
       </svg>`;
 
 /**
