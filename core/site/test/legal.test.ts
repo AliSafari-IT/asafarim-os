@@ -24,6 +24,7 @@ describe("the legal pages", () => {
       const html = renderLegalPage(doc, { repo, themeToggle: "<button data-theme-toggle></button>" });
       expect(html).toContain(`<title>${doc.title} · ASafariM OS</title>`);
       expect(html).toContain(`<link rel="canonical" href="https://asafarim.site/${doc.slug}" />`);
+      expect(html).toContain(`<meta property="og:url" content="https://asafarim.site/${doc.slug}" />`);
       expect(html).toContain('id="account"');
       expect(html).toContain("data-theme-toggle");
       for (const s of doc.sections) expect(html).toContain(`<a href="#${s.id}">`);

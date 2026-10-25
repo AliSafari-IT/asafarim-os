@@ -1,6 +1,6 @@
 /**
  * `pnpm --filter @asafarim/site build`: progress.json → dist/ (index.html, privacy.html, cookies.html, terms.html, theme.css, theme.js, styles.css,
- * session.js, favicon.svg and the screenshots the page uses), plus the app manifest's JSON Schema under /schemas/ (#87). Node built-ins
+ * session.js, favicon.svg, robots.txt, sitemap.xml, og.png and the screenshots the page uses), plus the app manifest's JSON Schema under /schemas/ (#87). Node built-ins
  * only: the image build runs this with no `pnpm install`.
  */
 import { copyFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseProgress, type Progress } from "./progress.ts";
 import { LEGAL_DOCS } from "./legal.ts";
-import { renderLegalPage, renderPage, type ImageSize } from "./render.ts";
+import { OG_IMAGE, renderLegalPage, renderPage, SITE_URL, type ImageSize } from "./render.ts";
 
 /** Every screenshot the site ships stays under this size (the issue's budget). */
 export const MAX_SCREENSHOT_BYTES = 300 * 1024;
@@ -42,6 +42,16 @@ export const defaultThemeDir = (siteDir: string) => path.join(siteDir, "..", "..
 /** Where the schema is, from core/site: the same relative path in the repository and in the image build. */
 export const defaultSchemaFile = (siteDir: string) =>
   path.join(siteDir, "..", "..", "packages", "app-manifest", "schema", "app-manifest.schema.json");
+
+/** The pages search engines should index: the home page and the legal pages (robots.txt points here). */
+export function renderSitemap(): string {
+  const urls = [SITE_URL, ...LEGAL_DOCS.map((d) => `${SITE_URL}${d.slug}`)];
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls.map((u) => `  <url><loc>${u}</loc></url>`).join("\n")}
+</urlset>
+`;
+}
 
 export function loadProgress(file: string): Progress {
   return parseProgress(JSON.parse(readFileSync(file, "utf8")));
@@ -107,6 +117,9 @@ export function buildSite(
   put("styles.css", path.join(siteDir, "public", "styles.css"));
   put("favicon.svg", path.join(siteDir, "public", "favicon.svg"));
   put("robots.txt", path.join(siteDir, "public", "robots.txt"));
+  put(OG_IMAGE.file, path.join(siteDir, "public", OG_IMAGE.file));
+  writeFileSync(path.join(outDir, "sitemap.xml"), renderSitemap());
+  written.push("sitemap.xml");
   put("session.js", path.join(siteDir, "public", "session.js"));
   // Only the screenshots the page uses: a stale PNG in public/ never ships.
   for (const file of imageSizes.keys()) put(`screenshots/${file}`, path.join(shotsDir, file));
