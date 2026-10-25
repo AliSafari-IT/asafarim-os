@@ -32,7 +32,7 @@ import {
   stripComments,
   type AppReview,
 } from "./review.ts";
-import { RESERVED_SERVICE_NAMES } from "./compose.ts";
+import { RESERVED_SERVICE_NAMES, buildCompose } from "./compose.ts";
 import { scaffoldApp } from "./scaffold.ts";
 
 const WORKSPACE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -1714,6 +1714,59 @@ describe("platform manifest review", () => {
 
     // other names, also ones that only contain a reserved name, are fine
     writeApp(withWorkers("mailer", "web-sync", "migrator"));
+    expect(kinds()).toEqual([]);
+  });
+
+  it("reports a secret named like a database variable of the compose file", () => {
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write"; process.env.DATABASE_URL; process.env.SHOP_DATABASE_URL; process.env.SHOP_MIGRATOR_DATABASE_URL; process.env.STRIPE_KEY;`,
+    );
+    const postgres = { engine: "postgres", migrations: "sql" };
+    const secrets = ["STRIPE_KEY", "DATABASE_URL", "SHOP_DATABASE_URL", "SHOP_MIGRATOR_DATABASE_URL"];
+    writeApp(manifest({ database: postgres, secrets }));
+    expect(kinds()).toEqual([
+      "secret-name-reserved secret: DATABASE_URL",
+      "secret-name-reserved secret: SHOP_DATABASE_URL",
+      "secret-name-reserved secret: SHOP_MIGRATOR_DATABASE_URL",
+    ]);
+    expect(json().reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "secret-name-reserved",
+      subject: "secret: DATABASE_URL",
+      message:
+        "the secret DATABASE_URL has the name of the database URL the platform hands the app in the generated compose file, so platform compose refuses to write the app's compose file and the app can't be deployed (rename the secret, or drop it: the platform provisions the database)",
+    });
+    expect(json().reviews[0]!.findings[1]).toMatchObject({
+      message: expect.stringContaining("the name of the web service's and workers' database URL"),
+    });
+    expect(json().reviews[0]!.findings[2]).toMatchObject({
+      message: expect.stringContaining("the name of the migrator's database URL"),
+    });
+    expect(review().lines.join("\n")).toMatch(/\[secret-name-reserved\] the secret DATABASE_URL/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| secret-name-reserved | secret: DATABASE\\_URL |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // the review and compose refuse the same names: each one alone stops the compose file
+    const pinned = `shop@sha256:${"a".repeat(64)}`;
+    const compose = (names: string[]) =>
+      buildCompose(manifest({ database: postgres, secrets: names }) as never, {
+        env: "prod",
+        image: pinned,
+        migrateCommand: ["migrate"],
+      }).ok;
+    expect(compose(["STRIPE_KEY"])).toBe(true);
+    for (const name of secrets.slice(1)) expect(compose(["STRIPE_KEY", name])).toBe(false);
+
+    // with engine "none" the app may bring its own DATABASE_URL, and other apps' names are fine
+    writeApp(manifest({ secrets: ["DATABASE_URL", "STRIPE_KEY"] }));
+    expect(kinds()).toEqual([]);
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write"; process.env.DATABASE_URL; process.env.OTHER_DATABASE_URL;`,
+    );
+    writeApp(manifest({ database: postgres, secrets: ["OTHER_DATABASE_URL"] }));
     expect(kinds()).toEqual([]);
   });
 });
