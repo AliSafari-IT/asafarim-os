@@ -1787,6 +1787,24 @@ describe("platform manifest review", () => {
     expect(kinds(["shop", "billing"])).toEqual(["domain-claimed-twice host: shop.asafarim.site"]);
   });
 
+  it("reports a manifest copied to a second folder without a new id", () => {
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    writeApp(manifest({ domains: { primary: "shop.example.com" } }));
+    // apps/shop-copy holds a copy of shop's manifest, id and all
+    put("apps/shop-copy/platform.app.json", JSON.stringify(manifest({ domains: { primary: "shop.example.com" } })));
+    put("apps/shop-copy/app/api/health/route.ts", "export function GET() {}");
+    put("apps/shop-copy/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    expect(kinds(["shop", "shop-copy"])).toEqual([
+      "domain-claimed-twice host: shop.example.com",
+      "domain-claimed-twice host: shop.example.com",
+    ]);
+    const messages = (
+      JSON.parse(review(["shop", "shop-copy", "--json"]).lines[0]!) as { reviews: AppReview[] }
+    ).reviews.map((r) => r.findings[0]!.message);
+    expect(messages[0]).toMatch(/is also claimed by shop \(apps\/shop-copy\) in this repo/);
+    expect(messages[1]).toMatch(/is also claimed by shop in this repo/);
+  });
+
   it("reports a secret named like a database variable of the compose file", () => {
     put(
       "apps/shop/lib/x.ts",

@@ -153,7 +153,8 @@
  *   schema checks one manifest at a time, but the gateway sends a host to one app only, so the other
  *   is unreachable at that host (a launcher tile opening it lands on the wrong app). Usually a copied
  *   manifest kept the other app's domain. It is reported on each app that claims the host, naming the
- *   others. It reads every app's manifest, also when only some ids are reviewed.
+ *   others. Apps are told apart by folder, so a manifest copied to a second folder with its id unchanged
+ *   counts too. It reads every app's manifest, also when only some ids are reviewed.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -639,27 +640,26 @@ export function readsAllConfig(text: string): boolean {
 export type Publishers = ReadonlyMap<string, readonly string[]>;
 
 /**
- * Which apps in the repo claim each host, by host (`domain-claimed-twice`). Only apps with a valid
- * manifest are in it.
+ * Which apps in the repo claim each host, by host (`domain-claimed-twice`): each claimant's folder under
+ * `apps/` and its manifest id. Only apps with a valid manifest are in it.
  */
-export type HostClaims = ReadonlyMap<string, readonly string[]>;
+export type HostClaims = ReadonlyMap<string, readonly { folder: string; id: string }[]>;
 
-/**
- * The hosts an app claims at the gateway: `domains.primary` (or its default `<id>.asafarim.site`) and
- * each alias, without repeats. The same rule as `platform against`'s drift check.
- */
 export function claimedHosts(manifest: AppManifest): string[] {
   return [...new Set([manifest.domains?.primary ?? defaultHost(manifest.id), ...(manifest.domains?.aliases ?? [])])];
 }
 
-/** Every valid manifest's hosts, by host, with the ids of the apps that claim it in the order given. */
-export function hostClaims(manifests: Iterable<AppManifest>): HostClaims {
-  const claims = new Map<string, string[]>();
-  for (const m of manifests) {
-    for (const host of claimedHosts(m)) {
-      const ids = claims.get(host) ?? [];
-      if (!ids.includes(m.id)) ids.push(m.id);
-      claims.set(host, ids);
+/**
+ * Every valid manifest's hosts, by host, with the apps that claim it in the order given. Claimants are
+ * told apart by folder, so a manifest copied to a second folder without a new id still counts twice.
+ */
+export function hostClaims(apps: Iterable<{ folder: string; manifest: AppManifest }>): HostClaims {
+  const claims = new Map<string, { folder: string; id: string }[]>();
+  for (const { folder, manifest } of apps) {
+    for (const host of claimedHosts(manifest)) {
+      const list = claims.get(host) ?? [];
+      list.push({ folder, id: manifest.id });
+      claims.set(host, list);
     }
   }
   return claims;
@@ -673,7 +673,8 @@ export function unversioned(type: string): string {
 /**
  * Review one app folder. `rootDir` is only used to print file paths relative to the workspace;
  * `publishers` is what the repo's apps publish (the reviewed app's own manifest always counts);
- * `hosts` is which apps claim each host (the reviewed app's own claims are taken from its manifest).
+ * `hosts` is which apps claim each host (the reviewed app's own claims are taken from its manifest, and
+ * it is told apart from the others by its folder, `appDir`'s name).
  */
 export function reviewApp(
   appDir: string,
@@ -1379,7 +1380,11 @@ export function reviewApp(
 
   // 30. A host belongs to one app: the gateway sends it to only one of the apps that claim it.
   for (const host of claimedHosts(manifest)) {
-    const others = (hosts.get(host) ?? []).filter((id) => id !== app);
+    // Claimants are told apart by folder; one whose folder isn't named after its id says where it is.
+    const folder = path.basename(appDir);
+    const others = (hosts.get(host) ?? [])
+      .filter((c) => c.folder !== folder)
+      .map((c) => (c.folder === c.id ? c.id : `${c.id} (apps/${c.folder})`));
     if (others.length === 0) continue;
     const how =
       host === manifest.domains?.primary
@@ -1596,7 +1601,9 @@ export function reviewCommand(args: string[], cwd: string, findRoot: () => strin
     }
   }
 
-  const hosts = hostClaims([...parsed.values()].flatMap((entry) => ("manifest" in entry ? [entry.manifest] : [])));
+  const hosts = hostClaims(
+    [...parsed].flatMap(([folder, entry]) => ("manifest" in entry ? [{ folder, manifest: entry.manifest }] : [])),
+  );
 
   const reviews: AppReview[] = [];
   const errors: string[] = [];
