@@ -134,8 +134,10 @@ try {
     const flowNext = path.join(FLOW_DIR, "node_modules/next/dist/bin/next");
     const flowBuild = spawnSync(process.execPath, [flowNext, "build"], { cwd: FLOW_DIR, stdio: "inherit" });
     if (flowBuild.status !== 0) throw new Error("next build (flow) failed");
-    start("flow", [flowNext, "start", "--port", String(DEV.apps.flow)], FLOW_DIR);
-    await waitFor(`${FLOW_URL}/health/live`);
+    const flow = start("flow", [flowNext, "start", "--port", String(DEV.apps.flow)], FLOW_DIR);
+    // Flow's own answer, not another process that holds the port.
+    const live = await (await waitFor(`${FLOW_URL}/health/live`)).json();
+    if (flow.exitCode !== null || live.app !== "flow") throw new Error(`Flow didn't start on ${FLOW_URL}`);
     console.log(`${green("✔")} Flow is up at ${FLOW_URL}`);
   }
 
