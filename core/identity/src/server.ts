@@ -4,6 +4,7 @@
 import { createServer } from "node:http";
 import { Redis } from "ioredis";
 import type { JWK } from "jose";
+import type Provider from "oidc-provider";
 import { PgAccountStore, type AccountStore } from "./accounts.ts";
 import { createAuditApi } from "./audit-api.ts";
 import { RedisAuthSessions, RedisEphemeral, RedisLoginFlows } from "./auth-session.ts";
@@ -13,7 +14,7 @@ import { GoogleOidc } from "./google.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { RedisOtpChallenges, RedisRateLimiter } from "./otp.ts";
 import { setHomeUrl } from "./pages.ts";
-import { createProvider, type ProviderDeps } from "./provider.ts";
+import { createProvider, endBrowserSession, type ProviderDeps } from "./provider.ts";
 import { RedisPendingLogins } from "./pending.ts";
 import { RedisReplayGuard, endSessionsOfAccount, redisAdapterFactory } from "./redis-adapter.ts";
 import { createSignIn } from "./sign-in.ts";
@@ -22,6 +23,9 @@ import { DevLogMailer, SmtpMailer } from "./smtp.ts";
 import { PgIdentityStore, PrincipalAccounts } from "./store.ts";
 
 const log = createLogger();
+
+/** The provider, once created: the local sign-in's Sign out ends this browser's provider session through it. */
+let oidcProvider: Provider | undefined;
 
 /** The local sign-in's pieces: its database (migrated, first admin bootstrapped) and its routes. */
 async function localSignIn(
@@ -82,6 +86,9 @@ async function localSignIn(
     sessions: new RedisAuthSessions(redis),
     flows: new RedisLoginFlows(redis),
     endProviderSessions: (principalId) => endSessionsOfAccount(redis, principalId),
+    endBrowserProviderSession: async (ctx) => {
+      if (oidcProvider) await endBrowserSession(oidcProvider, ctx);
+    },
     log: logger,
   });
   const auditApi = createAuditApi({ issuer, jwks, readers: config.auditReaders, store, log: logger });
@@ -149,6 +156,7 @@ async function main() {
     },
   });
 
+  oidcProvider = provider;
   const server = createServer(provider.callback());
   server.listen(config.port, () =>
     log.info("identity.started", { port: config.port, clients: config.clients.length, reason: config.login.method }),

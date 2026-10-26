@@ -157,6 +157,41 @@ export function withForwardedOrigin(request: Request): Request {
   } as RequestInit);
 }
 
+/**
+ * The visitor's origin (`https://docs.asafarim.site`) from the request headers: the forwarded host and protocol the
+ * gateway sets, else the Host header. Same rules as {@link withForwardedOrigin}; null when no header looks like a host.
+ */
+export function visitorOrigin(headers: Pick<Headers, "get">): string | null {
+  const forwarded = headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwarded && FORWARDED_HOST.test(forwarded) ? forwarded : headers.get("host")?.trim();
+  if (!host || !FORWARDED_HOST.test(host)) return null;
+  const proto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const local = /^(localhost|127\.0\.0\.1|[^:]+\.localhost)(:\d+)?$/.test(host);
+  const scheme = proto === "http" || proto === "https" ? proto : local ? "http" : "https";
+  return `${scheme}://${host}`;
+}
+
+/**
+ * Where an app sends the browser after clearing its own session: identity's end-session endpoint (OIDC RP-initiated
+ * logout). Clearing the app's cookie alone leaves identity's session in place, so the next "Sign in" lands straight
+ * back in the same account without asking. identity confirms, ends its session, and sends the browser to
+ * `postLogoutRedirectUri`, which must be one of the client's post-logout URIs (identity registers
+ * `https://<primary_domain>/` when the client lists none).
+ *
+ *   await signOut({ redirect: false });
+ *   redirect(endSessionUrl({ issuer, clientId, postLogoutRedirectUri: `${visitorOrigin(await headers())}/` }));
+ */
+export function endSessionUrl(opts: {
+  issuer: string;
+  clientId: string;
+  postLogoutRedirectUri?: string | null;
+}): string {
+  const url = new URL(`${opts.issuer.replace(/\/$/, "")}/session/end`);
+  url.searchParams.set("client_id", opts.clientId);
+  if (opts.postLogoutRedirectUri) url.searchParams.set("post_logout_redirect_uri", opts.postLogoutRedirectUri);
+  return url.href;
+}
+
 /** Wrap an Auth.js route handler (`handlers.GET` / `handlers.POST`) so it sees the visitor's origin. */
 export function forwardedOrigin<R extends Request, T>(handler: (request: R) => T): (request: R) => T {
   return (request) => handler(withForwardedOrigin(request) as R);

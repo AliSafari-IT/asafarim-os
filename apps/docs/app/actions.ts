@@ -3,7 +3,7 @@
 import { ACCESS_COOKIE_NAME } from "@asafarim/app-sdk";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { signIn, signOut } from "@/lib/auth";
+import { endSessionHref, signIn, signOut } from "@/lib/auth";
 import { gate } from "@/lib/gate";
 import { getPlatform } from "@/lib/platform";
 import { docParam } from "@/lib/reader";
@@ -22,7 +22,9 @@ export async function signOutAction() {
     httpOnly: true,
     sameSite: "lax",
   });
-  await signOut({ redirectTo: "/" });
+  await signOut({ redirect: false });
+  // Then out of identity too: otherwise "Sign in" goes straight back into the same account without asking.
+  redirect(await endSessionHref());
 }
 
 /** The Refresh button: forget the cached tree and files, then show the same document again. */

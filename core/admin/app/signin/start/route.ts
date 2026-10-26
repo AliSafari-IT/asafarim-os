@@ -10,7 +10,7 @@
  */
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { signIn } from "@/lib/auth";
+import { SIGNED_OUT_COOKIE, signIn } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +19,8 @@ const TRIED_SECONDS = 60;
 
 export async function GET() {
   const jar = await cookies();
-  if (jar.has(TRIED_COOKIE)) redirect("/signin");
+  // Just signed out (or tried a minute ago): show the sign-in page and its button, don't start a sign-in.
+  if (jar.has(TRIED_COOKIE) || jar.has(SIGNED_OUT_COOKIE)) redirect("/signin");
   jar.set(TRIED_COOKIE, "1", {
     path: "/signin",
     maxAge: TRIED_SECONDS,

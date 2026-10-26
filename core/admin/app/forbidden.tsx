@@ -1,11 +1,6 @@
 import { ThemeToggle } from "@asafarim/theme/react";
 import { AdminLogo } from "@/components/AdminLogo";
-import { signOut } from "@/lib/auth";
-
-async function signOutAction() {
-  "use server";
-  await signOut({ redirectTo: "/signin" });
-}
+import { signOutAction } from "@/lib/sign-out";
 
 /** Shown (with a real 403) to a signed-in person who doesn't hold core.admin. */
 export default function Forbidden() {

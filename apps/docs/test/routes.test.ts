@@ -63,6 +63,7 @@ vi.mock("@/lib/auth", () => ({
   auth: async () => (who.subject ? { user: { id: who.subject, name: who.subject } } : null),
   signIn: vi.fn(),
   signOut: vi.fn(),
+  endSessionHref: async () => "http://id/session/end",
   // Auth.js itself is a dependency; the stand-in only has to answer like a sign-in page would.
   handlers: { GET: async () => new Response("sign in"), POST: async () => new Response("sign in") },
 }));
