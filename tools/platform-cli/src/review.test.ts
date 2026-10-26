@@ -31,6 +31,7 @@ import {
   sourceFiles,
   stripComments,
   dockerfilePort,
+  stackedRoutes,
   type AppReview,
 } from "./review.ts";
 import { RESERVED_SERVICE_NAMES, buildCompose } from "./compose.ts";
@@ -1981,6 +1982,109 @@ describe("platform manifest review", () => {
     rmSync(path.join(root, "apps/shop/Dockerfile"));
     put("apps/shop/docker/Dockerfile", "FROM node\nENV PORT=8080\n");
     expect(kinds()).toEqual([]);
+  });
+});
+
+describe("platform manifest review: route-permissions-stacked", () => {
+  const roles = [
+    { key: "shop.viewer", grants: ["shop.orders.read"] },
+    { key: "shop.admin", grants: ["shop.orders.write"] },
+  ];
+  const stacked = [
+    { path: "/api/orders/**", permission: "shop.orders.read" },
+    { path: "/api/orders/admin/**", permission: "shop.orders.write" },
+  ];
+  const serve = () => {
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    put("apps/shop/app/api/orders/route.ts", "export function GET() {}");
+    put("apps/shop/app/api/orders/admin/route.ts", "export function GET() {} export function POST() {}");
+  };
+  // other kinds the fixtures below trip over (an unguarded handler, say) aren't this finding's business
+  const stacks = () => kinds().filter((k) => k.startsWith("route-permissions-stacked "));
+
+  it("reports overlapping routes whose permissions no single role grants", () => {
+    serve();
+    writeApp(manifest({ roles, routes: stacked }));
+    expect(kinds()).toEqual(["route-permissions-stacked routes: /api/orders/** + /api/orders/admin/**"]);
+    expect(json().reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "route-permissions-stacked",
+      subject: "routes: /api/orders/** + /api/orders/admin/**",
+      file: "apps/shop/platform.app.json",
+      message:
+        "the routes /api/orders/** (shop.orders.read) and /api/orders/admin/** (shop.orders.write) all match GET /api/orders/admin, and the gateway asks for every matching route's permission, but no role grants shop.orders.read and shop.orders.write together, so a user with only one of those roles gets 403 there (have one role grant them all, or narrow the broader route so they don't overlap)",
+    });
+    expect(review().lines.join("\n")).toMatch(/\[route-permissions-stacked\] the routes \/api\/orders\/\*\*/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| route-permissions-stacked |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+  });
+
+  it("finds the overlap on the method both routes cover", () => {
+    serve();
+    const routes = [
+      { path: "/api/orders/**", methods: ["POST"], permission: "shop.orders.read" },
+      { path: "/api/orders/admin", methods: ["GET", "POST"], permission: "shop.orders.write" },
+    ];
+    writeApp(manifest({ roles, routes }));
+    expect(json().reviews[0]!.findings.find((f) => f.kind === "route-permissions-stacked")).toMatchObject({
+      message: expect.stringContaining("all match POST /api/orders/admin,"),
+    });
+  });
+
+  it("leaves alone stacks a role grants together, separate methods or paths, one permission, and hidden paths", () => {
+    serve();
+    // one role grants both, by name or through <id>.*
+    writeApp(manifest({ routes: stacked }));
+    expect(stacks()).toEqual([]);
+    writeApp(manifest({ roles: [...roles, { key: "shop.owner", grants: ["shop.*"] }], routes: stacked }));
+    expect(stacks()).toEqual([]);
+    // the same path split by method (as Notes does), or paths that don't overlap
+    const split = [
+      { path: "/api/orders", methods: ["GET"], permission: "shop.orders.read" },
+      { path: "/api/orders", methods: ["POST"], permission: "shop.orders.write" },
+      { path: "/api/orders/admin/**", methods: ["GET"], permission: "shop.orders.write" },
+    ];
+    writeApp(manifest({ roles, routes: split }));
+    expect(stacks()).toEqual([]);
+    // overlapping routes that ask for the same permission
+    writeApp(
+      manifest({
+        roles,
+        routes: [stacked[0], { path: "/api/orders/admin/**", permission: "shop.orders.read" }],
+      }),
+    );
+    expect(stacks()).toEqual([]);
+    // the gateway answers 404 on a hidden path before it asks for permissions
+    const hidden = [...stacked, { path: "/api/orders/admin/**", expose: false }];
+    writeApp(manifest({ roles, routes: hidden }));
+    expect(stacks()).toEqual([]);
+    // hidden for one method only: the other method still stacks
+    writeApp(
+      manifest({ roles, routes: [...stacked, { path: "/api/orders/admin/**", methods: ["GET"], expose: false }] }),
+    );
+    expect(json().reviews[0]!.findings.find((f) => f.kind === "route-permissions-stacked")).toMatchObject({
+      message: expect.stringContaining("all match POST /api/orders/admin,"),
+    });
+  });
+
+  it("reports each set of stacked routes once", () => {
+    const routes = [
+      { path: "/api/**", permission: "shop.orders.read" },
+      { path: "/api/orders/admin/**", permission: "shop.orders.write" },
+      { path: "/api/orders/admin/x/*", permission: "shop.orders.read" },
+    ];
+    const found = stackedRoutes({ id: "shop", roles, routes } as never, [
+      "/api/orders/admin",
+      "/api/orders/admin/x",
+      "/api/orders/admin/x/y",
+      "/api/x",
+    ]);
+    expect(found.map((f) => f.routes.map((r) => r.path).join(" + "))).toEqual([
+      "/api/** + /api/orders/admin/**",
+      "/api/** + /api/orders/admin/** + /api/orders/admin/x/*",
+    ]);
+    expect(found[1]).toMatchObject({ method: "GET", path: "/api/orders/admin/x/y" });
   });
 });
 

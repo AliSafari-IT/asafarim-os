@@ -168,6 +168,15 @@
  *   declared secret can have the name a config key reads, so the secret's value is read as that config
  *   value (and one that isn't of the key's type makes the app throw when it starts). One finding per
  *   shared variable, naming every key and secret that uses it.
+ * - `route-permissions-stacked`: two or more manifest routes with a `permission` (not `expose: false`)
+ *   match the same path for the same method, with different permissions, and no role in the manifest
+ *   grants all of them (by name or through `<id>.*`). core-api's gateway asks for the permission of
+ *   every route matching a request, so the overlap needs them all, and a user holding only the role
+ *   meant for that path gets 403 there. It is usually a narrower route (`/api/admin/**` with
+ *   `<id>.admin`) meant to replace a broader one's permission (`/api/**` with `<id>.read`), which the
+ *   gateway doesn't do. Paths an `expose: false` route hides for that method are skipped (the gateway
+ *   answers 404 there first). Overlap is found on sample paths of the routes' globs and of the app's
+ *   route files and pages, as for `public-path-not-served`. One finding per set of routes.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -230,6 +239,7 @@ export const FINDING_KINDS = [
   "runtime-port-mismatch",
   "domain-claimed-twice",
   "config-variable-clash",
+  "route-permissions-stacked",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];
@@ -1523,7 +1533,58 @@ export function reviewApp(
     });
   }
 
+  // 33. Where guarded routes overlap, the gateway asks for every one's permission: some role must grant them all.
+  const candidates = [
+    ...new Set([...routes.flatMap((r) => globSamples(r.path)), ...served.flatMap((s) => samplePaths(s.url))]),
+  ].sort(byText);
+  for (const stack of stackedRoutes(manifest, candidates)) {
+    const named = stack.routes.map((r) => `${r.path} (${r.permission})`);
+    findings.push({
+      app,
+      kind: "route-permissions-stacked",
+      subject: `routes: ${stack.routes.map((r) => r.path).join(" + ")}`,
+      file: rel(path.join(appDir, MANIFEST_FILE)),
+      message: `the routes ${joinNames(named)} all match ${stack.method} ${stack.path}, and the gateway asks for every matching route's permission, but no role grants ${joinNames(stack.permissions)} together, so a user with only one of those roles gets 403 there (have one role grant them all, or narrow the broader route so they don't overlap)`,
+    });
+  }
+
   return { app, findings, handlers, plumbing };
+}
+
+/**
+ * Sets of guarded, exposed routes that match the same path for the same method with different
+ * permissions that no single role grants together (`route-permissions-stacked`), each with the first
+ * sample path and method (in `HTTP_METHODS` order) it was found on. A path a route hides
+ * (`expose: false`) for that method is skipped. One entry per set of routes, in manifest order.
+ */
+export function stackedRoutes(
+  manifest: Pick<AppManifest, "id" | "routes" | "roles">,
+  paths: readonly string[],
+): { routes: { path: string; permission: string }[]; permissions: string[]; method: string; path: string }[] {
+  const routes = (manifest.routes ?? []).map((r, i) => ({ ...r, i, re: globRegex(r.path) }));
+  const guards = routes.filter((r) => r.expose !== false && r.permission !== undefined);
+  const hiders = routes.filter((r) => r.expose === false);
+  const all = `${manifest.id}.*`;
+  const grantedTogether = (perms: string[]) =>
+    manifest.roles.some((role) => role.grants.includes(all) || perms.every((p) => role.grants.includes(p)));
+  const found = new Map<string, ReturnType<typeof stackedRoutes>[number]>();
+  for (const p of paths) {
+    for (const method of HTTP_METHODS) {
+      if (hiders.some((h) => methodCovered(h.methods, method) && h.re.test(p))) continue;
+      const hit = guards.filter((g) => methodCovered(g.methods, method) && g.re.test(p));
+      const permissions = [...new Set(hit.map((g) => g.permission!))].sort(byText);
+      if (permissions.length < 2 || grantedTogether(permissions)) continue;
+      const key = hit.map((g) => g.i).join(",");
+      if (found.has(key)) continue;
+      found.set(key, {
+        routes: hit.map((g) => ({ path: g.path, permission: g.permission! })),
+        permissions,
+        method,
+        path: p,
+      });
+    }
+  }
+  return [...found.values()];
 }
 
 /**
