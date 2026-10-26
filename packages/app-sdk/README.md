@@ -59,6 +59,18 @@ The app asks core-api, with a signed `GET /registry/v1/apps/<id>/subjects/<sub>`
 
 `state` is the app's lifecycle state (`installed`, `active`, `inactive`). An app should answer 503 unless it's `active`.
 
+### Acting for someone from an event handler (Flow)
+
+An event handler has no session and no token, but before it acts on behalf of a person (an event's `onBehalfOf`, the identity `sub`) it must check that they **still** hold the permission. Server only:
+
+```ts
+if (!(await platform.access.subjectHas(event.onBehalfOf, "docs.issues.create"))) return; // or publish a refusal
+```
+
+- `access.subjectPermissions(sub)` → the permissions **of this app** that `sub` holds now, sorted; `access.subjectHas(sub, permission)` → boolean. A signed `GET /registry/v1/subjects/<sub>/permissions` ([core-api](../../core/core-api/README.md#get-registryv1subjectssubpermissions-signed-by-the-app-flow)); core-api answers only the calling app's own namespace, the same resolution as `access()`.
+- **Never cached**: each call asks core-api, so a revoked role counts at once.
+- **Fails closed:** core-api unreachable, a 5xx, a refusal or a malformed answer throws `AccessUnavailableError`, never `false`. Let it propagate: the handler fails and the event is redelivered instead of being acted on, or worse, refused for good because of an outage.
+
 ## Events (P4.1): `@asafarim/app-sdk/events`
 
 A separate entry point (it re-exports `@asafarim/events`), so pages that import the SDK never load the NATS client.

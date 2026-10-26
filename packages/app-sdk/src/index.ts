@@ -57,6 +57,8 @@ function notInstalledAccess(): Access {
     require: unavailable,
     mintToken: unavailable,
     launcher: unavailable,
+    subjectPermissions: unavailable,
+    subjectHas: unavailable,
     clearCache: () => undefined,
   } as Access;
 }

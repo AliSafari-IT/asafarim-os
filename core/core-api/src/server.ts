@@ -35,6 +35,7 @@
  *                                                removed apps: their backup, purge date, whether purge is due;
  *                                                verify: each backup file checked against its sha256 now
  *   GET  /registry/v1/apps/:id/launcher/:sub     the apps a person can open (the app, signed)
+ *   GET  /registry/v1/subjects/:sub/permissions  the calling app's own permissions a subject holds now (the app, signed; Flow)
  *   GET  /admin/v1/launcher                      the apps the signed-in admin can open (Admin's app switcher;
  *                                                the CLI token, which is no person, gets an empty list)
  *
@@ -149,7 +150,13 @@ export function appDatabasePort(override: string | undefined, provisioner: URL):
 }
 
 const SUB = "[^/]{1,400}";
+const SUBJECT_PERMISSIONS_ROUTE = "/registry/v1/subjects/:sub/permissions";
 const ROLE = "[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+";
+
+/** A path as it may be logged: the subject-permissions route's subject never is (Flow), only its pattern. */
+function loggedPath(pathname: string): string {
+  return /^\/registry\/v1\/subjects\//.test(pathname) ? SUBJECT_PERMISSIONS_ROUTE : pathname;
+}
 
 /**
  * The route patterns a span is named after, in the handler's own terms (`:id` an app id, `:sub` a
@@ -166,6 +173,7 @@ const ROUTES: readonly [RegExp, string][] = (
     [`/registry/v1/apps/${APP_ID}/subjects/${SUB}`, "/registry/v1/apps/:id/subjects/:sub"],
     [`/registry/v1/apps/${APP_ID}/subjects/${SUB}/token`, "/registry/v1/apps/:id/subjects/:sub/token"],
     [`/registry/v1/apps/${APP_ID}/launcher/${SUB}`, "/registry/v1/apps/:id/launcher/:sub"],
+    [`/registry/v1/subjects/${SUB}/permissions`, SUBJECT_PERMISSIONS_ROUTE],
     ["/admin/v1/session", "/admin/v1/session"],
     ["/admin/v1/launcher", "/admin/v1/launcher"],
     ["/admin/v1/apps", "/admin/v1/apps"],
@@ -400,6 +408,15 @@ export function createHandler(opts: {
         return json(res, 200, await opts.registry.launcher(m[1]!, subject, headers, p));
       }
 
+      // Flow: the calling app (whoever signed) asks which of its own permissions a subject holds now.
+      // `*`, not `+`: an empty subject is a 400 from decodeSubject, not a 404.
+      m = /^\/registry\/v1\/subjects\/([^/]{0,400})\/permissions$/.exec(p);
+      if (m && req.method === "GET") {
+        const subject = decodeSubject(m[1]!);
+        const headers = Object.fromEntries(SIGNATURE_HEADERS.map((h) => [h, header(req, h)]));
+        return json(res, 200, await opts.registry.subjectPermissions(subject, headers, p));
+      }
+
       if (p.startsWith("/admin/v1/")) {
         const caller = await authorizeAdmin(req.headers.authorization);
         const actor = caller.actor;
@@ -550,14 +567,15 @@ export function createHandler(opts: {
       throw new ApiError("not_found");
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status >= 401 && err.status < 404) log({ msg: "request.refused", path: p, error: err.code });
+        if (err.status >= 401 && err.status < 404)
+          log({ msg: "request.refused", path: loggedPath(p), error: err.code });
         return json(res, err.status, {
           error: err.code,
           message: err.message,
           ...(err.details ? { details: err.details } : {}),
         });
       }
-      log({ msg: "request.failed", path: p, error: (err as Error).name });
+      log({ msg: "request.failed", path: loggedPath(p), error: (err as Error).name });
       return json(res, 500, { error: "internal" });
     }
   };
