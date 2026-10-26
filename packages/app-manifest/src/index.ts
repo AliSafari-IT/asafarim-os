@@ -24,6 +24,18 @@ export const MANIFEST_JSON_FILE = "platform.app.json";
 /** The source manifest an app author writes. */
 export const MANIFEST_SOURCE_FILE = "platform.app.ts";
 
+/**
+ * The environment variable a config key's value comes from: `APP_CONFIG_<KEY>`, with dots and camelCase
+ * as UPPER_SNAKE (`limits.maxNotes` → `APP_CONFIG_LIMITS_MAX_NOTES`). The app SDK reads it, and
+ * `platform manifest review` checks that no two names share one.
+ */
+export function envNameForConfigKey(key: string): string {
+  return `APP_CONFIG_${key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/\./g, "_")
+    .toUpperCase()}`;
+}
+
 /** The app's default host when the manifest declares no primary domain. */
 export function defaultHost(appId: string, homeDomain = "asafarim.site"): string {
   return `${appId}.${homeDomain}`;
