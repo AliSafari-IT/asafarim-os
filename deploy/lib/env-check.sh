@@ -49,8 +49,8 @@ require_env_vars() {
 # The names identity needs, one per line, for the login method its env file sets (core/identity/src/config.ts):
 #   hub (the default): every uncommented variable in the example (the Hub hand-off and the platform accounts DB);
 #   local or sms: signing keys, cookie keys, its own database and the code secret, plus what each sign-in method
-#   needs (email: an SMTP host and sender; sms with Twilio: the account, token and sender). The Hub variables and
-#   IDENTITY_ACCOUNTS_DATABASE_URL are not needed then.
+#   needs (email: an SMTP host and sender; google: the OAuth client id and secret; sms with Twilio: the account,
+#   token and sender). The Hub variables and IDENTITY_ACCOUNTS_DATABASE_URL are not needed then.
 identity_required_vars() {
   local env_file="$1" example_file="$2" method methods provider
   [[ -f "$env_file" ]] || { echo "env: ${env_file} does not exist" >&2; return 1; }
@@ -68,6 +68,9 @@ identity_required_vars() {
       fi
       if [[ ",${methods// /}," == *,email,* ]] && [[ "$(env_value "$env_file" IDENTITY_EMAIL_PROVIDER)" != dev-log ]]; then
         printf '%s\n' IDENTITY_SMTP_HOST IDENTITY_SMTP_FROM
+      fi
+      if [[ ",${methods// /}," == *,google,* ]]; then
+        printf '%s\n' IDENTITY_GOOGLE_CLIENT_ID IDENTITY_GOOGLE_CLIENT_SECRET
       fi
       if [[ ",${methods// /}," == *,sms,* ]]; then
         provider="$(env_value "$env_file" IDENTITY_SMS_PROVIDER)"

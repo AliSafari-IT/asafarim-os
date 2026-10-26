@@ -307,7 +307,7 @@ describe("local sign-in config", () => {
     const bad = (over: Record<string, string | undefined>) => () =>
       parseLocalLogin({ ...base, ...over }, { local: false });
     expect(bad({ IDENTITY_OTP_SECRET: "short" })).toThrow(/at least 32/);
-    expect(bad({ IDENTITY_SIGN_IN_METHODS: "passkey" })).toThrow(/needs email or sms/);
+    expect(bad({ IDENTITY_SIGN_IN_METHODS: "passkey" })).toThrow(/needs email, google or sms/);
     expect(bad({ IDENTITY_SIGN_IN_METHODS: "email,fax" })).toThrow(ConfigError);
     expect(bad({ IDENTITY_SMTP_SECURITY: "none" })).toThrow(/loopback/);
     expect(bad({ IDENTITY_SMTP_PASSWORD: undefined })).toThrow(/both or neither/);
@@ -339,7 +339,16 @@ describe("pages", () => {
       csrf: "tok",
       me: "11111111-1111-1111-1111-111111111111",
       requests: [
-        { id: "22222222-2222-2222-2222-222222222222", principalId: "p", label: "a@b.c", createdAt: new Date(0) },
+        {
+          id: "22222222-2222-2222-2222-222222222222",
+          principalId: "p",
+          label: "a@b.c",
+          createdAt: new Date(0),
+          apps: ["docs"],
+          note: "<b>please</b>",
+          methods: ["google"],
+          connected: false,
+        },
       ],
       connections: [
         {
@@ -358,7 +367,7 @@ describe("pages", () => {
     expect(html.match(/name="csrf" value="tok"/g)!.length).toBe(html.match(/<form /g)!.length);
     expect(html).not.toContain("11111111-1111-1111-1111-111111111111/revoke");
     expect(html).toContain('<a href="/admin" aria-current="page">Connections</a>');
-    expect(html).not.toContain("Admin console"); // none configured
+    expect(html).not.toContain(">Admin console</a>"); // none configured
   });
 
   it("every page carries the shared theme and its light/dark toggle; the script-free hand-off page only the styles", () => {
@@ -407,7 +416,7 @@ describe("pages", () => {
   it("the account page says where to go next: the OS home, then the named apps", () => {
     const html = accountPage({
       csrf: "tok",
-      apps: [{ name: "Docs <x>", href: "https://docs.example.test/" }],
+      apps: [{ id: "docs", name: "Docs <x>", href: "https://docs.example.test/" }],
       accountId: "11111111-1111-1111-1111-111111111111",
       label: "ali@example.test",
       connected: true,

@@ -30,6 +30,8 @@ export interface ClientEntry {
 
 /** An app a signed-in person can go on to from the account page. */
 export interface AppLink {
+  /** The client id: what an access request names. */
+  id: string;
   name: string;
   href: string;
   description?: string;
@@ -143,6 +145,7 @@ export function appLinks(file: ClientConfigFile): AppLink[] {
       throw new ClientConfigError(`${c.client_id}: description must be at most 160 characters`);
     }
     links.push({
+      id: c.client_id,
       name: c.name.trim(),
       href: c.post_logout_redirect_uris?.[0] ?? `https://${c.primary_domain}/`,
       ...(c.description ? { description: c.description } : {}),

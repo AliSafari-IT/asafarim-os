@@ -7,6 +7,7 @@ import { PgAccountStore, type AccountStore } from "./accounts.ts";
 import { RedisAuthSessions, RedisEphemeral, RedisLoginFlows } from "./auth-session.ts";
 import { ConfigError, loadConfig, type LocalLoginConfig } from "./config.ts";
 import type { AppLink } from "./clients.ts";
+import { GoogleOidc } from "./google.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { RedisOtpChallenges, RedisRateLimiter } from "./otp.ts";
 import { setHomeUrl } from "./pages.ts";
@@ -64,6 +65,7 @@ async function localSignIn(config: LocalLoginConfig, issuer: string, apps: AppLi
     ...(config.passkeys
       ? { passkeys: { rp: { id: issuerUrl.hostname, origin: issuerUrl.origin, name: "ASafariM" } } }
       : {}),
+    ...(config.google ? { google: new GoogleOidc(config.google) } : {}),
     ephemeral: new RedisEphemeral(redis),
     store,
     challenges: new RedisOtpChallenges(redis),

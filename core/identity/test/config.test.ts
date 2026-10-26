@@ -50,8 +50,8 @@ describe("client config", () => {
     };
     const docs = { ...base, client_id: "docs", primary_domain: "docs.example.test", name: "Docs" };
     expect(appLinks({ clients: [base, named, docs] })).toEqual([
-      { name: "Testora", href: "https://testora.cloud/home", description: "Test plans." },
-      { name: "Docs", href: "https://docs.example.test/" },
+      { id: "testora", name: "Testora", href: "https://testora.cloud/home", description: "Test plans." },
+      { id: "docs", name: "Docs", href: "https://docs.example.test/" },
     ]);
     expect(() => appLinks({ clients: [{ ...base, name: " " }] })).toThrow(ClientConfigError);
     expect(() => appLinks({ clients: [{ ...base, name: "x".repeat(61) }] })).toThrow(/60/);

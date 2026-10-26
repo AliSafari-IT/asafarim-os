@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { importJWK, type CryptoKey, type JWK, type KeyObject } from "jose";
 import { appLinks, loadClients, type AppLink, type ClientConfigFile, type OidcClient } from "./clients.ts";
 import { normalizeEmail } from "./email.ts";
+import type { GoogleConfig } from "./google.ts";
 import { isE164, normalizePhone, parsePrefixes } from "./phone.ts";
 import type { TwilioConfig } from "./sms.ts";
 import type { SmtpConfig, SmtpSecurity } from "./smtp.ts";
@@ -32,6 +33,8 @@ export interface LocalLoginConfig {
   /** The first admin's identities, connected only while no admin is. Empty when unset. */
   bootstrapAdmin: Identity[];
   passkeys: boolean;
+  /** "Continue with Google", when on (IDENTITY_GOOGLE_CLIENT_ID / _SECRET). */
+  google: GoogleConfig | null;
   email: {
     mailer: { kind: "smtp"; smtp: Omit<SmtpConfig, "heloName"> } | { kind: "dev-log" };
     dailyLimit: number;
@@ -219,13 +222,15 @@ export function parseLocalLogin(env: Env, opts: { local: boolean }): LocalLoginC
       .filter(Boolean),
   );
   for (const m of methods) {
-    if (m !== "email" && m !== "passkey" && m !== "sms") {
-      throw new ConfigError("IDENTITY_SIGN_IN_METHODS must list email, passkey and/or sms");
+    if (m !== "email" && m !== "passkey" && m !== "sms" && m !== "google") {
+      throw new ConfigError("IDENTITY_SIGN_IN_METHODS must list email, google, passkey and/or sms");
     }
   }
-  if (!methods.has("email") && !methods.has("sms")) {
+  if (!methods.has("email") && !methods.has("sms") && !methods.has("google")) {
     // A passkey is added by someone already signed in, so there must be a first way in.
-    throw new ConfigError("IDENTITY_SIGN_IN_METHODS needs email or sms (passkeys are added after a first sign-in)");
+    throw new ConfigError(
+      "IDENTITY_SIGN_IN_METHODS needs email, google or sms (passkeys are added after a first sign-in)",
+    );
   }
 
   const homeUrl = env.IDENTITY_HOME_URL ?? "https://asafarim.site/";
@@ -293,6 +298,17 @@ export function parseLocalLogin(env: Env, opts: { local: boolean }): LocalLoginC
     }
   }
 
+  let google: GoogleConfig | null = null;
+  if (methods.has("google")) {
+    const clientId = required(env, "IDENTITY_GOOGLE_CLIENT_ID");
+    if (!/^[\w.-]+\.apps\.googleusercontent\.com$/.test(clientId))
+      throw new ConfigError("IDENTITY_GOOGLE_CLIENT_ID must end with .apps.googleusercontent.com");
+    const clientSecret = required(env, "IDENTITY_GOOGLE_CLIENT_SECRET");
+    if (clientSecret.length < 16 || /\s/.test(clientSecret))
+      throw new ConfigError("IDENTITY_GOOGLE_CLIENT_SECRET doesn't look like a client secret");
+    google = { clientId, clientSecret };
+  }
+
   let sms: LocalLoginConfig["sms"] = null;
   if (methods.has("sms")) {
     let allowedPrefixes: string[];
@@ -333,6 +349,7 @@ export function parseLocalLogin(env: Env, opts: { local: boolean }): LocalLoginC
     ...(adminConsoleUrl ? { adminConsoleUrl } : {}),
     bootstrapAdmin,
     passkeys: methods.has("passkey"),
+    google,
     email,
     sms,
   };

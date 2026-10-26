@@ -19,15 +19,32 @@ export interface Principal {
   id: string;
   isAdmin: boolean;
   connection: ConnectionStatus;
-  /** How the principal is shown: its email, else its phone number; null if it has neither. */
+  /** How the principal is shown: its email, else its Google address, else its phone number; null if none. */
   label: string | null;
+  /** How this principal can sign in (besides passkeys): its identity methods. */
+  methods: IdentityMethod[];
 }
 
-export interface ConnectionRequestRow {
+/** What a person asked for: the apps (client ids) and an optional note for the admin. */
+export interface RequestDetails {
+  apps: string[];
+  note: string | null;
+}
+
+export interface PendingRequest extends RequestDetails {
+  id: string;
+  createdAt: Date;
+}
+
+export interface ConnectionRequestRow extends RequestDetails {
   id: string;
   principalId: string;
   label: string | null;
   createdAt: Date;
+  /** The requester's identity methods, so the admin sees how they proved who they are. */
+  methods: IdentityMethod[];
+  /** Already connected: the request is for more apps. */
+  connected: boolean;
 }
 
 export interface ConnectionRow {
@@ -48,10 +65,13 @@ export type AuditEvent =
   | "otp.verify_failed"
   | "otp.verify_refused"
   | "otp.verified"
+  | "google.verified"
+  | "google.failed"
   | "login.granted"
   | "login.not_authorized"
   | "logout"
   | "request.created"
+  | "request.updated"
   | "request.approved"
   | "request.rejected"
   | "connection.added"
@@ -64,7 +84,7 @@ export type AuditEvent =
 
 export interface AuditEntry {
   event: AuditEvent;
-  method?: "sms" | "email" | "passkey";
+  method?: "sms" | "email" | "passkey" | "google";
   principalId?: string | null;
   actorId?: string | null;
   /** HMAC of the identifier (never the number itself), for attempts nobody has proved yet. */
@@ -83,20 +103,35 @@ export interface AuditRow {
   detail: Record<string, unknown>;
 }
 
-export type RequestOutcome = "created" | "already_pending" | "already_connected";
+/** `updated`: a pending request's apps or note changed. `already_connected`: connected, and no apps asked for. */
+export type RequestOutcome = "created" | "updated" | "already_pending" | "already_connected";
 
 export interface IdentityStore {
   /** Someone proved this identity (a phone in E.164, a lower-case email): their principal, created on first proof. Grants nothing. */
   verifiedLogin(method: IdentityMethod, identifier: string): Promise<string>;
+  /**
+   * Google proved this account (its `sub`). Its principal, created on first proof. With `linkEmail` (Google is the
+   * authority for that address), a first Google sign-in joins the principal that already holds the address, and
+   * an address nobody holds yet becomes a verified email identity of the new principal. Grants nothing.
+   */
+  verifiedGoogleLogin(subject: string, email: string | null, linkEmail: boolean): Promise<string>;
   principal(id: string): Promise<Principal | null>;
-  requestConnection(principalId: string): Promise<RequestOutcome>;
-  hasPendingRequest(principalId: string): Promise<boolean>;
+  /**
+   * Ask for access: opens a pending request, or updates the open one (apps are added, a note replaces the old
+   * one). A connected person may ask for more apps; asking for nothing while connected is `already_connected`.
+   */
+  requestConnection(principalId: string, details?: RequestDetails): Promise<RequestOutcome>;
+  pendingRequest(principalId: string): Promise<PendingRequest | null>;
   pendingRequests(): Promise<ConnectionRequestRow[]>;
   connections(): Promise<ConnectionRow[]>;
   /** Approve or reject one pending request. Null if it isn't pending (already decided, unknown). */
   decideRequest(requestId: string, decision: "approved" | "rejected", actorId: string): Promise<string | null>;
   /** Revoke an active connection. False if there was none. */
   revoke(principalId: string, actorId: string): Promise<boolean>;
+  /** Make a revoked connection active again, by principal (whatever the way they sign in). False if not revoked. */
+  reconnect(principalId: string, actorId: string): Promise<boolean>;
+  /** The email addresses of admins with an active connection (for new-request notices). */
+  adminEmails(): Promise<string[]>;
   /** Connect an identity (creating its principal if needed); closes its pending request as approved. */
   addConnection(method: IdentityMethod, identifier: string, actorId: string): Promise<string>;
   /**
@@ -117,7 +152,7 @@ export interface IdentityStore {
   close(): Promise<void>;
 }
 
-export type IdentityMethod = "phone" | "email";
+export type IdentityMethod = "phone" | "email" | "google";
 
 export interface Identity {
   method: IdentityMethod;
@@ -139,9 +174,17 @@ export interface PasskeyRow extends NewPasskeyRow {
   lastUsedAt: Date | null;
 }
 
-/** The SQL for a principal's label: its email first, else its phone. `$col` is the principal id column. */
+/** Which identity labels a principal: an email identity, then a Google one (its address), then a phone. */
+const LABEL_ORDER = `CASE method WHEN 'email' THEN 0 WHEN 'google' THEN 1 ELSE 2 END, created_at`;
+
+/** The SQL for a principal's label (see LABEL_ORDER). `$col` is the principal id column. */
 const labelOf = (col: string) =>
-  `(SELECT identifier FROM identities i WHERE i.principal_id = ${col} ORDER BY (i.method = 'email') DESC, i.created_at LIMIT 1)`;
+  `(SELECT CASE WHEN i.method = 'google' THEN i.email ELSE i.identifier END FROM identities i
+    WHERE i.principal_id = ${col} AND (i.method <> 'google' OR i.email IS NOT NULL) ORDER BY ${LABEL_ORDER} LIMIT 1)`;
+
+/** The SQL for a principal's identity methods, as a text[]. */
+const methodsOf = (col: string) =>
+  `(SELECT coalesce(array_agg(DISTINCT method), '{}') FROM identities WHERE principal_id = ${col})`;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (s: string) => UUID.test(s);
@@ -235,6 +278,50 @@ export class PgIdentityStore implements IdentityStore {
     });
   }
 
+  async verifiedGoogleLogin(subject: string, email: string | null, linkEmail: boolean): Promise<string> {
+    return inTransaction(this.pool, async (c) => {
+      const found = await c.query<{ principal_id: string }>(
+        "SELECT principal_id FROM identities WHERE method = 'google' AND identifier = $1 FOR UPDATE",
+        [subject],
+      );
+      let principalId = found.rows[0]?.principal_id;
+      if (!principalId) {
+        // First Google sign-in for this account. Join the address's principal only when Google is its authority.
+        principalId =
+          linkEmail && email
+            ? await principalFor(c, "email", email)
+            : (await c.query<{ id: string }>("INSERT INTO principals DEFAULT VALUES RETURNING id")).rows[0]!.id;
+        const inserted = await c.query(
+          `INSERT INTO identities (method, identifier, principal_id, email) VALUES ('google', $1, $2, $3)
+           ON CONFLICT (method, identifier) DO NOTHING`,
+          [subject, principalId, email],
+        );
+        if (inserted.rowCount !== 1) {
+          // A concurrent first sign-in with the same Google account won the race: use its principal.
+          principalId = (
+            await c.query<{ principal_id: string }>(
+              "SELECT principal_id FROM identities WHERE method = 'google' AND identifier = $1",
+              [subject],
+            )
+          ).rows[0]!.principal_id;
+        }
+        if (linkEmail && email) {
+          await c.query(
+            `UPDATE identities SET verified_at = coalesce(verified_at, now())
+             WHERE method = 'email' AND identifier = $1 AND principal_id = $2`,
+            [email, principalId],
+          );
+        }
+      }
+      await c.query(
+        `UPDATE identities SET email = $2, verified_at = coalesce(verified_at, now()), last_login_at = now()
+         WHERE method = 'google' AND identifier = $1`,
+        [subject, email],
+      );
+      return principalId;
+    });
+  }
+
   async principal(id: string): Promise<Principal | null> {
     if (!isUuid(id)) return null;
     const { rows } = await this.pool.query<{
@@ -242,39 +329,56 @@ export class PgIdentityStore implements IdentityStore {
       is_admin: boolean;
       status: "active" | "revoked" | null;
       label: string | null;
+      methods: IdentityMethod[];
     }>(
-      `SELECT p.id, p.is_admin, c.status, ${labelOf("p.id")} AS label
+      `SELECT p.id, p.is_admin, c.status, ${labelOf("p.id")} AS label, ${methodsOf("p.id")} AS methods
        FROM principals p LEFT JOIN connections c ON c.principal_id = p.id
        WHERE p.id = $1`,
       [id],
     );
     const r = rows[0];
-    return r ? { id: r.id, isAdmin: r.is_admin, connection: r.status ?? "none", label: r.label } : null;
+    return r
+      ? { id: r.id, isAdmin: r.is_admin, connection: r.status ?? "none", label: r.label, methods: r.methods }
+      : null;
   }
 
-  async requestConnection(principalId: string): Promise<RequestOutcome> {
+  async requestConnection(
+    principalId: string,
+    details: RequestDetails = { apps: [], note: null },
+  ): Promise<RequestOutcome> {
     return inTransaction(this.pool, async (c) => {
       // Serialise per principal: lock the principal row.
       await c.query("SELECT id FROM principals WHERE id = $1 FOR UPDATE", [principalId]);
       const conn = await c.query<{ status: string }>("SELECT status FROM connections WHERE principal_id = $1", [
         principalId,
       ]);
-      if (conn.rows[0]?.status === "active") return "already_connected";
+      if (conn.rows[0]?.status === "active" && details.apps.length === 0) return "already_connected";
       const inserted = await c.query(
-        `INSERT INTO connection_requests (principal_id) VALUES ($1)
+        `INSERT INTO connection_requests (principal_id, apps, note) VALUES ($1, $2, $3)
          ON CONFLICT (principal_id) WHERE status = 'pending' DO NOTHING`,
-        [principalId],
+        [principalId, details.apps, details.note],
       );
-      return inserted.rowCount === 1 ? "created" : "already_pending";
+      if (inserted.rowCount === 1) return "created";
+      const updated = await c.query(
+        `UPDATE connection_requests
+         SET apps = (SELECT coalesce(array_agg(DISTINCT a ORDER BY a), '{}') FROM unnest(apps || $2::text[]) a),
+             note = coalesce($3, note)
+         WHERE principal_id = $1 AND status = 'pending'
+           AND (NOT (apps @> $2::text[]) OR ($3::text IS NOT NULL AND note IS DISTINCT FROM $3))`,
+        [principalId, details.apps, details.note],
+      );
+      return updated.rowCount === 1 ? "updated" : "already_pending";
     });
   }
 
-  async hasPendingRequest(principalId: string): Promise<boolean> {
-    const { rowCount } = await this.pool.query(
-      "SELECT 1 FROM connection_requests WHERE principal_id = $1 AND status = 'pending'",
+  async pendingRequest(principalId: string): Promise<PendingRequest | null> {
+    if (!isUuid(principalId)) return null;
+    const { rows } = await this.pool.query<{ id: string; apps: string[]; note: string | null; created_at: Date }>(
+      "SELECT id, apps, note, created_at FROM connection_requests WHERE principal_id = $1 AND status = 'pending'",
       [principalId],
     );
-    return (rowCount ?? 0) > 0;
+    const r = rows[0];
+    return r ? { id: r.id, apps: r.apps, note: r.note, createdAt: r.created_at } : null;
   }
 
   async pendingRequests(): Promise<ConnectionRequestRow[]> {
@@ -283,11 +387,26 @@ export class PgIdentityStore implements IdentityStore {
       principal_id: string;
       label: string | null;
       created_at: Date;
+      apps: string[];
+      note: string | null;
+      methods: IdentityMethod[];
+      connected: boolean;
     }>(
-      `SELECT r.id, r.principal_id, r.created_at, ${labelOf("r.principal_id")} AS label
+      `SELECT r.id, r.principal_id, r.created_at, r.apps, r.note, ${labelOf("r.principal_id")} AS label,
+              ${methodsOf("r.principal_id")} AS methods,
+              EXISTS (SELECT 1 FROM connections c WHERE c.principal_id = r.principal_id AND c.status = 'active') AS connected
        FROM connection_requests r WHERE r.status = 'pending' ORDER BY r.created_at`,
     );
-    return rows.map((r) => ({ id: r.id, principalId: r.principal_id, label: r.label, createdAt: r.created_at }));
+    return rows.map((r) => ({
+      id: r.id,
+      principalId: r.principal_id,
+      label: r.label,
+      createdAt: r.created_at,
+      apps: r.apps,
+      note: r.note,
+      methods: r.methods,
+      connected: r.connected,
+    }));
   }
 
   async connections(): Promise<ConnectionRow[]> {
@@ -304,8 +423,11 @@ export class PgIdentityStore implements IdentityStore {
        FROM connections c
        JOIN principals p ON p.id = c.principal_id
        LEFT JOIN LATERAL (
-         SELECT identifier, last_login_at FROM identities
-         WHERE principal_id = c.principal_id ORDER BY (method = 'email') DESC, created_at LIMIT 1
+         SELECT CASE WHEN method = 'google' THEN email ELSE identifier END AS identifier,
+                (SELECT max(last_login_at) FROM identities WHERE principal_id = c.principal_id) AS last_login_at
+         FROM identities
+         WHERE principal_id = c.principal_id AND (method <> 'google' OR email IS NOT NULL)
+         ORDER BY ${LABEL_ORDER} LIMIT 1
        ) i ON true
        ORDER BY c.status, c.granted_at`,
     );
@@ -353,6 +475,31 @@ export class PgIdentityStore implements IdentityStore {
       await writeAudit(c, { event: "connection.revoked", principalId, actorId });
       return true;
     });
+  }
+
+  async reconnect(principalId: string, actorId: string): Promise<boolean> {
+    if (!isUuid(principalId)) return false;
+    return inTransaction(this.pool, async (c) => {
+      const { rowCount } = await c.query(
+        "SELECT 1 FROM connections WHERE principal_id = $1 AND status = 'revoked' FOR UPDATE",
+        [principalId],
+      );
+      if (!rowCount) return false;
+      await grant(c, principalId, actorId);
+      await writeAudit(c, { event: "connection.added", principalId, actorId, detail: { reconnect: true } });
+      return true;
+    });
+  }
+
+  async adminEmails(): Promise<string[]> {
+    const { rows } = await this.pool.query<{ email: string }>(
+      `SELECT DISTINCT CASE WHEN i.method = 'google' THEN i.email ELSE i.identifier END AS email
+       FROM principals p
+       JOIN connections c ON c.principal_id = p.id AND c.status = 'active'
+       JOIN identities i ON i.principal_id = p.id AND (i.method = 'email' OR (i.method = 'google' AND i.email IS NOT NULL))
+       WHERE p.is_admin`,
+    );
+    return rows.map((r) => r.email);
   }
 
   async addConnection(method: IdentityMethod, identifier: string, actorId: string): Promise<string> {

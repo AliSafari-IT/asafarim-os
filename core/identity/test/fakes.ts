@@ -10,6 +10,13 @@ import { newToken } from "../src/auth-session.ts";
 import type { CookieOptions, HttpContext } from "../src/http.ts";
 import type { Limit, LimitResult, OtpChallenges, RateLimiter, VerifyResult } from "../src/otp.ts";
 import { OTP_MAX_ATTEMPTS } from "../src/otp.ts";
+import {
+  type GoogleFinish,
+  type GoogleIdentity,
+  type GoogleSignIn,
+  type GoogleStart,
+  GoogleError,
+} from "../src/google.ts";
 import type { SmsSender } from "../src/sms.ts";
 import type { MailMessage, Mailer } from "../src/smtp.ts";
 import type {
@@ -22,14 +29,16 @@ import type {
   IdentityStore,
   NewPasskeyRow,
   PasskeyRow,
+  PendingRequest,
   Principal,
+  RequestDetails,
   RequestOutcome,
 } from "../src/store.ts";
 
 interface P {
   id: string;
   isAdmin: boolean;
-  identities: Identity[];
+  identities: (Identity & { email?: string | null })[];
   verifiedAt: Date | null;
   lastLoginAt: Date | null;
 }
@@ -43,6 +52,8 @@ interface R {
   principalId: string;
   status: "pending" | "approved" | "rejected";
   createdAt: Date;
+  apps: string[];
+  note: string | null;
 }
 
 export class MemoryStore implements IdentityStore {
@@ -75,7 +86,13 @@ export class MemoryStore implements IdentityStore {
 
   labelOf(id: string): string | null {
     const ids = this.principals.get(id)?.identities ?? [];
-    return (ids.find((i) => i.method === "email") ?? ids[0])?.identifier ?? null;
+    const email = ids.find((i) => i.method === "email")?.identifier;
+    const google = ids.find((i) => i.method === "google" && i.email)?.email;
+    return email ?? google ?? ids.find((i) => i.method === "phone")?.identifier ?? null;
+  }
+
+  methodsOf(id: string): IdentityMethod[] {
+    return [...new Set((this.principals.get(id)?.identities ?? []).map((i) => i.method))].sort();
   }
 
   private grant(id: string) {
@@ -91,6 +108,30 @@ export class MemoryStore implements IdentityStore {
     return p.id;
   }
 
+  async verifiedGoogleLogin(subject: string, email: string | null, linkEmail: boolean) {
+    let p = this.by("google", subject);
+    if (!p) {
+      if (linkEmail && email) {
+        p = this.ensure("email", email);
+        p.identities.push({ method: "google", identifier: subject, email });
+      } else {
+        p = {
+          id: randomUUID(),
+          isAdmin: false,
+          identities: [{ method: "google", identifier: subject, email }],
+          verifiedAt: null,
+          lastLoginAt: null,
+        };
+        this.principals.set(p.id, p);
+      }
+    }
+    const g = p.identities.find((i) => i.method === "google" && i.identifier === subject)!;
+    g.email = email;
+    p.verifiedAt ??= new Date();
+    p.lastLoginAt = new Date();
+    return p.id;
+  }
+
   async principal(id: string): Promise<Principal | null> {
     const p = this.principals.get(id);
     if (!p) return null;
@@ -99,18 +140,38 @@ export class MemoryStore implements IdentityStore {
       isAdmin: p.isAdmin,
       label: this.labelOf(id),
       connection: this.connectionsById.get(id)?.status ?? "none",
+      methods: this.methodsOf(id),
     };
   }
 
-  async requestConnection(principalId: string): Promise<RequestOutcome> {
-    if (this.connectionsById.get(principalId)?.status === "active") return "already_connected";
-    if (this.requests.some((r) => r.principalId === principalId && r.status === "pending")) return "already_pending";
-    this.requests.push({ id: randomUUID(), principalId, status: "pending", createdAt: new Date() });
-    return "created";
+  async requestConnection(
+    principalId: string,
+    details: RequestDetails = { apps: [], note: null },
+  ): Promise<RequestOutcome> {
+    if (this.connectionsById.get(principalId)?.status === "active" && details.apps.length === 0)
+      return "already_connected";
+    const open = this.requests.find((r) => r.principalId === principalId && r.status === "pending");
+    if (!open) {
+      this.requests.push({
+        id: randomUUID(),
+        principalId,
+        status: "pending",
+        createdAt: new Date(),
+        apps: [...new Set(details.apps)].sort(),
+        note: details.note,
+      });
+      return "created";
+    }
+    const apps = [...new Set([...open.apps, ...details.apps])].sort();
+    const changed = apps.length !== open.apps.length || (details.note !== null && details.note !== open.note);
+    open.apps = apps;
+    if (details.note !== null) open.note = details.note;
+    return changed ? "updated" : "already_pending";
   }
 
-  async hasPendingRequest(principalId: string) {
-    return this.requests.some((r) => r.principalId === principalId && r.status === "pending");
+  async pendingRequest(principalId: string): Promise<PendingRequest | null> {
+    const r = this.requests.find((x) => x.principalId === principalId && x.status === "pending");
+    return r ? { id: r.id, apps: r.apps, note: r.note, createdAt: r.createdAt } : null;
   }
 
   async pendingRequests(): Promise<ConnectionRequestRow[]> {
@@ -121,6 +182,10 @@ export class MemoryStore implements IdentityStore {
         principalId: r.principalId,
         label: this.labelOf(r.principalId),
         createdAt: r.createdAt,
+        apps: r.apps,
+        note: r.note,
+        methods: this.methodsOf(r.principalId),
+        connected: this.connectionsById.get(r.principalId)?.status === "active",
       }));
   }
 
@@ -159,6 +224,24 @@ export class MemoryStore implements IdentityStore {
     c.revokedAt = new Date();
     this.auditLog.push({ event: "connection.revoked", principalId, actorId });
     return true;
+  }
+
+  async reconnect(principalId: string, actorId: string) {
+    if (this.connectionsById.get(principalId)?.status !== "revoked") return false;
+    this.connectionsById.delete(principalId);
+    this.grant(principalId);
+    this.auditLog.push({ event: "connection.added", principalId, actorId, detail: { reconnect: true } });
+    return true;
+  }
+
+  async adminEmails() {
+    return [...this.principals.values()]
+      .filter((p) => p.isAdmin && this.connectionsById.get(p.id)?.status === "active")
+      .flatMap((p) =>
+        p.identities.flatMap((i) =>
+          i.method === "email" ? [i.identifier] : i.method === "google" && i.email ? [i.email] : [],
+        ),
+      );
   }
 
   async addConnection(method: IdentityMethod, identifier: string, actorId: string) {
@@ -350,10 +433,15 @@ export class CapturingMailer implements Mailer {
   }
 
   lastCode(to: string): string {
-    const msg = [...this.sent].reverse().find((m) => m.to === to);
+    const msg = [...this.sent].reverse().find((m) => m.to === to && /code is \d{6}/.test(m.text));
     const m = msg && /code is (\d{6})/.exec(msg.text);
     if (!m) throw new Error(`no code was emailed to ${to}`);
     return m[1]!;
+  }
+
+  /** The notices (not codes) emailed to `to`. */
+  notices(to: string): MailMessage[] {
+    return this.sent.filter((m) => m.to === to && !/code is \d{6}/.test(m.text));
   }
 }
 
@@ -460,4 +548,30 @@ export function csrfOf(html: string): string {
   const m = /name="csrf" value="([^"]+)"/.exec(html);
   if (!m) throw new Error("no csrf field on the page");
   return m[1]!;
+}
+
+/** Google, as the sign-in routes see it: the next person it signs in, or the error it fails with. */
+export class FakeGoogle implements GoogleSignIn {
+  next: GoogleIdentity | GoogleError = {
+    subject: "100000000000000000001",
+    email: "ali@gmail.com",
+    authoritative: true,
+  };
+  readonly finished: GoogleFinish[] = [];
+
+  authorizeUrl(s: GoogleStart): string {
+    const q = new URLSearchParams({
+      state: s.state,
+      nonce: s.nonce,
+      redirect_uri: s.redirectUri,
+      code_challenge: s.codeChallenge,
+    });
+    return `https://accounts.google.test/auth?${q.toString()}`;
+  }
+
+  async finish(f: GoogleFinish): Promise<GoogleIdentity> {
+    this.finished.push(f);
+    if (this.next instanceof GoogleError) throw this.next;
+    return this.next;
+  }
 }
