@@ -225,7 +225,12 @@ export function createAccess(opts: AccessOptions) {
     } catch {
       throw new AccessUnavailableError("core-api is unreachable");
     }
-    const json = (await res.json().catch(() => ({}))) as { app?: unknown; permissions?: unknown; error?: string };
+    // `?? {}`: a body of JSON `null` is malformed too, not a TypeError.
+    const json = ((await res.json().catch(() => ({}))) ?? {}) as {
+      app?: unknown;
+      permissions?: unknown;
+      error?: string;
+    };
     if (!res.ok) throw new AccessUnavailableError(json.error ?? `http ${res.status}`);
     if (
       json.app !== opts.appId ||

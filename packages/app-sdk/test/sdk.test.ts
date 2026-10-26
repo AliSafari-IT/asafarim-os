@@ -28,7 +28,7 @@ function credential() {
 }
 
 const silent = { info: () => undefined, warn: () => undefined };
-const reply = (status: number, body: object) => new Response(JSON.stringify(body), { status });
+const reply = (status: number, body: object | null) => new Response(JSON.stringify(body), { status });
 
 /** Verify a request the SDK signed, the way core-api does. */
 function verifySigned(
@@ -478,6 +478,7 @@ describe("subjectPermissions / subjectHas (Flow: event handlers re-check before 
 
   it("a 200 that isn't the contract, or answers for another app, is unavailable", async () => {
     for (const bad of [
+      null,
       {},
       { app: "notes" },
       { app: "notes", permissions: "notes.read" },
