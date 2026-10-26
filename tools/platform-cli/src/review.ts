@@ -177,6 +177,12 @@
  *   gateway doesn't do. Paths an `expose: false` route hides for that method are skipped (the gateway
  *   answers 404 there first). Overlap is found on sample paths of the routes' globs and of the app's
  *   route files and pages, as for `public-path-not-served`. One finding per set of routes.
+ * - `subscription-declared-twice`: an event type that `events.subscribes` lists more than once. The
+ *   manifest schema rejects a repeated `events.publishes` type but not a repeated subscription, while
+ *   core-api keeps one subscription per app and event type (the `event_subscriptions` primary key is
+ *   `(app_id, event_type)`), so registering the app fails on the second one and the app can't be
+ *   installed or upgraded. It is usually a second handler added for a type without removing the first.
+ *   One finding per repeated type, naming its handlers.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -240,6 +246,7 @@ export const FINDING_KINDS = [
   "domain-claimed-twice",
   "config-variable-clash",
   "route-permissions-stacked",
+  "subscription-declared-twice",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];
@@ -1548,7 +1555,29 @@ export function reviewApp(
     });
   }
 
+  // 34. One subscription per event type: core-api keeps one row per app and type, so a repeat fails registration.
+  for (const { type, handlers: paths } of repeatedSubscriptions(manifest)) {
+    const distinct = [...new Set(paths)];
+    findings.push({
+      app,
+      kind: "subscription-declared-twice",
+      subject: `subscription: ${type}`,
+      file: rel(path.join(appDir, MANIFEST_FILE)),
+      message: `events.subscribes lists ${type} ${paths.length} times (${distinct.length > 1 ? `handlers ${joinNames(distinct)}` : `each with the handler ${distinct[0]}`}), but core-api keeps one subscription per app and event type, so registering the app fails and it can't be installed or upgraded (keep one subscription for the type, with one handler)`,
+    });
+  }
+
   return { app, findings, handlers, plumbing };
+}
+
+/**
+ * Event types `events.subscribes` lists more than once (`subscription-declared-twice`), with the handler
+ * of each entry, in the order the types first repeat.
+ */
+export function repeatedSubscriptions(manifest: Pick<AppManifest, "events">): { type: string; handlers: string[] }[] {
+  const byType = new Map<string, string[]>();
+  for (const s of manifest.events?.subscribes ?? []) byType.set(s.type, [...(byType.get(s.type) ?? []), s.handler]);
+  return [...byType].filter(([, handlers]) => handlers.length > 1).map(([type, handlers]) => ({ type, handlers }));
 }
 
 /**
