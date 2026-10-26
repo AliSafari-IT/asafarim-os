@@ -493,9 +493,78 @@ button.wide {
   font-size: 0.85rem;
   color: var(--muted);
 }
-.mermaid svg {
-  max-width: 100%;
+/* A diagram sits on a card in the OS's colours; a wide one scrolls inside this frame, never the page. */
+.mermaid-svg {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.mermaid-svg svg {
+  display: block;
+  margin: 0 auto;
   height: auto;
+}
+.mermaid-tools {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+.mermaid-enlarge,
+.mermaid-dialog-bar button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 3px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--accent);
+  cursor: pointer;
+}
+.mermaid-enlarge:hover,
+.mermaid-dialog-bar button:hover {
+  border-color: var(--accent);
+}
+.mermaid-dialog {
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: var(--card);
+  color: var(--ink);
+}
+.mermaid-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.mermaid-dialog::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+.mermaid-dialog-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  font-family: var(--sans);
+  border-bottom: 1px solid var(--line);
+}
+.mermaid-dialog-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  display: grid;
+  place-items: start center;
+}
+.mermaid-dialog-body svg {
+  max-width: none;
 }
 
 /* ⌘K search */

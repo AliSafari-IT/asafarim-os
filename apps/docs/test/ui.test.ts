@@ -3,7 +3,7 @@ import { filterTree } from "../components/DocTree";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createOutcome, createRequest, IssueCreatedUnsaved, PUBLIC_BANNER } from "../components/IssueDialog";
-import { mermaidLabel } from "../components/Mermaid";
+import { MIN_SCALE, fitWidth, mermaidLabel, themeVariables } from "../components/Mermaid";
 import type { NavNode } from "../components/nav";
 import { searchDocs } from "../components/Search";
 import { hashId } from "../components/Toc";
@@ -186,5 +186,28 @@ describe("Generate GitHub issue, in the page (#82)", () => {
     expect(html).toContain("example-org/demo-app/issues/7");
     expect(html).toContain("The issue was created, but the link could not be saved on this note.");
     expect(html).toContain('role="alert"');
+  });
+});
+
+describe("Mermaid sizing and colours", () => {
+  it("reads a title from front matter too", () => {
+    expect(mermaidLabel("---\ntitle: The two audit trails\n---\nflowchart LR\n  a --> b")).toBe(
+      "Diagram: The two audit trails",
+    );
+  });
+
+  it("draws at natural size when it fits, shrinks to the frame down to MIN_SCALE, then scrolls", () => {
+    expect(fitWidth(500, 800)).toBe(500);
+    expect(fitWidth(1000, 800)).toBe(800);
+    expect(fitWidth(1000, 360)).toBe(1000 * MIN_SCALE);
+    expect(fitWidth(0, 360)).toBe(0);
+  });
+
+  it("uses the page's theme tokens, with the OS's colours as fallbacks", () => {
+    const tokens: Record<string, string> = { "--accent": " #0f4c6e", "--ink": "#15212b" };
+    const light = themeVariables((n) => tokens[n] ?? "", false);
+    expect(light).toMatchObject({ primaryBorderColor: "#0f4c6e", primaryTextColor: "#15212b", background: "#ffffff" });
+    const dark = themeVariables(() => "", true);
+    expect(dark).toMatchObject({ darkMode: true, background: "#1c1c1c", primaryBorderColor: "#7fb0dc" });
   });
 });

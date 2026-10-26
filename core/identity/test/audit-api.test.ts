@@ -21,9 +21,9 @@ class Reader implements AuditReader {
   counts: AuditCounts = { perDay: [], pendingRequests: 0, activeConnections: 0 };
   sinceAsked: Date | undefined;
   async principal(id: string): Promise<Principal | null> {
-    if (id === ADMIN) return { id, isAdmin: true, connection: "active", label: "ali@example.test" };
-    if (id === MEMBER) return { id, isAdmin: false, connection: "active", label: "m@example.test" };
-    if (id === REVOKED_ADMIN) return { id, isAdmin: true, connection: "revoked", label: "r@example.test" };
+    if (id === ADMIN) return { id, isAdmin: true, connection: "active", label: "ali@example.test", methods: [] };
+    if (id === MEMBER) return { id, isAdmin: false, connection: "active", label: "m@example.test", methods: [] };
+    if (id === REVOKED_ADMIN) return { id, isAdmin: true, connection: "revoked", label: "r@example.test", methods: [] };
     return null;
   }
   async searchAudit(f: AuditSearch): Promise<{ events: AuditSearchRow[]; next: number | null }> {
