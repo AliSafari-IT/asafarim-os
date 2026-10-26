@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "asafarim://flow/events/flow.issue-draft.requested.v1.json",
+  "title": "flow.issue-draft.requested.v1",
+  "description": "Flow asks Docs to draft a GitHub issue from a study note. Docs answers with docs.issue-draft.ready.v1 or docs.issue-draft.failed.v1, carrying the same runId and stepId. Only ids: Docs reads the note itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runId", "stepId", "noteId", "onBehalfOf"],
+  "properties": {
+    "runId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The Flow run" },
+    "stepId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "The run's step that waits for the answer"
+    },
+    "noteId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The Docs note" },
+    "onBehalfOf": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "The subject (person) the run acts for: the note's author"
+    }
+  }
+}

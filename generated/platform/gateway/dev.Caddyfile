@@ -35,6 +35,22 @@ http://docs.localhost:8080 {
 	}
 }
 
+http://flow.localhost:8080 {
+	@hidden1 {
+		path /internal /internal/*
+	}
+	handle @hidden1 {
+		respond "Not found" 404
+	}
+	handle {
+		forward_auth {$OS_CORE_API_UPSTREAM} {
+			uri /authz/check
+			header_up X-Asafarim-App flow
+		}
+		reverse_proxy {$OS_APP_FLOW_UPSTREAM}
+	}
+}
+
 http://notes.localhost:8080 {
 	@hidden1 {
 		path /internal /internal/*

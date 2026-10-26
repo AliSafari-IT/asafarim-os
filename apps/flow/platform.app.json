@@ -1,0 +1,130 @@
+{
+  "id": "flow",
+  "name": "Flow",
+  "version": "0.1.0",
+  "platform": ">=0.1 <1",
+  "owner": "ASafariM Digital",
+  "domains": {
+    "primary": "flow.asafarim.site"
+  },
+  "runtime": {
+    "image": "flow",
+    "port": 3000,
+    "health": {
+      "live": "/health/live",
+      "ready": "/health/ready"
+    },
+    "resources": {
+      "memory": "192m",
+      "cpus": 0.5
+    }
+  },
+  "database": {
+    "engine": "postgres",
+    "migrations": "sql"
+  },
+  "auth": {
+    "client": "oidc",
+    "publicPaths": ["/health/live", "/health/ready"]
+  },
+  "permissions": [
+    {
+      "key": "flow.read",
+      "description": "See workflows and their runs"
+    },
+    {
+      "key": "flow.workflows.write",
+      "description": "Pause and resume workflows"
+    },
+    {
+      "key": "flow.runs.start",
+      "description": "Retry or cancel a run"
+    },
+    {
+      "key": "flow.approvals.decide",
+      "description": "Approve or reject a step that waits for a person"
+    }
+  ],
+  "roles": [
+    {
+      "key": "flow.viewer",
+      "grants": ["flow.read"],
+      "description": "Can see workflows and runs"
+    },
+    {
+      "key": "flow.approver",
+      "grants": ["flow.read", "flow.approvals.decide"],
+      "description": "Can see runs and decide their approvals"
+    },
+    {
+      "key": "flow.owner",
+      "grants": ["flow.read", "flow.workflows.write", "flow.runs.start", "flow.approvals.decide"],
+      "description": "Runs Flow: workflows, runs and approvals"
+    }
+  ],
+  "routes": [
+    {
+      "path": "/internal/**",
+      "expose": false
+    }
+  ],
+  "events": {
+    "publishes": [
+      {
+        "type": "flow.issue-draft.requested.v1",
+        "schema": "./events/flow.issue-draft.requested.v1.json"
+      },
+      {
+        "type": "flow.issue.approved.v1",
+        "schema": "./events/flow.issue.approved.v1.json"
+      }
+    ],
+    "subscribes": [
+      {
+        "type": "docs.note.created.v1",
+        "handler": "/internal/events/docs.note.created.v1"
+      },
+      {
+        "type": "docs.issue-draft.ready.v1",
+        "handler": "/internal/events/docs.issue-draft.ready.v1"
+      },
+      {
+        "type": "docs.issue-draft.failed.v1",
+        "handler": "/internal/events/docs.issue-draft.failed.v1"
+      },
+      {
+        "type": "docs.issue.created.v1",
+        "handler": "/internal/events/docs.issue.created.v1"
+      },
+      {
+        "type": "docs.issue.failed.v1",
+        "handler": "/internal/events/docs.issue.failed.v1"
+      }
+    ]
+  },
+  "ui": {
+    "glyph": "FL",
+    "color": "#2563eb",
+    "nav": [
+      {
+        "label": "Overview",
+        "href": "/"
+      },
+      {
+        "label": "Runs",
+        "href": "/runs"
+      },
+      {
+        "label": "Workflows",
+        "href": "/workflows"
+      }
+    ],
+    "status": "active",
+    "launcher": {
+      "description": "Workflows across your apps: a #issue note in Docs becomes a GitHub issue once you approve it.",
+      "meta": "flow.asafarim.site",
+      "access": "authenticated",
+      "order": 30
+    }
+  }
+}
