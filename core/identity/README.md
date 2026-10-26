@@ -40,7 +40,7 @@ Any failure shows a styled error page with a short code (`assertion_replayed`, `
 
 ## Local sign-in
 
-`IDENTITY_LOGIN_METHOD=local`, `IDENTITY_SIGN_IN_METHODS=email,passkey` (default; `sms` optional; the first version's `IDENTITY_LOGIN_METHOD=sms` still means SMS only). No third-party service or library is involved: codes are emailed by the service's own SMTP client (`src/smtp.ts`) through your mail server, and passkeys are verified by its own WebAuthn code (`src/webauthn.ts`, `src/cbor.ts`).
+`IDENTITY_LOGIN_METHOD=local`, `IDENTITY_SIGN_IN_METHODS=email,passkey` (default; `google` and `sms` optional; the first version's `IDENTITY_LOGIN_METHOD=sms` still means SMS only). No third-party service or library is involved: codes are emailed by the service's own SMTP client (`src/smtp.ts`) through your mail server, and passkeys are verified by its own WebAuthn code (`src/webauthn.ts`, `src/cbor.ts`).
 
 - **Email codes** work exactly like the SMS codes below (same storage, limits, single use, no probing), with `IDENTITY_SMTP_*` settings. TLS is always verified; `starttls` refuses a server that doesn't offer it; AUTH is only sent over TLS.
 - **Passkeys:** a signed-in person adds one on **`/account`**; after that "Sign in with a passkey" on `/login` needs no code. The server checks the challenge (single use), the origin (`IDENTITY_ISSUER`), the rpId hash, user presence **and** verification, the signature (ES256, EdDSA, RS256 ≥ 2048 bits) and the sign counter. Attestation is `none`. The page's only script is `/static/passkey.js` (`script-src 'self'`).
@@ -49,6 +49,20 @@ Any failure shows a styled error page with a short code (`assertion_replayed`, `
 The flow with codes (the same for email and SMS):
 
 **QR code or link → `/connect` → `/login` → mobile number → SMS code → verify → connected? → the app (or `IDENTITY_HOME_URL`)**. If the number isn't connected: **"Request connection" → an admin approves → sign in again**.
+
+### Continue with Google
+
+`google` in `IDENTITY_SIGN_IN_METHODS` puts **Continue with Google** first on `/login` (`src/google.ts`, no library besides jose). It is the OpenID Connect code flow with PKCE (S256), a `state` bound to this browser's login flow (single use, 10 minutes) and a `nonce` checked in the ID token; the token's signature (Google's JWKS), issuer, audience and expiry are verified. `/login/google` is a plain link, not a form, so `form-action 'self'` doesn't block the hop to Google.
+
+- The identity is Google's account id (`sub`, method `google`), never the address. The verified address is kept for display (`identities.email`).
+- A first Google sign-in joins the principal that already holds the address **only when Google is its authority**: an `@gmail.com` address, or a Workspace one (`hd` = the address's domain). A new Gmail address also becomes a verified email identity. Any other address gets a principal of its own, so a Google account can never take over an account it doesn't own.
+- Like every method, it **grants nothing**: the principal still needs an admin's connection.
+
+Settings: `IDENTITY_GOOGLE_CLIENT_ID` and `IDENTITY_GOOGLE_CLIENT_SECRET`, from a Google Cloud OAuth client of type _Web application_ whose authorized redirect URI is `https://id.asafarim.site/login/google/callback`. Audit events: `google.verified`, `google.failed` (`detail.reason`), and `method = google` on `login.granted` / `login.not_authorized`.
+
+### Access requests
+
+Someone signed in but not connected sees **Ask for access**: they pick the apps they need (the named clients) and may add a note (500 characters). The admins get an email (when email is configured); `/admin` shows who asked, how they sign in, the apps and the note. **Approve** connects the account and emails the requester; **Reject** emails them too. A connected person can ask for more apps from `/account`; approving that closes the request, and the admin grants the app roles in the Admin console (core-api decides who may open an app). One open request per person: asking again adds apps and replaces the note (`request.updated`). Reconnecting a revoked account works by principal, whatever way they sign in.
 
 ### Authentication and authorization are separate
 

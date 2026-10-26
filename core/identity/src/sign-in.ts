@@ -25,6 +25,7 @@ import {
 } from "./auth-session.ts";
 import type { AppLink } from "./clients.ts";
 import { maskEmail, normalizeEmail } from "./email.ts";
+import { type GoogleSignIn, GoogleError, pkcePair } from "./google.ts";
 import { type HttpContext, clientIp, queryValue, readForm, readJson, sendHtml } from "./http.ts";
 import type { Logger } from "./log.ts";
 import {
@@ -43,6 +44,7 @@ import { maskPhone, normalizePhone, prefixAllowed } from "./phone.ts";
 import { type SmsSender, SmsError, codeMessage } from "./sms.ts";
 import { type Mailer, MailError } from "./smtp.ts";
 import {
+  NOTE_MAX,
   PAGE_CSP,
   PASSKEY_PAGE_CSP,
   accountPage,
@@ -54,7 +56,7 @@ import {
   notConnectedPage,
 } from "./sign-in-pages.ts";
 import { CONTINUE_PAGE_CSP } from "./pages.ts";
-import type { AuditEntry, IdentityMethod, IdentityStore, Principal } from "./store.ts";
+import type { AuditEntry, IdentityMethod, IdentityStore, Principal, RequestDetails } from "./store.ts";
 import {
   type RelyingParty,
   WebAuthnError,
@@ -86,6 +88,8 @@ export interface SignInDeps {
   sms?: { sender: SmsSender; allowedPrefixes: readonly string[]; dailyLimit: number };
   /** Passkeys, when on: the relying party (the issuer's host and origin). */
   passkeys?: { rp: RelyingParty };
+  /** "Continue with Google", when on. */
+  google?: GoogleSignIn;
   ephemeral: Ephemeral;
   store: IdentityStore;
   challenges: OtpChallenges;
@@ -116,11 +120,12 @@ export interface SignIn {
 
 const UID = /^[\w-]{1,64}$/;
 const REQUEST_ACTION = /^\/admin\/requests\/([0-9a-f-]{36})\/(approve|reject)$/;
-const REVOKE_ACTION = /^\/admin\/connections\/([0-9a-f-]{36})\/revoke$/;
+const REVOKE_ACTION = /^\/admin\/connections\/([0-9a-f-]{36})\/(revoke|reconnect)$/;
 const NOTICES: Record<string, string> = {
-  approved: "Request approved: they're now connected.",
-  rejected: "Request rejected.",
+  approved: "Request approved: they're now connected, and they've been emailed.",
+  rejected: "Request rejected. They've been emailed.",
   revoked: "Connection revoked. Their sign-in sessions have ended.",
+  reconnected: "Reconnected.",
   added: "Connected.",
   stale: "That request or connection had already changed. Nothing was done.",
   self: "You can't revoke your own connection.",
@@ -186,8 +191,54 @@ export function createSignIn(d: SignInDeps): SignIn {
       email: Boolean(channels.email),
       sms: Boolean(channels.sms),
       passkey: Boolean(d.passkeys),
+      google: Boolean(d.google),
       ...extra,
     });
+  const apps = d.apps ?? [];
+  const appName = (id: string) => apps.find((a) => a.id === id)?.name ?? id;
+
+  /**
+   * A notice by email (new requests to the admins, decisions to the requester), when email is configured.
+   * Best effort: a failure is logged and never changes the outcome. Addresses are never logged.
+   */
+  async function notify(to: readonly string[], subject: string, text: string) {
+    if (!d.email) return;
+    for (const address of new Set(to)) {
+      try {
+        await d.email.mailer.send({ to: address, subject, text });
+      } catch (err) {
+        d.log.warn("notify.failed", { reason: err instanceof MailError ? err.reason : "error" });
+      }
+    }
+  }
+
+  /** What a request form asks for: known app ids only, and a note without control characters. */
+  function requestDetails(form: URLSearchParams): RequestDetails {
+    const known = new Set(apps.map((a) => a.id));
+    const picked = [...new Set(form.getAll("app"))].filter((id) => known.has(id)).slice(0, 20);
+    const note = (form.get("note") ?? "")
+      .replace(/\r\n?/g, "\n")
+      // Control characters (Unicode Cc), except the newline.
+      .replace(/[^\n\P{Cc}]/gu, "")
+      .trim()
+      .slice(0, NOTE_MAX);
+    return { apps: picked.sort(), note: note || null };
+  }
+
+  /** The "ask for access" page (or its pending state) for a signed-in principal who isn't connected. */
+  async function accessPage(
+    ctx: HttpContext,
+    csrf: string,
+    principal: Principal,
+    extra: { justRequested?: boolean; error?: string } = {},
+  ) {
+    const pending = await d.store.pendingRequest(principal.id);
+    render(
+      ctx,
+      200,
+      notConnectedPage({ csrf, pending, apps, label: principal.label, methods: principal.methods, ...extra }),
+    );
+  }
 
   /** Auditing must never break a sign-in: a failed write is logged and the request goes on. */
   async function audit(entry: AuditEntry) {
@@ -270,10 +321,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     if (current) {
       const principal = await d.store.principal(current.session.principalId);
       if (principal?.connection === "active") return seeOther(ctx, targetHref(target));
-      if (principal) {
-        const pending = await d.store.hasPendingRequest(principal.id);
-        return render(ctx, 200, notConnectedPage({ csrf: current.session.csrf, pending }));
-      }
+      if (principal) return accessPage(ctx, current.session.csrf, principal);
     }
     // Reuse this browser's flow if it has one (a reload doesn't store a new one); otherwise start one,
     // within a per-IP budget so the page can't be used to fill Redis.
@@ -437,7 +485,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     flowToken: string,
     flow: LoginFlow,
     principalId: string,
-    method: "email" | "sms" | "passkey",
+    method: "email" | "sms" | "passkey" | "google",
   ): Promise<{ authorized: boolean; next: string }> {
     await d.flows.destroy(flowToken);
     setCookie(ctx, FLOW_COOKIE, null, FLOW_COOKIE_PATH, 0);
@@ -517,6 +565,95 @@ export function createSignIn(d: SignInDeps): SignIn {
     const outcome = await signedIn(ctx, token, flow, principalId, via);
     if (!outcome.authorized) return seeOther(ctx, outcome.next);
     render(ctx, 200, continueToPage(outcome.next), CONTINUE_PAGE_CSP);
+  }
+
+  // ---- Continue with Google ---------------------------------------------------------------------
+
+  const googleRedirectUri = `${d.issuer}/login/google/callback`;
+  const googleKey = (flowToken: string) => `google:${flowToken}`;
+
+  /**
+   * GET /login/google: a plain link, not a form, so no form-action applies to the hop to Google. It needs this
+   * browser's login flow; the state, nonce and PKCE verifier are bound to that flow (single use, 10 minutes).
+   */
+  async function googleStart(ctx: HttpContext) {
+    const current = await currentFlow(ctx);
+    if (!current || !d.google) return seeOther(ctx, "/login");
+    const budget = await d.limits.hit("google-ip", ipHandle(ctx), LIMITS.flowsPerIp);
+    if (!budget.allowed) {
+      ctx.set("Retry-After", String(budget.retryAfter));
+      return render(
+        ctx,
+        429,
+        messagePage({ title: "Too many attempts", message: "Please wait a while before trying to sign in again." }),
+      );
+    }
+    const state = newToken();
+    const nonce = newToken();
+    const { verifier, challenge } = pkcePair();
+    await d.ephemeral.put(googleKey(current.token), JSON.stringify({ state, nonce, verifier }), 600);
+    seeOther(ctx, d.google.authorizeUrl({ redirectUri: googleRedirectUri, state, nonce, codeChallenge: challenge }));
+  }
+
+  /** GET /login/google/callback: Google sends the browser back here with a code (or an error). */
+  async function googleCallback(ctx: HttpContext) {
+    const current = await currentFlow(ctx);
+    if (!current || !d.google) return expired(ctx);
+    const ip = ipHandle(ctx);
+    const pending = await d.ephemeral.take(googleKey(current.token));
+    const fail = async (reason: string, message: string) => {
+      await audit({ event: "google.failed", method: "google", ipHandle: ip, detail: { reason } });
+      d.log.info("google.failed", { reason });
+      render(ctx, 400, login(current.flow.csrf, { error: message }), PASSKEY_PAGE_CSP);
+    };
+    const error = queryValue(ctx, "error");
+    if (error) {
+      return fail(
+        error === "access_denied" ? "cancelled" : "provider_error",
+        error === "access_denied"
+          ? "Google sign-in was cancelled. Try again, or use another way."
+          : "Google couldn't sign you in. Try again, or use another way.",
+      );
+    }
+    let saved: { state: string; nonce: string; verifier: string } | null = null;
+    try {
+      saved = pending ? (JSON.parse(pending) as { state: string; nonce: string; verifier: string }) : null;
+    } catch {
+      saved = null;
+    }
+    const state = queryValue(ctx, "state");
+    const code = queryValue(ctx, "code");
+    if (!saved || !sameToken(state, saved.state) || !code || code.length > 2048) {
+      return fail("state_mismatch", "That Google sign-in has expired. Please try again.");
+    }
+    const limit = await d.limits.hit("verify-ip", ip, LIMITS.verifyPerIp);
+    if (!limit.allowed) {
+      ctx.set("Retry-After", String(limit.retryAfter));
+      return fail("rate_limited", "Too many tries. Wait a while and try again.");
+    }
+    let who;
+    try {
+      who = await d.google.finish({
+        code,
+        redirectUri: googleRedirectUri,
+        codeVerifier: saved.verifier,
+        nonce: saved.nonce,
+      });
+    } catch (err) {
+      const reason = err instanceof GoogleError ? err.reason : "error";
+      return fail(reason, "Google couldn't sign you in. Try again, or use another way.");
+    }
+    const principalId = await d.store.verifiedGoogleLogin(who.subject, who.email, who.authoritative);
+    await audit({
+      event: "google.verified",
+      method: "google",
+      principalId,
+      ipHandle: ip,
+      detail: { linked: who.authoritative },
+    });
+    const outcome = await signedIn(ctx, current.token, current.flow, principalId, "google");
+    // A top-level GET (Google's redirect), not a form submission: a plain redirect may leave for the app's domain.
+    seeOther(ctx, outcome.next);
   }
 
   // ---- passkeys ---------------------------------------------------------------------------------
@@ -673,19 +810,27 @@ export function createSignIn(d: SignInDeps): SignIn {
     const me = await requireSession(ctx);
     if (!me) return seeOther(ctx, "/login");
     const done = queryValue(ctx, "done");
+    const notices: Record<string, string> = {
+      removed: "Passkey removed.",
+      requested: "Request sent. An administrator will review it, and you'll get an email.",
+      unchanged: "Your request already has those apps.",
+    };
     render(
       ctx,
       200,
       accountPage({
         csrf: me.session.csrf,
-        apps: d.apps ?? [],
+        apps,
         accountId: me.principal.id,
         label: me.principal.label,
+        initials: initialsOf(me.principal.label),
+        methods: me.principal.methods,
+        pending: await d.store.pendingRequest(me.principal.id),
         connected: me.principal.connection === "active",
         isAdmin: me.principal.isAdmin && me.principal.connection === "active",
         ...(d.adminConsoleUrl ? { adminConsoleUrl: d.adminConsoleUrl } : {}),
         passkeys: d.passkeys ? await d.store.passkeysOf(me.principal.id) : [],
-        ...(done === "removed" ? { notice: "Passkey removed." } : {}),
+        ...(done && notices[done] ? { notice: notices[done] } : {}),
       }),
       PASSKEY_PAGE_CSP,
     );
@@ -705,21 +850,40 @@ export function createSignIn(d: SignInDeps): SignIn {
 
   // ---- connection requests, sign-out ------------------------------------------------------------
 
+  /**
+   * POST /login/request: ask for access (which apps, and a note). Someone not connected asks to be connected;
+   * a connected person asks for more apps. Either way an admin decides; nothing is granted here.
+   */
   async function postRequest(ctx: HttpContext) {
     const form = await readForm(ctx);
-    const current = await currentSession(ctx);
-    if (!current) return seeOther(ctx, "/login");
-    if (!form || !sameToken(form.get("csrf"), current.session.csrf)) return expired(ctx);
-    const outcome = await d.store.requestConnection(current.session.principalId);
-    if (outcome === "already_connected") return seeOther(ctx, "/login");
-    if (outcome === "created") {
-      await audit({ event: "request.created", principalId: current.session.principalId, ipHandle: ipHandle(ctx) });
+    const me = await requireSession(ctx);
+    if (!me) return seeOther(ctx, "/login");
+    if (!form || !sameToken(form.get("csrf"), me.session.csrf)) return expired(ctx);
+    const connected = me.principal.connection === "active";
+    const details = requestDetails(form);
+    if (connected && details.apps.length === 0) return seeOther(ctx, "/account?done=unchanged");
+    const outcome = await d.store.requestConnection(me.principal.id, details);
+    if (outcome === "already_connected") return seeOther(ctx, "/account");
+    if (outcome === "created" || outcome === "updated") {
+      await audit({
+        event: outcome === "created" ? "request.created" : "request.updated",
+        principalId: me.principal.id,
+        ipHandle: ipHandle(ctx),
+        detail: { apps: details.apps.join(","), note: details.note !== null },
+      });
     }
-    render(
-      ctx,
-      200,
-      notConnectedPage({ csrf: current.session.csrf, pending: true, justRequested: outcome === "created" }),
-    );
+    if (outcome === "created") {
+      const asked = details.apps.length ? details.apps.map(appName).join(", ") : "an account (no app picked)";
+      await notify(
+        await d.store.adminEmails(),
+        "ASafariM: new access request",
+        `${me.principal.label ?? "Someone"} asked for access to ASafariM.\n\nApps: ${asked}\n${
+          details.note ? `Note: ${details.note}\n` : ""
+        }\nReview it at ${d.issuer}/admin\n`,
+      );
+    }
+    if (connected) return seeOther(ctx, `/account?done=${outcome === "already_pending" ? "unchanged" : "requested"}`);
+    await accessPage(ctx, me.session.csrf, me.principal, { justRequested: outcome === "created" });
   }
 
   async function postLogout(ctx: HttpContext) {
@@ -782,8 +946,10 @@ export function createSignIn(d: SignInDeps): SignIn {
         requests,
         connections,
         audit: recent,
+        apps,
         ...(d.adminConsoleUrl ? { adminConsoleUrl: d.adminConsoleUrl } : {}),
         ...(done && NOTICES[done] ? { notice: NOTICES[done] } : {}),
+        grantHint: done === "approved",
         ...(error ? { error } : {}),
       }),
     );
@@ -814,11 +980,27 @@ export function createSignIn(d: SignInDeps): SignIn {
     const request = REQUEST_ACTION.exec(path);
     if (request) {
       const decision = request[2] === "approve" ? "approved" : "rejected";
+      const asked = (await d.store.pendingRequests()).find((r) => r.id === request[1]);
       const principalId = await d.store.decideRequest(request[1]!, decision, actor);
+      if (principalId && asked?.label?.includes("@")) {
+        const names = asked.apps.map(appName).join(", ");
+        await notify(
+          [asked.label],
+          decision === "approved" ? "ASafariM: your access request was approved" : "ASafariM: your access request",
+          decision === "approved"
+            ? `Good news: an administrator approved your access request${names ? ` for ${names}` : ""}.\n\nSign in at ${d.issuer}/account to see your apps. If an app still says you have no access, its roles are being set up: try again a little later.\n`
+            : `An administrator didn't approve your access request${names ? ` for ${names}` : ""}.\n\nIf you think this is a mistake, sign in at ${d.issuer}/login and send a new request with a note.\n`,
+        );
+      }
       seeOther(ctx, `/admin?done=${principalId ? decision : "stale"}`);
       return true;
     }
     const revoke = REVOKE_ACTION.exec(path);
+    if (revoke?.[2] === "reconnect") {
+      const done = await d.store.reconnect(revoke[1]!, actor);
+      seeOther(ctx, `/admin?done=${done ? "reconnected" : "stale"}`);
+      return true;
+    }
     if (revoke) {
       const target = revoke[1]!;
       if (target === actor) {
@@ -871,6 +1053,14 @@ export function createSignIn(d: SignInDeps): SignIn {
           return true;
         case "/login/restart":
           await restart(ctx);
+          return true;
+        case "/login/google":
+          if (!d.google) return false;
+          await googleStart(ctx);
+          return true;
+        case "/login/google/callback":
+          if (!d.google) return false;
+          await googleCallback(ctx);
           return true;
         case "/account":
           await showAccount(ctx);

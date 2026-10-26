@@ -138,7 +138,12 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
     u.pathname = `/${dbName}`;
     dbUrl = u.href;
     store = new PgIdentityStore(dbUrl);
-    expect(await store.migrate()).toEqual(["001_sms_login.sql", "002_email_passkeys.sql", "003_passkey_id_check.sql"]);
+    expect(await store.migrate()).toEqual([
+      "001_sms_login.sql",
+      "002_email_passkeys.sql",
+      "003_passkey_id_check.sql",
+      "004_google_access_requests.sql",
+    ]);
     expect(await store.migrate()).toEqual([]);
   });
 
@@ -163,7 +168,13 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
   it("a proved number gets one principal and nothing else", async () => {
     const id = await store.verifiedLogin("email", OTHER);
     expect(await store.verifiedLogin("email", OTHER)).toBe(id);
-    expect(await store.principal(id)).toEqual({ id, isAdmin: false, connection: "none", label: OTHER });
+    expect(await store.principal(id)).toEqual({
+      id,
+      isAdmin: false,
+      connection: "none",
+      label: OTHER,
+      methods: ["email"],
+    });
     expect(await store.verifiedLogin("phone", PHONE)).not.toBe(id);
     const parallel = await Promise.all(Array.from({ length: 5 }, () => store.verifiedLogin("email", "p@example.test")));
     expect(new Set(parallel).size).toBe(1);
@@ -192,6 +203,49 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
     expect(events).toEqual(
       expect.arrayContaining(["request.approved", "connection.revoked", "connection.added", "connection.bootstrapped"]),
     );
+  });
+
+  it("Google: one principal per Google account; joins an address only when Google is its authority", async () => {
+    const adminId = (await store.connections())[0]!.principalId;
+    // Gmail: joins the principal that already holds the address, and keeps it as the label.
+    const holder = await store.verifiedLogin("email", "g@gmail.com");
+    expect(await store.verifiedGoogleLogin("111", "g@gmail.com", true)).toBe(holder);
+    expect(await store.verifiedGoogleLogin("111", "g@gmail.com", true)).toBe(holder);
+    expect((await store.principal(holder))!.methods).toEqual(["email", "google"]);
+    // Not the authority: a principal of its own, labelled by the address, which proves nothing.
+    const other = await store.verifiedGoogleLogin("222", OTHER, false);
+    expect(other).not.toBe(await store.verifiedLogin("email", OTHER));
+    expect(await store.principal(other)).toMatchObject({ label: OTHER, methods: ["google"], connection: "none" });
+    // No address at all: no label, still a principal.
+    const bare = await store.verifiedGoogleLogin("333", null, false);
+    expect((await store.principal(bare))!.label).toBeNull();
+    // A new Gmail address becomes a verified email identity of the new principal.
+    const fresh = await store.verifiedGoogleLogin("444", "fresh@gmail.com", true);
+    expect((await store.principal(fresh))!.methods).toEqual(["email", "google"]);
+    const parallel = await Promise.all(Array.from({ length: 5 }, () => store.verifiedGoogleLogin("555", null, false)));
+    expect(new Set(parallel).size).toBe(1);
+    await expect(store.verifiedGoogleLogin("../bad", null, false)).rejects.toThrow();
+
+    // Requests carry apps and a note; a connected person can ask for more apps.
+    expect(await store.requestConnection(other, { apps: ["docs"], note: "hi" })).toBe("created");
+    expect(await store.requestConnection(other, { apps: ["docs"], note: null })).toBe("already_pending");
+    expect(await store.requestConnection(other, { apps: ["notes"], note: null })).toBe("updated");
+    expect(await store.pendingRequest(other)).toMatchObject({ apps: ["docs", "notes"], note: "hi" });
+    const [r] = (await store.pendingRequests()).filter((x) => x.principalId === other);
+    expect(r).toMatchObject({ label: OTHER, methods: ["google"], connected: false, apps: ["docs", "notes"] });
+    await store.decideRequest(r!.id, "approved", adminId);
+    expect(await store.requestConnection(other)).toBe("already_connected");
+    expect(await store.requestConnection(other, { apps: ["admin"], note: null })).toBe("created");
+    expect((await store.pendingRequests()).find((x) => x.principalId === other)).toMatchObject({ connected: true });
+
+    // Reconnect by principal, whatever the way they sign in.
+    expect(await store.reconnect(other, adminId)).toBe(false);
+    await store.revoke(other, adminId);
+    expect(await store.reconnect(other, adminId)).toBe(true);
+    expect((await store.principal(other))!.connection).toBe("active");
+    expect((await store.connections()).find((c) => c.principalId === other)).toMatchObject({ label: OTHER });
+
+    expect(await store.adminEmails()).toEqual([ADMIN]);
   });
 
   it("stores passkeys per principal: look up, count forward, remove", async () => {
@@ -449,7 +503,7 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/login");
     const page = await (await get("/login", jar)).text();
-    expect(page).toContain("Request connection");
+    expect(page).toContain("Ask for access");
   });
 
   it("revoking ends the provider session and refresh tokens stop working", async () => {

@@ -7,9 +7,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createLogger } from "../src/log.ts";
 import { type SignIn, createSignIn, initialsOf } from "../src/sign-in.ts";
 import { SoftPasskey } from "./authenticator.ts";
+import { GoogleError } from "../src/google.ts";
 import {
   Browser,
   CapturingMailer,
+  FakeGoogle,
   CapturingSender,
   MemoryChallenges,
   MemoryEphemeral,
@@ -36,8 +38,10 @@ describe("local sign-in", () => {
   let ended: string[];
   let logLines: string[];
   let signIn: SignIn;
+  let google: FakeGoogle;
 
   beforeEach(async () => {
+    google = new FakeGoogle();
     store = new MemoryStore();
     mailer = new CapturingMailer();
     sms = new CapturingSender();
@@ -54,6 +58,11 @@ describe("local sign-in", () => {
       email: { mailer, dailyLimit: 100 },
       sms: { sender: sms, allowedPrefixes: ["+32"], dailyLimit: 100 },
       passkeys: { rp: RP },
+      google,
+      apps: [
+        { id: "docs", name: "Docs", href: "https://docs.example.test/" },
+        { id: "notes", name: "Notes", href: "https://notes.example.test/", description: "Your notes." },
+      ],
       ephemeral: new MemoryEphemeral(),
       store,
       challenges: new MemoryChallenges(),
@@ -360,6 +369,178 @@ describe("local sign-in", () => {
     await store.revoke(userId, "x");
     const res = await passkeyLogin(new Browser(), key);
     expect(JSON.parse(res.body)).toEqual({ redirect: "/login" });
+  });
+
+  /** /login → Google → back. Returns the callback's reply. */
+  async function googleSignIn(b: Browser, startUrl = "/login", tamper?: (q: URLSearchParams) => void) {
+    expect((await go(b, "GET", startUrl)).status).toBe(200);
+    const out = await go(b, "GET", "/login/google");
+    expect(out.status).toBe(303);
+    const sent = new URL(out.location!).searchParams;
+    expect(sent.get("redirect_uri")).toBe(`${ISSUER}/login/google/callback`);
+    const back = new URLSearchParams({ state: sent.get("state")!, code: "c0de" });
+    tamper?.(back);
+    return go(b, "GET", `/login/google/callback?${back.toString()}`);
+  }
+
+  describe("Continue with Google", () => {
+    it("the login page offers Google first, then a passkey and codes", async () => {
+      const page = (await go(new Browser(), "GET", "/login")).body;
+      expect(page).toContain('href="/login/google"');
+      expect(page).toContain("Continue with Google");
+      expect(page.indexOf("Continue with Google")).toBeLessThan(page.indexOf('data-passkey="login"'));
+      expect(page).toContain("Use a mobile number instead");
+      expect(page).toContain("No app opens until an administrator gives you access");
+    });
+
+    it("a Gmail address an admin already connected signs straight in, and the PKCE verifier goes to Google", async () => {
+      await store.addConnection("email", "ali@gmail.com", "x");
+      const b = new Browser();
+      const res = await googleSignIn(b);
+      expect(res.status).toBe(303);
+      expect(res.location).toBe("https://home.example.test/");
+      expect(google.finished[0]!.codeVerifier).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(store.auditLog.find((e) => e.event === "login.granted")?.method).toBe("google");
+      const id = (await store.connections()).find((c) => c.label === "ali@gmail.com")!.principalId;
+      expect((await store.principal(id))!.methods).toEqual(["email", "google"]);
+      // An app's sign-in continues to the app.
+      const app = await googleSignIn(new Browser(), "/login?uid=abc123");
+      expect(app.location).toBe("/interaction/abc123");
+    });
+
+    it("a new Google account gets an account but no access: it asks, an admin approves, both are emailed", async () => {
+      google.next = { subject: "200", email: "new.person@gmail.com", authoritative: true };
+      const user = new Browser();
+      expect((await googleSignIn(user)).location).toBe("/login");
+      const ask = await go(user, "GET", "/login");
+      expect(ask.body).toContain("Ask for access");
+      expect(ask.body).toContain('name="app" value="docs"');
+      expect(ask.body).toContain("new.person@gmail.com");
+      const sent = await go(user, "POST", "/login/request", {
+        csrf: csrfOf(ask.body),
+        app: "notes",
+        note: "I run the\r\nnotes \u0007team",
+      });
+      expect(sent.body).toContain("Request pending");
+      expect(sent.body).toContain("Notes");
+      const [request] = await store.pendingRequests();
+      expect(request).toMatchObject({ apps: ["notes"], note: "I run the\nnotes team", methods: ["email", "google"] });
+      expect(mailer.notices(ADMIN)[0]?.text).toContain("Apps: Notes");
+
+      const admin = new Browser();
+      await emailSignIn(admin, ADMIN, "/login?next=admin");
+      const panel = await go(admin, "GET", "/admin");
+      expect(panel.body).toContain("I run the");
+      expect(panel.body).toContain('<li class="chip">Google</li>');
+      const approved = await go(admin, "POST", `/admin/requests/${request!.id}/approve`, { csrf: csrfOf(panel.body) });
+      expect(approved.location).toBe("/admin?done=approved");
+      const after = await go(admin, "GET", "/admin?done=approved");
+      expect(after.body).toContain("Give them roles for their apps in the Admin console");
+      expect(mailer.notices("new.person@gmail.com")[0]?.subject).toContain("approved");
+      expect((await go(user, "GET", "/login")).location).toBe("https://home.example.test/");
+    });
+
+    it("a Google account with a non-Google address never joins the account that holds that address", async () => {
+      await store.addConnection("email", OTHER, "x");
+      google.next = { subject: "300", email: OTHER, authoritative: false };
+      expect((await googleSignIn(new Browser())).location).toBe("/login");
+      const holder = (await store.connections()).find((c) => c.label === OTHER)!;
+      expect((await store.principal(holder.principalId))!.methods).toEqual(["email"]);
+    });
+
+    it("refuses a forged state, a cancelled consent and Google's failure, with no session", async () => {
+      const forged = new Browser();
+      const res = await googleSignIn(forged, "/login", (q) => q.set("state", "forged"));
+      expect(res.status).toBe(400);
+      expect(res.body).toContain("expired");
+      expect(forged.cookies.has("identity_auth")).toBe(false);
+      expect(google.finished).toHaveLength(0);
+
+      const cancelled = await googleSignIn(new Browser(), "/login", (q) => {
+        q.delete("code");
+        q.set("error", "access_denied");
+      });
+      expect(cancelled.body).toContain("Google sign-in was cancelled");
+
+      google.next = new GoogleError("id_token_nonce");
+      const failed = await googleSignIn(new Browser());
+      expect(failed.status).toBe(400);
+      const reasons = store.auditLog.filter((e) => e.event === "google.failed").map((e) => e.detail?.reason);
+      expect(reasons).toEqual(["state_mismatch", "cancelled", "id_token_nonce"]);
+      // The state is single use: replaying the same callback fails too.
+      const b = new Browser();
+      google.next = { subject: "400", email: null, authoritative: false };
+      await go(b, "GET", "/login");
+      const out = new URL((await go(b, "GET", "/login/google")).location!).searchParams;
+      const back = `/login/google/callback?state=${out.get("state")}&code=c`;
+      expect((await go(b, "GET", back)).status).toBe(303);
+      await go(b, "GET", "/login");
+      expect((await go(b, "GET", back)).status).toBe(400);
+    });
+
+    it("without a login flow, /login/google goes back to /login", async () => {
+      expect((await go(new Browser(), "GET", "/login/google")).location).toBe("/login");
+    });
+  });
+
+  describe("access requests", () => {
+    it("a connected person asks for more apps from the account page; unknown apps are dropped", async () => {
+      await store.addConnection("email", OTHER, "x");
+      const b = new Browser();
+      await emailSignIn(b, OTHER);
+      const account = await go(b, "GET", "/account");
+      expect(account.body).toContain("Need another app?");
+      expect(account.body).toContain('<span class="pill ok">Connected</span>');
+      const csrf = csrfOf(account.body);
+      expect((await go(b, "POST", "/login/request", { csrf })).location).toBe("/account?done=unchanged");
+      const asked = await go(b, "POST", "/login/request", { csrf, app: "docs", note: "" });
+      expect(asked.location).toBe("/account?done=requested");
+      await go(b, "POST", "/login/request", { csrf, app: "evil" });
+      const [request] = await store.pendingRequests();
+      expect(request).toMatchObject({ apps: ["docs"], note: null, connected: true });
+      const again = await go(b, "GET", "/account?done=requested");
+      expect(again.body).toContain("Waiting for an admin");
+      expect(store.events().filter((e) => e.startsWith("request."))).toEqual(["request.created"]);
+    });
+
+    it("adding an app to a pending request updates it and doesn't email the admins again", async () => {
+      const b = new Browser();
+      await emailSignIn(b, OTHER);
+      const csrf = csrfOf((await go(b, "GET", "/login")).body);
+      await go(b, "POST", "/login/request", { csrf, app: "docs" });
+      await go(b, "POST", "/login/request", { csrf, app: "notes", note: "both please" });
+      const [request] = await store.pendingRequests();
+      expect(request).toMatchObject({ apps: ["docs", "notes"], note: "both please" });
+      expect(mailer.notices(ADMIN)).toHaveLength(1);
+      expect(store.events()).toContain("request.updated");
+    });
+
+    it("a rejection is emailed; a revoked Google-only account is reconnected by id", async () => {
+      google.next = { subject: "500", email: "x@co.be", authoritative: false };
+      const user = new Browser();
+      await googleSignIn(user);
+      await go(user, "POST", "/login/request", { csrf: csrfOf((await go(user, "GET", "/login")).body) });
+      const admin = new Browser();
+      await emailSignIn(admin, ADMIN);
+      const csrf = csrfOf((await go(admin, "GET", "/admin")).body);
+      const [request] = await store.pendingRequests();
+      await go(admin, "POST", `/admin/requests/${request!.id}/reject`, { csrf });
+      expect(mailer.notices("x@co.be")[0]?.text).toContain("didn't approve");
+
+      const id = request!.principalId;
+      await store.requestConnection(id);
+      const [again] = await store.pendingRequests();
+      await go(admin, "POST", `/admin/requests/${again!.id}/approve`, { csrf });
+      await go(admin, "POST", `/admin/connections/${id}/revoke`, { csrf });
+      const panel = await go(admin, "GET", "/admin");
+      expect(panel.body).toContain(`/admin/connections/${id}/reconnect`);
+      expect((await go(admin, "POST", `/admin/connections/${id}/reconnect`, { csrf })).location).toBe(
+        "/admin?done=reconnected",
+      );
+      expect((await store.principal(id))!.connection).toBe("active");
+      // No second principal was made from the label.
+      expect((await store.connections()).filter((c) => c.label === "x@co.be")).toHaveLength(1);
+    });
   });
 
   it("leaves every other path to the provider", async () => {

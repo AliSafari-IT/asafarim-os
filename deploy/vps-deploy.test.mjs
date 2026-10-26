@@ -167,6 +167,16 @@ test("identity, local without email: SMTP is not needed; sms needs Twilio", () =
   assert.equal(legacy.status, 0, legacy.output);
 });
 
+test("identity, local with google: the Google client id and secret are needed too", () => {
+  const google = ["IDENTITY_GOOGLE_CLIENT_ID", "IDENTITY_GOOGLE_CLIENT_SECRET"];
+  const methods = "IDENTITY_SIGN_IN_METHODS=google,email,passkey";
+  const missing = identityCheck(`IDENTITY_LOGIN_METHOD=local\n${methods}\n${env([...LOCAL, ...SMTP])}`);
+  assert.equal(missing.status, 1);
+  for (const name of google) assert.match(missing.output, new RegExp(name));
+  const ok = identityCheck(`IDENTITY_LOGIN_METHOD=local\n${methods}\n${env([...LOCAL, ...SMTP, ...google])}`);
+  assert.equal(ok.status, 0, ok.output);
+});
+
 test("identity: an unknown login method stops the check, naming the variable and never its value", () => {
   const result = identityCheck(`IDENTITY_LOGIN_METHOD=s3cr3t-typo\n${env(HUB)}`);
   assert.equal(result.status, 1);
