@@ -1489,6 +1489,7 @@ export function reviewApp(
       app,
       kind: "domain-claimed-twice",
       subject: `host: ${host}`,
+      file: rel(path.join(appDir, MANIFEST_FILE)),
       message: `the host ${host} (${how}) is also claimed by ${others.join(", ")} in this repo, but the gateway sends a host to one app only, so every request to it reaches one of them and the other is unreachable at that host (give each app its own domain)`,
     });
   }

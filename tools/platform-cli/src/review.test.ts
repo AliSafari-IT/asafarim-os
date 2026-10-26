@@ -1774,6 +1774,7 @@ describe("platform manifest review", () => {
       app: "shop",
       kind: "domain-claimed-twice",
       subject: "host: shop.example.com",
+      file: "apps/shop/platform.app.json",
       message:
         "the host shop.example.com (its domains.primary) is also claimed by crm in this repo, but the gateway sends a host to one app only, so every request to it reaches one of them and the other is unreachable at that host (give each app its own domain)",
     });
@@ -1829,6 +1830,11 @@ describe("platform manifest review", () => {
     ).reviews.map((r) => r.findings[0]!.message);
     expect(messages[0]).toMatch(/is also claimed by shop \(apps\/shop-copy\) in this repo/);
     expect(messages[1]).toMatch(/is also claimed by shop in this repo/);
+    // the file says which folder each finding is about, also when both apps have the same id
+    const files = (
+      JSON.parse(review(["shop", "shop-copy", "--json"]).lines[0]!) as { reviews: AppReview[] }
+    ).reviews.map((r) => r.findings[0]!.file);
+    expect(files).toEqual(["apps/shop/platform.app.json", "apps/shop-copy/platform.app.json"]);
   });
 
   it("reports a secret named like a database variable of the compose file", () => {
