@@ -419,6 +419,12 @@ test("every admin action is in the audit log under the admin's own name", async 
   const page = await adminCtx.newPage();
   await page.goto(`${ADMIN}/admin/audit`);
   await expect(page.getByRole("heading", { level: 2, name: "Audit" })).toBeVisible();
+  // The overview: counts, the chart and the newest events of both trails.
+  await expect(page.getByTestId("audit-kpi")).toHaveCount(5);
+  await expect(page.getByTestId("audit-chart")).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/a9-audit-overview.png`, fullPage: true });
+  await page.getByRole("navigation", { name: "Audit" }).getByRole("link", { name: "Admin changes" }).click();
+  await expect(page).toHaveURL(/\/admin\/audit\/changes$/);
 
   // The UI: filter by app and actor.
   // Exact: the top bar's "Admin: switch app" button also contains "app".
@@ -543,7 +549,15 @@ test("the console works from the keyboard and has labels, landmarks and captions
   await expect(trigger).toBeFocused();
 
   // Every form control has an accessible name, on every page that has any.
-  for (const path of ["/admin/apps", "/admin/roles?app=notes", "/admin/events", "/admin/status", "/admin/audit"]) {
+  for (const path of [
+    "/admin/apps",
+    "/admin/roles?app=notes",
+    "/admin/events",
+    "/admin/status",
+    "/admin/audit",
+    "/admin/audit/changes",
+    "/admin/audit/sign-ins",
+  ]) {
     await page.goto(`${ADMIN}${path}`);
     const unnamed = await page.evaluate(() =>
       Array.from(document.querySelectorAll("input:not([type=hidden]), select, textarea, button"))
@@ -570,7 +584,15 @@ for (const scheme of ["light", "dark"] as const) {
     const page = await adminCtx.newPage();
     await page.emulateMedia({ colorScheme: scheme });
     const checked: Record<string, number> = {};
-    for (const path of ["/admin/apps", "/admin/roles?app=notes", "/admin/events", "/admin/status", "/admin/audit"]) {
+    for (const path of [
+      "/admin/apps",
+      "/admin/roles?app=notes",
+      "/admin/events",
+      "/admin/status",
+      "/admin/audit",
+      "/admin/audit/changes",
+      "/admin/audit/sign-ins",
+    ]) {
       await page.goto(`${ADMIN}${path}`);
       const ratios = await page.evaluate(() => {
         const parse = (c: string) => (/rgba?\(([^)]+)\)/.exec(c)?.[1] ?? "0,0,0").split(",").map((n) => parseFloat(n));

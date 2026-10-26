@@ -67,6 +67,31 @@ export interface AuditEvent {
   detail: Record<string, unknown>;
 }
 
+/** What the Admin changes page filters core-api's log by (mirrors core-api's `AuditFilter`, src/admin.ts). */
+export interface AuditFilter {
+  app?: string;
+  actor?: string;
+  /** Exact (`role.granted`) or a kind (`role.`). */
+  action?: string;
+  /** A subject: they did it, or it names them. */
+  involving?: string;
+  /** ISO dates or times; `until` is exclusive. */
+  since?: string;
+  until?: string;
+  before?: number;
+  limit?: number;
+}
+
+/** The overview's counts (mirrors core-api's `AuditSummary`). */
+export interface AuditSummary {
+  days: number;
+  since: string;
+  total: number;
+  byDay: { day: string; total: number; kinds: Record<string, number> }[];
+  byAction: { action: string; count: number }[];
+  topActors: { actor: string; count: number }[];
+}
+
 /** A subscriber in the event catalog (mirrors core-api's `CatalogSubscriber`, src/admin.ts). */
 export interface CatalogSubscriber {
   appId: string;
@@ -217,14 +242,19 @@ export function coreApi(idToken: string) {
       (await call<{ roles: AdminRole[] }>(idToken, "GET", `/admin/v1/roles${app ? `?app=${enc(app)}` : ""}`)).roles,
     roleGrants: async (role: string) =>
       (await call<{ grants: RoleGrant[] }>(idToken, "GET", `/admin/v1/roles/${enc(role)}/grants`)).grants,
-    audit: (f: { app?: string; actor?: string; before?: number; limit?: number } = {}) => {
+    audit: (f: AuditFilter = {}) => {
       const q = new URLSearchParams();
       if (f.app) q.set("app", f.app);
       if (f.actor) q.set("actor", f.actor);
+      if (f.action) q.set("action", f.action);
+      if (f.involving) q.set("involving", f.involving);
+      if (f.since) q.set("since", f.since);
+      if (f.until) q.set("until", f.until);
       if (f.before) q.set("before", String(f.before));
       if (f.limit) q.set("limit", String(f.limit));
       return call<{ events: AuditEvent[]; next: number | null }>(idToken, "GET", `/admin/v1/audit?${q}`);
     },
+    auditSummary: (days = 14) => call<AuditSummary>(idToken, "GET", `/admin/v1/audit/summary?days=${days}`),
     activate: (app: string) => call<{ state: string }>(idToken, "POST", `/admin/v1/apps/${enc(app)}/activate`),
     deactivate: (app: string) => call<{ state: string }>(idToken, "POST", `/admin/v1/apps/${enc(app)}/deactivate`),
     /** Remove (#68): from installed or inactive. core-api tears down its event plumbing, credentials and grants. */

@@ -3,7 +3,9 @@
  */
 import { createServer } from "node:http";
 import { Redis } from "ioredis";
+import type { JWK } from "jose";
 import { PgAccountStore, type AccountStore } from "./accounts.ts";
+import { createAuditApi } from "./audit-api.ts";
 import { RedisAuthSessions, RedisEphemeral, RedisLoginFlows } from "./auth-session.ts";
 import { ConfigError, loadConfig, type LocalLoginConfig } from "./config.ts";
 import type { AppLink } from "./clients.ts";
@@ -22,7 +24,14 @@ import { PgIdentityStore, PrincipalAccounts } from "./store.ts";
 const log = createLogger();
 
 /** The local sign-in's pieces: its database (migrated, first admin bootstrapped) and its routes. */
-async function localSignIn(config: LocalLoginConfig, issuer: string, apps: AppLink[], redis: Redis, logger: Logger) {
+async function localSignIn(
+  config: LocalLoginConfig,
+  issuer: string,
+  jwks: { keys: JWK[] },
+  apps: AppLink[],
+  redis: Redis,
+  logger: Logger,
+) {
   const store = new PgIdentityStore(config.databaseUrl, (err) =>
     logger.warn("database.idle_error", { errorCode: (err as { code?: string }).code ?? err.name }),
   );
@@ -75,7 +84,8 @@ async function localSignIn(config: LocalLoginConfig, issuer: string, apps: AppLi
     endProviderSessions: (principalId) => endSessionsOfAccount(redis, principalId),
     log: logger,
   });
-  return { store, signIn };
+  const auditApi = createAuditApi({ issuer, jwks, readers: config.auditReaders, store, log: logger });
+  return { store, signIn, auditApi };
 }
 
 async function main() {
@@ -87,14 +97,28 @@ async function main() {
   let closeDatabase: () => Promise<void>;
   let method: Pick<
     ProviderDeps,
-    "loginMethod" | "handoffPrivateKey" | "hubPublicKey" | "hubContinueUrl" | "replay" | "pending" | "signIn"
+    | "loginMethod"
+    | "handoffPrivateKey"
+    | "hubPublicKey"
+    | "hubContinueUrl"
+    | "replay"
+    | "pending"
+    | "signIn"
+    | "auditApi"
   >;
   if (config.login.method === "local") {
     setHomeUrl(config.login.homeUrl);
-    const { store, signIn } = await localSignIn(config.login, config.issuer, config.apps, redis, log);
+    const { store, signIn, auditApi } = await localSignIn(
+      config.login,
+      config.issuer,
+      config.jwks,
+      config.apps,
+      redis,
+      log,
+    );
     accounts = new PrincipalAccounts(store);
     closeDatabase = () => store.close();
-    method = { loginMethod: "local", signIn };
+    method = { loginMethod: "local", signIn, auditApi };
   } else {
     const platform = new PgAccountStore(config.login.accountsDatabaseUrl);
     accounts = platform;

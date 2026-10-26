@@ -25,7 +25,9 @@
  *   GET  /admin/v1/roles[?app=<id>]              roles, permissions, holders, what needs migrating
  *   GET  /admin/v1/roles/<role>/grants           who holds a role
  *   GET  /admin/v1/subjects/<sub>/grants         what a person holds
- *   GET  /admin/v1/audit[?app=&actor=&limit=&before=]   the audit log, newest first
+ *   GET  /admin/v1/audit[?app=&actor=&action=&involving=&since=&until=&limit=&before=]
+ *                                                the audit log, newest first (action: exact, or a kind ending in ".")
+ *   GET  /admin/v1/audit/summary[?days=14]       counts by day and kind, the busiest actions and actors
  *   GET  /admin/v1/status                        each app's live/ready, as last polled (P6.1, health.ts)
  *   GET  /admin/v1/alerts                        the last 50 down/recovered transitions, newest first (alerts.ts,
  *                                                kept across restarts in alert_events, alert-store.ts)
@@ -173,6 +175,7 @@ const ROUTES: readonly [RegExp, string][] = (
     [`/admin/v1/roles/${ROLE}/grants/${SUB}`, "/admin/v1/roles/:role/grants/:sub"],
     [`/admin/v1/subjects/${SUB}/grants`, "/admin/v1/subjects/:sub/grants"],
     ["/admin/v1/audit", "/admin/v1/audit"],
+    ["/admin/v1/audit/summary", "/admin/v1/audit/summary"],
     ["/admin/v1/status", "/admin/v1/status"],
     ["/admin/v1/alerts", "/admin/v1/alerts"],
     ["/admin/v1/gateway/apps", "/admin/v1/gateway/apps"],
@@ -429,10 +432,42 @@ export function createHandler(opts: {
             if (!/^\d{1,12}$/.test(v)) throw new ApiError("bad_request", `${name} must be a whole number`);
             return Number(v);
           };
+          const time = (name: string) => {
+            const v = url.searchParams.get(name);
+            if (v === null || v === "") return undefined;
+            const d = new Date(v);
+            if (v.length > 40 || !/^\d{4}-\d\d-\d\d/.test(v) || Number.isNaN(d.getTime()))
+              throw new ApiError("bad_request", `${name} must be a date or time (ISO 8601)`);
+            return d;
+          };
           const app = url.searchParams.get("app") || undefined;
           const who = url.searchParams.get("actor") || undefined;
           if (who !== undefined && who.length > 128) throw new ApiError("bad_request", "actor is too long");
-          return json(res, 200, await queries.audit({ app, actor: who, limit: num("limit"), before: num("before") }));
+          const action = url.searchParams.get("action") || undefined;
+          if (action !== undefined && !/^[a-z][a-z0-9_]*(?:\.[a-z0-9_]*)*$/.test(action))
+            throw new ApiError("bad_request", "action must look like role.granted, or role. for every role action");
+          const involving = url.searchParams.get("involving") || undefined;
+          if (involving !== undefined && !/^[A-Za-z0-9._:@-]{1,128}$/.test(involving))
+            throw new ApiError("bad_request", "involving must be a subject id");
+          return json(
+            res,
+            200,
+            await queries.audit({
+              app,
+              actor: who,
+              action,
+              involving,
+              since: time("since"),
+              until: time("until"),
+              limit: num("limit"),
+              before: num("before"),
+            }),
+          );
+        }
+        if (req.method === "GET" && p === "/admin/v1/audit/summary") {
+          const v = url.searchParams.get("days");
+          if (v !== null && v !== "" && !/^\d{1,2}$/.test(v)) throw new ApiError("bad_request", "days must be 1 to 90");
+          return json(res, 200, await queries.auditSummary(v ? Number(v) : 14));
         }
         if (req.method === "GET" && p === "/admin/v1/retention") {
           const flag = (name: string) => {

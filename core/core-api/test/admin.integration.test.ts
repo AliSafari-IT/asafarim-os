@@ -413,6 +413,57 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
     }
   });
 
+  it("the audit log: filtered by action (exact or a kind), by the person involved and by time", async () => {
+    type Page = { events: (EventRow & { at: string; detail: Record<string, unknown> })[]; next: number | null };
+    const granted = await json<Page>(await as("dev-admin", "GET", "/admin/v1/audit?action=role.granted&limit=200"));
+    expect(granted.events.length).toBeGreaterThan(0);
+    expect(granted.events.every((e) => e.action === "role.granted")).toBe(true);
+
+    const roles = await json<Page>(await as("dev-admin", "GET", "/admin/v1/audit?action=role.&limit=200"));
+    expect(new Set(roles.events.map((e) => e.action))).toEqual(new Set(["role.granted", "role.revoked"]));
+
+    // everything about dev-member: grants that name them (detail.subject), never other people's
+    const about = await json<Page>(await as("dev-admin", "GET", "/admin/v1/audit?involving=dev-member&limit=200"));
+    expect(about.events.length).toBeGreaterThan(0);
+    expect(about.events.every((e) => e.actor === "user:dev-member" || e.detail.subject === "dev-member")).toBe(true);
+
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    expect((await json<Page>(await as("dev-admin", "GET", `/admin/v1/audit?since=${future}`))).events).toEqual([]);
+    const upTo = await json<Page>(await as("dev-admin", "GET", `/admin/v1/audit?until=${future}&limit=5`));
+    expect(upTo.events).toHaveLength(5);
+
+    for (const bad of [
+      "action=ROLE",
+      "action=role.granted;drop",
+      "involving=a%20b",
+      "since=yesterday",
+      "until=2026-13-45",
+    ]) {
+      expect((await as("dev-admin", "GET", `/admin/v1/audit?${bad}`)).status, bad).toBe(400);
+    }
+  });
+
+  it("the audit summary: the last N days by day and kind, the busiest actions and actors, counts only", async () => {
+    const s = await json<{
+      days: number;
+      total: number;
+      byDay: { day: string; total: number; kinds: Record<string, number> }[];
+      byAction: { action: string; count: number }[];
+      topActors: { actor: string; count: number }[];
+    }>(await as("dev-admin", "GET", "/admin/v1/audit/summary?days=7"));
+    expect(s.days).toBe(7);
+    expect(s.byDay).toHaveLength(7);
+    expect(s.byDay.at(-1)!.day).toBe(new Date().toISOString().slice(0, 10));
+    expect(s.byDay.reduce((n, d) => n + d.total, 0)).toBe(s.total);
+    expect(s.byDay.at(-1)!.kinds.role).toBeGreaterThan(0);
+    expect(s.byAction.find((a) => a.action === "role.granted")!.count).toBeGreaterThan(0);
+    expect(s.topActors.some((a) => a.actor === "user:dev-admin")).toBe(true);
+    expect(JSON.stringify(s)).not.toContain("detail");
+    for (const bad of ["days=abc", "days=-1", "days=1000"]) {
+      expect((await as("dev-admin", "GET", `/admin/v1/audit/summary?${bad}`)).status, bad).toBe(400);
+    }
+  });
+
   describe("the launcher", () => {
     const launcher = async (appId: string, sub: string) => {
       const path = `/registry/v1/apps/${appId}/launcher/${encodeURIComponent(sub)}`;

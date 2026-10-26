@@ -112,7 +112,14 @@ For a connected principal with `is_admin`, signed in by SMS (`/login?next=admin`
 - connection requests;
 - approvals, rejections, connections and revocations, each with the acting admin.
 
-The admin page shows the latest 50 entries.
+The admin page shows the latest 50 entries. The Admin console reads the whole trail, filtered, through a read-only JSON API (`src/audit-api.ts`):
+
+| Endpoint                                                                               | What                                                                                                       |
+| -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `GET /admin/v1/audit[?event=&method=&principal=&handle=&since=&until=&before=&limit=]` | newest first; `event` is up to 16 comma-separated events or kinds (`otp.`); `handle` an IP or subject HMAC |
+| `GET /admin/v1/audit/summary[?days=14]`                                                | counts per UTC day and event, open requests, active connections                                            |
+
+The caller sends the signed-in person's ID token as `Bearer`. It must be identity's own (ES256, this issuer), issued to a client in `IDENTITY_AUDIT_READERS` (default `core-admin`), unexpired, and its subject must be an identity admin with an active connection, read fresh. Anyone else gets 401 or 403, and a signed-in non-admin's attempt is audited as `admin.denied` (`via: audit_api`). The console has already checked `core.admin` with core-api, so a reader needs both. Rows carry each person's label (email, else phone) and the HMAC handles, never a code, a number or an address. Local sign-in only: with Hub login the paths are not served.
 
 ### Its database
 
