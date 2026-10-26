@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { validateManifest } from "@asafarim/app-manifest";
 import {
   checkedKeysIn,
   exportedMethods,
@@ -1528,11 +1529,13 @@ describe("platform manifest review", () => {
         runtime: { ...manifest().runtime, image: "billing" },
       }),
     );
-    // only shop is reviewed, but billing's manifest is read for what it publishes
+    // only shop is reviewed, but billing's manifest is read for what it publishes; void.v1 is reported
+    // once although it's listed twice (core-api refuses that repeat, reported as subscription-declared-twice)
     expect(kinds(["shop"])).toEqual([
       "subscription-not-published billing.invoice.void.v1",
       "subscription-not-published billing.refund.issued.v1",
       "subscription-not-published shop.order.shipped.v1",
+      "subscription-declared-twice subscription: billing.invoice.void.v1",
     ]);
     const found = (JSON.parse(review(["shop", "--json"]).lines[0]!) as { reviews: AppReview[] }).reviews[0]!.findings;
     expect(found[0]!.file).toBeUndefined();
@@ -1946,6 +1949,73 @@ describe("platform manifest review", () => {
         secrets: ["APP_CONFIG_THEMES", "THEME"],
       }),
     );
+    expect(kinds()).toEqual([]);
+  });
+
+  it("reports an event type events.subscribes lists more than once", () => {
+    const code = `"shop.orders.read"; "shop.orders.write"; "billing.invoice.paid.v1"; "billing.invoice.void.v1";`;
+    put("apps/shop/lib/x.ts", code);
+    const sub = (type: string, handler: string) => ({ type, handler });
+    writeApp(
+      manifest({
+        events: {
+          subscribes: [
+            sub("billing.invoice.paid.v1", "/events/paid"),
+            sub("billing.invoice.void.v1", "/events/void"),
+            sub("billing.invoice.paid.v1", "/events/paid-v2"),
+            sub("billing.invoice.void.v1", "/events/void"),
+          ],
+        },
+      }),
+    );
+    expect(kinds()).toEqual([
+      "subscription-declared-twice subscription: billing.invoice.paid.v1",
+      "subscription-declared-twice subscription: billing.invoice.void.v1",
+    ]);
+    expect(json().reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "subscription-declared-twice",
+      subject: "subscription: billing.invoice.paid.v1",
+      file: "apps/shop/platform.app.json",
+      message:
+        "events.subscribes lists billing.invoice.paid.v1 2 times (handlers /events/paid and /events/paid-v2), but core-api keeps one subscription per app and event type, so registering the app fails and it can't be installed or upgraded (keep one subscription for the type, with one handler)",
+    });
+    expect(json().reviews[0]!.findings[1]).toMatchObject({
+      message: expect.stringMatching(
+        /^events\.subscribes lists billing\.invoice\.void\.v1 2 times \(each with the handler \/events\/void\)/,
+      ),
+    });
+    expect(review().lines.join("\n")).toMatch(
+      /\[subscription-declared-twice\] events\.subscribes lists billing\.invoice\.paid\.v1/,
+    );
+    expect(review(["--markdown"]).lines[0]!).toContain(
+      "| subscription-declared-twice | subscription: billing.invoice.paid.v1 |",
+    );
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // the manifest schema accepts the repeat, which is why the review reports it
+    expect(
+      validateManifest(
+        manifest({
+          events: { subscribes: [sub("billing.invoice.paid.v1", "/a"), sub("billing.invoice.paid.v1", "/b")] },
+        }),
+      ).ok,
+    ).toBe(true);
+
+    // each type once, also other versions of the same type: nothing to report
+    writeApp(
+      manifest({
+        events: {
+          subscribes: [
+            sub("billing.invoice.paid.v1", "/events/paid"),
+            sub("billing.invoice.paid.v2", "/events/paid"),
+            sub("billing.invoice.void.v1", "/events/void"),
+          ],
+        },
+      }),
+    );
+    put("apps/shop/lib/x.ts", `${code} "billing.invoice.paid.v2";`);
     expect(kinds()).toEqual([]);
   });
 
