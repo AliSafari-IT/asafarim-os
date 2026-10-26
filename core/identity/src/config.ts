@@ -30,6 +30,8 @@ export interface LocalLoginConfig {
   homeUrl: string;
   /** The Admin console (IDENTITY_ADMIN_CONSOLE_URL), linked in an identity admin's header. Optional. */
   adminConsoleUrl?: string;
+  /** The OIDC clients whose ID tokens may read the sign-in trail (IDENTITY_AUDIT_READERS, default core-admin). */
+  auditReaders: string[];
   /** The first admin's identities, connected only while no admin is. Empty when unset. */
   bootstrapAdmin: Identity[];
   passkeys: boolean;
@@ -256,6 +258,13 @@ export function parseLocalLogin(env: Env, opts: { local: boolean }): LocalLoginC
     adminConsoleUrl = admin.href;
   }
 
+  const auditReaders = (env.IDENTITY_AUDIT_READERS ?? "core-admin")
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean);
+  if (auditReaders.some((c) => !/^[A-Za-z0-9._-]{1,64}$/.test(c)))
+    throw new ConfigError("IDENTITY_AUDIT_READERS must be comma-separated client ids");
+
   const bootstrapAdmin: Identity[] = [];
   if (env.IDENTITY_BOOTSTRAP_ADMIN_EMAIL) {
     const email = normalizeEmail(env.IDENTITY_BOOTSTRAP_ADMIN_EMAIL);
@@ -347,6 +356,7 @@ export function parseLocalLogin(env: Env, opts: { local: boolean }): LocalLoginC
     otpSecret,
     homeUrl: home.href,
     ...(adminConsoleUrl ? { adminConsoleUrl } : {}),
+    auditReaders,
     bootstrapAdmin,
     passkeys: methods.has("passkey"),
     google,

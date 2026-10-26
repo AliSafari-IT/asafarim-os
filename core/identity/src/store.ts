@@ -103,6 +103,41 @@ export interface AuditRow {
   detail: Record<string, unknown>;
 }
 
+/** What the Admin console may filter identity's trail by (audit-api.ts). */
+export interface AuditSearch {
+  /** Exact events (`login.granted`) and kinds (`otp.`, every event starting with it): any of them matches. */
+  events?: string[];
+  method?: string;
+  /** Events about this principal, or done by them. */
+  principalId?: string;
+  /** An ip or subject handle: every attempt from one address, or on one identifier nobody proved. */
+  handle?: string;
+  since?: Date;
+  until?: Date;
+  before?: number;
+  limit?: number;
+}
+
+export interface AuditSearchRow {
+  id: number;
+  at: Date;
+  event: string;
+  method: string | null;
+  principalId: string | null;
+  actorId: string | null;
+  label: string | null;
+  actorLabel: string | null;
+  subjectHandle: string | null;
+  ipHandle: string | null;
+  detail: Record<string, unknown>;
+}
+
+export interface AuditCounts {
+  perDay: { day: string; event: string; n: number }[];
+  pendingRequests: number;
+  activeConnections: number;
+}
+
 /** `updated`: a pending request's apps or note changed. `already_connected`: connected, and no apps asked for. */
 export type RequestOutcome = "created" | "updated" | "already_pending" | "already_connected";
 
@@ -629,6 +664,83 @@ export class PgIdentityStore implements IdentityStore {
       label: r.label,
       detail: r.detail,
     }));
+  }
+
+  /** The Admin console's read of the trail (audit-api.ts): filtered, newest first, paged by id. */
+  async searchAudit(f: AuditSearch): Promise<{ events: AuditSearchRow[]; next: number | null }> {
+    const limit = Math.max(1, Math.min(200, Math.trunc(f.limit ?? 50)));
+    const kinds = f.events?.filter((e) => e.endsWith(".")) ?? [];
+    const exact = f.events?.filter((e) => !e.endsWith(".")) ?? [];
+    const { rows } = await this.pool.query<{
+      id: string;
+      at: Date;
+      event: string;
+      method: string | null;
+      principal_id: string | null;
+      actor_id: string | null;
+      subject_handle: string | null;
+      ip_handle: string | null;
+      detail: Record<string, unknown>;
+      label: string | null;
+      actor_label: string | null;
+    }>(
+      `SELECT a.id, a.at, a.event, a.method, a.principal_id, a.actor_id, a.subject_handle, a.ip_handle, a.detail,
+              ${labelOf("a.principal_id")} AS label, ${labelOf("a.actor_id")} AS actor_label
+         FROM audit_log a
+        WHERE (cardinality($1::text[]) + cardinality($2::text[]) = 0
+               OR a.event = ANY($1::text[])
+               OR EXISTS (SELECT 1 FROM unnest($2::text[]) k WHERE left(a.event, length(k)) = k))
+          AND ($3::text IS NULL OR a.method = $3)
+          AND ($4::uuid IS NULL OR a.principal_id = $4 OR a.actor_id = $4)
+          AND ($5::timestamptz IS NULL OR a.at >= $5)
+          AND ($6::timestamptz IS NULL OR a.at < $6)
+          AND ($7::bigint IS NULL OR a.id < $7)
+          AND ($8::text IS NULL OR a.ip_handle = $8 OR a.subject_handle = $8)
+        ORDER BY a.id DESC LIMIT $9`,
+      [
+        exact,
+        kinds,
+        f.method ?? null,
+        f.principalId ?? null,
+        f.since ?? null,
+        f.until ?? null,
+        f.before ?? null,
+        f.handle ?? null,
+        limit + 1,
+      ],
+    );
+    const events = rows.slice(0, limit).map((r) => ({
+      id: Number(r.id),
+      at: r.at,
+      event: r.event,
+      method: r.method,
+      principalId: r.principal_id,
+      actorId: r.actor_id,
+      label: r.label,
+      actorLabel: r.actor_label,
+      subjectHandle: r.subject_handle,
+      ipHandle: r.ip_handle,
+      detail: r.detail,
+    }));
+    return { events, next: rows.length > limit ? events[events.length - 1]!.id : null };
+  }
+
+  /** Counts for the Admin console's overview: per UTC day and event since `since`, and the open requests. */
+  async auditCounts(since: Date): Promise<AuditCounts> {
+    const [perDay, pending, active] = await Promise.all([
+      this.pool.query<{ day: string; event: string; n: number }>(
+        `SELECT to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, event, count(*)::int AS n
+           FROM audit_log WHERE at >= $1 GROUP BY 1, 2`,
+        [since],
+      ),
+      this.pool.query<{ n: number }>("SELECT count(*)::int AS n FROM connection_requests WHERE status = 'pending'"),
+      this.pool.query<{ n: number }>("SELECT count(*)::int AS n FROM connections WHERE status = 'active'"),
+    ]);
+    return {
+      perDay: perDay.rows,
+      pendingRequests: pending.rows[0]?.n ?? 0,
+      activeConnections: active.rows[0]?.n ?? 0,
+    };
   }
 
   async ping(): Promise<void> {

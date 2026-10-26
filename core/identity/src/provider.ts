@@ -16,6 +16,7 @@
 import { randomBytes } from "node:crypto";
 import Provider, { type Configuration } from "oidc-provider";
 import type { CryptoKey, JWK, KeyObject } from "jose";
+import type { AuditApi } from "./audit-api.ts";
 import type { AccountStore } from "./accounts.ts";
 import type { OidcClient } from "./clients.ts";
 import { HandoffError, issueTicket, verifyAssertion, type ReplayGuard } from "./handoff.ts";
@@ -49,6 +50,8 @@ export interface ProviderDeps {
   hubContinueUrl?: string;
   /** `local` only: the service's own sign-in (email codes, passkeys, SMS) and the connections admin. */
   signIn?: SignIn;
+  /** `local` only: the sign-in trail for the Admin console (audit-api.ts). */
+  auditApi?: AuditApi;
   trustProxy: boolean;
   // oidc-provider's adapter contract is a constructor taking the model name.
   adapter: Configuration["adapter"];
@@ -462,6 +465,10 @@ export function createProvider(deps: ProviderDeps): Provider {
       ctx.respond = false;
       return;
     }
+
+    // The Admin console's read of the sign-in trail (JSON, Bearer ID token), before the /admin… pages.
+    if (deps.auditApi && path.startsWith("/admin/v1/") && (await deps.auditApi.handle(ctx as unknown as HttpContext)))
+      return;
 
     // The local sign-in's own pages: /connect, /login…, /logout, /account…, /passkeys… and /admin….
     if (login.method === "local" && (await login.signIn.handle(ctx as unknown as HttpContext))) return;

@@ -133,9 +133,27 @@ export interface AuditFilter {
   app?: string;
   /** A case-insensitive part of the actor (e.g. "dev-admin"). */
   actor?: string;
+  /** An exact action (`role.granted`), or every action of a kind when it ends with a dot (`role.`). */
+  action?: string;
+  /** A person the event is about: they did it (`user:<sub>`) or it names them (`detail.subject`, a grant). */
+  involving?: string;
+  /** Only events at or after / before this time. */
+  since?: Date;
+  until?: Date;
   limit?: number;
   /** Return events older than this id (paging). */
   before?: number;
+}
+
+/** What `auditSummary` counts: the last `days` days, by day and kind, plus the busiest actions and actors. */
+export interface AuditSummary {
+  days: number;
+  since: string;
+  total: number;
+  /** One entry per UTC day, oldest first, including empty days; `kinds` counts by the action's first part (`role`, `app`…). */
+  byDay: { day: string; total: number; kinds: Record<string, number> }[];
+  byAction: { action: string; count: number }[];
+  topActors: { actor: string; count: number }[];
 }
 
 /** The apps columns and backup join that `retentionOf` reads. */
@@ -354,16 +372,36 @@ export function createAdminQueries(pool: pg.Pool, now: () => Date = () => new Da
     }));
   }
 
-  /** The audit log, newest first, filterable by app and by (part of) the actor. */
+  /**
+   * The audit log, newest first, filterable by app, by (part of) the actor, by action (exact or a kind),
+   * by the person involved and by time.
+   */
   async function audit(f: AuditFilter = {}) {
     const limit = Math.min(Math.max(Math.trunc(f.limit ?? 50), 1), 200);
+    const kind = f.action?.endsWith(".") ? f.action : null;
+    const exact = f.action && !kind ? f.action : null;
     const r = await pool.query(
       `SELECT id, at, actor, action, app_id, detail FROM audit_events
         WHERE ($1::text IS NULL OR app_id = $1)
           AND ($2::text IS NULL OR position(lower($2) in lower(actor)) > 0)
           AND ($3::bigint IS NULL OR id < $3)
+          AND ($5::text IS NULL OR action = $5)
+          AND ($6::text IS NULL OR left(action, length($6)) = $6)
+          AND ($7::text IS NULL OR actor = 'user:' || $7 OR detail->>'subject' = $7)
+          AND ($8::timestamptz IS NULL OR at >= $8)
+          AND ($9::timestamptz IS NULL OR at < $9)
         ORDER BY id DESC LIMIT $4`,
-      [f.app ?? null, f.actor ?? null, f.before ?? null, limit + 1],
+      [
+        f.app ?? null,
+        f.actor ?? null,
+        f.before ?? null,
+        limit + 1,
+        exact,
+        kind,
+        f.involving ?? null,
+        f.since ?? null,
+        f.until ?? null,
+      ],
     );
     const rows = r.rows.slice(0, limit).map((x) => ({
       id: Number(x.id),
@@ -376,6 +414,50 @@ export function createAdminQueries(pool: pg.Pool, now: () => Date = () => new Da
     return { events: rows, next: r.rows.length > limit ? rows[rows.length - 1]!.id : null };
   }
 
+  /** The Admin console's overview: counts only, never details. `now` is for tests. */
+  async function auditSummary(days = 14, now = new Date()): Promise<AuditSummary> {
+    const n = Math.min(Math.max(Math.trunc(days), 1), 90);
+    const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const since = new Date(today - (n - 1) * 86_400_000);
+    const [perDay, perAction, perActor] = await Promise.all([
+      pool.query(
+        `SELECT to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, split_part(action, '.', 1) AS kind, count(*)::int AS n
+           FROM audit_events WHERE at >= $1 GROUP BY 1, 2`,
+        [since],
+      ),
+      pool.query(
+        `SELECT action, count(*)::int AS n FROM audit_events WHERE at >= $1 GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 12`,
+        [since],
+      ),
+      pool.query(
+        `SELECT actor, count(*)::int AS n FROM audit_events WHERE at >= $1 GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 8`,
+        [since],
+      ),
+    ]);
+    const byDay = Array.from({ length: n }, (_, i) => ({
+      day: new Date(since.getTime() + i * 86_400_000).toISOString().slice(0, 10),
+      total: 0,
+      kinds: {} as Record<string, number>,
+    }));
+    const index = new Map(byDay.map((d) => [d.day, d]));
+    let total = 0;
+    for (const row of perDay.rows as { day: string; kind: string; n: number }[]) {
+      const d = index.get(row.day);
+      if (!d) continue;
+      d.kinds[row.kind] = (d.kinds[row.kind] ?? 0) + row.n;
+      d.total += row.n;
+      total += row.n;
+    }
+    return {
+      days: n,
+      since: since.toISOString(),
+      total,
+      byDay,
+      byAction: (perAction.rows as { action: string; n: number }[]).map((r) => ({ action: r.action, count: r.n })),
+      topActors: (perActor.rows as { actor: string; n: number }[]).map((r) => ({ actor: r.actor, count: r.n })),
+    };
+  }
+
   return {
     holdsRole,
     listApps,
@@ -385,6 +467,7 @@ export function createAdminQueries(pool: pg.Pool, now: () => Date = () => new Da
     roleGrants,
     subjectGrants,
     audit,
+    auditSummary,
     CORE_ADMIN_ROLE,
   };
 }
