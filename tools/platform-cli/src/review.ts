@@ -160,6 +160,14 @@
  *   manifest kept the other app's domain. It is reported on each app that claims the host, naming the
  *   others. Apps are told apart by folder, so a manifest copied to a second folder with its id unchanged
  *   counts too. It reads every app's manifest, also when only some ids are reviewed.
+ * - `config-variable-clash`: two of the manifest's names share one environment variable. The app SDK
+ *   reads each `config` key from `APP_CONFIG_<KEY>`, with dots and camelCase as UPPER_SNAKE
+ *   (`envNameForConfigKey` in `@asafarim/app-manifest`), and the manifest schema only rejects duplicate
+ *   keys. So two different keys can read the same variable (`limits.maxNotes` and `limitsMax.notes`
+ *   both read `APP_CONFIG_LIMITS_MAX_NOTES`): setting one sets the other, and they can't differ. And a
+ *   declared secret can have the name a config key reads, so the secret's value is read as that config
+ *   value (and one that isn't of the key's type makes the app throw when it starts). One finding per
+ *   shared variable, naming every key and secret that uses it.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -173,7 +181,13 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { HTTP_METHODS, defaultHost, validateManifest, type AppManifest } from "@asafarim/app-manifest";
+import {
+  HTTP_METHODS,
+  defaultHost,
+  envNameForConfigKey,
+  validateManifest,
+  type AppManifest,
+} from "@asafarim/app-manifest";
 import { compileEventSchema } from "@asafarim/events";
 import { RESERVED_SERVICE_NAMES, databaseVariableNames } from "./compose.ts";
 import { MANIFEST_FILE } from "./sync.ts";
@@ -215,6 +229,7 @@ export const FINDING_KINDS = [
   "secret-name-reserved",
   "runtime-port-mismatch",
   "domain-claimed-twice",
+  "config-variable-clash",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];
@@ -1494,7 +1509,46 @@ export function reviewApp(
     });
   }
 
+  // 32. Each config key reads a variable of its own, and no secret takes one of those names.
+  for (const { variable, keys, secret } of configVariableClashes(manifest)) {
+    const named = keys.length > 1 ? `config keys ${joinNames(keys)}` : `config key ${keys[0]}`;
+    findings.push({
+      app,
+      kind: "config-variable-clash",
+      subject: `variable: ${variable}`,
+      message:
+        secret !== undefined
+          ? `the secret ${secret} has the name of the variable the ${named} ${keys.length > 1 ? "read their values" : "reads its value"} from, so the secret's value is read as config, and the app throws when it starts if that value isn't of the key's type (rename the secret)`
+          : `the ${named} read the same variable, ${variable}, so setting it sets every one of them and they can't have different values (rename all but one of the keys)`,
+    });
+  }
+
   return { app, findings, handlers, plumbing };
+}
+
+/**
+ * The environment variables more than one of the manifest's names use (`config-variable-clash`): the
+ * config keys that read each one (`envNameForConfigKey`, in manifest order), and the declared secret
+ * of that name, if any. A variable only one name uses isn't listed.
+ */
+export function configVariableClashes(
+  manifest: Pick<AppManifest, "config" | "secrets">,
+): { variable: string; keys: string[]; secret?: string }[] {
+  const byVariable = new Map<string, string[]>();
+  for (const { key } of manifest.config ?? []) {
+    const variable = envNameForConfigKey(key);
+    byVariable.set(variable, [...(byVariable.get(variable) ?? []), key]);
+  }
+  const secrets = new Set(manifest.secrets ?? []);
+  return [...byVariable].flatMap(([variable, keys]) => {
+    const secret = secrets.has(variable) ? variable : undefined;
+    return keys.length + (secret ? 1 : 0) > 1 ? [{ variable, keys, ...(secret ? { secret } : {}) }] : [];
+  });
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function joinNames(items: string[]): string {
+  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 /**

@@ -6,17 +6,13 @@
  * Asking for a key the manifest doesn't declare, or with the wrong type,
  * throws, so a typo can't become `undefined`.
  */
-import type { AppManifest } from "@asafarim/app-manifest";
+import { envNameForConfigKey, type AppManifest } from "@asafarim/app-manifest";
 
 type ConfigEntry = NonNullable<AppManifest["config"]>[number];
 export type ConfigValue = string | number | boolean;
 
-export function envNameForConfigKey(key: string): string {
-  return `APP_CONFIG_${key
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/\./g, "_")
-    .toUpperCase()}`;
-}
+// Defined next to the manifest, so the review and the SDK name the same variable.
+export { envNameForConfigKey };
 
 function parse(entry: ConfigEntry, raw: string): ConfigValue {
   switch (entry.type) {

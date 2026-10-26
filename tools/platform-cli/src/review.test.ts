@@ -1889,6 +1889,65 @@ describe("platform manifest review", () => {
     writeApp(manifest({ database: postgres, secrets: ["OTHER_DATABASE_URL"] }));
     expect(kinds()).toEqual([]);
   });
+  it("reports config keys and secrets that share one APP_CONFIG_ variable", () => {
+    const code = `"shop.orders.read"; "shop.orders.write"; config.getInt("limits.maxNotes"); config.getInt("limitsMax.notes"); config.getString("theme"); process.env.APP_CONFIG_THEME;`;
+    put("apps/shop/lib/x.ts", code);
+    const config = [
+      { key: "limits.maxNotes", type: "int", default: 10 },
+      { key: "limitsMax.notes", type: "int", default: 20 },
+      { key: "theme", type: "string", default: "light" },
+    ];
+    writeApp(manifest({ config, secrets: ["APP_CONFIG_THEME"] }));
+    expect(kinds()).toEqual([
+      "config-variable-clash variable: APP_CONFIG_LIMITS_MAX_NOTES",
+      "config-variable-clash variable: APP_CONFIG_THEME",
+    ]);
+    expect(json().reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "config-variable-clash",
+      subject: "variable: APP_CONFIG_LIMITS_MAX_NOTES",
+      message:
+        "the config keys limits.maxNotes and limitsMax.notes read the same variable, APP_CONFIG_LIMITS_MAX_NOTES, so setting it sets every one of them and they can't have different values (rename all but one of the keys)",
+    });
+    expect(json().reviews[0]!.findings[1]).toEqual({
+      app: "shop",
+      kind: "config-variable-clash",
+      subject: "variable: APP_CONFIG_THEME",
+      message:
+        "the secret APP_CONFIG_THEME has the name of the variable the config key theme reads its value from, so the secret's value is read as config, and the app throws when it starts if that value isn't of the key's type (rename the secret)",
+    });
+    expect(review().lines.join("\n")).toMatch(/\[config-variable-clash\] the config keys limits\.maxNotes/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| config-variable-clash | variable: APP\\_CONFIG\\_THEME |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // a secret clashing with two keys at once is one finding, naming both keys
+    writeApp(manifest({ config: config.slice(0, 2), secrets: ["APP_CONFIG_LIMITS_MAX_NOTES"] }));
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write"; config.getInt("limits.maxNotes"); config.getInt("limitsMax.notes"); process.env.APP_CONFIG_LIMITS_MAX_NOTES;`,
+    );
+    expect(kinds()).toEqual(["config-variable-clash variable: APP_CONFIG_LIMITS_MAX_NOTES"]);
+    expect(json().reviews[0]!.findings[0]).toMatchObject({
+      message: expect.stringMatching(
+        /^the secret APP_CONFIG_LIMITS_MAX_NOTES has the name of the variable the config keys limits\.maxNotes and limitsMax\.notes read their values from/,
+      ),
+    });
+
+    // keys and secrets with variables of their own are fine, also ones that only look alike
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write"; config.getInt("limits.maxNotes"); config.getInt("limits.max"); config.getString("theme"); process.env.APP_CONFIG_THEMES; process.env.THEME;`,
+    );
+    writeApp(
+      manifest({
+        config: [config[0], config[2], { key: "limits.max", type: "int", default: 1 }],
+        secrets: ["APP_CONFIG_THEMES", "THEME"],
+      }),
+    );
+    expect(kinds()).toEqual([]);
+  });
+
   it("reports a Dockerfile PORT other than runtime.port", () => {
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
     writeApp(manifest());
