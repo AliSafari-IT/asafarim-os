@@ -147,6 +147,13 @@
  *   but `platform compose` refuses to write the app's file, so the app can't be deployed until the
  *   secret is renamed or dropped. One finding per such secret. With `engine: "none"` the app may bring
  *   its own `DATABASE_URL` as a secret, and nothing is reported.
+ * - `domain-claimed-twice`: a host the app claims (`domains.primary`, or `<id>.asafarim.site` when there
+ *   is none, and each `domains.aliases` entry, read as `platform against`'s drift check reads them) is
+ *   also claimed by another app in this repo (a valid `apps/<app>/platform.app.json`). The manifest
+ *   schema checks one manifest at a time, but the gateway sends a host to one app only, so the other
+ *   is unreachable at that host (a launcher tile opening it lands on the wrong app). Usually a copied
+ *   manifest kept the other app's domain. It is reported on each app that claims the host, naming the
+ *   others. It reads every app's manifest, also when only some ids are reviewed.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -160,7 +167,7 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { HTTP_METHODS, validateManifest, type AppManifest } from "@asafarim/app-manifest";
+import { HTTP_METHODS, defaultHost, validateManifest, type AppManifest } from "@asafarim/app-manifest";
 import { compileEventSchema } from "@asafarim/events";
 import { RESERVED_SERVICE_NAMES, databaseVariableNames } from "./compose.ts";
 import { MANIFEST_FILE } from "./sync.ts";
@@ -200,6 +207,7 @@ export const FINDING_KINDS = [
   "database-migrations-missing",
   "worker-name-reserved",
   "secret-name-reserved",
+  "domain-claimed-twice",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];
@@ -630,6 +638,33 @@ export function readsAllConfig(text: string): boolean {
  */
 export type Publishers = ReadonlyMap<string, readonly string[]>;
 
+/**
+ * Which apps in the repo claim each host, by host (`domain-claimed-twice`). Only apps with a valid
+ * manifest are in it.
+ */
+export type HostClaims = ReadonlyMap<string, readonly string[]>;
+
+/**
+ * The hosts an app claims at the gateway: `domains.primary` (or its default `<id>.asafarim.site`) and
+ * each alias, without repeats. The same rule as `platform against`'s drift check.
+ */
+export function claimedHosts(manifest: AppManifest): string[] {
+  return [...new Set([manifest.domains?.primary ?? defaultHost(manifest.id), ...(manifest.domains?.aliases ?? [])])];
+}
+
+/** Every valid manifest's hosts, by host, with the ids of the apps that claim it in the order given. */
+export function hostClaims(manifests: Iterable<AppManifest>): HostClaims {
+  const claims = new Map<string, string[]>();
+  for (const m of manifests) {
+    for (const host of claimedHosts(m)) {
+      const ids = claims.get(host) ?? [];
+      if (!ids.includes(m.id)) ids.push(m.id);
+      claims.set(host, ids);
+    }
+  }
+  return claims;
+}
+
 /** An event type without its trailing `.v<N>`, so two versions of one type compare equal. */
 export function unversioned(type: string): string {
   return type.replace(/\.v\d+$/, "");
@@ -637,13 +672,15 @@ export function unversioned(type: string): string {
 
 /**
  * Review one app folder. `rootDir` is only used to print file paths relative to the workspace;
- * `publishers` is what the repo's apps publish (the reviewed app's own manifest always counts).
+ * `publishers` is what the repo's apps publish (the reviewed app's own manifest always counts);
+ * `hosts` is which apps claim each host (the reviewed app's own claims are taken from its manifest).
  */
 export function reviewApp(
   appDir: string,
   manifest: AppManifest,
   rootDir: string,
   publishers: Publishers = new Map(),
+  hosts: HostClaims = new Map(),
 ): AppReview {
   const app = manifest.id;
   const rel = (abs: string) => path.relative(rootDir, abs).split(path.sep).join("/");
@@ -1340,6 +1377,24 @@ export function reviewApp(
     }
   }
 
+  // 30. A host belongs to one app: the gateway sends it to only one of the apps that claim it.
+  for (const host of claimedHosts(manifest)) {
+    const others = (hosts.get(host) ?? []).filter((id) => id !== app);
+    if (others.length === 0) continue;
+    const how =
+      host === manifest.domains?.primary
+        ? "its domains.primary"
+        : (manifest.domains?.aliases ?? []).includes(host)
+          ? "a domains.aliases entry"
+          : "its default host, as it has no domains.primary";
+    findings.push({
+      app,
+      kind: "domain-claimed-twice",
+      subject: `host: ${host}`,
+      message: `the host ${host} (${how}) is also claimed by ${others.join(", ")} in this repo, but the gateway sends a host to one app only, so every request to it reaches one of them and the other is unreachable at that host (give each app its own domain)`,
+    });
+  }
+
   return { app, findings, handlers, plumbing };
 }
 
@@ -1541,6 +1596,8 @@ export function reviewCommand(args: string[], cwd: string, findRoot: () => strin
     }
   }
 
+  const hosts = hostClaims([...parsed.values()].flatMap((entry) => ("manifest" in entry ? [entry.manifest] : [])));
+
   const reviews: AppReview[] = [];
   const errors: string[] = [];
   for (const id of ids) {
@@ -1549,7 +1606,7 @@ export function reviewCommand(args: string[], cwd: string, findRoot: () => strin
       errors.push(entry.error);
       continue;
     }
-    reviews.push(reviewApp(path.join(appsDir, id), entry.manifest, root, publishers));
+    reviews.push(reviewApp(path.join(appsDir, id), entry.manifest, root, publishers, hosts));
   }
 
   const findings = reviews.flatMap((r) => r.findings);

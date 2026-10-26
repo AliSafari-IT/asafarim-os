@@ -81,6 +81,18 @@ function writeApp(m: Record<string, unknown>) {
   put("apps/shop/app/api/health/route.ts", "export function GET() {}");
 }
 
+/** Writes a second app `id` (no permissions, its own image) with the given `domains`, and its health route. */
+function writeOtherApp(id: string, domains?: Record<string, unknown>) {
+  put(
+    `apps/${id}/platform.app.json`,
+    JSON.stringify({
+      ...manifest({ id, permissions: [], roles: [], ...(domains ? { domains } : {}) }),
+      runtime: { ...manifest().runtime, image: id },
+    }),
+  );
+  put(`apps/${id}/app/api/health/route.ts`, "export function GET() {}");
+}
+
 const review = (args: string[] = []) => reviewCommand([...args, "--root", root], root, () => root)!;
 const json = (args: string[] = []) => {
   const out = review([...args, "--json"]);
@@ -1715,6 +1727,64 @@ describe("platform manifest review", () => {
     // other names, also ones that only contain a reserved name, are fine
     writeApp(withWorkers("mailer", "web-sync", "migrator"));
     expect(kinds()).toEqual([]);
+  });
+
+  it("reports a host that another app in this repo also claims", () => {
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    writeApp(
+      manifest({ domains: { primary: "shop.example.com", aliases: ["www.shop.example.com", "store.example.com"] } }),
+    );
+    // billing takes shop's alias as its primary; crm lists shop's primary as an alias; blog has its own host
+    writeOtherApp("billing", { primary: "www.shop.example.com" });
+    writeOtherApp("crm", { primary: "crm.example.com", aliases: ["shop.example.com"] });
+    writeOtherApp("blog");
+    // only shop is reviewed, but every app's manifest is read for its hosts
+    expect(kinds(["shop"])).toEqual([
+      "domain-claimed-twice host: shop.example.com",
+      "domain-claimed-twice host: www.shop.example.com",
+    ]);
+    const found = (JSON.parse(review(["shop", "--json"]).lines[0]!) as { reviews: AppReview[] }).reviews[0]!.findings;
+    expect(found[0]).toEqual({
+      app: "shop",
+      kind: "domain-claimed-twice",
+      subject: "host: shop.example.com",
+      message:
+        "the host shop.example.com (its domains.primary) is also claimed by crm in this repo, but the gateway sends a host to one app only, so every request to it reaches one of them and the other is unreachable at that host (give each app its own domain)",
+    });
+    expect(found[1]!.message).toMatch(
+      /^the host www\.shop\.example\.com \(a domains\.aliases entry\) is also claimed by billing /,
+    );
+    // each side of a clash is reported
+    expect(kinds(["billing"])).toEqual(["domain-claimed-twice host: www.shop.example.com"]);
+    expect(kinds(["crm"])).toEqual(["domain-claimed-twice host: shop.example.com"]);
+    expect(kinds(["blog"])).toEqual([]);
+    expect(review(["shop"]).lines.join("\n")).toMatch(/\[domain-claimed-twice\] the host shop\.example\.com/);
+    expect(review(["shop", "--markdown"]).lines[0]!).toContain("| domain-claimed-twice | host: shop.example.com |");
+    expect(review(["shop"]).ok).toBe(true);
+    expect(review(["shop", "--strict"]).ok).toBe(false);
+  });
+
+  it("counts an app's default host, names every other claimant, and skips invalid manifests", () => {
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    writeApp(manifest());
+    writeOtherApp("billing", { primary: "shop.asafarim.site" });
+    writeOtherApp("crm", { primary: "crm.example.com", aliases: ["shop.asafarim.site"] });
+    // an invalid manifest claims nothing
+    put("apps/broken/platform.app.json", JSON.stringify({ id: "broken", domains: { primary: "shop.asafarim.site" } }));
+    expect(kinds(["shop"])).toEqual(["domain-claimed-twice host: shop.asafarim.site"]);
+    const messages = (id: string) =>
+      (JSON.parse(review([id, "--json"]).lines[0]!) as { reviews: AppReview[] }).reviews[0]!.findings.map(
+        (f) => f.message,
+      );
+    expect(messages("shop")[0]).toMatch(
+      /^the host shop\.asafarim\.site \(its default host, as it has no domains\.primary\) is also claimed by billing, crm in this repo/,
+    );
+    // billing sees the same clash from its side, naming both others (in folder order)
+    expect(kinds(["billing"])).toEqual(["domain-claimed-twice host: shop.asafarim.site"]);
+    expect(messages("billing")[0]).toMatch(/\(its domains\.primary\) is also claimed by crm, shop in this repo/);
+    // once shop has a primary of its own, its default host is no longer its: only billing and crm still clash
+    writeApp(manifest({ domains: { primary: "shop.example.com" } }));
+    expect(kinds(["shop", "billing"])).toEqual(["domain-claimed-twice host: shop.asafarim.site"]);
   });
 
   it("reports a secret named like a database variable of the compose file", () => {
