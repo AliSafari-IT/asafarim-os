@@ -1,0 +1,278 @@
+/* Flow's own styles, after Notes'. The tokens, the top bar and the theme toggle are @asafarim/theme's (theme.css,
+   loaded first by app/layout.tsx). */
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    16px/1.5 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+main {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+.topbar-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 10px 16px;
+}
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+h1 {
+  font-size: 1.4rem;
+  margin: 0;
+}
+.muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 12px 0;
+  box-shadow: var(--shadow);
+}
+.card h2 {
+  font-size: 1.05rem;
+  margin: 0 0 4px;
+}
+.card p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+}
+input,
+textarea {
+  width: 100%;
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-2);
+  color: var(--ink);
+  margin: 4px 0 10px;
+}
+button {
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+main button:hover {
+  background: var(--accent-hover);
+}
+button.secondary {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.notice {
+  border-left: 4px solid var(--accent);
+  padding: 8px 12px;
+  margin: 12px 0;
+  background: var(--card);
+  border-radius: 0 8px 8px 0;
+}
+.notice.bad {
+  border-color: var(--bad);
+}
+.perm {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin: 0 0 8px;
+}
+.tabs {
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+.tabs-inner {
+  display: flex;
+  gap: 4px;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 0 16px;
+  overflow-x: auto;
+}
+.tabs a {
+  padding: 10px 12px;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.tabs a[aria-current="page"] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+a {
+  color: var(--accent);
+}
+.mono {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+}
+.count {
+  color: var(--muted);
+  font-weight: 400;
+}
+.table-wrap {
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+th {
+  color: var(--muted);
+  font-weight: 600;
+}
+.status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--card-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  vertical-align: middle;
+}
+.status-succeeded,
+.status-active {
+  color: var(--good);
+}
+.status-failed,
+.status-timed_out,
+.status-rejected {
+  color: var(--bad);
+}
+.status-waiting,
+.status-paused {
+  color: var(--warn);
+}
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 8px 0;
+}
+.facts dt {
+  color: var(--muted);
+}
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.actions,
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.check input {
+  width: auto;
+  margin: 0;
+}
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+pre {
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-size: 0.85rem;
+}
+summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.signin {
+  min-height: 70vh;
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+.signin-card {
+  max-width: 420px;
+  text-align: center;
+}
+.corner-toggle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+.glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 700;
+}

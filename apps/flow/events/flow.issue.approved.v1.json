@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "asafarim://flow/events/flow.issue.approved.v1.json",
+  "title": "flow.issue.approved.v1",
+  "description": "A person approved a drafted GitHub issue in Flow (with any edits they made). Docs creates the issue and answers with docs.issue.created.v1 or docs.issue.failed.v1, carrying the same runId and stepId.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runId",
+    "stepId",
+    "approvalId",
+    "noteId",
+    "onBehalfOf",
+    "decidedBy",
+    "decidedAt",
+    "repo",
+    "title",
+    "body",
+    "labels",
+    "acknowledgedPublic"
+  ],
+  "properties": {
+    "runId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The Flow run" },
+    "stepId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "The run's step that waits for the answer"
+    },
+    "approvalId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The approval decided" },
+    "noteId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The Docs note" },
+    "onBehalfOf": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "The subject (person) the run acts for: the note's author"
+    },
+    "decidedBy": { "type": "string", "minLength": 1, "maxLength": 200, "description": "The subject who approved" },
+    "decidedAt": { "type": "string", "format": "date-time" },
+    "repo": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$",
+      "description": "The GitHub repository (owner/name) the issue goes to"
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "body": { "type": "string", "maxLength": 60000 },
+    "labels": {
+      "type": "array",
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 50 }
+    },
+    "acknowledgedPublic": {
+      "type": "boolean",
+      "description": "True when the approver saw that the repository is public and still approved"
+    }
+  }
+}

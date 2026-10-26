@@ -13,6 +13,7 @@
  *   apps/notes, then admin.spec.ts (the console at http://core.localhost:8080, P3.3b) in core/admin,
  *   then docs.spec.ts (the reader, with Lighthouse) and notes.spec.ts (study notes, #81) in apps/docs →
  *   restart Docs, then the `@after-restart` test: the notes are still in its database →
+ *   Flow (build and start; ADR 0001): flow.spec.ts, a #issue note in Docs starts a run through the bus →
  *   stop everything. `--down` also removes the dev volumes (CI).
  *   `--screenshots` (`pnpm screenshots`): the same stack, then only core/site's screenshot spec, which
  *   writes the asafarim.site screenshots to core/site/public/screenshots/ (#70).
@@ -41,6 +42,8 @@ import { DEV, DEV_DIR, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
 const NOTES_DIR = path.join(ROOT, "apps/notes");
 const DOCS_DIR = path.join(ROOT, "apps/docs");
 const DOCS_URL = `http://localhost:${DEV.apps.docs}`;
+const FLOW_DIR = path.join(ROOT, "apps/flow");
+const FLOW_URL = `http://localhost:${DEV.apps.flow}`;
 const ADMIN_DIR = path.join(ROOT, "core/admin");
 const ADMIN_URL = `http://localhost:${DEV.adminPort}`;
 const ADMIN_GATEWAY_URL = `http://core.localhost:${DEV.gatewayPort}`;
@@ -125,6 +128,17 @@ try {
   let docs = await startDocs();
   console.log(`${green("✔")} Docs is up at ${DOCS_URL}, reading the fixtures`);
 
+  // Flow (ADR 0001): it consumes Docs' events from the bus, so it runs next to Docs.
+  if (!SCREENSHOTS) {
+    console.log(bold("Building Flow…"));
+    const flowNext = path.join(FLOW_DIR, "node_modules/next/dist/bin/next");
+    const flowBuild = spawnSync(process.execPath, [flowNext, "build"], { cwd: FLOW_DIR, stdio: "inherit" });
+    if (flowBuild.status !== 0) throw new Error("next build (flow) failed");
+    start("flow", [flowNext, "start", "--port", String(DEV.apps.flow)], FLOW_DIR);
+    await waitFor(`${FLOW_URL}/health/live`);
+    console.log(`${green("✔")} Flow is up at ${FLOW_URL}`);
+  }
+
   const core = readEnvFile(path.join(DEV_DIR, "core-api.env"));
   const e2eEnv = {
     ...process.env,
@@ -132,6 +146,7 @@ try {
     E2E_GATEWAY_URL: GATEWAY_URL,
     E2E_ADMIN_URL: ADMIN_GATEWAY_URL,
     E2E_DOCS_URL: DOCS_URL,
+    E2E_FLOW_URL: FLOW_URL,
     E2E_TOKEN_TTL: String(TOKEN_TTL),
     E2E_CORE_API_URL: core.CORE_API_URL,
     E2E_ADMIN_TOKEN: core.CORE_API_ADMIN_TOKEN,
@@ -178,6 +193,8 @@ try {
         PLAYWRIGHT_HTML_OUTPUT_DIR: "playwright-report/after-restart",
       }),
     );
+    // Last: it writes notes in Docs, which the Docs suites don't expect.
+    results.push(run(["@asafarim/flow", "e2e"]));
   }
   exitCode = results.find((code) => code !== 0) ?? 0;
   const label = SCREENSHOTS ? "screenshots" : "e2e";

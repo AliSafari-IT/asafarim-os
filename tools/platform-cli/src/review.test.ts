@@ -1609,9 +1609,21 @@ describe("platform manifest review", () => {
 
   it("finds nothing in this workspace's own apps", () => {
     const out = reviewCommand(["--json"], WORKSPACE, () => WORKSPACE)!;
-    const { reviews } = JSON.parse(out.lines[0]!) as { reviews: { app: string; findings: unknown[] }[] };
-    expect(reviews.map((r) => r.app)).toEqual(expect.arrayContaining(["docs", "notes"]));
-    expect(reviews.flatMap((r) => r.findings)).toEqual([]);
+    const { reviews } = JSON.parse(out.lines[0]!) as {
+      reviews: { app: string; findings: { app: string; kind: string; subject: string }[] }[];
+    };
+    expect(reviews.map((r) => r.app)).toEqual(expect.arrayContaining(["docs", "flow", "notes"]));
+    // Flow (ADR 0001) subscribes to Docs' outcome events ahead of them: Docs publishes them from Flow
+    // PRs 4 and 5, which remove these lines. Only these exact findings are expected.
+    const waitingForDocs = [
+      "docs.issue-draft.ready.v1",
+      "docs.issue-draft.failed.v1",
+      "docs.issue.created.v1",
+      "docs.issue.failed.v1",
+    ];
+    const expected = (f: { app: string; kind: string; subject: string }) =>
+      f.app === "flow" && f.kind === "subscription-not-published" && waitingForDocs.includes(f.subject);
+    expect(reviews.flatMap((r) => r.findings).filter((f) => !expected(f))).toEqual([]);
   });
   it("reports code that reads DATABASE_URL when the manifest declares no database", () => {
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);

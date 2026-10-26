@@ -20,6 +20,16 @@
       "status": "active",
       "access": "authenticated",
       "order": 20
+    },
+    {
+      "key": "flow",
+      "name": "Flow",
+      "description": "Workflows across your apps: a #issue note in Docs becomes a GitHub issue once you approve it.",
+      "glyph": "FL",
+      "meta": "flow.asafarim.site",
+      "status": "active",
+      "access": "authenticated",
+      "order": 30
     }
   ]
 }
