@@ -48,6 +48,14 @@
       "description": "The owner of the documentation: reads, keeps notes and files issues"
     }
   ],
+  "events": {
+    "publishes": [
+      {
+        "type": "docs.note.created.v1",
+        "schema": "./events/docs.note.created.v1.json"
+      }
+    ]
+  },
   "config": [
     {
       "key": "source.repo",

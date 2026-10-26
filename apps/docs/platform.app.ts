@@ -53,6 +53,10 @@ export default defineApp({
       description: "The owner of the documentation: reads, keeps notes and files issues",
     },
   ],
+  // Flow (ADR 0001): published through the outbox in the same transaction as the note's write (lib/notes.ts).
+  events: {
+    publishes: [{ type: "docs.note.created.v1", schema: "./events/docs.note.created.v1.json" }],
+  },
   config: [
     {
       key: "source.repo",

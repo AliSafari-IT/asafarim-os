@@ -1,5 +1,9 @@
+import path from "node:path";
 import { validateManifest } from "@asafarim/app-manifest";
+import { loadSchemas } from "@asafarim/app-sdk/events";
 import { describe, expect, it } from "vitest";
+import { publisher } from "../lib/events";
+import { EVENT_SCHEMAS } from "../lib/schemas";
 import manifest from "../platform.app";
 
 describe("docs manifest", () => {
@@ -36,5 +40,14 @@ describe("docs manifest", () => {
 
   it("declares bounded resources for the shared host", () => {
     expect(manifest.runtime.resources).toEqual({ memory: "256m", cpus: 0.5 });
+  });
+
+  it("publishes docs.note.created.v1 (Flow), and hands the SDK the schema file the manifest names", () => {
+    expect(manifest.events?.publishes).toEqual([
+      { type: "docs.note.created.v1", schema: "./events/docs.note.created.v1.json" },
+    ]);
+    // The schema the app validates with (and uploads for the event catalog) is the file the manifest names.
+    expect(EVENT_SCHEMAS).toEqual(loadSchemas(manifest, path.resolve(import.meta.dirname, "..")));
+    expect(publisher.types).toEqual(["docs.note.created.v1"]);
   });
 });
