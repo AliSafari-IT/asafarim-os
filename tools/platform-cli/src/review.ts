@@ -147,6 +147,11 @@
  *   but `platform compose` refuses to write the app's file, so the app can't be deployed until the
  *   secret is renamed or dropped. One finding per such secret. With `engine: "none"` the app may bring
  *   its own `DATABASE_URL` as a secret, and nothing is reported.
+ * - `runtime-port-mismatch`: the app's root `Dockerfile` sets `ENV PORT` to a number other than
+ *   `runtime.port` in its final stage (or in the earlier stage that one is built `FROM`). The gateway
+ *   and the compose file reach the web service on `runtime.port`, but the server listens on `PORT`, so
+ *   every request through the gateway fails. Only a literal number counts: an `ARG` or `${…}` value, or
+ *   no root `Dockerfile`, is not checked. `EXPOSE` is documentation and isn't read.
  * - `domain-claimed-twice`: a host the app claims (`domains.primary`, or `<id>.asafarim.site` when there
  *   is none, and each `domains.aliases` entry, read as `platform against`'s drift check reads them) is
  *   also claimed by another app in this repo (a valid `apps/<app>/platform.app.json`). The manifest
@@ -208,6 +213,7 @@ export const FINDING_KINDS = [
   "database-migrations-missing",
   "worker-name-reserved",
   "secret-name-reserved",
+  "runtime-port-mismatch",
   "domain-claimed-twice",
 ] as const;
 
@@ -251,6 +257,75 @@ const SOURCE_FILE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
 const PRISMA_FILE = /\.prisma$/;
 /** drizzle-kit's default config file, which `drizzle-kit migrate` reads from the app's root. */
 const DRIZZLE_CONFIG = /^drizzle\.config\.(?:ts|js|mjs|cjs|mts|cts|json)$/;
+
+/**
+ * Splits `KEY=VALUE KEY2="VALUE 2"` the way a Dockerfile's `ENV` does: whitespace separates words unless it is
+ * quoted or escaped with `\`, and quotes and escapes are removed from the result.
+ */
+function dockerWords(text: string): string[] {
+  const words: string[] = [];
+  let word: string | undefined;
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote === undefined && /\s/.test(c)) {
+      if (word !== undefined) words.push(word);
+      word = undefined;
+      continue;
+    }
+    word ??= "";
+    if (c === "\\" && quote !== "'" && i + 1 < text.length) word += text[++i];
+    else if (quote === undefined && (c === '"' || c === "'")) quote = c;
+    else if (c === quote) quote = undefined;
+    else word += c;
+  }
+  if (word !== undefined) words.push(word);
+  return words;
+}
+
+/**
+ * The `PORT` value a Dockerfile's final image runs with: the last `ENV PORT`
+ * of the final stage, or of the earlier stage it is built `FROM` (an image inherits its base's `ENV`).
+ * Returns the raw value; `undefined` when no stage in that chain sets it.
+ */
+export function dockerfilePort(text: string): string | undefined {
+  const stages: { base: string; alias?: string; port?: string }[] = [];
+  // Docker drops comment lines before it joins `\` continuations, so a comment can sit inside an instruction.
+  const lines = text
+    .split(/\r?\n/)
+    .filter((l) => !l.trimStart().startsWith("#"))
+    .join("\n")
+    .replace(/\\[ \t]*\r?\n/g, " ")
+    .split("\n");
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line === "") continue;
+    const [instruction = "", ...rest] = line.split(/\s+/);
+    const args = rest.filter((a) => !a.startsWith("--")); // FROM --platform=…
+    if (/^from$/i.test(instruction)) {
+      const alias = /^as$/i.test(args[1] ?? "") ? args[2]?.toLowerCase() : undefined;
+      stages.push({ base: (args[0] ?? "").toLowerCase(), alias });
+      continue;
+    }
+    const stage = stages.at(-1);
+    if (!stage || !/^env$/i.test(instruction)) continue;
+    const body = line.slice(instruction.length).trim();
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(body)) {
+      for (const word of dockerWords(body)) if (word.startsWith("PORT=")) stage.port = word.slice("PORT=".length);
+    } else {
+      const legacy = /^([A-Za-z_][A-Za-z0-9_]*)\s+(.*)$/.exec(body);
+      if (legacy?.[1] === "PORT") stage.port = legacy[2]!.trim().replace(/^(["'])(.*)\1$/, "$2");
+    }
+  }
+  // Walk back through the bases: each step goes to an earlier stage, so this ends.
+  for (let i = stages.length - 1; i >= 0;) {
+    const stage = stages[i]!;
+    if (stage.port !== undefined) return stage.port;
+    i = stages.findLastIndex((s, j) => j < i && s.alias !== undefined && s.alias === stage.base);
+  }
+  return undefined;
+}
+
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const MANIFEST_SOURCE = /^platform\.app\.(?:ts|js|mjs|json)$/;
 const ROUTE_FILE = /^route\.[cm]?[jt]sx?$/;
@@ -1378,7 +1453,25 @@ export function reviewApp(
     }
   }
 
-  // 30. A host belongs to one app: the gateway sends it to only one of the apps that claim it.
+  // 30. The image's server listens on the port the gateway and the compose file reach it on.
+  let dockerfile: string | undefined;
+  try {
+    dockerfile = readFileSync(path.join(appDir, "Dockerfile"), "utf8");
+  } catch {
+    dockerfile = undefined;
+  }
+  const port = dockerfile === undefined ? undefined : dockerfilePort(dockerfile);
+  if (port !== undefined && /^\d+$/.test(port) && Number(port) !== manifest.runtime.port) {
+    findings.push({
+      app,
+      kind: "runtime-port-mismatch",
+      subject: `PORT=${port}`,
+      file: rel(path.join(appDir, "Dockerfile")),
+      message: `the Dockerfile sets ENV PORT=${port}, but the manifest says runtime.port: ${manifest.runtime.port}, which the gateway and the compose file reach the web service on, so the server listens on the wrong port and every request through the gateway fails (make them the same)`,
+    });
+  }
+
+  // 31. A host belongs to one app: the gateway sends it to only one of the apps that claim it.
   for (const host of claimedHosts(manifest)) {
     // Claimants are told apart by folder; one whose folder isn't named after its id says where it is.
     const folder = path.basename(appDir);
