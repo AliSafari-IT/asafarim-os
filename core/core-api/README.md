@@ -196,6 +196,17 @@ The catalog, sorted by type: one entry per type that an app that isn't removed p
 
 ## What an app may do (P3.2)
 
+Every call an app makes to core-api is signed with its registry credential ([`ed25519-v1`](#signing-scheme-ed25519-v1)), bound to its method and exact path:
+
+| Endpoint                                           |                                                                                      |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `POST /registry/v1/apps/<id>`                      | self-registration, on every boot ([above](#self-registration-the-app-on-every-boot)) |
+| `PUT /registry/v1/apps/<id>/event-schemas`         | the JSON Schemas of what it publishes, for the event catalog                         |
+| `GET /registry/v1/apps/<id>/subjects/<sub>`        | what a subject may do in this app: roles and permissions (below)                     |
+| `GET /registry/v1/subjects/<sub>/permissions`      | Flow: the calling app's own permissions a subject holds now, for event handlers      |
+| `POST /registry/v1/apps/<id>/subjects/<sub>/token` | a short-lived access token for a signed-in person ([below](#the-access-token))       |
+| `GET /registry/v1/apps/<id>/launcher/<sub>`        | the apps a person can open ([the launcher](#the-launcher-p33b))                      |
+
 ### `GET /registry/v1/apps/<id>/subjects/<sub>` (signed by the app)
 
 The app asks what a subject may do **in this app**. The request is signed like a registration, but it's a `GET` with an empty body: the canonical string carries `GET` and the exact path, **including the subject**, so a signature for one subject can't be replayed for another, and a `POST` signature isn't a `GET` signature. The nonce is single use.
@@ -211,6 +222,23 @@ The app asks what a subject may do **in this app**. The request is signed like a
 ```
 
 Only roles an admin granted count, and **deprecated roles and permissions grant nothing**. `state` lets an inactive app say so. The app SDK caches the answer for 60 s and fails closed when core-api is unreachable.
+
+### `GET /registry/v1/subjects/<sub>/permissions` (signed by the app; Flow)
+
+An app about to act **on behalf of** someone from an event handler (ASafariM Flow, ADR 0001: `onBehalfOf` is the platform `sub`) has no session to check, so it asks whether that person **still** holds its permission. The path names no app: the caller is the app whose credential signed the request (the `x-asafarim-key-id`), and the answer is **only that app's own namespace** (`<appId>.*`), never another app's permissions or grants.
+
+Signed like the other registry calls, bound to `GET` and the exact path including the percent-encoded subject; the same nonce store and ±60 s window. A removed app answers `403 unknown_app`; a revoked or unknown key, `401 bad_signature`. A subject that isn't 1–128 of `A–Z a–z 0–9 . _ : @ -` (after percent-decoding) is `400 bad_request`.
+
+```json
+{ "sub": "user@example.test", "app": "docs", "permissions": ["docs.issues.create", "docs.issues.read"] }
+```
+
+- The permissions the subject holds **now** through role grants, sorted: the same resolution as the subject lookup above and the access token (`grantsOf` in `src/registry.ts`), so the gateway, `access()` and this agree. **Deprecated** roles and permissions count for nothing.
+- An unknown subject, or one with no grant in this app, gets `permissions: []`, never a `404`.
+- Read-only: no audit event, and the subject is never logged (a refusal logs the route pattern, not the path).
+- An inactive app may ask too: its event handlers run whatever the gateway serves.
+
+The app SDK's `access.subjectPermissions(sub)` / `access.subjectHas(sub, permission)` call it.
 
 ### Granting roles (admin)
 

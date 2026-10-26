@@ -206,6 +206,47 @@ export function createAccess(opts: AccessOptions) {
     return pending;
   }
 
+  /**
+   * Flow (ADR 0001): which of THIS app's permissions `subject` holds right now, for an event handler
+   * about to act on their behalf (`onBehalfOf`), where there is no session and no token. A signed GET
+   * to core-api's `/registry/v1/subjects/<sub>/permissions`, which answers only the calling app's own
+   * namespace. Never cached: the point is to re-check just before acting. Fails closed: core-api
+   * unreachable, a refusal or a malformed answer throws `AccessUnavailableError`, so the handler fails
+   * and the event is redelivered rather than acted on. Server only (it signs with the credential).
+   */
+  async function subjectPermissions(subject: string): Promise<string[]> {
+    const path = `/registry/v1/subjects/${encodeURIComponent(subject)}/permissions`;
+    let res: Response;
+    try {
+      res = await doFetch(`${base}${path}`, {
+        headers: signRequest({ credential: opts.credential, method: "GET", path }),
+        cache: "no-store",
+      });
+    } catch {
+      throw new AccessUnavailableError("core-api is unreachable");
+    }
+    // `?? {}`: a body of JSON `null` is malformed too, not a TypeError.
+    const json = ((await res.json().catch(() => ({}))) ?? {}) as {
+      app?: unknown;
+      permissions?: unknown;
+      error?: string;
+    };
+    if (!res.ok) throw new AccessUnavailableError(json.error ?? `http ${res.status}`);
+    if (
+      json.app !== opts.appId ||
+      !Array.isArray(json.permissions) ||
+      !json.permissions.every((p) => typeof p === "string")
+    ) {
+      throw new AccessUnavailableError("core-api sent a malformed permissions answer");
+    }
+    return json.permissions as string[];
+  }
+
+  /** `subjectHas(sub, "docs.issues.create")`: does `subject` hold it now? Throws `AccessUnavailableError` like `subjectPermissions`, never answers false for an outage. */
+  async function subjectHas(subject: string, permission: string): Promise<boolean> {
+    return (await subjectPermissions(subject)).includes(permission);
+  }
+
   const subjectOf = (session: SessionLike | null | undefined) => session?.user?.id ?? undefined;
 
   /** `can(session, "notes.write")`: false for no session, and false (never throws) if core-api is down. */
@@ -242,6 +283,8 @@ export function createAccess(opts: AccessOptions) {
     require,
     mintToken,
     launcher,
+    subjectPermissions,
+    subjectHas,
     clearCache: () => {
       cache.clear();
       launcherCache.clear();

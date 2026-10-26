@@ -28,7 +28,7 @@ function credential() {
 }
 
 const silent = { info: () => undefined, warn: () => undefined };
-const reply = (status: number, body: object) => new Response(JSON.stringify(body), { status });
+const reply = (status: number, body: object | null) => new Response(JSON.stringify(body), { status });
 
 /** Verify a request the SDK signed, the way core-api does. */
 function verifySigned(
@@ -426,6 +426,79 @@ describe("createAccess (permission checks resolved from core-api)", () => {
       fetch: async () => reply(401, { error: "bad_signature" }),
     });
     await expect(access.access("x")).rejects.toThrow(/bad_signature/);
+  });
+});
+
+describe("subjectPermissions / subjectHas (Flow: event handlers re-check before acting)", () => {
+  const answer = { sub: "user@example.test:1", app: "notes", permissions: ["notes.issues.create", "notes.read"] };
+  const make = (fetchMock: typeof fetch) =>
+    createAccess({ appId: "notes", credential: credential().secret, coreApiUrl: "http://core/", fetch: fetchMock });
+
+  it("asks core-api with a signed GET bound to the encoded subject path, and answers", async () => {
+    const c = credential();
+    const fetchMock = vi.fn(async () => reply(200, answer));
+    const access = createAccess({ appId: "notes", credential: c.secret, coreApiUrl: "http://core/", fetch: fetchMock });
+    expect(await access.subjectPermissions("user@example.test:1")).toEqual(answer.permissions);
+    expect(await access.subjectHas("user@example.test:1", "notes.issues.create")).toBe(true);
+    expect(await access.subjectHas("user@example.test:1", "notes.write")).toBe(false);
+    const path = "/registry/v1/subjects/user%40example.test%3A1/permissions";
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`http://core${path}`);
+    expect(init.cache).toBe("no-store");
+    expect(verifySigned(c.publicKey, "GET", path, init.headers!)).toBe(true);
+  });
+
+  it("is never cached: every check asks core-api again, so a revoked grant counts at once", async () => {
+    let permissions = ["notes.issues.create"];
+    const fetchMock = vi.fn(async () => reply(200, { ...answer, permissions }));
+    const access = make(fetchMock);
+    expect(await access.subjectHas("u", "notes.issues.create")).toBe(true);
+    permissions = [];
+    expect(await access.subjectHas("u", "notes.issues.create")).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed: unreachable or 5xx throws AccessUnavailableError, never false", async () => {
+    const down = make(async () => {
+      throw new TypeError("fetch failed");
+    });
+    await expect(down.subjectHas("u", "notes.read")).rejects.toBeInstanceOf(AccessUnavailableError);
+    const broken = make(async () => reply(503, { error: "internal" }));
+    await expect(broken.subjectPermissions("u")).rejects.toBeInstanceOf(AccessUnavailableError);
+    const html = make(async () => new Response("<html>bad gateway</html>", { status: 502 }));
+    await expect(html.subjectHas("u", "notes.read")).rejects.toThrow(/http 502/);
+  });
+
+  it("a refusal (e.g. a revoked credential) is unavailable too, not an empty list", async () => {
+    const access = make(async () => reply(401, { error: "bad_signature" }));
+    const err = await access.subjectHas("u", "notes.read").catch((e: unknown) => e);
+    expect(isAccessUnavailableError(err)).toBe(true);
+    expect((err as Error).message).toMatch(/bad_signature/);
+  });
+
+  it("a 200 that isn't the contract, or answers for another app, is unavailable", async () => {
+    for (const bad of [
+      null,
+      {},
+      { app: "notes" },
+      { app: "notes", permissions: "notes.read" },
+      { app: "notes", permissions: [7] },
+      { app: "tasks", permissions: [] },
+    ]) {
+      await expect(make(async () => reply(200, bad)).subjectPermissions("u"), JSON.stringify(bad)).rejects.toThrow(
+        /malformed/,
+      );
+    }
+  });
+
+  it("an app that isn't installed can't check: AccessUnavailableError", async () => {
+    const platform = startApp({
+      manifest: { id: "notes", config: [], version: "0.1.0" } as never,
+      env: {},
+      log: silent,
+    });
+    await expect(platform.access.subjectHas("u", "notes.read")).rejects.toBeInstanceOf(AccessUnavailableError);
+    await expect(platform.access.subjectPermissions("u")).rejects.toBeInstanceOf(AccessUnavailableError);
   });
 });
 

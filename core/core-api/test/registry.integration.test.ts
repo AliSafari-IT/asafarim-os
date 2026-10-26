@@ -28,6 +28,7 @@ const coreDb = `core_test_${run}`;
 const APP = `notes-${run}`; // unique per run: app databases are cluster-wide
 const OTHER = `crm-${run}`;
 const THIRD = `wiki-${run}`; // only the subject-access tests install it
+const FOURTH = `docs-${run}`; // only the subject-permissions (Flow) test installs it
 const ADMIN_TOKEN = "t".repeat(40);
 
 /** The JSON responses the tests read. */
@@ -106,7 +107,7 @@ describe.skipIf(!ADMIN_URL)("core-api registry (integration)", () => {
     await pool?.end();
     if (admin) {
       await admin.query(`DROP DATABASE IF EXISTS "${coreDb}"`);
-      for (const id of [APP, OTHER, THIRD]) {
+      for (const id of [APP, OTHER, THIRD, FOURTH]) {
         const { database, role } = appDatabaseNames(id);
         await admin.query(`DROP DATABASE IF EXISTS "${database}"`);
         await admin.query(`DROP ROLE IF EXISTS "${role}"`);
@@ -328,6 +329,76 @@ describe.skipIf(!ADMIN_URL)("core-api registry (integration)", () => {
       const headers = signRequest({ credential: credentials.get(APP)!, method: "GET", path: subjectPath("user-3") });
       expect((await fetch(`${base}${subjectPath("user-3")}`, { headers })).status).toBe(200);
       expect(await errorOf(await fetch(`${base}${subjectPath("user-3")}`, { headers }))).toBe("replayed_signature");
+    });
+  });
+
+  it("subject permissions (Flow): the calling app's own live permissions, agreeing with its subject lookup", async () => {
+    const installed = (await (await adminPost(`/admin/v1/apps/${FOURTH}/install`, manifest(FOURTH))).json()) as {
+      credential: string;
+    };
+    credentials.set(FOURTH, installed.credential);
+    expect((await register(FOURTH, manifest(FOURTH))).status).toBe(200);
+    const grant = (role: string, sub: string) =>
+      fetch(`${base}/admin/v1/roles/${role}/grants/${sub}`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      });
+    const sub = "user@example.test:9";
+    const enc = encodeURIComponent(sub);
+    await grant(`${APP}.editor`, enc);
+    await grant(`${FOURTH}.editor`, enc);
+
+    const ask = async (app: string, s = enc) => {
+      const path = `/registry/v1/subjects/${s}/permissions`;
+      const res = await fetch(`${base}${path}`, {
+        headers: signRequest({ credential: credentials.get(app)!, method: "GET", path }),
+      });
+      return {
+        status: res.status,
+        body: (await res.json()) as { app?: string; permissions?: string[]; error?: string },
+      };
+    };
+
+    // Each app sees only its own namespace, though the subject holds roles in both.
+    expect(await ask(FOURTH)).toEqual({
+      status: 200,
+      body: { sub, app: FOURTH, permissions: [`${FOURTH}.notes.read`, `${FOURTH}.notes.write`] },
+    });
+    const own = await ask(APP);
+    expect(own.body.app).toBe(APP);
+    expect(own.body.permissions!.every((p) => p.startsWith(`${APP}.`))).toBe(true);
+    // The same answer as the app's subject lookup (what access() and the access token resolve).
+    const lookupPath = `/registry/v1/apps/${APP}/subjects/${enc}`;
+    const lookup = (await (
+      await fetch(`${base}${lookupPath}`, {
+        headers: signRequest({ credential: credentials.get(APP)!, method: "GET", path: lookupPath }),
+      })
+    ).json()) as { permissions: string[] };
+    expect(own.body.permissions).toEqual(lookup.permissions);
+    expect(own.body.permissions!.length).toBeGreaterThan(0);
+
+    // A deprecated permission is excluded; an unknown subject gets an empty list.
+    await pool.query("UPDATE permissions SET deprecated_at = now() WHERE key = $1", [`${FOURTH}.notes.write`]);
+    expect((await ask(FOURTH)).body.permissions).toEqual([`${FOURTH}.notes.read`]);
+    await pool.query("UPDATE permissions SET deprecated_at = NULL WHERE key = $1", [`${FOURTH}.notes.write`]);
+    expect(await ask(FOURTH, "nobody")).toEqual({ status: 200, body: { sub: "nobody", app: FOURTH, permissions: [] } });
+    expect((await ask(FOURTH, "a%2Fb")).status).toBe(400);
+
+    // Read-only: nothing audited.
+    expect(
+      await count(
+        "SELECT count(*) AS n FROM audit_events WHERE action NOT IN ('app.installed', 'app.registered', 'role.granted') AND app_id = $1",
+        [FOURTH],
+      ),
+    ).toBe(0);
+
+    await fetch(`${base}/admin/v1/roles/${APP}.editor/grants/${enc}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    await fetch(`${base}/admin/v1/roles/${FOURTH}.editor/grants/${enc}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
     });
   });
 

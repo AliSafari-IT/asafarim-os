@@ -433,6 +433,18 @@ export function createRegistry(deps: RegistryDeps) {
     return r.rowCount ?? 0;
   }
 
+  /** The four signature headers, well-formed, or `missing_signature`. */
+  function signatureHeaders(headers: Record<string, string | undefined>) {
+    const ts = headers["x-asafarim-timestamp"];
+    const nonce = headers["x-asafarim-nonce"];
+    const keyId = headers["x-asafarim-key-id"];
+    const sig = /^v1=([A-Za-z0-9_-]+)$/.exec(headers["x-asafarim-signature"] ?? "")?.[1];
+    if (!ts || !nonce || !keyId || !sig || !/^\d{1,12}$/.test(ts) || !NONCE_PATTERN.test(nonce)) {
+      throw new ApiError("missing_signature");
+    }
+    return { ts, nonce, keyId, sig };
+  }
+
   /** Verify the signed request; returns the app's current state. Doesn't touch the catalog. */
   async function authenticate(
     appId: string,
@@ -441,13 +453,7 @@ export function createRegistry(deps: RegistryDeps) {
     headers: Record<string, string | undefined>,
     body: string,
   ) {
-    const ts = headers["x-asafarim-timestamp"];
-    const nonce = headers["x-asafarim-nonce"];
-    const keyId = headers["x-asafarim-key-id"];
-    const sig = /^v1=([A-Za-z0-9_-]+)$/.exec(headers["x-asafarim-signature"] ?? "")?.[1];
-    if (!ts || !nonce || !keyId || !sig || !/^\d{1,12}$/.test(ts) || !NONCE_PATTERN.test(nonce)) {
-      throw new ApiError("missing_signature");
-    }
+    const { ts, nonce, keyId, sig } = signatureHeaders(headers);
 
     // An unknown or removed app has no credential to verify against.
     const app = await deps.pool.query<{ state: AppState }>("SELECT state FROM apps WHERE id = $1", [appId]);
@@ -937,6 +943,30 @@ export function createRegistry(deps: RegistryDeps) {
     return { appId, subject, state, ...(await grantsOf(appId, subject)) };
   }
 
+  /**
+   * Flow (ADR 0001): an app about to act for `subject` from an event handler, where there is no
+   * session, asks (signed GET, bound to this subject's path) which of ITS OWN permissions the
+   * subject holds now. The path names no app: the caller is the app whose credential signed the
+   * request, so an app can only ever learn its own namespace. The key id picks the app, then the
+   * usual checks run against it (a removed app → `unknown_app`; a revoked or unknown key → `bad_signature`).
+   * The same resolution as the access token and `subjectAccess` (`grantsOf`). Read-only, not audited.
+   */
+  async function subjectPermissions(
+    subject: string,
+    headers: Record<string, string | undefined>,
+    /** The request path exactly as the app signed it (percent-encoded). */
+    path = `/registry/v1/subjects/${encodeURIComponent(subject)}/permissions`,
+  ) {
+    const { keyId } = signatureHeaders(headers);
+    // Revoked keys too, so a removed app's key answers `unknown_app` like its other calls; authenticate refuses revoked ones.
+    const owner = (
+      await deps.pool.query<{ app_id: string }>("SELECT app_id FROM app_credentials WHERE key_id = $1", [keyId])
+    ).rows[0];
+    if (!owner) throw new ApiError("bad_signature");
+    await authenticate(owner.app_id, "GET", path, headers, "");
+    return { sub: subject, app: owner.app_id, permissions: (await grantsOf(owner.app_id, subject)).permissions };
+  }
+
   /** The roles an admin granted `subject` in this app, and the permissions those carry. Deprecated ones grant nothing. */
   async function grantsOf(appId: string, subject: string) {
     const roles = (
@@ -951,7 +981,7 @@ export function createRegistry(deps: RegistryDeps) {
         `SELECT DISTINCT p.key FROM role_grants g
            JOIN roles r ON r.key = g.role_key AND r.deprecated_at IS NULL
            JOIN role_permissions rp ON rp.role_key = r.key
-           JOIN permissions p ON p.key = rp.permission_key AND p.deprecated_at IS NULL
+           JOIN permissions p ON p.key = rp.permission_key AND p.deprecated_at IS NULL AND p.app_id = r.app_id
          WHERE g.subject = $1 AND r.app_id = $2 ORDER BY p.key`,
         [subject, appId],
       )
@@ -1082,6 +1112,7 @@ export function createRegistry(deps: RegistryDeps) {
     get,
     pruneNonces,
     subjectAccess,
+    subjectPermissions,
     issueAccessToken,
     launcher,
     launcherForSubject,
