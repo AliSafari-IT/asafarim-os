@@ -30,6 +30,7 @@ import {
   samplePaths,
   sourceFiles,
   stripComments,
+  dockerfilePort,
   type AppReview,
 } from "./review.ts";
 import { RESERVED_SERVICE_NAMES, buildCompose } from "./compose.ts";
@@ -96,6 +97,31 @@ const kinds = (args: string[] = []) =>
   json(args).reviews.flatMap((r) => r.findings.map((f) => `${f.kind} ${f.subject}`));
 
 describe("helpers", () => {
+  it("reads the PORT a Dockerfile's final image runs with", () => {
+    expect(dockerfilePort("FROM node:22\nENV PORT=3000\n")).toBe("3000");
+    // both ENV forms, several keys on one line, quotes, continuation lines, case-insensitive instructions
+    expect(dockerfilePort('FROM node:22\nenv NODE_ENV=production PORT="4000" HOSTNAME=0.0.0.0\n')).toBe("4000");
+    expect(dockerfilePort("FROM node:22\nENV PORT 5000\n")).toBe("5000");
+    expect(dockerfilePort("FROM node:22\nENV A=1 \\\n    PORT=6000\n")).toBe("6000");
+    // the last assignment of the final stage wins; comments and earlier unrelated stages don't count
+    expect(dockerfilePort("FROM node AS deps\nENV PORT=1\nFROM node\n# ENV PORT=2\nENV PORT=3\nENV PORT=4\n")).toBe(
+      "4",
+    );
+    expect(dockerfilePort("FROM node AS build\nENV PORT=1\nFROM node:22-slim\nCMD x\n")).toBeUndefined();
+    // a stage built FROM an earlier stage inherits its ENV, through any number of steps
+    expect(
+      dockerfilePort("FROM node AS base\nENV PORT=7000\nFROM base AS mid\nFROM --platform=linux/amd64 MID\n"),
+    ).toBe("7000");
+    // a comment line inside a continued instruction doesn't end it; an escaped space keeps text in its value
+    expect(dockerfilePort("FROM node\nENV NODE_ENV=production \\\n# the port\n    PORT=8080\n")).toBe("8080");
+    expect(dockerfilePort("FROM node\nENV MESSAGE=hello\\ PORT=8080\n")).toBeUndefined();
+    expect(dockerfilePort("FROM node\nENV MESSAGE=\"a PORT=1\" PORT='2'\n")).toBe("2");
+    // the raw value comes back: the caller decides what a literal number is
+    expect(dockerfilePort("FROM node\nARG P=1\nENV PORT=${P}\n")).toBe("${P}");
+    expect(dockerfilePort("ENV PORT=1\n")).toBeUndefined();
+    expect(dockerfilePort("FROM node\nENV PORTS=1 MYPORT=2\n")).toBeUndefined();
+  });
+
   it("reads whole string literals only: not quotes inside another literal, not comments", () => {
     const text = `a("x.y"); b('say "q.r" now'); c(\`t\\\`u\`); // "c.d"\n/* 'e.f' */ d("")`;
     expect([...stringLiterals(text)]).toEqual(["x.y", 'say "q.r" now', "t\\`u", ""]);
@@ -1767,6 +1793,40 @@ describe("platform manifest review", () => {
       `"shop.orders.read"; "shop.orders.write"; process.env.DATABASE_URL; process.env.OTHER_DATABASE_URL;`,
     );
     writeApp(manifest({ database: postgres, secrets: ["OTHER_DATABASE_URL"] }));
+    expect(kinds()).toEqual([]);
+  });
+  it("reports a Dockerfile PORT other than runtime.port", () => {
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    writeApp(manifest());
+    put(
+      "apps/shop/Dockerfile",
+      "FROM node:22 AS build\nENV PORT=3000\nFROM node:22-slim\nENV NODE_ENV=production PORT=8080\n",
+    );
+    expect(kinds()).toEqual(["runtime-port-mismatch PORT=8080"]);
+    expect(json().reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "runtime-port-mismatch",
+      subject: "PORT=8080",
+      file: "apps/shop/Dockerfile",
+      message:
+        "the Dockerfile sets ENV PORT=8080, but the manifest says runtime.port: 3000, which the gateway and the compose file reach the web service on, so the server listens on the wrong port and every request through the gateway fails (make them the same)",
+    });
+    expect(review().lines.join("\n")).toMatch(/\[runtime-port-mismatch\] the Dockerfile sets ENV PORT=8080/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| runtime-port-mismatch | PORT=8080 |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // the same port, a non-literal value, no PORT at all, or no root Dockerfile: nothing to report
+    for (const text of [
+      "FROM node\nENV PORT 3000\n",
+      "FROM node\nARG PORT=8080\nENV PORT=${PORT}\n",
+      "FROM node\nEXPOSE 8080\n",
+    ]) {
+      put("apps/shop/Dockerfile", text);
+      expect(kinds()).toEqual([]);
+    }
+    rmSync(path.join(root, "apps/shop/Dockerfile"));
+    put("apps/shop/docker/Dockerfile", "FROM node\nENV PORT=8080\n");
     expect(kinds()).toEqual([]);
   });
 });
