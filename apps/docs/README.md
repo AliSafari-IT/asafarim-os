@@ -65,6 +65,16 @@ Two routes, both for `docs.issues.create` (after `docs.read`) on the caller's ow
 
 `e2e/notes.spec.ts` creates, edits and deletes notes, checks the "text changed" case and Lighthouse accessibility (light and dark, `test-results/lighthouse-notes.json`); `pnpm e2e` then restarts Docs and checks the notes are still there.
 
+## Events (Flow)
+
+Docs publishes **`docs.note.created.v1`** (schema: [`events/docs.note.created.v1.json`](events/docs.note.created.v1.json): `id`, `author`, `docPath`, `tags`, `hasIssue`, `createdAt`). **Never the note's body or its quote**: notes are private, so a subscriber gets the note's tags and asks Docs for anything more. It's the trigger for ASafariM Flow (ADR 0001): writing `#issue` in a note starts a run that drafts a GitHub issue from it.
+
+- **When:** on every new note, and on an edit that adds the tag `issue` (it wasn't there before the edit, it is after). Same type and fields; `createdAt` stays the note's creation time. Nothing on delete, on any other edit, or when the issue URL is saved.
+- **Tags** (`lib/tags.ts`): `#word` in the note's Markdown, 1–40 letters, digits or hyphens, lower-cased, distinct in the order first seen, the first 10 only (so a `#issue` after ten other tags doesn't count). Not a tag: anything in fenced code or inline code, a URL or a link's destination, or a `#` that ends a word or a heading marker (`C#`, `a#b`, `##a`).
+- `lib/notes.ts` writes the note and the event to the **outbox** in **one transaction** (an edit locks the row while it compares the tags before and after), so there is never a note without its event or an event without its note. The outbox relay (started in `instrumentation.ts`) sends it to the stream `APP_DOCS`, which core-api creates at install; the schema is uploaded for the Admin event catalog after registration. With the bus down, notes are still written; their events go out when it's back.
+
+`test/tags.test.ts` covers the tag parser, `test/note-events.test.ts` when an event is written and what it carries (over a transactional stand-in for Postgres, `test/fake-db.ts`).
+
 ## Try it
 
 ```bash

@@ -3,11 +3,19 @@ import "server-only";
  * Study notes (#81), in the app's own database (created by `platform app install`, DATABASE_URL). A
  * note is private: every query is scoped to its author, so someone else's note reads as "not found".
  * Without DATABASE_URL there are no notes: the reader still works and says so.
+ *
+ * Next to them, the event outbox (Flow, ADR 0001): creating a note, and an edit that adds the tag
+ * `issue`, write `docs.note.created.v1` in the note's own transaction, so there is never a note
+ * without its event or an event without its note. The relay sends the rows to the bus.
  */
 import { createHash } from "node:crypto";
+import { OUTBOX_SQL, startAppRelay, type Queryable, type Relay } from "@asafarim/app-sdk/events";
 import { databaseNameOf, traceDatabasePool } from "@asafarim/telemetry";
 import pg from "pg";
 import { z } from "zod";
+import manifest from "../platform.app";
+import { NOTE_CREATED, publisher, type NoteCreatedV1 } from "./events";
+import { tagsOf } from "./tags";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS notes (
@@ -22,7 +30,11 @@ CREATE TABLE IF NOT EXISTS notes (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS notes_author_doc ON notes (author, doc_path);`;
+CREATE INDEX IF NOT EXISTS notes_author_doc ON notes (author, doc_path);
+${OUTBOX_SQL}`;
+
+/** The tag that asks Flow to draft a GitHub issue from a note. */
+export const ISSUE_TAG = "issue";
 
 export interface Note {
   id: string;
@@ -96,16 +108,61 @@ export interface NotesStore {
   setIssueUrl(author: string, id: string, url: string): Promise<Note | null>;
 }
 
-export function createNotesStore(pool: pg.Pool): NotesStore {
-  let ready: Promise<unknown> | undefined;
-  // The app's migration, once per process (idempotent); a failed run is retried on the next call.
-  const db = async () => {
-    ready ??= pool.query(SCHEMA).catch((err: unknown) => {
-      ready = undefined;
+const migrated = new WeakMap<pg.Pool, Promise<unknown>>();
+
+/** The app's migrations, once per pool (idempotent); a failed run is retried on the next call. */
+async function migrate(pool: pg.Pool): Promise<pg.Pool> {
+  let ready = migrated.get(pool);
+  if (!ready) {
+    ready = pool.query(SCHEMA).catch((err: unknown) => {
+      migrated.delete(pool);
       throw err;
     });
-    await ready;
-    return pool;
+    migrated.set(pool, ready);
+  }
+  await ready;
+  return pool;
+}
+
+/** Write `docs.note.created.v1` for `note` to the outbox, through the caller's transaction. */
+async function publishNoteCreated(tx: Queryable, author: string, note: Note) {
+  await publisher.publish<NoteCreatedV1>(
+    tx,
+    NOTE_CREATED,
+    {
+      id: note.id,
+      author,
+      docPath: note.docPath,
+      tags: tagsOf(note.body),
+      hasIssue: note.issueUrl !== null,
+      createdAt: note.createdAt,
+    },
+    { subject: note.id },
+  );
+}
+
+export interface NotesStoreOptions {
+  /** Called after a commit (the relay's `wake`, so a new event goes out without waiting for its poll). */
+  onCommit?: () => void;
+}
+
+export function createNotesStore(pool: pg.Pool, opts: NotesStoreOptions = {}): NotesStore {
+  const db = () => migrate(pool);
+  /** `fn` inside BEGIN … COMMIT on one connection; any error rolls everything back. */
+  const inTransaction = async <T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> => {
+    const client = await (await db()).connect();
+    try {
+      await client.query("BEGIN");
+      const out = await fn(client);
+      await client.query("COMMIT");
+      opts.onCommit?.();
+      return out;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
   };
   return {
     async list(author, docPath) {
@@ -123,24 +180,38 @@ export function createNotesStore(pool: pg.Pool): NotesStore {
       ).query<Row>(`SELECT ${COLUMNS} FROM notes WHERE id = $2 AND author = $1`, [author, id]);
       return rows[0] ? toNote(rows[0]) : null;
     },
+    // Every new note publishes docs.note.created.v1, in the insert's transaction.
     async create(author, n) {
-      const { rows } = await (
-        await db()
-      ).query<Row>(
-        `INSERT INTO notes (author, doc_path, heading_id, quote, body, doc_sha) VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING ${COLUMNS}`,
-        [author, n.docPath, n.headingId, n.quote, n.body, n.docSha],
-      );
-      return toNote(rows[0]!);
+      return inTransaction(async (client) => {
+        const { rows } = await client.query<Row>(
+          `INSERT INTO notes (author, doc_path, heading_id, quote, body, doc_sha) VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING ${COLUMNS}`,
+          [author, n.docPath, n.headingId, n.quote, n.body, n.docSha],
+        );
+        const note = toNote(rows[0]!);
+        await publishNoteCreated(client, author, note);
+        return note;
+      });
     },
+    // An edit publishes it again only when it adds the tag `issue` (the row is locked between the read and the write).
     async update(author, id, body) {
-      const { rows } = await (
-        await db()
-      ).query<Row>(
-        `UPDATE notes SET body = $3, updated_at = now() WHERE id = $2 AND author = $1 RETURNING ${COLUMNS}`,
-        [author, id, body],
-      );
-      return rows[0] ? toNote(rows[0]) : null;
+      return inTransaction(async (client) => {
+        const before = await client.query<{ body: string }>(
+          "SELECT body FROM notes WHERE id = $2 AND author = $1 FOR UPDATE",
+          [author, id],
+        );
+        if (!before.rows[0]) return null;
+        const hadIssueTag = tagsOf(before.rows[0].body).includes(ISSUE_TAG);
+        const { rows } = await client.query<Row>(
+          `UPDATE notes SET body = $3, updated_at = now() WHERE id = $2 AND author = $1 RETURNING ${COLUMNS}`,
+          [author, id, body],
+        );
+        const note = toNote(rows[0]!);
+        if (!hadIssueTag && tagsOf(note.body).includes(ISSUE_TAG)) {
+          await publishNoteCreated(client, author, note);
+        }
+        return note;
+      });
     },
     async remove(author, id) {
       const res = await (await db()).query("DELETE FROM notes WHERE id = $2 AND author = $1", [author, id]);
@@ -158,19 +229,40 @@ export function createNotesStore(pool: pg.Pool): NotesStore {
   };
 }
 
-const g = globalThis as unknown as { docsNotes?: NotesStore | null };
+const g = globalThis as unknown as {
+  docsPool?: pg.Pool | null;
+  docsNotes?: NotesStore | null;
+  docsRelay?: Relay | null;
+};
 
-/** The app's notes, one pool per server process; null without DATABASE_URL. */
+/** The app's pool, one per server process; null without DATABASE_URL. */
+function docsPool(): pg.Pool | null {
+  if (g.docsPool === undefined) {
+    const url = process.env.DATABASE_URL;
+    g.docsPool = url ? createDocsPool(url) : null;
+  }
+  return g.docsPool;
+}
+
+/** The app's notes; null without DATABASE_URL. */
 export function getNotes(): NotesStore | null {
   if (g.docsNotes === undefined) {
-    const url = process.env.DATABASE_URL;
-    if (!url) {
-      g.docsNotes = null;
-    } else {
-      g.docsNotes = createNotesStore(createDocsPool(url));
-    }
+    const pool = docsPool();
+    g.docsNotes = pool ? createNotesStore(pool, { onCommit: () => g.docsRelay?.wake() }) : null;
   }
   return g.docsNotes;
+}
+
+/**
+ * Start the outbox relay once per process (on boot: instrumentation.ts), so events left in the
+ * outbox by an earlier run go out too. Without DATABASE_URL or ASAFARIM_NATS_URL there is none.
+ */
+export function startEventRelay(): Relay | undefined {
+  if (g.docsRelay === undefined) {
+    const pool = docsPool();
+    g.docsRelay = pool ? (startAppRelay({ appId: manifest.id, pool: () => migrate(pool) }) ?? null) : null;
+  }
+  return g.docsRelay ?? undefined;
 }
 
 /**

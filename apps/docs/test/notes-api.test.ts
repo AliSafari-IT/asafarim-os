@@ -1,7 +1,7 @@
 /**
  * The notes API (#81): docs.read first, docs.notes.write for every change, and a person only ever
  * sees or changes their own notes. The store is the real one over a recording stand-in for Postgres
- * (the e2e run uses the app's real database).
+ * (test/fake-db.ts; the e2e run uses the app's real database).
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -10,6 +10,7 @@ import { ForbiddenError } from "@asafarim/app-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createNotesStore, type NotesStore } from "../lib/notes";
 import { createFixtureBackend, createSource } from "../lib/source";
+import { fakeDb, type FakeDb } from "./fake-db";
 
 const who = vi.hoisted(() => ({ subject: undefined as string | undefined, permissions: [] as string[] }));
 const db = vi.hoisted(() => ({ store: null as NotesStore | null }));
@@ -42,53 +43,6 @@ vi.mock("@/lib/notes", async (importOriginal) => ({
 const ROADMAP = "ventures/demo-app/roadmap/roadmap.md";
 const roadmap = readFileSync(path.resolve(import.meta.dirname, "../fixtures", ROADMAP), "utf8");
 
-/** Postgres, as far as the store uses it: one table, every statement recorded. */
-function fakePool() {
-  const rows: Record<string, unknown>[] = [];
-  const statements: { sql: string; params: unknown[] }[] = [];
-  let next = 1;
-  const query = async (sql: string, params: unknown[] = []) => {
-    statements.push({ sql, params });
-    if (sql.includes("CREATE TABLE")) return { rows: [], rowCount: 0 };
-    if (sql.startsWith("SELECT")) {
-      const [author, doc] = params;
-      return { rows: rows.filter((r) => r.author === author && (doc === null || r.doc_path === doc)) };
-    }
-    if (sql.startsWith("INSERT")) {
-      const [author, doc_path, heading_id, quote, body, doc_sha] = params;
-      const now = new Date();
-      const row = {
-        id: String(next++),
-        author,
-        doc_path,
-        heading_id,
-        quote,
-        body,
-        doc_sha,
-        issue_url: null,
-        created_at: now,
-        updated_at: now,
-      };
-      rows.push(row);
-      return { rows: [row] };
-    }
-    if (sql.startsWith("UPDATE")) {
-      const [author, id, body] = params;
-      const row = rows.find((r) => r.id === id && r.author === author);
-      if (row) Object.assign(row, { body, updated_at: new Date() });
-      return { rows: row ? [row] : [] };
-    }
-    if (sql.startsWith("DELETE")) {
-      const [author, id] = params;
-      const i = rows.findIndex((r) => r.id === id && r.author === author);
-      if (i !== -1) rows.splice(i, 1);
-      return { rows: [], rowCount: i === -1 ? 0 : 1 };
-    }
-    throw new Error(`unexpected SQL: ${sql}`);
-  };
-  return { pool: { query } as never, statements };
-}
-
 const collection = () => import("../app/api/notes/route");
 const item = () => import("../app/api/notes/[id]/route");
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -97,11 +51,11 @@ const jsonReq = (method: string, body: unknown, url = "http://docs.test/api/note
 const create = async (body: unknown) => (await collection()).POST(jsonReq("POST", body));
 const valid = { docPath: ROADMAP, headingId: "milestones", quote: "Ship the  beta", body: "Ask **Team B** about it." };
 
-let pool: ReturnType<typeof fakePool>;
+let pool: FakeDb;
 beforeEach(() => {
   who.subject = "owner";
   who.permissions = ["docs.read", "docs.notes.write"];
-  pool = fakePool();
+  pool = fakeDb();
   db.store = createNotesStore(pool.pool);
 });
 
@@ -210,8 +164,9 @@ describe("reading notes (#81)", () => {
     await (await collection()).GET(new Request("http://docs.test/api/notes"));
     await (await item()).PATCH(jsonReq("PATCH", { body: "x" }), params("1"));
     await (await item()).DELETE(new Request("http://docs.test/"), params("1"));
-    const scoped = pool.statements.filter((s) => !s.sql.includes("CREATE TABLE"));
-    expect(scoped.length).toBe(4);
+    // Not the app's own migration, the transactions or the outbox row (which carries the author in the event).
+    const scoped = pool.statements.filter((s) => !/CREATE TABLE|^(BEGIN|COMMIT|ROLLBACK)$|asafarim_outbox/.test(s.sql));
+    expect(scoped.length).toBe(5);
     for (const s of scoped) expect(s.params[0]).toBe("owner");
     for (const s of scoped.filter((x) => !x.sql.startsWith("INSERT"))) expect(s.sql).toMatch(/author = \$1/);
   });
