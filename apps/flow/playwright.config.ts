@@ -13,7 +13,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: process.env.E2E_FLOW_URL ?? "http://localhost:4120",
+    baseURL: process.env.E2E_FLOW_URL ?? "http://localhost:4130",
     trace: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
