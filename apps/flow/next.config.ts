@@ -8,6 +8,9 @@ for (const file of ["app.env", "flow.env"]) {
   const p = path.join(process.cwd(), "../../.dev", file);
   if (existsSync(p)) process.loadEnvFile(p);
 }
+// Docs behind the dev gateway (the approval page links the draft's document there).
+if (existsSync(path.join(process.cwd(), "../../.dev")))
+  process.env.APP_CONFIG_DOCS_URL ??= "http://docs.localhost:8080";
 
 const nextConfig: NextConfig = {
   output: process.env.BUILD_STANDALONE === "true" ? "standalone" : undefined,

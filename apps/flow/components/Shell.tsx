@@ -8,6 +8,7 @@ import { getPlatform } from "@/lib/platform";
 const NAV = [
   { href: "/", label: "Overview" },
   { href: "/runs", label: "Runs" },
+  { href: "/approvals", label: "Approvals" },
   { href: "/workflows", label: "Workflows" },
 ] as const;
 

@@ -142,7 +142,8 @@ try {
     const flow = start("flow", [flowNext, "start", "--port", String(DEV.apps.flow)], FLOW_DIR);
     // Flow's own answer, not another process that holds the port.
     const live = await (await waitFor(`${FLOW_URL}/health/live`)).json();
-    if (flow.exitCode !== null || live.app !== "flow") throw new Error(`Flow didn't start on ${FLOW_URL}`);
+    if (flow.exitCode !== null || flow.signalCode !== null || live.app !== "flow")
+      throw new Error(`Flow didn't start on ${FLOW_URL}`);
     console.log(`${green("✔")} Flow is up at ${FLOW_URL}`);
   }
 

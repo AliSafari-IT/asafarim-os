@@ -8,7 +8,9 @@
  *  2. without the tag the run is `skipped`, and nothing is published;
  *  3. the same event delivered again creates nothing (the inbox; and trigger_event_id behind it);
  *  4. the sweeper times a run out, skipping one another connection holds (FOR UPDATE SKIP LOCKED);
- *     retry publishes a new request; retention clears old payloads; versions are immutable.
+ *     retry publishes a new request; retention clears old payloads; versions are immutable;
+ *  5. the approval: Docs' draft opens a pending approval; approve (with edits) publishes
+ *     flow.issue.approved.v1 in the same transaction; reject, expiry (the sweeper) and cancel.
  *
  * Needs FLOW_TEST_ADMIN_URL (or EVENTS_TEST_ADMIN_URL): a superuser URL on a DEV Postgres. Skipped
  * without it. It uses a throwaway database, dropped afterwards. No bus: the relay isn't started, so
@@ -31,6 +33,17 @@ import type * as Queries from "../lib/queries";
 const ADMIN_URL = process.env.FLOW_TEST_ADMIN_URL ?? process.env.EVENTS_TEST_ADMIN_URL;
 const dbName = `flow_test_${Date.now().toString(36)}`;
 const NOTE = "docs.note.created.v1";
+/** Docs' draft (docs.issue-draft.ready.v1 without runId, stepId, requestId). */
+const DRAFT = {
+  noteId: "7",
+  docPath: "guides/getting-started.md",
+  repo: "AliSafari-IT/asafarim-docs",
+  public: false,
+  title: "Fix the getting-started guide",
+  body: "## Context\n\nThe install step is out of date.",
+  labels: ["docs"],
+};
+const DRAFT_PUBLIC = { ...DRAFT, public: true };
 
 const noteEvent = (data: Partial<Record<string, unknown>> = {}): CloudEvent => ({
   specversion: "1.0",
@@ -119,7 +132,7 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ key: "docs-note-to-issue", status: "active", version: 1 });
     expect(rows[0].definition.trigger).toEqual({ event: NOTE });
-    expect(await q("SELECT version FROM flow_migrations")).toEqual([{ version: 1 }]);
+    expect(await q("SELECT version FROM flow_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }]);
   });
 
   it("a version can't be changed once published", async () => {
@@ -232,7 +245,7 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
       ...noteEvent(),
       id: ulid(),
       type: "docs.issue-draft.ready.v1",
-      data: { runId: run.id, stepId: draft.id, title },
+      data: { runId: run.id, stepId: draft.id, ...DRAFT, title },
     });
     expect(await deliver(ready("First"))).toBe("processed");
     expect(await deliver(ready("Second"))).toBe("processed"); // a new event id: past the inbox, ignored by the engine
@@ -243,7 +256,103 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
       ["review", "waiting"],
     ]);
     expect(steps[1].output).toMatchObject({ title: "First" });
-    expect(await runFor(event.id)).toMatchObject({ status: "waiting", error_code: "approval_not_implemented" });
+    expect(await runFor(event.id)).toMatchObject({ status: "waiting", error_code: null });
+    expect(await q("SELECT status, assignee_role FROM approvals WHERE run_id = $1", [run.id])).toEqual([
+      { status: "pending", assignee_role: "flow.approver" },
+    ]);
+  });
+
+  /** A run waiting on its review step: its id, the review step's and the approval's. */
+  async function waitingOnReview(draft: Record<string, unknown> = DRAFT) {
+    const event = noteEvent();
+    await deliver(event);
+    const run = await runFor(event.id);
+    const step = (await stepsOf(run.id))[1];
+    await deliver({
+      ...noteEvent(),
+      id: ulid(),
+      type: "docs.issue-draft.ready.v1",
+      data: { runId: run.id, stepId: step.id, requestId: step.request_event_id, ...draft },
+    });
+    const [approval] = await q("SELECT * FROM approvals WHERE run_id = $1", [run.id]);
+    return { runId: run.id as string, approvalId: approval.id as string };
+  }
+
+  it("approve with edits: approved, flow.issue.approved.v1 in the outbox in the same transaction", async () => {
+    const { runId, approvalId } = await waitingOnReview({ ...DRAFT, public: true });
+    const listed = await queries.listPendingApprovals(pool);
+    expect(listed.find((a) => a.id === approvalId)).toMatchObject({ runId, docPath: DRAFT.docPath, repo: DRAFT.repo });
+    const view = await queries.getApproval(pool, approvalId);
+    expect(view).toMatchObject({ draft: DRAFT_PUBLIC, step: { key: "review", editable: ["title", "body", "labels"] } });
+
+    const edits = { title: "Edited title", labels: ["docs", "help wanted"] };
+    expect(
+      await flow.inTransaction(pool, (tx) => flow.engine.approve(tx, approvalId, "dev-approver", edits, false)),
+    ).toMatchObject({ ok: false, error: "public_not_acknowledged" });
+    const r = await flow.inTransaction(pool, (tx) => flow.engine.approve(tx, approvalId, "dev-approver", edits, true));
+    expect(r.ok).toBe(true);
+    const [approval] = await q("SELECT * FROM approvals WHERE id = $1", [approvalId]);
+    expect(approval).toMatchObject({ status: "approved", decided_by: "dev-approver", edited: edits });
+    const steps = await stepsOf(runId);
+    expect(steps.map((s) => [s.step_key, s.status])).toEqual([
+      ["only-tagged", "succeeded"],
+      ["draft", "succeeded"],
+      ["review", "succeeded"],
+      ["create", "waiting"],
+    ]);
+    const out = await outboxOf(runId);
+    expect(out.map((o) => o.type)).toEqual(["flow.issue-draft.requested.v1", "flow.issue.approved.v1"]);
+    expect(out[1].id).toBe(steps[3].request_event_id);
+    expect(out[1].envelope.data).toMatchObject({
+      runId,
+      stepId: steps[3].id,
+      approvalId,
+      onBehalfOf: "dev-admin",
+      decidedBy: "dev-approver",
+      title: "Edited title",
+      labels: edits.labels,
+      acknowledgedPublic: true,
+    });
+    // Deciding twice is refused.
+    expect(await flow.inTransaction(pool, (tx) => flow.engine.reject(tx, approvalId, "dev-approver"))).toMatchObject({
+      ok: false,
+      error: "not_pending",
+    });
+    expect((await queries.getRun(pool, runId))?.approvals).toMatchObject([{ id: approvalId, status: "approved" }]);
+  });
+
+  it("reject ends the run rejected; expiry fails it with approval_expired; cancel cancels the approval", async () => {
+    const rejected = await waitingOnReview();
+    await flow.inTransaction(pool, (tx) => flow.engine.reject(tx, rejected.approvalId, "dev-approver", "No."));
+    expect((await q("SELECT status, comment FROM approvals WHERE id = $1", [rejected.approvalId]))[0]).toEqual({
+      status: "rejected",
+      comment: "No.",
+    });
+    expect((await q("SELECT status FROM workflow_runs WHERE id = $1", [rejected.runId]))[0].status).toBe("rejected");
+
+    const expiring = await waitingOnReview();
+    await q("UPDATE approvals SET deadline = now() - interval '1 minute' WHERE id = $1", [expiring.approvalId]);
+    expect(await workers.sweepTimeouts(pool, flow.engine)).toBeGreaterThanOrEqual(1);
+    expect((await q("SELECT status FROM approvals WHERE id = $1", [expiring.approvalId]))[0].status).toBe("expired");
+    expect((await q("SELECT status, error_code FROM workflow_runs WHERE id = $1", [expiring.runId]))[0]).toEqual({
+      status: "failed",
+      error_code: "approval_expired",
+    });
+    expect((await queries.listPendingApprovals(pool)).some((a) => a.id === expiring.approvalId)).toBe(false);
+
+    const cancelled = await waitingOnReview();
+    await flow.inTransaction(pool, (tx) => flow.engine.cancel(tx, cancelled.runId, "dev-admin"));
+    expect((await q("SELECT status FROM approvals WHERE id = $1", [cancelled.approvalId]))[0].status).toBe("cancelled");
+  });
+
+  it("one pending approval per step, in the database too", async () => {
+    const { approvalId } = await waitingOnReview();
+    await expect(
+      q(
+        "INSERT INTO approvals (id, run_id, step_id, status, assignee_role) SELECT $2, run_id, step_id, 'pending', 'x' FROM approvals WHERE id = $1",
+        [approvalId, ulid()],
+      ),
+    ).rejects.toThrow(/approvals_one_pending/);
   });
 
   it("the pages' queries: skipped runs only when asked for; a run with its steps", async () => {

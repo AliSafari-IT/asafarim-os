@@ -67,7 +67,8 @@ export default defineApp({
       { type: "flow.issue.approved.v1", schema: "./events/flow.issue.approved.v1.json" },
     ],
     // Consumed by lib/engine/subscribers.ts, inbox and transition in one transaction. Docs publishes
-    // the first; the four outcomes have no publisher yet (core-api reports waiting_for_publisher).
+    // the trigger and the draft outcomes; the issue outcomes have no publisher yet (core-api reports
+    // waiting_for_publisher until Flow PR 5).
     subscribes: [
       { type: "docs.note.created.v1", handler: "/internal/events/docs.note.created.v1" },
       { type: "docs.issue-draft.ready.v1", handler: "/internal/events/docs.issue-draft.ready.v1" },
@@ -76,12 +77,21 @@ export default defineApp({
       { type: "docs.issue.failed.v1", handler: "/internal/events/docs.issue.failed.v1" },
     ],
   },
+  config: [
+    {
+      key: "docs.url",
+      type: "string",
+      default: "https://docs.asafarim.site",
+      description: "Where Docs is served: the approval page links the draft's document there",
+    },
+  ],
   ui: {
     glyph: "FL",
     color: "#2563eb",
     nav: [
       { label: "Overview", href: "/" },
       { label: "Runs", href: "/runs" },
+      { label: "Approvals", href: "/approvals" },
       { label: "Workflows", href: "/workflows" },
     ],
     status: "active",

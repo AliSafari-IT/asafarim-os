@@ -92,6 +92,14 @@ CREATE INDEX approvals_pending ON approvals (deadline) WHERE status = 'pending';
 ${OUTBOX_SQL}
 ${INBOX_SQL}`,
   },
+  {
+    version: 2,
+    name: "approvals: by run, and one pending approval per step",
+    sql: `
+CREATE INDEX approvals_run ON approvals (run_id, created_at);
+-- A step waits on one approval at a time; a retry after expiry opens a new one.
+CREATE UNIQUE INDEX approvals_one_pending ON approvals (step_id) WHERE status = 'pending';`,
+  },
 ];
 
 /** Run the migrations not applied yet, in one transaction under an advisory lock. */

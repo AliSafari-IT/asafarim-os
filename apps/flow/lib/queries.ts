@@ -1,7 +1,9 @@
 /** What the pages read (server only). Every caller has checked `flow.read` first (lib/gate.ts). */
 import type pg from "pg";
-import { runFrom, stepFrom, versionFrom } from "./engine/pg-store";
-import type { RunRow, StepRow, VersionRow, WorkflowStatus } from "./engine/store";
+import { approvalFrom, runFrom, stepFrom, versionFrom } from "./engine/pg-store";
+import type { ApprovalRow, RunRow, StepRow, VersionRow, WorkflowStatus } from "./engine/store";
+import { Draft } from "./workflow/approval";
+import type { ApprovalStep } from "./workflow/definition";
 
 export interface RunSummary extends RunRow {
   workflowKey: string;
@@ -26,12 +28,14 @@ const summaryFrom = (r: Record<string, unknown>): RunSummary => ({
 
 export async function overview(p: pg.Pool, now = new Date()) {
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const [waiting, failures, latest] = await Promise.all([
+  const [waiting, failures, latest, approvals] = await Promise.all([
     p.query(`${SUMMARY} WHERE r.status = 'waiting' ORDER BY r.started_at DESC LIMIT 50`),
     p.query(`${SUMMARY} WHERE r.status = 'failed' AND r.ended_at >= $1 ORDER BY r.ended_at DESC LIMIT 50`, [weekAgo]),
     p.query(`${SUMMARY} ORDER BY r.started_at DESC LIMIT 10`),
+    p.query("SELECT count(*)::int AS n FROM approvals WHERE status = 'pending' AND deadline > $1", [now]),
   ]);
   return {
+    pendingApprovals: approvals.rows[0].n as number,
     waiting: waiting.rows.map(summaryFrom),
     failures: failures.rows.map(summaryFrom),
     latest: latest.rows.map(summaryFrom),
@@ -48,15 +52,83 @@ export async function listRuns(p: pg.Pool, opts: { skipped: boolean; limit?: num
 export async function getRun(
   p: pg.Pool,
   id: string,
-): Promise<{ run: RunSummary; version: VersionRow; steps: StepRow[] } | undefined> {
+): Promise<{ run: RunSummary; version: VersionRow; steps: StepRow[]; approvals: ApprovalRow[] } | undefined> {
   const { rows } = await p.query(`${SUMMARY} WHERE r.id = $1`, [id]);
   if (!rows[0]) return undefined;
   const run = summaryFrom(rows[0]);
-  const [version, steps] = await Promise.all([
+  const [version, steps, approvals] = await Promise.all([
     p.query("SELECT * FROM workflow_versions WHERE id = $1", [run.versionId]),
     p.query("SELECT * FROM workflow_run_steps WHERE run_id = $1 ORDER BY seq", [id]),
+    p.query("SELECT * FROM approvals WHERE run_id = $1 ORDER BY created_at, id", [id]),
   ]);
-  return { run, version: versionFrom(version.rows[0]), steps: steps.rows.map(stepFrom) };
+  return {
+    run,
+    version: versionFrom(version.rows[0]),
+    steps: steps.rows.map(stepFrom),
+    approvals: approvals.rows.map(approvalFrom),
+  };
+}
+
+export interface PendingApproval {
+  id: string;
+  runId: string;
+  workflowKey: string;
+  createdAt: Date;
+  deadline: Date | null;
+  /** From the draft (the step's input); undefined when it isn't one. */
+  docPath?: string;
+  repo?: string;
+}
+
+/** Pending approvals still before their deadline, oldest first. */
+export async function listPendingApprovals(p: pg.Pool, now = new Date(), limit = 100): Promise<PendingApproval[]> {
+  const { rows } = await p.query(
+    `SELECT a.id, a.run_id, a.created_at, a.deadline, s.input, w.key AS workflow_key
+       FROM approvals a
+       JOIN workflow_run_steps s ON s.id = a.step_id
+       JOIN workflow_runs r ON r.id = a.run_id
+       JOIN workflow_versions v ON v.id = r.version_id
+       JOIN workflows w ON w.id = v.workflow_id
+      WHERE a.status = 'pending' AND a.deadline > $1
+      ORDER BY a.created_at, a.id
+      LIMIT $2`,
+    [now, limit],
+  );
+  return rows.map((r) => {
+    const draft = Draft.safeParse(r.input);
+    return {
+      id: r.id,
+      runId: r.run_id,
+      workflowKey: r.workflow_key,
+      createdAt: r.created_at,
+      deadline: r.deadline,
+      ...(draft.success ? { docPath: draft.data.docPath, repo: draft.data.repo } : {}),
+    };
+  });
+}
+
+export interface ApprovalView {
+  approval: ApprovalRow;
+  run: RunSummary;
+  /** The step's definition: its role, deadline and editable fields. */
+  step: ApprovalStep;
+  /** The draft shown (the step's input); undefined once retention cleared it. */
+  draft?: Draft;
+}
+
+export async function getApproval(p: pg.Pool, id: string): Promise<ApprovalView | undefined> {
+  const { rows } = await p.query(
+    "SELECT a.*, s.input AS step_input, s.step_key AS step_key FROM approvals a JOIN workflow_run_steps s ON s.id = a.step_id WHERE a.id = $1",
+    [id],
+  );
+  const r = rows[0];
+  if (!r) return undefined;
+  const approval = approvalFrom(r);
+  const found = await getRun(p, approval.runId);
+  const step = found?.version.definition.steps.find((s) => s.key === r.step_key);
+  if (!found || step?.type !== "approval") return undefined;
+  const draft = Draft.safeParse(r.step_input);
+  return { approval, run: found.run, step, ...(draft.success ? { draft: draft.data } : {}) };
 }
 
 export interface WorkflowView {

@@ -7,7 +7,7 @@ import { overview } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
-/** Overview: what waits, what failed in the last 7 days, and the last 10 runs. */
+/** Overview: what waits for your approval, what waits, what failed in the last 7 days, and the last 10 runs. */
 export default async function Overview() {
   const access = await pageAccess();
   if (!access.ok) {
@@ -18,9 +18,25 @@ export default async function Overview() {
     );
   }
   const o = await overview(await db());
+  const canDecide = access.permissions.includes("flow.approvals.decide");
   return (
     <Shell current="/">
       <h1>Overview</h1>
+      {canDecide ? (
+        <section className="card" aria-labelledby="your-approval">
+          <h2 id="your-approval">
+            Waiting for your approval{" "}
+            <span className="count" data-testid="pending-approvals">
+              {o.pendingApprovals}
+            </span>
+          </h2>
+          {o.pendingApprovals ? (
+            <a href="/approvals">Review them on Approvals</a>
+          ) : (
+            <p className="muted">Nothing to decide.</p>
+          )}
+        </section>
+      ) : null}
       <section className="card" aria-labelledby="waiting">
         <h2 id="waiting">
           Waiting <span className="count">{o.waiting.length}</span>
