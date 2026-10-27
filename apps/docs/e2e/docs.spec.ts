@@ -195,8 +195,12 @@ test("the account menu shows the person (never an id), links to the account and 
   await expect(name).toHaveCount(0);
   await expect(avatar).toBeFocused();
 
+  // Signing out ends identity's session too (#252): identity asks first, then sends the browser back to
+  // Docs (its registered post_logout_redirect_uri), signed out.
   await avatar.click();
   await page.getByTestId("sign-out").click();
+  await expect(page.getByRole("heading", { name: "Sign out of ASafariM?" })).toBeVisible();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
 });
 

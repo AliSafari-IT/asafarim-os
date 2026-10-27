@@ -355,16 +355,6 @@ describe("flow.issue-draft.requested.v1: outside failures", () => {
     expect((await expectFailure("no_repo_access")).message).toBe("No access to example-org/demo-app");
   });
 
-  it("no GitHub token for issues is no_repo_access; no AI key is ai_unavailable", async () => {
-    services.tracker = null;
-    await expectFailure("no_repo_access");
-    db.outbox.length = 0;
-    db.inbox.length = 0;
-    services.tracker = gh.tracker;
-    services.writer = null;
-    await expectFailure("ai_unavailable");
-  });
-
   it("an AI answer that fails validation is invalid_ai_answer", async () => {
     services.writer = fakeWriter({ title: "x", body: "no sections" }).writer;
     await expectFailure("invalid_ai_answer");
@@ -399,6 +389,9 @@ describe("flow.issue-draft.requested.v1: outside failures", () => {
     ],
     ["GitHub's 5xx", () => (services.tracker = fakeTracker({ fail: new GitHubUnavailableError("HTTP 502") }).tracker)],
     ["an unexpected error", () => (services.writer = fakeWriter(undefined, new Error("boom")).writer)],
+    // Not set up: the contract has no answer for it, so Flow's step keeps waiting.
+    ["no DOCS_ISSUES_TOKEN", () => (services.tracker = null)],
+    ["no DOCS_AI_API_KEY", () => (services.writer = null)],
   ])("%s is thrown: redelivered, nothing answered", async (_what, arrange) => {
     arrange();
     const { outcome, acks, answers } = await deliver(request());

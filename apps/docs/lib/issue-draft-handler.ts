@@ -118,10 +118,12 @@ export function createIssueDraftHandler(deps: IssueDraftDeps = defaultIssueDraft
       return fail("forbidden", `Missing the permission ${read ? "docs.issues.create" : "docs.read"}.`);
     }
     if (note.issueUrl) return fail("issue_exists", "This note already has an issue.");
+    // Not set up (no DOCS_ISSUES_TOKEN / DOCS_AI_API_KEY): no answer the contract has; thrown, so the
+    // request is retried and dead-lettered, and Flow's step waits (until its own timeout).
     const tracker = deps.tracker();
-    if (!tracker) return fail("no_repo_access", "GitHub access for issues isn't set up on this server.");
+    if (!tracker) throw new Error("docs: issues aren't set up on this server (DOCS_ISSUES_TOKEN)");
     const writer = deps.writer();
-    if (!writer) return fail("ai_unavailable", "The AI isn't set up on this server.");
+    if (!writer) throw new Error("docs: the AI isn't set up on this server (DOCS_AI_API_KEY)");
 
     const doc = await deps.loadDocument(note.docPath);
     let draft;

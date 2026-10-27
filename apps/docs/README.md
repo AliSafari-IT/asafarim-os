@@ -91,7 +91,7 @@ Docs subscribes to **`flow.issue-draft.requested.v1`** (`{ runId, stepId, noteId
 3. `onBehalfOf` needs `docs.read` and `docs.issues.create`, asked from core-api every time: otherwise `forbidden`. If core-api can't answer (`AccessUnavailableError`) the handler throws, so the request is redelivered and nothing is answered.
 4. A note that already has an issue: `issue_exists`.
 5. The draft is built by the same code as "Generate GitHub issue" (`lib/issue-drafting.ts`, also used by `POST /api/notes/:id/issue/draft`): the repo that owns the document, its labels only, the validated AI answer, links to the reader replaced by the document's path.
-6. Failures: GitHub's 401/403/404 (or no `DOCS_ISSUES_TOKEN`) is `no_repo_access`; an AI answer that fails validation, has no issue tool call, or grows past the event's limits once links are replaced is `invalid_ai_answer`; an AI timeout, network error, 429 or 5xx (or no `DOCS_AI_API_KEY`) is `ai_unavailable`. Anything else (GitHub's 5xx, the AI's other 4xx, the document gone from the source) is thrown: redelivered with a backoff, then dead-lettered.
+6. Failures: GitHub's 401/403/404 is `no_repo_access`; an AI answer that fails validation, has no issue tool call, or grows past the event's limits once links are replaced is `invalid_ai_answer`; an AI timeout, network error, 429 or 5xx is `ai_unavailable`. Anything else (no `DOCS_ISSUES_TOKEN` or `DOCS_AI_API_KEY`, GitHub's 5xx, the AI's other 4xx, the document gone from the source) is thrown: redelivered with a backoff, then dead-lettered, and Flow's step keeps waiting.
 
 `test/issue-draft-handler.test.ts` runs every branch through the SDK's delivery code over `test/fake-db.ts`, with GitHub and the AI mocked, and checks every answer against its schema.
 
