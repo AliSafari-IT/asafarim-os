@@ -1,7 +1,8 @@
 # ASafariM OS production stack: the identity service (id.asafarim.site) and its own Redis
 # (asafarim-os#45, part of #22, P2.3), the asafarim.site landing page, os-site (#70), and docs.asafarim.site, os-docs
 # (#83), and flow.asafarim.site, os-flow (only once its encrypted env is committed), and the event bus os-nats
-# (asafarim-os#259, only once core/nats/.env.production.age is committed). Also breinhap.asafarim.site, breinhap-site (a landing page built in AliSafari-IT/breinhap), and
+# (asafarim-os#259, only once core/nats/.env.production.age is committed; then core-api, os-docs and os-flow are given
+# its address through OS_NATS_URL). Also breinhap.asafarim.site, breinhap-site (a landing page built in AliSafari-IT/breinhap), and
 # igs.asafarim.site, igs-site (a landing page built in AliSafari-IT/igs-pharma). The owner deploys it with deploy/vps-deploy.sh; nothing else runs this file. See deploy/README.md for the
 # deploy, the rollback and the network rules.
 #
@@ -176,6 +177,10 @@ services:
       # ASAFARIM_REGISTRY_CREDENTIAL (from `deploy/core-api/admin.sh install docs`) is in .env.docs as well;
       # without it the SDK treats docs as not installed and the gate answers 503.
       CORE_API_URL: http://os-core-api:4020
+      # The event bus (asafarim-os#259): empty unless the deploy runs os-nats, and the SDK reads an empty value as "no
+      # bus" (the outbox relay stays off and events wait in the outbox). The app signs in to the bus with its
+      # registry credential, like it does to core-api.
+      ASAFARIM_NATS_URL: ${OS_NATS_URL:-}
     networks:
       edge_net:
         # Unique on the shared edge_net; sites/asafarim-os.caddy proxies docs.asafarim.site to it.
@@ -244,6 +249,10 @@ services:
       # An installed app's DATABASE_URL points at os-postgres, by its name on os_core.
       CORE_API_APP_DB_HOST: os-postgres
       CORE_API_APP_DB_PORT: "5432"
+      # The event bus (asafarim-os#259): empty unless the deploy runs os-nats (deploy/vps-deploy.sh sets OS_NATS_URL
+      # only then), and core-api ignores an empty value. Its login on the bus (CORE_API_NATS_USER, _PASSWORD and
+      # _ISSUER_SEED) is in .env.core-api, never here.
+      CORE_API_NATS_URL: ${OS_NATS_URL:-}
       # Health polling (P6.1): where each app runs, on os_core.
       OS_APP_DOCS_UPSTREAM: os-docs:3000
       # Polled only while flow is active, which needs os-flow deployed (the "flow" profile).
@@ -380,8 +389,9 @@ services:
       CORE_API_URL: http://os-core-api:4020
       # docs.url: where the approval page links a draft's document.
       APP_CONFIG_DOCS_URL: https://docs.asafarim.site
-      # No ASAFARIM_NATS_URL: production has no event bus yet. Flow starts, serves its pages and is healthy; its
-      # subscribers and outbox relay stay off (one log line each), so it runs no workflow until a bus is added.
+      # The event bus (asafarim-os#259): empty unless the deploy runs os-nats. Without a bus Flow starts, serves its
+      # pages and is healthy; its subscribers and outbox relay stay off (one log line each), so it runs no workflow.
+      ASAFARIM_NATS_URL: ${OS_NATS_URL:-}
     depends_on:
       - os-core-api
     healthcheck:

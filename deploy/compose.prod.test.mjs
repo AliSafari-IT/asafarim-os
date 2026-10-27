@@ -715,7 +715,7 @@ test("os-flow is hardened like os-docs: read_only, no capabilities, non-root tmp
   assert.ok(!flow.ports || flow.ports.length === 0, "os-flow publishes no port");
 });
 
-test("os-flow reads its secrets from ../.env.flow only; its settings: client flow, identity, core-api, Docs, and no bus", () => {
+test("os-flow reads its secrets from ../.env.flow only; its settings: client flow, identity, core-api, Docs, and a bus only when given", () => {
   assert.match(composeText, /os-flow:[\s\S]*?env_file:\n\s+- \.\.\/\.env\.flow\n/);
   assert.equal(flow.environment.ASAFARIM_APP_ID, flowManifest.id);
   assert.equal(flow.environment.OIDC_ISSUER, flowConfig.services.identity.environment.IDENTITY_ISSUER);
@@ -723,7 +723,8 @@ test("os-flow reads its secrets from ../.env.flow only; its settings: client flo
   assert.equal(flow.environment.APP_CONFIG_DOCS_URL, "https://docs.asafarim.site");
   assert.equal(flow.environment.APP_CONFIG_DOCS_URL, `https://${docsManifest.domains.primary}`);
   assert.equal(flow.environment.HOSTNAME, "0.0.0.0");
-  assert.ok(!("ASAFARIM_NATS_URL" in flow.environment), "production has no event bus yet");
+  // The bus address comes from OS_NATS_URL (empty unless the deploy runs os-nats): see the event bus tests below.
+  assert.equal(flow.environment.ASAFARIM_NATS_URL, "", "no bus unless the deploy gives one");
   for (const name of ["AUTH_SECRET", "OIDC_CLIENT_SECRET", "DATABASE_URL", "ASAFARIM_REGISTRY_CREDENTIAL"]) {
     assert.ok(!(name in flow.environment), `${name} is a secret: it belongs in .env.flow`);
   }
@@ -855,13 +856,6 @@ test("os-nats reads its two values from ../.env.nats only; nothing secret is in 
   }
 });
 
-test("without a nats profile, the stack is what it was: no other service names os-nats", () => {
-  for (const [name, service] of Object.entries(natsConfig.services)) {
-    if (name === "os-nats") continue;
-    assert.ok(!JSON.stringify(service).includes("os-nats"), `${name} mentions os-nats before the follow-up PR`);
-  }
-});
-
 test("nats.conf refuses anonymous clients: the callout, the one `core` login, and no other way in", () => {
   assert.match(natsConf, /auth_callout\s*\{[^}]*issuer:\s*\$NATS_AUTH_ISSUER/);
   assert.match(natsConf, /auth_users:\s*\[\s*core\s*\]/);
@@ -901,4 +895,47 @@ test("nats.conf is the dev bus's design: the same accounts and callout blocks", 
     .replace(/\s+/g, " ")
     .trim();
   assert.equal(prod, dev);
+});
+
+// ---- the bus's address (asafarim-os#259, part 2): core-api, Docs and Flow get it from OS_NATS_URL, which the deploy sets
+// only when it runs os-nats. Unset, all three get an empty address and run without a bus, as before.
+test("without OS_NATS_URL, core-api, Docs and Flow get an EMPTY bus address: a deploy without the bus is what it was", () => {
+  // Flow is in its own profile, so it comes from the render that has it.
+  for (const [service, key] of [
+    [natsConfig.services["os-core-api"], "CORE_API_NATS_URL"],
+    [natsConfig.services["os-docs"], "ASAFARIM_NATS_URL"],
+    [flowConfig.services["os-flow"], "ASAFARIM_NATS_URL"],
+  ]) {
+    assert.equal(service.environment[key], "", `${key} is empty without OS_NATS_URL`);
+  }
+});
+
+test("with OS_NATS_URL, core-api, Docs and Flow are given the address, and nothing else mentions the bus", () => {
+  const url = "nats://os-nats:4222";
+  const withUrl = render({
+    IMAGE_TAG: "testsha",
+    SITE_IMAGE_TAG: "sitesha",
+    DOCS_IMAGE_TAG: "docssha",
+    CORE_API_IMAGE_TAG: "coresha",
+    COMPOSE_PROFILES: "core,flow,nats",
+    OS_NATS_URL: url,
+  });
+  assert.equal(withUrl.status, 0, withUrl.stderr);
+  const c = JSON.parse(withUrl.stdout).services;
+  assert.equal(c["os-core-api"].environment.CORE_API_NATS_URL, url);
+  assert.equal(c["os-docs"].environment.ASAFARIM_NATS_URL, url);
+  assert.equal(c["os-flow"].environment.ASAFARIM_NATS_URL, url);
+  for (const name of ["identity", "os-redis", "os-site", "breinhap-site", "igs-site", "os-postgres"]) {
+    assert.ok(!JSON.stringify(c[name]).includes("NATS"), `${name} has no bus setting`);
+  }
+  // The address is the bus's alias and its client port.
+  assert.equal(c["os-nats"].networks.os_core.aliases[0], "os-nats");
+  assert.match(url, /^nats:\/\/os-nats:4222$/);
+});
+
+test("core-api's login on the bus is a secret: it is in .env.core-api, never in the compose file", () => {
+  for (const name of ["CORE_API_NATS_USER", "CORE_API_NATS_PASSWORD", "CORE_API_NATS_ISSUER_SEED"]) {
+    assert.ok(!(name in natsConfig.services["os-core-api"].environment), `${name} belongs in .env.core-api`);
+    assert.doesNotMatch(composeText.replace(/^\s*#.*$/gm, ""), new RegExp(name));
+  }
 });

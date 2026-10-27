@@ -65,8 +65,11 @@
 # The event bus (os-nats, asafarim-os#259; full mode only): when core-api is part of the deploy and the commit has
 # core/nats/.env.production.age, the same steps decrypt it into .env.nats, check core/nats/.env.production.example's
 # names, start os-nats (profile "nats", on top of "core"; on os_core only, no published port) and wait for its health.
-# It publishes nothing on the edge and takes no image sha (the image is pinned in deploy/compose.prod.yml). Without that
-# file the deploy is exactly what it was before: no .env.nats, no nats profile, no os-nats.
+# It publishes nothing on the edge and takes no image sha (the image is pinned in deploy/compose.prod.yml). It also checks
+# core-api's env names its side of the login (CORE_API_NATS_USER, _PASSWORD and _ISSUER_SEED; node deploy/nats/new-env.mjs
+# writes them), and sets OS_NATS_URL, which compose gives to os-core-api (CORE_API_NATS_URL), os-docs and os-flow
+# (ASAFARIM_NATS_URL). Without that file the deploy is exactly what it was before: no .env.nats, no nats profile, no
+# os-nats, and OS_NATS_URL unset, so all three get an empty address and run without a bus.
 # asafarim.site cutover: remove the asafarim.site and www.asafarim.site blocks from asafarim-com.caddy first
 # (deploy/README.md); until then step 7's validation refuses the duplicate host and keeps the old config.
 #
@@ -248,6 +251,9 @@ main() {
       log "Checking the event bus environment (names only)..."
       require_env_vars .env.nats core/nats/.env.production.example \
         || fatal "fill the variables named above in core/nats/.env.production (node deploy/nats/new-env.mjs writes them all), re-encrypt it, commit the .age file, and deploy that commit."
+      # core-api's side of the same login: without it core-api would connect to the bus as nobody, and the bus refuses that.
+      require_env_names .env.core-api CORE_API_NATS_USER CORE_API_NATS_PASSWORD CORE_API_NATS_ISSUER_SEED \
+        || fatal "core-api's env lacks its side of the bus login. Run node deploy/nats/new-env.mjs (it adds the variables named above to core/core-api/.env.production), re-encrypt it, commit the .age file, and deploy that commit."
     else
       log "No core/nats/.env.production.age in this commit: the event bus is not part of this deploy."
     fi
@@ -273,6 +279,13 @@ main() {
     export COMPOSE_PROFILES="$profiles"
   else
     unset COMPOSE_PROFILES
+  fi
+  # The bus's address for core-api, Docs and Flow, only when os-nats runs: compose reads an unset value as empty, and
+  # each of them runs without a bus then.
+  if [[ "$with_nats" == true ]]; then
+    export OS_NATS_URL="nats://os-nats:4222"
+  else
+    unset OS_NATS_URL
   fi
   if [[ "$site_only" == true ]]; then
     # The site-only file has no id.asafarim.site: publishing it while identity runs would take identity off the edge.

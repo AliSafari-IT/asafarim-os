@@ -80,11 +80,11 @@ commits `apps/flow/.env.production.age`**, the same gate as core-api's (asafarim
 app's, never the platform's Postgres. `docs.url` is `https://docs.asafarim.site`. The image comes from the "Flow
 image" workflow (`apps/flow/Dockerfile`), which smoke-tests it before publishing `flow-<sha>`.
 
-> **Flow runs no workflow from Docs events until the bus is connected.** There is no `ASAFARIM_NATS_URL` here yet: Flow
-> starts, serves its pages and is healthy, and logs once that its subscribers (`flow.subscribers.no_bus`) and its
-> outbox relay (`events.relay.no_bus`) are off. A `#issue` note in Docs starts nothing yet. The bus itself is
-> [the next section](#the-event-bus-os-nats); the follow-up pull request of asafarim-os#259 gives Docs and Flow its
-> address.
+> **Flow runs no workflow from Docs events unless the event bus is deployed.** Without the bus
+> ([the next section](#the-event-bus-os-nats)) `ASAFARIM_NATS_URL` is empty: Flow starts, serves its pages and is
+> healthy, and logs once that its subscribers (`flow.subscribers.no_bus`) and its outbox relay
+> (`events.relay.no_bus`) are off. A `#issue` note in Docs starts nothing then. With the bus, the deploy gives Flow
+> (and Docs and core-api) its address.
 
 **For the owner, in order:**
 
@@ -141,6 +141,12 @@ is **off until the owner commits `core/nats/.env.production.age`**, the same gat
   names `core/nats/.env.production.example` lists (never the values), turns the `nats` profile on next to `core`, and
   waits up to 60 seconds for the bus's `/healthz?js-enabled-only=true`. It publishes nothing on the edge and takes no
   image sha. `deploy/redeploy.sh` needs no change.
+- **The bus's address.** Only when it runs `os-nats` does the deploy set `OS_NATS_URL=nats://os-nats:4222`, which
+  compose hands to `os-core-api` (as `CORE_API_NATS_URL`) and to `os-docs` and `os-flow` (as `ASAFARIM_NATS_URL`). It
+  first checks that core-api's env names its side of the login (`CORE_API_NATS_USER`, `CORE_API_NATS_PASSWORD`,
+  `CORE_API_NATS_ISSUER_SEED`; names only) and stops before pulling if it does not. Without the bus the variable is
+  unset, all three get an **empty** address and run without a bus, exactly as before (`deploy/vps-deploy.test.mjs`
+  and `deploy/compose.prod.test.mjs` prove both cases). The login itself is a secret and stays in `.env.core-api`.
 
 **Who can reach it.** `os-nats` is on `os_core` only, as `os-nats`, and publishes no port: only `os-core-api`, `os-docs`
 and `os-flow` can open a connection, and nothing outside this host can. There is **no TLS**: the traffic never leaves
@@ -161,20 +167,34 @@ with its store on the named volume `os_nats_data`, 128 MB and 0.25 CPU, and a he
 2. **The env file.** On your PC, in the repository: `pnpm env:decrypt:production` (core-api's env must be there), then
    `node deploy/nats/new-env.mjs`. It writes `core/nats/.env.production` (`NATS_AUTH_ISSUER`, the public key, and
    `NATS_CORE_PASSWORD`; mode 600) and adds core-api's side of the same login (`CORE_API_NATS_USER`,
-   `CORE_API_NATS_PASSWORD`, `CORE_API_NATS_ISSUER_SEED`) to `core/core-api/.env.production`. core-api ignores those three
-   until `CORE_API_NATS_URL` is set, which the follow-up pull request does, so adding them changes nothing yet. The script
-   prints only file names, and refuses to overwrite the bus's file or to run when core-api's env already names a
-   `CORE_API_NATS_` variable. Then `pnpm env:encrypt:production` and commit **only** `core/nats/.env.production.age` and
+   `CORE_API_NATS_PASSWORD`, `CORE_API_NATS_ISSUER_SEED`) to `core/core-api/.env.production`. core-api uses those three
+   only when the deploy gives it the bus's address, so a deploy without the bus ignores them. The script prints only
+   file names, and refuses to overwrite the bus's file or to run when core-api's env already names a `CORE_API_NATS_`
+   variable. Then `pnpm env:encrypt:production` and commit **only** `core/nats/.env.production.age` and
    `core/core-api/.env.production.age`, on a branch, and merge them with a pull request. Never commit a decrypted env.
 3. **After the automatic deploy** (identity and core-api run, so it is the full deploy, now with `os-nats`), on the VPS:
    `docker ps --filter name=os-nats --format '{{.Names}} {{.Status}}'` shows the container as `(healthy)`, and
    `docker logs --tail 20 $(docker ps -q --filter name=os-nats)` shows `Server is ready` and no secret. If the deploy
-   stopped at "os-nats did not become ready", the same `docker logs` says why.
+   stopped at "os-nats did not become ready", the same `docker logs` says why. Then:
+   - core-api logs `bus.auth.serving` (it answers the bus's auth callout), and `bus.auth.granted` with `app` `docs` and
+     `flow` once they connect. `bus.auth.refused` names the reason an app was turned away.
+   - Docs and Flow are recreated by the same deploy (their environment changed). Their `events.relay.no_bus`,
+     `flow.subscribers.no_bus` and `events.subscribers.not_started` warnings are gone.
+   - **No reinstall is needed for an app that is already installed** (Docs, Flow). Every start registers the app with
+     core-api, and registration runs the same idempotent steps as install: it creates the app's JetStream stream
+     (`APP_<ID>`) if it publishes events, its consumers for the types it subscribes to, and the consumers of installed
+     subscribers of what it publishes. If the bus is not ready yet, core-api answers `503 bus_unavailable` and the SDK
+     retries with a backoff, so the order apps and bus come up in does not matter. The events Docs wrote to its outbox
+     while there was no bus go out once its relay connects.
+   - The end-to-end proof (a note in Docs reaches Flow; a handler that keeps failing ends in the `DEADLETTER` stream) is
+     the staging check of asafarim-os#259. The same paths already run against the dev bus in CI (the "Event bus
+     integration tests" step).
 4. **Rollback.** To take the bus off without touching the rest: revert the commit that added
    `core/nats/.env.production.age` (a pull request) and let it deploy, then stop the container on the VPS with
    `COMPOSE_PROFILES=core,nats IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback CORE_API_IMAGE_TAG=rollback ADMIN_IMAGE_TAG=rollback FLOW_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml rm -sf os-nats`.
-   The streams on the `os_nats_data` volume stay. Once the follow-up has connected core-api, Docs and Flow, revert that
-   first: they keep retrying a bus that is gone, which only costs log lines.
+   The streams on the `os_nats_data` volume stay. The same deploy takes the address away from core-api, Docs and Flow
+   (`OS_NATS_URL` is unset again), so they go back to running without a bus; nothing else needs reverting. Events Docs
+   publishes meanwhile wait in its outbox.
 
 ## Landing page and docs (identity not running)
 
