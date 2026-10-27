@@ -13,7 +13,9 @@
  *   apps/notes, then admin.spec.ts (the console at http://core.localhost:8080, P3.3b) in core/admin,
  *   then docs.spec.ts (the reader, with Lighthouse) and notes.spec.ts (study notes, #81) in apps/docs →
  *   restart Docs, then the `@after-restart` test: the notes are still in its database →
- *   Flow (build and start; ADR 0001): flow.spec.ts, a #issue note in Docs starts a run through the bus →
+ *   Flow (build and start; ADR 0001), then Docs restarted against local GitHub and Claude mocks
+ *   (apps/flow/e2e/mocks.mjs): flow.spec.ts, slice 1 end to end through the bus (a #issue note, its
+ *   draft, the approval, the issue) →
  *   stop everything. `--down` also removes the dev volumes (CI).
  *   `--screenshots` (`pnpm screenshots`): the same stack, then only core/site's screenshot spec, which
  *   writes the asafarim.site screenshots to core/site/public/screenshots/ (#70).
@@ -38,6 +40,7 @@ import {
   waitForGateway,
 } from "./infra.mjs";
 import { DEV, DEV_DIR, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
+import { startMocks } from "../../apps/flow/e2e/mocks.mjs";
 
 const NOTES_DIR = path.join(ROOT, "apps/notes");
 const DOCS_DIR = path.join(ROOT, "apps/docs");
@@ -54,6 +57,7 @@ const TOKEN_TTL = Number(process.env.E2E_TOKEN_TTL ?? 6);
 // `pnpm screenshots` (#70): the same stack, then core/site's screenshot spec instead of the e2e suites.
 const SCREENSHOTS = process.argv.includes("--screenshots");
 const children = [];
+let mocks;
 
 function start(name, args, cwd = ROOT, env = process.env) {
   const child = spawn(process.execPath, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
@@ -117,10 +121,11 @@ try {
   const docsNext = path.join(DOCS_DIR, "node_modules/next/dist/bin/next");
   const docsBuild = spawnSync(process.execPath, [docsNext, "build"], { cwd: DOCS_DIR, stdio: "inherit" });
   if (docsBuild.status !== 0) throw new Error("next build (docs) failed");
-  const startDocs = async () => {
+  const startDocs = async (extraEnv = {}) => {
     const child = start("docs", [docsNext, "start", "--port", String(DEV.apps.docs)], DOCS_DIR, {
       ...process.env,
       DOCS_SOURCE_DIR: path.join(DOCS_DIR, "fixtures"),
+      ...extraEnv,
     });
     await waitFor(`${DOCS_URL}/api/health`);
     return child;
@@ -178,14 +183,16 @@ try {
     }).status ?? 1;
   const results = runs.map((r) => run(r));
   if (!SCREENSHOTS) {
-    // Study notes survive a restart (#81): stop Docs, start it again, and look for them.
-    console.log(bold("Restarting Docs…"));
-    if (docs.exitCode === null) {
+    const stopDocs = async () => {
+      if (docs.exitCode !== null) return;
       await new Promise((resolve) => {
         docs.once("exit", resolve);
         docs.kill();
       });
-    }
+    };
+    // Study notes survive a restart (#81): stop Docs, start it again, and look for them.
+    console.log(bold("Restarting Docs…"));
+    await stopDocs();
     docs = await startDocs();
     // Its own output and report folders: Playwright empties the ones it writes to, and the first
     // run's screenshots, Lighthouse scores and report must stay.
@@ -195,8 +202,18 @@ try {
         PLAYWRIGHT_HTML_OUTPUT_DIR: "playwright-report/after-restart",
       }),
     );
-    // Last: it writes notes in Docs, which the Docs suites don't expect.
-    results.push(run(["@asafarim/flow", "e2e"]));
+    // Last: it writes notes in Docs, which the Docs suites don't expect. Docs drafts and creates
+    // issues there, against local mocks of GitHub and Claude (never the real ones; fake credentials).
+    mocks = await startMocks();
+    console.log(bold("Restarting Docs against the GitHub and Claude mocks…"));
+    await stopDocs();
+    docs = await startDocs({
+      DOCS_ISSUES_TOKEN: "e2e-not-a-token",
+      DOCS_AI_API_KEY: "e2e-not-a-key",
+      DOCS_E2E_GITHUB_API_URL: mocks.githubUrl,
+      DOCS_E2E_AI_API_URL: mocks.aiUrl,
+    });
+    results.push(run(["@asafarim/flow", "e2e"], { ...e2eEnv, E2E_GITHUB_MOCK_URL: mocks.githubUrl }));
   }
   exitCode = results.find((code) => code !== 0) ?? 0;
   const label = SCREENSHOTS ? "screenshots" : "e2e";
@@ -205,6 +222,7 @@ try {
   console.error(red(`\ne2e setup FAILED: ${err.message}`));
 } finally {
   for (const c of children) c.kill();
+  mocks?.stop();
   stopExternalApp();
   if (process.argv.includes("--down")) compose("down", "--volumes", "--remove-orphans");
 }
