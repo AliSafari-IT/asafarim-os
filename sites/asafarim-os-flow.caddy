@@ -1,0 +1,23 @@
+# Flow (flow.asafarim.site): a Next.js server at os-flow:3000 (apps/flow). NOT a site file of its own: the full deploy
+# (deploy/vps-deploy.sh) appends this block to sites/asafarim-os.caddy, and publishes the result under the same edge
+# site name (asafarim-os), ONLY when the commit has apps/flow/.env.production.age and os-flow is running and ready.
+# Without that file the published site file is sites/asafarim-os.caddy, byte for byte: a Caddy site for a host with
+# no container would only turn a TLS error into a 502.
+#
+# Private: every page but /health/live and /health/ready asks for a sign-in. No Content-Security-Policy here for the
+# same reason as docs: Next's pages need their inline scripts, and `defer` makes the edge's values replace the
+# upstream's instead of sending each header twice.
+flow.asafarim.site {
+  header {
+    defer
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options nosniff
+    # Run and approval paths are private: never leak them in a Referer.
+    Referrer-Policy no-referrer
+    X-Frame-Options DENY
+    X-Robots-Tag "noindex, nofollow"
+    -Server
+    -X-Powered-By
+  }
+  reverse_proxy os-flow:3000
+}

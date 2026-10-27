@@ -5,7 +5,7 @@
 //   node --test deploy/vps-deploy.test.mjs          (needs bash)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -22,6 +22,7 @@ const realExample = path.join(root, "core", "identity", ".env.production.example
 const docsExample = path.join(root, "apps", "docs", ".env.production.example");
 const coreApiExample = path.join(root, "core", "core-api", ".env.production.example");
 const adminExample = path.join(root, "core", "admin", ".env.production.example");
+const flowExample = path.join(root, "apps", "flow", ".env.production.example");
 
 /** Run require_env_vars on two fixture files; returns { status, output } with stdout and stderr together. */
 function check(envText, exampleText) {
@@ -330,6 +331,8 @@ function runDeploy(
     coreApiEnvEmpty = false,
     adminEnv = false,
     adminEnvEmpty = false,
+    flowEnv = false,
+    flowEnvEmpty = false,
     pullFails = 0,
     pullAttempts = "",
   } = {},
@@ -349,10 +352,12 @@ function runDeploy(
       "deploy/compose.prod.yml",
       "sites/asafarim-os.caddy",
       "sites/asafarim-os-site.caddy",
+      "sites/asafarim-os-flow.caddy",
       "core/identity/.env.production.example",
       "apps/docs/.env.production.example",
       "core/core-api/.env.production.example",
       "core/admin/.env.production.example",
+      "apps/flow/.env.production.example",
     ]) {
       cpSync(path.join(root, file), path.join(repo, file), { recursive: true });
     }
@@ -367,6 +372,7 @@ function runDeploy(
     }
     if (coreApiEnv) writeFileSync(path.join(repo, "core/core-api/.env.production.age"), "stand-in ciphertext\n");
     if (adminEnv) writeFileSync(path.join(repo, "core/admin/.env.production.age"), "stand-in ciphertext\n");
+    if (flowEnv) writeFileSync(path.join(repo, "apps/flow/.env.production.age"), "stand-in ciphertext\n");
     const fill = (example) =>
       readFileSync(example, "utf8")
         .match(/^[A-Z][A-Z0-9_]*(?==)/gm)
@@ -383,6 +389,9 @@ function runDeploy(
       `elif [[ "$*" == *core/admin/* ]]; then`,
       `  [[ -n "$ADMIN_ENV_EMPTY" ]] && exit 0`,
       fill(adminExample),
+      `elif [[ "$*" == *apps/flow/* ]]; then`,
+      `  [[ -n "$FLOW_ENV_EMPTY" ]] && exit 0`,
+      fill(flowExample),
       `else`,
       fill(realExample),
       `fi`,
@@ -438,6 +447,7 @@ function runDeploy(
         DOCS_ENV_EMPTY: docsEnvEmpty ? "1" : "",
         CORE_API_ENV_EMPTY: coreApiEnvEmpty ? "1" : "",
         ADMIN_ENV_EMPTY: adminEnvEmpty ? "1" : "",
+        FLOW_ENV_EMPTY: flowEnvEmpty ? "1" : "",
         PULL_FAILS: String(pullFails),
         PULL_COUNT: path.join(dir, "pull-count"),
         DEPLOY_PULL_RETRY_DELAY: "0",
@@ -453,6 +463,10 @@ function runDeploy(
       envDocsWritten: existsSync(path.join(repo, ".env.docs")),
       envCoreApiWritten: existsSync(path.join(repo, ".env.core-api")),
       envAdminWritten: existsSync(path.join(repo, ".env.admin")),
+      envFlowWritten: existsSync(path.join(repo, ".env.flow")),
+      generatedSite: existsSync(path.join(repo, ".vps-deploy-site.caddy"))
+        ? readFileSync(path.join(repo, ".vps-deploy-site.caddy"), "utf8")
+        : null,
       liveSite: existsSync(liveSite) ? readFileSync(liveSite, "utf8") : null,
       repo,
     };
@@ -519,7 +533,7 @@ test("--site-only takes at most three shas, each a full sha", () => {
     runDeploy(["--site-only", SHA, SITE_SHA, "abc"]).stderr,
     /<docs-image-commit> must be a full 40-character sha/,
   );
-  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, SHA], { full: true }).stderr, /usage:/);
+  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, SHA, SHA], { full: true }).stderr, /usage:/);
   assert.match(
     runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, "abc"], { full: true }).stderr,
     /<core-api-image-commit> must be a full 40-character sha/,
@@ -828,5 +842,206 @@ test("DEPLOY_PULL_ATTEMPTS sets the number of tries, and a bad value stops befor
     assert.equal(r.status, 1);
     assert.match(r.stderr, /DEPLOY_PULL_ATTEMPTS must be a whole number of at least 1/);
     assert.ok(!r.calls.some((c) => c.startsWith("git reset")), r.calls.join("\n"));
+  }
+});
+
+// Flow (flow.asafarim.site): part of the full deploy next to core-api, once apps/flow/.env.production.age is committed.
+// Without it, a deploy must be EXACTLY what it was: the same commands, the same site file, byte for byte.
+const FLOW_SHA = "e".repeat(40);
+const fullSite = readFileSync(path.join(root, "sites", "asafarim-os.caddy"), "utf8");
+const flowSite = readFileSync(path.join(root, "sites", "asafarim-os-flow.caddy"), "utf8");
+
+test("without apps/flow/.env.production.age: no Flow env, no flow profile, os-flow never touched, the site file unchanged", () => {
+  for (const [args, opts] of [
+    [[SHA, SHA, SITE_SHA, DOCS_SHA], { full: true }],
+    [[SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], { full: true, coreApiEnv: true }],
+    [[SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA], { full: true, coreApiEnv: true, adminEnv: true }],
+    [[SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, FLOW_SHA], { full: true, coreApiEnv: true }],
+  ]) {
+    const r = runDeploy(args, opts);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!r.calls.some((c) => c.includes("apps/flow") || c.includes("os-flow")), r.calls.join("\n"));
+    assert.ok(!r.calls.some((c) => /^profiles=\S*flow/.test(c)), "the flow profile is off");
+    assert.equal(r.envFlowWritten, false);
+    assert.equal(r.generatedSite, null, "no generated site file");
+    assert.ok(
+      r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os.caddy`),
+      r.calls.join("\n"),
+    );
+    assert.equal(r.liveSite, fullSite, "the live Caddy gets sites/asafarim-os.caddy, byte for byte");
+    assert.doesNotMatch(r.liveSite ?? "", /flow\.asafarim\.site/);
+  }
+});
+
+test("without apps/flow/.env.production.age: the compose commands are exactly those of the deploy before Flow", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA], { full: true, coreApiEnv: true, adminEnv: true });
+  assert.equal(r.status, 0, r.stderr);
+  const profiled = r.calls
+    .filter((c) => c.startsWith("profiles=core,admin "))
+    .map((c) => c.slice("profiles=core,admin ".length).replace(`${compose.slice("docker ".length)} `, ""));
+  assert.deepEqual(profiled, [
+    "config -q",
+    "pull",
+    "up -d --remove-orphans",
+    "exec -T identity wget -qO- http://127.0.0.1:3000/readyz",
+    "exec -T os-core-api wget -qO- http://127.0.0.1:4020/readyz",
+    "exec -T os-admin wget -qO- http://127.0.0.1:3000/api/health",
+    "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T breinhap-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T igs-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
+  ]);
+});
+
+test("with apps/flow/.env.production.age: decrypts and checks it, starts the flow profile, waits for os-flow, then publishes flow.asafarim.site", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, FLOW_SHA], {
+    full: true,
+    coreApiEnv: true,
+    flowEnv: true,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.calls.includes("age -d -i .age/key.txt apps/flow/.env.production.age"));
+  assert.equal(r.envFlowWritten, true, ".env.flow is os-flow's env_file");
+  const profiled = r.calls
+    .filter((c) => c.startsWith("profiles=core,flow "))
+    .map((c) => c.slice("profiles=core,flow ".length).replace(`${compose.slice("docker ".length)} `, ""));
+  assert.deepEqual(profiled, [
+    "config -q",
+    "pull",
+    "up -d --remove-orphans",
+    "exec -T identity wget -qO- http://127.0.0.1:3000/readyz",
+    "exec -T os-core-api wget -qO- http://127.0.0.1:4020/readyz",
+    "exec -T os-flow wget -qO- http://127.0.0.1:3000/health/ready",
+    "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T breinhap-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T igs-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
+  ]);
+  assert.match(r.stdout, new RegExp(`:flow-${FLOW_SHA}`), "the pull names the flow image");
+  const flowReadyAt = r.calls.findIndex((c) =>
+    c.endsWith("exec -T os-flow wget -qO- http://127.0.0.1:3000/health/ready"),
+  );
+  const edgeAt = r.calls.findIndex((c) => c.startsWith("edge-deploy-site.sh"));
+  assert.ok(flowReadyAt >= 0 && edgeAt > flowReadyAt, r.calls.join("\n"));
+  // The published file: the full site file with the Flow block appended, under the same edge site name.
+  assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/.vps-deploy-site.caddy`), r.calls.join("\n"));
+  assert.equal(r.generatedSite, fullSite + flowSite);
+  assert.equal(r.liveSite, fullSite + flowSite, "the live Caddy gets the same file");
+  assert.match(r.stdout, /curl -fsS https:\/\/flow\.asafarim\.site\/health\/live/);
+});
+
+test("with the Admin console and Flow: both profiles on top of core", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, FLOW_SHA], {
+    full: true,
+    coreApiEnv: true,
+    adminEnv: true,
+    flowEnv: true,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(
+    r.calls.some((c) => c.startsWith("profiles=core,admin,flow ")),
+    r.calls.join("\n"),
+  );
+  assert.equal(r.generatedSite, fullSite + flowSite);
+});
+
+test("a Flow env with a variable missing stops the deploy before pulling, naming it and never a value", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, FLOW_SHA], {
+    full: true,
+    coreApiEnv: true,
+    flowEnv: true,
+    flowEnvEmpty: true,
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /missing or empty in \.env\.flow: AUTH_SECRET OIDC_CLIENT_SECRET/);
+  assert.match(r.stderr, /node deploy\/flow\/new-env\.mjs/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c) || c.startsWith("edge-deploy-site.sh")), r.calls.join("\n"));
+});
+
+test("the Flow env without core-api's is refused before anything is pulled: Flow needs core-api", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, FLOW_SHA], { full: true, flowEnv: true });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Flow needs core-api/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c)));
+  assert.equal(r.envFlowWritten, false);
+});
+
+test("--site-only never touches Flow, even when its env is committed", () => {
+  const r = runDeploy(["--site-only", SHA], { coreApiEnv: true, flowEnv: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!r.calls.some((c) => c.includes("apps/flow") || c.includes("os-flow")), r.calls.join("\n"));
+  assert.equal(r.envFlowWritten, false);
+  assert.equal(r.generatedSite, null);
+  assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os-site.caddy`));
+});
+
+test("<flow-image-commit> is a seventh, optional sha, checked like the others; an eighth is refused", () => {
+  assert.match(
+    runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, "abc"], { full: true }).stderr,
+    /<flow-image-commit> must be a full 40-character sha/,
+  );
+  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, SHA, SHA], { full: true }).stderr, /usage:/);
+  assert.match(code, /export FLOW_IMAGE_TAG="\$flow_image_commit"/);
+  assert.ok(code.indexOf("export FLOW_IMAGE_TAG") < code.indexOf('"${compose[@]}" config -q'));
+});
+
+test("the Flow example requires AUTH_SECRET and OIDC_CLIENT_SECRET; the install's two are listed commented out", () => {
+  const text = readFileSync(flowExample, "utf8");
+  assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), ["AUTH_SECRET", "OIDC_CLIENT_SECRET"]);
+  assert.match(text, /^# DATABASE_URL=$/m);
+  assert.match(text, /^# ASAFARIM_REGISTRY_CREDENTIAL=$/m);
+  assert.doesNotMatch(text, /^(# )?ASAFARIM_NATS_URL=/m, "production has no bus: Flow's env names none");
+});
+
+test("deploy/flow/new-env.mjs fills the Flow example, gives identity the same client secret, and overwrites nothing", async () => {
+  const { newEnv, writeEnv, IDENTITY_SECRET_NAME } = await import("./flow/new-env.mjs");
+  const parse = (text) =>
+    Object.fromEntries(
+      text
+        .split("\n")
+        .filter((l) => /^[A-Z]/.test(l))
+        .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
+    );
+  const generated = newEnv();
+  assert.equal(check(generated.flow, readFileSync(flowExample, "utf8")).status, 0);
+  assert.equal(parse(generated.identity)[IDENTITY_SECRET_NAME], parse(generated.flow).OIDC_CLIENT_SECRET);
+  assert.ok(parse(generated.flow).AUTH_SECRET.length >= 32);
+  assert.notEqual(newEnv().flow, generated.flow, "every run is new");
+
+  const dir = mkdtempSync(path.join(tmpdir(), "flow-new-env-"));
+  try {
+    const flowFile = path.join(dir, "flow.env");
+    const identityFile = path.join(dir, "identity.env");
+    // identity's env not decrypted: nothing is written.
+    assert.match(writeEnv({ flowFile, identityFile }), /pnpm env:decrypt:production/);
+    assert.equal(existsSync(flowFile), false);
+    writeFileSync(identityFile, "IDENTITY_OIDC_JWKS=stand-in");
+    assert.equal(writeEnv({ flowFile, identityFile }), undefined);
+    const flowEnv = parse(readFileSync(flowFile, "utf8"));
+    const identityEnv = parse(readFileSync(identityFile, "utf8"));
+    assert.equal(identityEnv.IDENTITY_OIDC_JWKS, "stand-in", "identity's own lines are kept");
+    assert.equal(identityEnv[IDENTITY_SECRET_NAME], flowEnv.OIDC_CLIENT_SECRET);
+    assert.equal(statSync(flowFile).mode & 0o777, 0o600);
+    // A second run changes nothing: identity already names the secret.
+    const before = [readFileSync(flowFile, "utf8"), readFileSync(identityFile, "utf8")];
+    assert.match(writeEnv({ flowFile, identityFile }), new RegExp(`already has ${IDENTITY_SECRET_NAME}`));
+    rmSync(flowFile);
+    assert.match(writeEnv({ flowFile, identityFile }), /already has/);
+    assert.equal(existsSync(flowFile), false);
+    // An existing Flow env is never overwritten, and identity's then stays as it was.
+    writeFileSync(flowFile, before[0]);
+    writeFileSync(identityFile, "IDENTITY_OIDC_JWKS=stand-in\n");
+    assert.match(writeEnv({ flowFile, identityFile }), /already exists: not overwriting it/);
+    assert.equal(readFileSync(flowFile, "utf8"), before[0]);
+    assert.equal(readFileSync(identityFile, "utf8"), "IDENTITY_OIDC_JWKS=stand-in\n");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deploy/flow/new-env.mjs prints file names, never a value", () => {
+  const source = readFileSync(path.join(root, "deploy", "flow", "new-env.mjs"), "utf8");
+  for (const m of source.matchAll(/console\.(log|error)\(([\s\S]*?)\);/g)) {
+    assert.doesNotMatch(m[2], /\benv\.(flow|identity)\b|secret\(|clientSecret/, `it must not print a value: ${m[2]}`);
   }
 });

@@ -364,6 +364,69 @@ test("identity running, no core-api env in the commit: four shas, as before", ()
     assert.ok(!r.calls.some((c) => c.includes(":core-api-")));
   }));
 
+/** Flow: c9 adds its encrypted env and c10 changes it, on top of the core-api commits (and the Admin console's if asked). */
+function withFlow(env, { admin = false } = {}) {
+  const base = admin ? withAdmin(env) : withCoreApi(env);
+  const c9 = commit(env.src, "flow env", { "apps/flow/.env.production.age": "stand-in ciphertext" });
+  const c10 = commit(env.src, "flow", { "apps/flow/app/x.ts": "f1" });
+  git(env.src, "push", "-q", "--force", env.origin, `${c10}:refs/heads/main`);
+  return { ...base, c9, c10, published: `${base.published} flow-${c10}` };
+}
+
+test("Flow's env committed next to core-api: its newest image is checked and passed as the seventh sha (the sixth a placeholder)", () =>
+  withSetup((env) => {
+    const e = { ...withFlow(env), identityRunning: "abc123" };
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.match(r.output, new RegExp(`Newest flow image from: ${e.c10}`));
+    assert.ok(r.calls.includes(`docker manifest inspect ghcr.io/alisafari-it/asafarim-os:flow-${e.c10}`));
+    assert.ok(!r.calls.some((c) => c.includes(":admin-")), "no Admin console: no admin image is looked up");
+    assert.equal(
+      r.calls.at(-1),
+      `vps-deploy ${e.c10} ${env.c4} ${env.c1} ${env.c2} ${e.c6} ${e.c10} ${e.c10} (HEAD ${e.c10})`,
+    );
+  }));
+
+test("Flow and the Admin console: the admin image is the sixth sha, Flow's the seventh", () =>
+  withSetup((env) => {
+    const e = { ...withFlow(env, { admin: true }), identityRunning: "abc123" };
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.equal(
+      r.calls.at(-1),
+      `vps-deploy ${e.c10} ${env.c4} ${env.c1} ${env.c2} ${e.c6} ${e.c8} ${e.c10} (HEAD ${e.c10})`,
+    );
+  }));
+
+test("Flow's newest image not published yet: exit code 3, naming the 'Flow image' workflow, nothing changed", () =>
+  withSetup((env) => {
+    const base = withFlow(env);
+    const r = run({ ...base, identityRunning: "abc123", published: base.published.replace(` flow-${base.c10}`, "") });
+    assert.equal(r.status, 3, r.output);
+    assert.match(r.output, new RegExp(`flow-${base.c10} is not published \\(yet\\)`));
+    assert.match(r.output, /'Flow image' workflow/);
+    assert.ok(!r.calls.some((c) => c.startsWith("vps-deploy")));
+    assert.equal(r.head, env.c0);
+  }));
+
+test("without apps/flow/.env.production.age: no flow image is looked up, and the shas are those of before", () =>
+  withSetup((env) => {
+    const e = { ...withAdmin(env), identityRunning: "abc123" };
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.ok(!r.calls.some((c) => c.includes(":flow-")));
+    assert.doesNotMatch(r.output, /Flow is part of this deploy/);
+    assert.equal(r.calls.at(-1), `vps-deploy ${e.c8} ${env.c4} ${env.c1} ${env.c2} ${e.c6} ${e.c8} (HEAD ${e.c8})`);
+  }));
+
+test("site-only (identity not running): Flow is never looked up, even with its env committed", () =>
+  withSetup((env) => {
+    const r = run(withFlow(env));
+    assert.equal(r.status, 0, r.output);
+    assert.match(r.calls.at(-1), /^vps-deploy --site-only /);
+    assert.ok(!r.calls.some((c) => c.includes(":flow-")));
+  }));
+
 test("it is valid bash, runs main() on one last line, and never prints a secret", () => {
   const r = spawnSync("bash", ["-n", path.join(root, "deploy", "redeploy.sh")], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
@@ -378,6 +441,7 @@ for (const [name, variable] of [
   ["identity", "IDENTITY_IMAGE_PATHS"],
   ["core-api", "CORE_API_IMAGE_PATHS"],
   ["admin", "ADMIN_IMAGE_PATHS"],
+  ["flow", "FLOW_IMAGE_PATHS"],
 ]) {
   test(`its list of the ${name} image's inputs is the one in .github/workflows/${name}-image.yml`, () => {
     const workflow = readFileSync(path.join(root, ".github", "workflows", `${name}-image.yml`), "utf8");

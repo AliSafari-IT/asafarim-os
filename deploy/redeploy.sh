@@ -41,6 +41,11 @@
 # The Admin console (#175): next to core-api, once the commit also has core/admin/.env.production.age,
 # <admin-image-commit> is found the same way (the paths of .github/workflows/admin-image.yml), its image must be
 # published too, and it is passed as vps-deploy.sh's sixth sha (which then starts os-admin).
+#
+# Flow: next to core-api, once the commit also has apps/flow/.env.production.age, <flow-image-commit> is found the same
+# way (the paths of .github/workflows/flow-image.yml), its image must be published too, and it is passed as
+# vps-deploy.sh's seventh sha (which then starts os-flow and publishes flow.asafarim.site). Without the Admin console
+# the sixth sha is <commit> then, a placeholder vps-deploy.sh never uses. Without that file nothing changes.
 # It holds no secret and prints none. Rollback: deploy/README.md.
 set -euo pipefail
 
@@ -54,6 +59,8 @@ IDENTITY_IMAGE_PATHS=("core/identity/**" "packages/**" "package.json" "pnpm-lock
 CORE_API_IMAGE_PATHS=("core/core-api/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/core-api-image.yml")
 # The inputs of the admin image: the same list as `on.push.paths` in .github/workflows/admin-image.yml.
 ADMIN_IMAGE_PATHS=("core/admin/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/admin-image.yml")
+# The inputs of the flow image: the same list as `on.push.paths` in .github/workflows/flow-image.yml.
+FLOW_IMAGE_PATHS=("apps/flow/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/flow-image.yml")
 IMAGE_REPO="${REDEPLOY_IMAGE_REPO:-ghcr.io/alisafari-it/asafarim-os}"
 
 # Everything lives in main(), called on ONE line at the very end: the reset in step 4 can replace this very file
@@ -144,12 +151,21 @@ main() {
     log "The Admin console is part of this deploy. Newest admin image from: ${admin_commit}"
   fi
 
+  # Flow: part of the deploy next to core-api, once its encrypted env is committed (vps-deploy.sh decides the same way).
+  local flow_commit=""
+  if [[ -n "$core_api_commit" ]] && git cat-file -e "${commit}:apps/flow/.env.production.age" 2>/dev/null; then
+    flow_commit="$(git log -1 --format=%H "$commit" -- "${FLOW_IMAGE_PATHS[@]}")"
+    [[ "$flow_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "no commit on origin/main changed the flow image's inputs."
+    log "Flow is part of this deploy. Newest flow image from: ${flow_commit}"
+  fi
+
   # 3. Never deploy an older image than the newest one, quietly.
   local image workflow sha
   local -a images=("${IMAGE_REPO}:site-${site_commit}" "${IMAGE_REPO}:docs-${docs_commit}")
   [[ "$full" == true ]] && images+=("${IMAGE_REPO}:identity-${identity_commit}")
   [[ -n "$core_api_commit" ]] && images+=("${IMAGE_REPO}:core-api-${core_api_commit}")
   [[ -n "$admin_commit" ]] && images+=("${IMAGE_REPO}:admin-${admin_commit}")
+  [[ -n "$flow_commit" ]] && images+=("${IMAGE_REPO}:flow-${flow_commit}")
   for image in "${images[@]}"; do
     sha="${image##*-}"
     workflow="Site image"
@@ -157,6 +173,7 @@ main() {
     [[ "${image##*:}" == identity-* ]] && workflow="Identity image"
     [[ "${image##*:}" == core-api-* ]] && workflow="Core API image"
     [[ "${image##*:}" == admin-* ]] && workflow="Admin image"
+    [[ "${image##*:}" == flow-* ]] && workflow="Flow image"
     if ! docker manifest inspect "$image" >/dev/null 2>&1; then
       # Exit code 3, not 1: "not published (yet)" is the one failure the Deploy workflow waits out.
       echo "FATAL: ${image} is not published (yet). The '${workflow}' workflow may still be building it: check its run for ${sha:0:12} on GitHub, then run this again. If it failed there, fix that first. (If the build is done, the VPS may not be able to reach ghcr.io: run 'docker login ghcr.io' if the package is private.) Nothing changed." >&2
@@ -169,6 +186,11 @@ main() {
   [[ "$full" == true ]] && deploy_args=("$commit" "$identity_commit" "$site_commit" "$docs_commit")
   [[ -n "$core_api_commit" ]] && deploy_args+=("$core_api_commit")
   [[ -n "$admin_commit" ]] && deploy_args+=("$admin_commit")
+  # Flow's sha is the seventh: without the Admin console, the sixth is a placeholder vps-deploy.sh never uses.
+  if [[ -n "$flow_commit" ]]; then
+    [[ -n "$admin_commit" ]] || deploy_args+=("$commit")
+    deploy_args+=("$flow_commit")
+  fi
   if [[ "$dry_run" == true ]]; then
     log "Dry run. It would run: deploy/vps-deploy.sh ${deploy_args[*]}"
     exit 0

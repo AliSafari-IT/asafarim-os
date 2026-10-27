@@ -21,6 +21,9 @@ holds a plaintext secret.
 | `sites/asafarim-os.caddy`       | This stack's site file: `id.asafarim.site` → `os-identity:3000`, `asafarim.site` → `os-site:8080`, `docs.asafarim.site` → `os-docs:3000`. |
 | `sites/asafarim-os-site.caddy`  | The site-only file (`--site-only`): `asafarim.site` → `os-site:8080`, `docs.asafarim.site` → `os-docs:3000`, no `id.asafarim.site`.       |
 | `apps/docs/.env.production.age` | `os-docs`'s secrets, encrypted (today `AUTH_SECRET` only). Decrypted on the VPS into `.env.docs` (mode 600, git-ignored).                 |
+| `sites/asafarim-os-flow.caddy`  | `flow.asafarim.site` → `os-flow:3000`. Appended to the full site file **only** by a deploy with Flow ([below](#flowasafarimsite)).        |
+| `apps/flow/.env.production.age` | **Not committed yet.** `os-flow`'s secrets; committing it is what turns Flow on. Decrypted on the VPS into `.env.flow`.                   |
+| `deploy/flow/new-env.mjs`       | Writes `apps/flow/.env.production` (and identity's `IDENTITY_CLIENT_SECRET_FLOW`) with generated secrets.                                 |
 | `deploy/identity/clients.json`  | **Not in git.** The client config you put there (below).                                                                                  |
 
 ## docs.asafarim.site
@@ -51,6 +54,73 @@ name resolves.
 **Image.** The "Docs image" workflow builds `apps/docs/Dockerfile` (a Next.js standalone server, non-root, read-only
 root) when `apps/docs`, `packages` or the lockfile change, and publishes `ghcr.io/alisafari-it/asafarim-os:docs-<sha>`.
 Its build fails if any fixture text is in it.
+
+## flow.asafarim.site
+
+`os-flow` runs Flow (`apps/flow`): workflows across the OS apps, through events only. It is **off until the owner
+commits `apps/flow/.env.production.age`**, the same gate as core-api's (asafarim-docs ADR 0001 Addendum I):
+
+- **Without that file** a deploy is exactly what it was before: no `.env.flow`, no `flow` profile, no `os-flow`
+  container, and the edge gets `sites/asafarim-os.caddy` byte for byte, with no `flow.asafarim.site` (a Caddy site for
+  a host with no container would only turn today's TLS error into a 502). `deploy/vps-deploy.test.mjs` ("without
+  apps/flow/.env.production.age: ...") proves it.
+- **With it**, the full deploy (never `--site-only`) also needs core-api's env, decrypts it into `.env.flow`, checks
+  the names `apps/flow/.env.production.example` lists (never the values), turns the `flow` profile on next to `core`,
+  waits up to 60 seconds for `os-flow`'s `/health/ready`, and only then publishes `sites/asafarim-os.caddy` with
+  `sites/asafarim-os-flow.caddy` appended (written to `.vps-deploy-site.caddy`, git-ignored). The edge's Caddy gets
+  the certificate by itself. `deploy/redeploy.sh` (and so the automatic deploy) then also picks the newest "Flow
+  image" and waits for it like the others.
+
+`os-flow` is hardened like `os-docs` (read-only root, no capabilities, the `node` user, the manifest's 192 MB and
+0.5 CPU, a healthcheck on `/health/live`), on `edge_net` as `os-flow` and on `os_core` with
+`CORE_API_URL=http://os-core-api:4020`. Its database is on `os-postgres`, created by core-api's install like every
+app's, never the platform's Postgres. `docs.url` is `https://docs.asafarim.site`. The image comes from the "Flow
+image" workflow (`apps/flow/Dockerfile`), which smoke-tests it before publishing `flow-<sha>`.
+
+> **Flow runs no workflow from Docs events until NATS is in production.** There is no `ASAFARIM_NATS_URL` here: Flow
+> starts, serves its pages and is healthy, and logs once that its subscribers (`flow.subscribers.no_bus`) and its
+> outbox relay (`events.relay.no_bus`) are off. A `#issue` note in Docs starts nothing yet.
+
+**For the owner, in order:**
+
+1. **DNS.** `flow.asafarim.site` already resolves to the VPS; confirm it: `dig +short flow.asafarim.site` answers the
+   same address as `dig +short asafarim.site`.
+2. **The env file.** On your PC, in the repository: `pnpm env:decrypt:production` (identity's env must be there),
+   then `node deploy/flow/new-env.mjs`. It writes `apps/flow/.env.production` (`AUTH_SECRET` and `OIDC_CLIENT_SECRET`,
+   generated; mode 600), adds the same client secret to `core/identity/.env.production` as
+   `IDENTITY_CLIENT_SECRET_FLOW`, prints only file names, and refuses to overwrite either. Then
+   `pnpm env:encrypt:production` and commit **only** `apps/flow/.env.production.age` and
+   `core/identity/.env.production.age`, on a branch, and merge them with a pull request. Never commit a decrypted env.
+3. **The identity client.** Before merging, add the `flow` client to the VPS's `deploy/identity/clients.json` (not in
+   git). Its secret is the `IDENTITY_CLIENT_SECRET_FLOW` of step 2, shared through identity's encrypted env:
+   ```json
+   {
+     "client_id": "flow",
+     "primary_domain": "flow.asafarim.site",
+     "redirect_uris": ["https://flow.asafarim.site/api/auth/callback/asafarim"],
+     "post_logout_redirect_uris": ["https://flow.asafarim.site/"],
+     "client_secret_env": "IDENTITY_CLIENT_SECRET_FLOW"
+   }
+   ```
+4. **After the automatic deploy** (identity and core-api run, so it is the full deploy, now with `os-flow`), on the VPS
+   in `/var/repos/asafarim-os`:
+   1. `deploy/core-api/admin.sh install flow`: it writes Flow's one-time credential and database URL to
+      `.env.core-api-install-flow` (mode 600), never to the screen.
+   2. Copy that file's two lines (`ASAFARIM_REGISTRY_CREDENTIAL`, `DATABASE_URL`) into `apps/flow/.env.production`
+      (`pnpm env:decrypt:production` first), uncomment both names in `apps/flow/.env.production.example`,
+      `pnpm env:encrypt:production`, and merge the `.age` file and the example with a pull request. The deploy
+      restarts `os-flow` with them: it migrates its database and seeds its workflow.
+   3. `deploy/core-api/admin.sh activate flow`. Flow registers on its next start (it retries), which creates its roles.
+   4. `deploy/core-api/admin.sh grant flow.owner <account id>` (your id is on <https://id.asafarim.site/account>), or
+      grant it in the Admin console. Permissions are cached for up to 60 seconds.
+5. **Check:** `curl -fsS https://flow.asafarim.site/health/live` answers `{"ok":true,"app":"flow"}`; signing in at
+   <https://flow.asafarim.site> shows the Overview.
+6. **Rollback.** To take Flow off without touching the rest: revert the commit that added
+   `apps/flow/.env.production.age` (a pull request) and let it deploy: the site file loses `flow.asafarim.site`, then
+   stop the container on the VPS with
+   `COMPOSE_PROFILES=core,flow IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback CORE_API_IMAGE_TAG=rollback ADMIN_IMAGE_TAG=rollback FLOW_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml rm -sf os-flow`.
+   Flow's database on `os-postgres` stays. To run an **earlier Flow image** instead, deploy by hand with that image's
+   commit as `vps-deploy.sh`'s seventh sha.
 
 ## Landing page and docs (identity not running)
 
@@ -251,10 +321,10 @@ its main that touches `apps/site`. It runs exactly like `breinhap-site` (same li
 ## Networks: who can reach what
 
 - **`edge_net`** (shared by every stack): `identity` under the unique alias **`os-identity`**, `os-site` (alias
-  **`os-site`**, on no other network), `os-docs` (alias **`os-docs`**), `breinhap-site` (alias **`breinhap-site`**, on
+  **`os-site`**, on no other network), `os-docs` (alias **`os-docs`**), `os-flow` (alias **`os-flow`**, only once Flow is deployed), `breinhap-site` (alias **`breinhap-site`**, on
   no other network) and `igs-site` (alias **`igs-site`**, on no other network). The edge's Caddy reaches them there. Redis,
   core-api and its Postgres are never on it.
-- **`os_core`**: `os-core-api`, `os-postgres` and `os-docs` (the apps core-api serves). identity and `os-redis` are not
+- **`os_core`**: `os-core-api`, `os-postgres`, `os-docs` and `os-flow` (the apps core-api serves). identity and `os-redis` are not
   on it.
 - **`identity_db`**: `identity` and the platform's Postgres (alias `platform-postgres`), nothing else. Identity reads
   the platform database as the read-only `identity_ro` role. asafarim-platform's deploy creates this network.
@@ -343,10 +413,11 @@ Afterwards: `curl -fsS https://id.asafarim.site/.well-known/openid-configuration
    ```
 2. Stop the stack. The tag only has to be non-empty here; `down` does not pull anything:
    ```bash
-   COMPOSE_PROFILES=core IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback CORE_API_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml down
+   COMPOSE_PROFILES=core IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback CORE_API_IMAGE_TAG=rollback ADMIN_IMAGE_TAG=rollback FLOW_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml down
    ```
    `COMPOSE_PROFILES=core` also stops `os-core-api` and `os-postgres` when they run (it needs `.env.core-api` to exist,
-   which it does once core-api has been deployed; without core-api, leave `COMPOSE_PROFILES=core` out).
+   which it does once core-api has been deployed; without core-api, leave `COMPOSE_PROFILES=core` out). Make it
+   `core,admin` and/or `core,flow` when the Admin console or Flow runs (each needs its `.env.admin` / `.env.flow`).
 3. **The volumes stay** (do not add `-v`): Redis's data in `os_redis_data`, the OS's Postgres in `os_pg_data` and
    core-api's backups in `os_core_api_backups` are kept, and `.env.identity`, `.env.docs` and `.env.core-api` stay on
    disk (mode 600; delete them yourself if you want them gone).
