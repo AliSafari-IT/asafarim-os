@@ -32,7 +32,7 @@ export default async function RunPage({
   const { error, permission } = await searchParams;
   const found = RUN_ID.test(id) ? await getRun(await db(), id) : undefined;
   if (!found) notFound();
-  const { run, version, steps } = found;
+  const { run, version, steps, approvals } = found;
   const canStart = access.permissions.includes("flow.runs.start");
   const canDecide = access.permissions.includes("flow.approvals.decide");
   const reached = new Map(steps.map((s) => [s.stepKey, s]));
@@ -94,13 +94,30 @@ export default async function RunPage({
                 <strong className="mono">{def.key}</strong> <span className="muted">{def.type}</span>{" "}
                 {s ? <Status value={s.status} /> : <span className="muted">not reached</span>}
               </div>
-              {s && def.type === "approval" && s.status === "waiting" ? (
-                <p className="notice" data-testid="approval-waiting">
-                  Waits for a person with the role <span className="perm">{def.role}</span> (permission{" "}
-                  <span className="perm">flow.approvals.decide</span>){canDecide ? "; you have it" : ""}. Deciding in
-                  Flow comes with its Approvals page.
-                </p>
-              ) : null}
+              {s && def.type === "approval"
+                ? approvals
+                    .filter((a) => a.stepId === s.id)
+                    .map((a) => (
+                      <div key={a.id} className="notice" data-testid="approval" data-approval={a.status}>
+                        Approval <Status value={a.status} /> for the role <span className="perm">{def.role}</span>, due{" "}
+                        {at(a.deadline)}
+                        {a.decidedAt ? (
+                          <>
+                            {" "}
+                            · {a.status} by <span className="mono">{a.decidedBy}</span> at {at(a.decidedAt)}
+                          </>
+                        ) : null}
+                        {a.edited ? <> · edited: {Object.keys(a.edited).join(", ")}</> : null}
+                        {a.comment ? <span className="pre-wrap"> · “{a.comment}”</span> : null}
+                        {a.status === "pending" && canDecide ? (
+                          <>
+                            {" "}
+                            · <a href={`/approvals/${a.id}`}>Review it</a>
+                          </>
+                        ) : null}
+                      </div>
+                    ))
+                : null}
               {s ? (
                 <>
                   <dl className="facts">

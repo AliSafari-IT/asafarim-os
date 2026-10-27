@@ -50,7 +50,7 @@ export class RequestMappingError extends Error {
 /** The part of `docs.note.created.v1` the requests use. */
 const NoteTrigger = z.object({ id: z.string().min(1), author: z.string().min(1) });
 
-/** What an approval step's output holds once a person approved (written by the approval step, PR 4). */
+/** What an approval step's output holds once a person approved (lib/workflow/approval.ts, `Decision`). */
 export const ApprovalDecision = z.object({
   approvalId: z.string().min(1),
   decidedBy: z.string().min(1),

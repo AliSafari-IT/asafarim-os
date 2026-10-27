@@ -3,7 +3,7 @@
  * outbox rows the real publisher writes through it. No rollback: each test checks what one call wrote.
  * The Postgres store is covered by test/flow.integration.test.ts.
  */
-import type { FlowStore, RunRow, StepRow, VersionRow, WorkflowRow } from "../lib/engine/store";
+import type { ApprovalRow, FlowStore, RunRow, StepRow, VersionRow, WorkflowRow } from "../lib/engine/store";
 import type { WorkflowDefinition } from "../lib/workflow/definition";
 
 export interface OutboxRow {
@@ -17,6 +17,7 @@ export function memoryDb() {
   const versions: VersionRow[] = [];
   const runs = new Map<string, RunRow>();
   const steps: StepRow[] = [];
+  const approvals: ApprovalRow[] = [];
   const outbox: OutboxRow[] = [];
   /** Run ids locked by "another instance": claimOverdueRun skips them, as SKIP LOCKED does. */
   const lockedElsewhere = new Set<string>();
@@ -75,10 +76,28 @@ export function memoryDb() {
       const s = steps.find((x) => x.id === id)!;
       for (const [k, v] of Object.entries(patch)) if (v !== undefined) (s as unknown as Record<string, unknown>)[k] = v;
     },
+    async insertApproval(a) {
+      if (a.status === "pending" && approvals.some((x) => x.stepId === a.stepId && x.status === "pending"))
+        throw new Error("duplicate pending approval (approvals_one_pending)");
+      approvals.push({ ...a });
+    },
+    async approval(id) {
+      const a = approvals.find((x) => x.id === id);
+      return a ? { ...a } : undefined;
+    },
+    async approvalsOf(runId) {
+      return approvals.filter((a) => a.runId === runId).map((a) => ({ ...a }));
+    },
+    async updateApproval(id, patch) {
+      const a = approvals.find((x) => x.id === id)!;
+      for (const [k, v] of Object.entries(patch)) if (v !== undefined) (a as unknown as Record<string, unknown>)[k] = v;
+    },
     async claimOverdueRun(now) {
       for (const r of runs.values()) {
         if (r.status !== "waiting" || lockedElsewhere.has(r.id)) continue;
         if (steps.some((s) => s.runId === r.id && s.status === "waiting" && s.timeoutAt && s.timeoutAt <= now))
+          return r.id;
+        if (approvals.some((a) => a.runId === r.id && a.status === "pending" && a.deadline && a.deadline <= now))
           return r.id;
       }
       return undefined;
@@ -98,6 +117,7 @@ export function memoryDb() {
     store,
     runs,
     steps,
+    approvals,
     outbox,
     lockedElsewhere,
     /** A workflow with one version (or a new version of an existing workflow). */

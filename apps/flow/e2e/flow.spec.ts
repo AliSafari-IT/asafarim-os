@@ -2,8 +2,9 @@
  * Flow's slice 1 through the real bus (`pnpm e2e`): a study note written in Docs with `#issue` reaches
  * Flow as `docs.note.created.v1` (Docs' outbox → JetStream → Flow's inbox) and starts a run that waits
  * on its draft step, its request in Flow's outbox; a note without the tag starts a run that is
- * skipped (hidden on Runs unless asked for); Cancel stops a run. Docs doesn't answer the request yet
- * (Flow PRs 4 and 5), so the run stays waiting.
+ * skipped (hidden on Runs unless asked for); Cancel stops a run; the Approvals page opens for the
+ * owner. The e2e Docs has no AI key, so it never answers the draft request and the run stays waiting
+ * on its draft (the approval itself is covered by the unit and integration tests).
  */
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
@@ -12,9 +13,22 @@ const ADMIN_TOKEN = process.env.E2E_ADMIN_TOKEN ?? "";
 const DOCS = process.env.E2E_DOCS_URL ?? "http://localhost:4110";
 const SHOTS = "test-results/screens";
 
+/**
+ * One call to core-api's admin API; its status. Bounded to 3 s: a call that times out answers 504, so
+ * `expect.poll` tries again instead of hanging. Any other error is thrown.
+ */
 async function admin(method: string, p: string) {
-  const res = await fetch(`${CORE_API}${p}`, { method, headers: { authorization: `Bearer ${ADMIN_TOKEN}` } });
-  return res.status;
+  try {
+    const res = await fetch(`${CORE_API}${p}`, {
+      method,
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      signal: AbortSignal.timeout(3000),
+    });
+    return res.status;
+  } catch (err) {
+    if ((err as Error).name === "TimeoutError") return 504;
+    throw err;
+  }
 }
 
 /** Sign in through identity and the dev login stub as dev-member, on `base` (identity may remember them). */
@@ -104,6 +118,15 @@ test("a note without the tag starts a skipped run, hidden on Runs unless asked f
   await page.goto("/runs");
   await expect(page.getByTestId("run").filter({ hasText: "skipped" })).toHaveCount(0);
   expect(await page.getByTestId("run").count()).toBe(before);
+});
+
+test("Approvals: the owner may decide; the Overview counts what waits for them", async ({ page }) => {
+  await signIn(page, "");
+  await expect(page.getByTestId("pending-approvals")).toBeVisible();
+  await page.getByRole("navigation", { name: "Flow" }).getByRole("link", { name: "Approvals" }).click();
+  await expect(page.getByRole("heading", { name: /Approvals/ })).toBeVisible();
+  await expect(page.getByTestId("approvals").or(page.getByTestId("approvals-empty"))).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/approvals.png`, fullPage: true });
 });
 
 test("Workflows shows the definition read-only; the owner pauses and resumes it", async ({ page }) => {

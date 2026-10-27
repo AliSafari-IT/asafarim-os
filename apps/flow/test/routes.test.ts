@@ -1,8 +1,9 @@
 /**
  * Every page and server action of the app, found on disk: a page added later is checked without anyone
- * remembering to. Not signed in → the 401 sign-in page; signed in without flow.read → 403; and each
- * server action asks for its own permission (flow.runs.start, flow.workflows.write) before it changes
- * anything. The database and the engine are stand-ins that record what was asked of them.
+ * remembering to. Not signed in → the 401 sign-in page; signed in without flow.read → 403; the
+ * Approvals pages are 403 without flow.approvals.decide, even with flow.read; and each server action
+ * asks for its own permission (flow.runs.start, flow.workflows.write, flow.approvals.decide) before it
+ * changes anything. The database and the engine are stand-ins that record what was asked of them.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -33,6 +34,13 @@ const ACTIONS: Record<string, string | null> = {
   retryRunAction: "flow.runs.start",
   cancelRunAction: "flow.runs.start",
   setWorkflowStatusAction: "flow.workflows.write",
+  approveAction: "flow.approvals.decide",
+  rejectAction: "flow.approvals.decide",
+};
+/** Pages that ask for more than flow.read. */
+const PAGE_PERMISSION: Record<string, string> = {
+  "approvals/page.tsx": "flow.approvals.decide",
+  "approvals/[id]/page.tsx": "flow.approvals.decide",
 };
 
 const who = vi.hoisted(() => ({ subject: undefined as string | undefined, permissions: [] as string[] }));
@@ -93,6 +101,8 @@ vi.mock("@/lib/db", () => {
       retry: record("retry"),
       cancel: record("cancel"),
       setWorkflowStatus: record("setWorkflowStatus"),
+      approve: record("approve"),
+      reject: record("reject"),
     },
   };
 });
@@ -101,6 +111,8 @@ vi.mock("@/lib/queries", () => ({
   listRuns: async () => [],
   getRun: async () => undefined,
   listWorkflows: async () => [],
+  listPendingApprovals: async () => [],
+  getApproval: async () => undefined,
 }));
 
 async function load<T>(file: string): Promise<T> {
@@ -128,7 +140,7 @@ function form(values: Record<string, string>) {
   for (const [k, v] of Object.entries(values)) f.set(k, v);
   return f;
 }
-const FORM = { runId: RUN, workflow: "docs-note-to-issue", status: "paused" };
+const FORM = { runId: RUN, approvalId: RUN, workflow: "docs-note-to-issue", status: "paused", title: "T" };
 
 beforeEach(() => {
   who.subject = undefined;
@@ -139,7 +151,14 @@ beforeEach(() => {
 
 describe("the routes on disk", () => {
   it("finds the pages, the route handlers and the server actions", () => {
-    expect(pages).toEqual(["page.tsx", "runs/[id]/page.tsx", "runs/page.tsx", "workflows/page.tsx"]);
+    expect(pages).toEqual([
+      "approvals/[id]/page.tsx",
+      "approvals/page.tsx",
+      "page.tsx",
+      "runs/[id]/page.tsx",
+      "runs/page.tsx",
+      "workflows/page.tsx",
+    ]);
     // No API of its own yet: the route files are sign-in plumbing and health.
     expect(handlers).toEqual(Object.keys(PUBLIC).sort());
     expect(actionFiles).toEqual(["actions.ts"]);
@@ -170,7 +189,8 @@ describe("signed in without flow.read", () => {
 });
 
 describe("with flow.read", () => {
-  it.each(pages.filter((p) => p !== "runs/[id]/page.tsx"))("page %s renders", async (file) => {
+  const detail = ["runs/[id]/page.tsx", "approvals/[id]/page.tsx"];
+  it.each(pages.filter((p) => !detail.includes(p) && !PAGE_PERMISSION[p]))("page %s renders", async (file) => {
     who.subject = "dev-viewer";
     who.permissions = ["flow.read"];
     expect(await interruptOf(() => renderPage(file))).toBeUndefined();
@@ -180,6 +200,27 @@ describe("with flow.read", () => {
     who.subject = "dev-viewer";
     who.permissions = ["flow.read"];
     expect((await interruptOf(() => renderPage("runs/[id]/page.tsx")))?.kind).toBe("notFound");
+  });
+
+  it.each(Object.entries(PAGE_PERMISSION))("page %s without %s is 403, and reads nothing", async (file) => {
+    who.subject = "dev-viewer";
+    who.permissions = ["flow.read"];
+    expect((await interruptOf(() => renderPage(file)))?.kind).toBe("forbidden");
+    expect(calls.db).toBe(0);
+  });
+});
+
+describe("with flow.approvals.decide", () => {
+  it("the Approvals page renders", async () => {
+    who.subject = "dev-approver";
+    who.permissions = ["flow.read", "flow.approvals.decide"];
+    expect(await interruptOf(() => renderPage("approvals/page.tsx"))).toBeUndefined();
+  });
+
+  it("an approval that doesn't exist is a 404", async () => {
+    who.subject = "dev-approver";
+    who.permissions = ["flow.read", "flow.approvals.decide"];
+    expect((await interruptOf(() => renderPage("approvals/[id]/page.tsx")))?.kind).toBe("notFound");
   });
 });
 
@@ -211,6 +252,19 @@ describe("server actions", () => {
     const mod = await load<Record<string, (f: FormData) => Promise<void>>>("actions.ts");
     const stop = await interruptOf(() => mod.retryRunAction!(form({ runId: "../../etc" })));
     expect(stop).toMatchObject({ kind: "redirect", to: "/runs" });
+    expect(calls.engine).toEqual([]);
+  });
+});
+
+describe("the decisions", () => {
+  it("an approval id that isn't one goes back to Approvals, before anything else", async () => {
+    who.subject = "dev-approver";
+    who.permissions = ["flow.read", "flow.approvals.decide"];
+    const mod = await load<Record<string, (f: FormData) => Promise<void>>>("actions.ts");
+    for (const name of ["approveAction", "rejectAction"]) {
+      const stop = await interruptOf(() => mod[name]!(form({ approvalId: "../x" })));
+      expect(stop).toMatchObject({ kind: "redirect", to: "/approvals" });
+    }
     expect(calls.engine).toEqual([]);
   });
 });

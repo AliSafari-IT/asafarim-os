@@ -5,7 +5,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { signIn, signOut } from "@/lib/auth";
 import { db, engine, inTransaction } from "@/lib/db";
-import { RUN_ID } from "@/lib/format";
+import { APPROVAL_ID, RUN_ID } from "@/lib/format";
 import { gate } from "@/lib/gate";
 
 export async function signInAction() {
@@ -54,4 +54,51 @@ export async function setWorkflowStatusAction(formData: FormData) {
   if (!g.ok) redirect(`/workflows?error=${g.body.error}${g.body.permission ? `&permission=${g.body.permission}` : ""}`);
   const r = await inTransaction(await db(), (tx) => engine.setWorkflowStatus(tx, key, status, g.subject));
   redirect(r.ok ? "/workflows" : `/workflows?error=${r.error}`);
+}
+
+/** The labels as typed: comma- or line-separated, trimmed, empty ones dropped, each once. */
+const labelsOf = (raw: string) => [
+  ...new Set(
+    raw
+      .split(/[,\n]/)
+      .map((l) => l.trim())
+      .filter(Boolean),
+  ),
+];
+/** A textarea posts CRLF line ends; the draft has LF. */
+const text = (v: FormDataEntryValue | null) => (typeof v === "string" ? v.replace(/\r\n?/g, "\n") : undefined);
+
+/** Approve or reject an approval (flow.approvals.decide); back to the approval, with the refusal if there was one. */
+async function onDecision(formData: FormData, what: "approve" | "reject") {
+  const id = String(formData.get("approvalId") ?? "");
+  if (!APPROVAL_ID.test(id)) redirect("/approvals");
+  const g = await gate("flow.approvals.decide");
+  if (!g.ok)
+    redirect(`/approvals/${id}?error=${g.body.error}${g.body.permission ? `&permission=${g.body.permission}` : ""}`);
+  let edits: Record<string, unknown> = {};
+  if (what === "approve") {
+    // Only the fields the form sent (the editable ones); the engine refuses any other.
+    const title = text(formData.get("title"));
+    const body = text(formData.get("body"));
+    const labels = text(formData.get("labels"));
+    edits = {
+      ...(title !== undefined ? { title: title.trim() } : {}),
+      ...(body !== undefined ? { body } : {}),
+      ...(labels !== undefined ? { labels: labelsOf(labels) } : {}),
+    };
+  }
+  const r = await inTransaction(await db(), (tx) =>
+    what === "approve"
+      ? engine.approve(tx, id, g.subject, edits, formData.get("acknowledgedPublic") === "on")
+      : engine.reject(tx, id, g.subject, text(formData.get("comment")) ?? null),
+  );
+  redirect(r.ok ? `/approvals/${id}` : `/approvals/${id}?error=${r.error}`);
+}
+
+export async function approveAction(formData: FormData) {
+  await onDecision(formData, "approve");
+}
+
+export async function rejectAction(formData: FormData) {
+  await onDecision(formData, "reject");
 }
