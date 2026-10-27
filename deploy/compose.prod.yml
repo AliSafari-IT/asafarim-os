@@ -1,6 +1,7 @@
 # ASafariM OS production stack: the identity service (id.asafarim.site) and its own Redis
 # (asafarim-os#45, part of #22, P2.3), the asafarim.site landing page, os-site (#70), and docs.asafarim.site, os-docs
-# (#83), and flow.asafarim.site, os-flow (only once its encrypted env is committed). Also breinhap.asafarim.site, breinhap-site (a landing page built in AliSafari-IT/breinhap), and
+# (#83), and flow.asafarim.site, os-flow (only once its encrypted env is committed), and the event bus os-nats
+# (asafarim-os#259, only once core/nats/.env.production.age is committed). Also breinhap.asafarim.site, breinhap-site (a landing page built in AliSafari-IT/breinhap), and
 # igs.asafarim.site, igs-site (a landing page built in AliSafari-IT/igs-pharma). The owner deploys it with deploy/vps-deploy.sh; nothing else runs this file. See deploy/README.md for the
 # deploy, the rollback and the network rules.
 #
@@ -258,6 +259,54 @@ services:
         aliases:
           - os-core-api
 
+  os-nats:
+    # The OS's event bus (asafarim-os#259, ADR 0001 §5): NATS with JetStream, its file store on a named volume. Apps
+    # publish through their outbox relay and subscribe through their consumers; core-api creates each app's stream at
+    # install. Its own "nats" profile, which deploy/vps-deploy.sh turns on (next to "core") once
+    # core/nats/.env.production.age is committed: without it the env_file below would not exist, and a deploy is what
+    # it was before. Pinned to a minor line, not a floating tag (dev and CI float on 2).
+    #
+    # Who may connect: deploy/nats/nats.conf sends every client but core-api's own to core-api's auth callout, so an app
+    # signs in with its registry credential and gets only what its manifest allows. Anonymous clients are refused.
+    # No TLS, because the bus is on os_core ONLY (never edge_net), with no published port: only os-core-api, os-docs
+    # and os-flow are on that network. The config DIRECTORY is mounted, not one file (the asafarim-platform #733
+    # lesson). 8222 is NATS's monitoring port, used only by the healthcheck inside the container.
+    image: nats:2.11-alpine
+    profiles: [nats]
+    restart: unless-stopped
+    command: ["-c", "/etc/nats/nats.conf", "-js", "-sd", "/data", "-m", "8222"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # PROPOSED, pending the owner's `free -m` (the OS stack's limits add up to about 1.5 GB before this one): the
+    # dev bus runs in 256m. GOMEMLIMIT keeps Go's garbage collector under the container limit, so a busy moment is
+    # collected rather than killed.
+    mem_limit: 128m
+    cpus: 0.25
+    # NATS_AUTH_ISSUER (the callout issuer's PUBLIC key) and NATS_CORE_PASSWORD, decrypted from
+    # core/nats/.env.production.age by deploy/vps-deploy.sh, at the repository root (core/nats/.env.production.example).
+    env_file:
+      - ../.env.nats
+    environment:
+      GOMEMLIMIT: 96MiB
+    volumes:
+      - os_nats_data:/data
+      - ./nats:/etc/nats:ro
+    healthcheck:
+      # /healthz?js-enabled-only=true answers 200 once JetStream is up.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+    networks:
+      os_core:
+        aliases:
+          - os-nats
+
   os-admin:
     # admin.asafarim.site: the Admin console's Next.js server (core/admin/Dockerfile, asafarim-os#175), published by
     # .github/workflows/admin-image.yml. ADMIN_IMAGE_TAG is the full commit sha of that build; deploy/vps-deploy.sh
@@ -360,10 +409,12 @@ networks:
     external: true
     name: identity_db
   os_net:
-  # core-api, its Postgres, the Admin console and the apps it serves (os-docs, os-flow). identity and os-redis are not on it.
+  # core-api, its Postgres, the event bus (os-nats), the Admin console and the apps it serves (os-docs, os-flow).
+  # identity and os-redis are not on it.
   os_core:
 
 volumes:
   os_redis_data:
   os_pg_data:
   os_core_api_backups:
+  os_nats_data:

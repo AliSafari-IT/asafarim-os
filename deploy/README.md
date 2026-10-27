@@ -24,6 +24,9 @@ holds a plaintext secret.
 | `sites/asafarim-os-flow.caddy`  | `flow.asafarim.site` → `os-flow:3000`. Appended to the full site file **only** by a deploy with Flow ([below](#flowasafarimsite)).        |
 | `apps/flow/.env.production.age` | **Not committed yet.** `os-flow`'s secrets; committing it is what turns Flow on. Decrypted on the VPS into `.env.flow`.                   |
 | `deploy/flow/new-env.mjs`       | Writes `apps/flow/.env.production` (and identity's `IDENTITY_CLIENT_SECRET_FLOW`) with generated secrets.                                 |
+| `deploy/nats/nats.conf`         | `os-nats`'s config: the auth callout and core-api's one login, no anonymous way in ([below](#the-event-bus-os-nats)).                     |
+| `core/nats/.env.production.age` | **Not committed yet.** `os-nats`'s two values; committing it is what turns the bus on. Decrypted on the VPS into `.env.nats`.             |
+| `deploy/nats/new-env.mjs`       | Writes `core/nats/.env.production` and core-api's side of the same login, with a generated key and password.                              |
 | `deploy/identity/clients.json`  | **Not in git.** The client config you put there (below).                                                                                  |
 
 ## docs.asafarim.site
@@ -77,9 +80,11 @@ commits `apps/flow/.env.production.age`**, the same gate as core-api's (asafarim
 app's, never the platform's Postgres. `docs.url` is `https://docs.asafarim.site`. The image comes from the "Flow
 image" workflow (`apps/flow/Dockerfile`), which smoke-tests it before publishing `flow-<sha>`.
 
-> **Flow runs no workflow from Docs events until NATS is in production.** There is no `ASAFARIM_NATS_URL` here: Flow
+> **Flow runs no workflow from Docs events until the bus is connected.** There is no `ASAFARIM_NATS_URL` here yet: Flow
 > starts, serves its pages and is healthy, and logs once that its subscribers (`flow.subscribers.no_bus`) and its
-> outbox relay (`events.relay.no_bus`) are off. A `#issue` note in Docs starts nothing yet.
+> outbox relay (`events.relay.no_bus`) are off. A `#issue` note in Docs starts nothing yet. The bus itself is
+> [the next section](#the-event-bus-os-nats); the follow-up pull request of asafarim-os#259 gives Docs and Flow its
+> address.
 
 **For the owner, in order:**
 
@@ -121,6 +126,55 @@ image" workflow (`apps/flow/Dockerfile`), which smoke-tests it before publishing
    `COMPOSE_PROFILES=core,flow IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback CORE_API_IMAGE_TAG=rollback ADMIN_IMAGE_TAG=rollback FLOW_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml rm -sf os-flow`.
    Flow's database on `os-postgres` stays. To run an **earlier Flow image** instead, deploy by hand with that image's
    commit as `vps-deploy.sh`'s seventh sha.
+
+## The event bus (os-nats)
+
+`os-nats` ([asafarim-os#259](https://github.com/AliSafari-IT/asafarim-os/issues/259), ADR 0001 §5) is the OS's event
+bus: NATS with JetStream, as in development (`compose.dev.yml`), pinned to a minor line (`nats:2.11-alpine`). Apps
+publish through their outbox relay and subscribe through consumers; core-api creates each app's stream at install. It
+is **off until the owner commits `core/nats/.env.production.age`**, the same gate as core-api's and Flow's:
+
+- **Without that file** a deploy is exactly what it was before: no `.env.nats`, no `nats` profile, no `os-nats`
+  container. `deploy/vps-deploy.test.mjs` ("without core/nats/.env.production.age: ...") proves the same commands run
+  in the same order, and the site file is byte for byte the same.
+- **With it**, the full deploy (never `--site-only`) also needs core-api's env, decrypts it into `.env.nats`, checks the
+  names `core/nats/.env.production.example` lists (never the values), turns the `nats` profile on next to `core`, and
+  waits up to 60 seconds for the bus's `/healthz?js-enabled-only=true`. It publishes nothing on the edge and takes no
+  image sha. `deploy/redeploy.sh` needs no change.
+
+**Who can reach it.** `os-nats` is on `os_core` only, as `os-nats`, and publishes no port: only `os-core-api`, `os-docs`
+and `os-flow` can open a connection, and nothing outside this host can. There is **no TLS**: the traffic never leaves
+the host's private Docker network. **Anonymous clients are refused**: `deploy/nats/nats.conf` has no anonymous user, no
+token and no other login than `core`. Every other client is sent to core-api's auth callout, which checks the app's
+registry credential and grants only what its manifest allows (the same design as development). The two values the bus
+holds are the callout issuer's **public** key and core-api's own password; the callout's signing key (the seed) stays in
+core-api's env. A test fails if the config gains an anonymous way in.
+
+`os-nats` is hardened like the other services (read-only root, no capabilities, `no-new-privileges`, a tmpfs `/tmp`),
+with its store on the named volume `os_nats_data`, 128 MB and 0.25 CPU, and a healthcheck. **The 128 MB is a proposal**
+(development uses 256): the OS stack's limits already add up to about 1.5 GB, so check the host first (step 1).
+
+**For the owner, in order:**
+
+1. **Memory.** On the VPS run `free -m` and share the "available" number. If the host cannot spare 128 MB, the limit
+   changes before this is merged.
+2. **The env file.** On your PC, in the repository: `pnpm env:decrypt:production` (core-api's env must be there), then
+   `node deploy/nats/new-env.mjs`. It writes `core/nats/.env.production` (`NATS_AUTH_ISSUER`, the public key, and
+   `NATS_CORE_PASSWORD`; mode 600) and adds core-api's side of the same login (`CORE_API_NATS_USER`,
+   `CORE_API_NATS_PASSWORD`, `CORE_API_NATS_ISSUER_SEED`) to `core/core-api/.env.production`. core-api ignores those three
+   until `CORE_API_NATS_URL` is set, which the follow-up pull request does, so adding them changes nothing yet. The script
+   prints only file names, and refuses to overwrite the bus's file or to run when core-api's env already names a
+   `CORE_API_NATS_` variable. Then `pnpm env:encrypt:production` and commit **only** `core/nats/.env.production.age` and
+   `core/core-api/.env.production.age`, on a branch, and merge them with a pull request. Never commit a decrypted env.
+3. **After the automatic deploy** (identity and core-api run, so it is the full deploy, now with `os-nats`), on the VPS:
+   `docker ps --filter name=os-nats --format '{{.Names}} {{.Status}}'` shows the container as `(healthy)`, and
+   `docker logs --tail 20 $(docker ps -q --filter name=os-nats)` shows `Server is ready` and no secret. If the deploy
+   stopped at "os-nats did not become ready", the same `docker logs` says why.
+4. **Rollback.** To take the bus off without touching the rest: revert the commit that added
+   `core/nats/.env.production.age` (a pull request) and let it deploy, then stop the container on the VPS with
+   `COMPOSE_PROFILES=core,nats IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback CORE_API_IMAGE_TAG=rollback ADMIN_IMAGE_TAG=rollback FLOW_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml rm -sf os-nats`.
+   The streams on the `os_nats_data` volume stay. Once the follow-up has connected core-api, Docs and Flow, revert that
+   first: they keep retrying a bus that is gone, which only costs log lines.
 
 ## Landing page and docs (identity not running)
 
@@ -324,8 +378,8 @@ its main that touches `apps/site`. It runs exactly like `breinhap-site` (same li
   **`os-site`**, on no other network), `os-docs` (alias **`os-docs`**), `os-flow` (alias **`os-flow`**, only once Flow is deployed), `breinhap-site` (alias **`breinhap-site`**, on
   no other network) and `igs-site` (alias **`igs-site`**, on no other network). The edge's Caddy reaches them there. Redis,
   core-api and its Postgres are never on it.
-- **`os_core`**: `os-core-api`, `os-postgres`, `os-docs` and `os-flow` (the apps core-api serves). identity and `os-redis` are not
-  on it.
+- **`os_core`**: `os-core-api`, `os-postgres`, `os-nats` (only once the bus is deployed), `os-docs` and `os-flow` (the
+  apps core-api serves). identity and `os-redis` are not on it.
 - **`identity_db`**: `identity` and the platform's Postgres (alias `platform-postgres`), nothing else. Identity reads
   the platform database as the read-only `identity_ro` role. asafarim-platform's deploy creates this network.
 - **`os_net`**: this stack's own private network, for `identity` and `os-redis`.
@@ -417,9 +471,10 @@ Afterwards: `curl -fsS https://id.asafarim.site/.well-known/openid-configuration
    ```
    `COMPOSE_PROFILES=core` also stops `os-core-api` and `os-postgres` when they run (it needs `.env.core-api` to exist,
    which it does once core-api has been deployed; without core-api, leave `COMPOSE_PROFILES=core` out). Make it
-   `core,admin` and/or `core,flow` when the Admin console or Flow runs (each needs its `.env.admin` / `.env.flow`).
+   `core,admin`, `core,flow` and/or `core,nats` when the Admin console, Flow or the event bus runs (each needs its
+   `.env.admin` / `.env.flow` / `.env.nats`).
 3. **The volumes stay** (do not add `-v`): Redis's data in `os_redis_data`, the OS's Postgres in `os_pg_data` and
-   core-api's backups in `os_core_api_backups` are kept, and `.env.identity`, `.env.docs` and `.env.core-api` stay on
+   core-api's backups in `os_core_api_backups` and the bus's streams in `os_nats_data` are kept, and `.env.identity`, `.env.docs` and `.env.core-api` stay on
    disk (mode 600; delete them yourself if you want them gone).
 
 To go back to an **earlier image** instead, run the deploy again with that image's commit as `<image-commit>`.
