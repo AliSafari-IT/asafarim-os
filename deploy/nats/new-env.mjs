@@ -9,8 +9,8 @@
 // It generates ONE auth callout issuer key and ONE password:
 //   core/nats/.env.production       NATS_AUTH_ISSUER (the PUBLIC key) and NATS_CORE_PASSWORD
 //   core/core-api/.env.production   CORE_API_NATS_USER, CORE_API_NATS_PASSWORD and CORE_API_NATS_ISSUER_SEED (the
-//                                   private half). core-api ignores all three until CORE_API_NATS_URL is set, which
-//                                   the second pull request of asafarim-os#259 does in deploy/compose.prod.yml.
+//                                   private half). core-api uses them only when the deploy gives it the bus's address
+//                                   (deploy/vps-deploy.sh sets OS_NATS_URL only when it runs os-nats).
 // It prints file NAMES, never a value. It refuses to overwrite core/nats/.env.production, and refuses to run when
 // core-api's env already names any CORE_API_NATS_ variable: two different keys would never match. It changes nothing
 // unless it can write both.
@@ -70,7 +70,7 @@ export function writeEnv({
   const separator = coreApiText === "" || coreApiText.endsWith("\n") ? "" : "\n";
   appendFileSync(
     coreApiFile,
-    `${separator}# core-api's login on the event bus (deploy/README.md, the event bus). Inert until CORE_API_NATS_URL is set.\n${env.coreApi}`,
+    `${separator}# core-api's login on the event bus (deploy/README.md, the event bus). Used only when the deploy runs os-nats.\n${env.coreApi}`,
   );
   return undefined;
 }

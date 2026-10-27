@@ -346,6 +346,7 @@ function runDeploy(
     flowEnvEmpty = false,
     natsEnv = false,
     natsEnvEmpty = false,
+    coreApiNatsMissing = false,
     pullFails = 0,
     pullAttempts = "",
   } = {},
@@ -401,6 +402,10 @@ function runDeploy(
       `elif [[ "$*" == *core/core-api/* ]]; then`,
       `  [[ -n "$CORE_API_ENV_EMPTY" ]] && exit 0`,
       fill(coreApiExample),
+      // core-api's side of the bus login, as deploy/nats/new-env.mjs adds it (unless the test says it is missing).
+      `if [[ -z "$CORE_API_NATS_MISSING" ]]; then`,
+      `  echo CORE_API_NATS_USER=stand-in; echo CORE_API_NATS_PASSWORD=stand-in; echo CORE_API_NATS_ISSUER_SEED=stand-in`,
+      `fi`,
       `elif [[ "$*" == *core/admin/* ]]; then`,
       `  [[ -n "$ADMIN_ENV_EMPTY" ]] && exit 0`,
       fill(adminExample),
@@ -428,6 +433,8 @@ function runDeploy(
           `  "compose "*" pull"|"compose "*" pull "*)`,
           `    n=$(( $(cat "$PULL_COUNT") + 1 )); echo "$n" > "$PULL_COUNT"`,
           `    (( n <= PULL_FAILS )) && exit 1 ;;`,
+          // What the bus address was when the stack was started (compose reads OS_NATS_URL; unset = empty).
+          `  "compose "*" up "*) echo "natsurl=\${OS_NATS_URL-unset}" >> "$CALLS" ;;`,
           `  *"ps -q identity"*) printf '%s' "$IDENTITY_RUNNING" ;;`,
           `  "ps -q --filter label=com.docker.compose.project=asafarim-com"*) printf '%s\\n' "$LIVE_ID" ;;`,
           `  "compose -p edge ps -q caddy") printf '%s\\n' "$EDGE_ID" ;;`,
@@ -467,6 +474,7 @@ function runDeploy(
         ADMIN_ENV_EMPTY: adminEnvEmpty ? "1" : "",
         FLOW_ENV_EMPTY: flowEnvEmpty ? "1" : "",
         NATS_ENV_EMPTY: natsEnvEmpty ? "1" : "",
+        CORE_API_NATS_MISSING: coreApiNatsMissing ? "1" : "",
         PULL_FAILS: String(pullFails),
         PULL_COUNT: path.join(dir, "pull-count"),
         DEPLOY_PULL_RETRY_DELAY: "0",
@@ -1080,6 +1088,11 @@ test("without core/nats/.env.production.age: no bus env, no nats profile, os-nat
     assert.ok(!r.calls.some((c) => c.includes("core/nats") || c.includes("os-nats")), r.calls.join("\n"));
     assert.ok(!r.calls.some((c) => /^profiles=\S*nats/.test(c)), "the nats profile is off");
     assert.equal(r.envNatsWritten, false);
+    assert.deepEqual(
+      r.calls.filter((c) => c.startsWith("natsurl=")),
+      ["natsurl=unset"],
+      "no bus address: core-api, Docs and Flow run without a bus",
+    );
     // The one line that says it is not part of this deploy, like the Admin console's and Flow's; nothing else names it.
     const mentions = r.stdout.split("\n").filter((l) => /nats|event bus/i.test(l));
     assert.equal(mentions.length, 1, mentions.join("\n"));
@@ -1139,6 +1152,11 @@ test("with core/nats/.env.production.age: decrypts and checks it, starts the nat
     "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
   ]);
   assert.match(r.stdout, /nats:2\.\d+-alpine/, "the pull names the bus image");
+  assert.deepEqual(
+    r.calls.filter((c) => c.startsWith("natsurl=")),
+    ["natsurl=nats://os-nats:4222"],
+    "core-api, Docs and Flow are given the bus's address",
+  );
   const natsReadyAt = r.calls.findIndex((c) => c.includes("exec -T os-nats wget"));
   const edgeAt = r.calls.findIndex((c) => c.startsWith("edge-deploy-site.sh"));
   assert.ok(natsReadyAt >= 0 && edgeAt > natsReadyAt, r.calls.join("\n"));
@@ -1284,4 +1302,39 @@ test("deploy/nats/new-env.mjs prints file names, never a value", () => {
       `it must not print a value: ${m[2]}`,
     );
   }
+});
+
+test("a bus env without core-api's side of the login is refused before anything is pulled, naming the variables", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], {
+    full: true,
+    coreApiEnv: true,
+    natsEnv: true,
+    coreApiNatsMissing: true,
+  });
+  assert.equal(r.status, 1);
+  assert.match(
+    r.stderr,
+    /missing or empty in \.env\.core-api: CORE_API_NATS_USER CORE_API_NATS_PASSWORD CORE_API_NATS_ISSUER_SEED/,
+  );
+  assert.match(r.stderr, /node deploy\/nats\/new-env\.mjs/);
+  assert.doesNotMatch(r.stderr, /stand-in/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c) || c.startsWith("edge-deploy-site.sh")), r.calls.join("\n"));
+});
+
+test("without the bus, core-api's own env needs no bus names: a deploy without os-nats never asks for them", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], {
+    full: true,
+    coreApiEnv: true,
+    coreApiNatsMissing: true,
+  });
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test("--site-only never gives anything a bus address, even when the bus env is committed", () => {
+  const r = runDeploy(["--site-only", SHA], { coreApiEnv: true, natsEnv: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(
+    r.calls.filter((c) => c.startsWith("natsurl=")),
+    ["natsurl=unset"],
+  );
 });
