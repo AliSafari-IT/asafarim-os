@@ -5,7 +5,17 @@
 //   node --test deploy/vps-deploy.test.mjs          (needs bash)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -1190,16 +1200,6 @@ test("the bus example requires exactly NATS_AUTH_ISSUER and NATS_CORE_PASSWORD, 
   assert.doesNotMatch(text, /^(# )?\w*SEED\w*=/m, "the signing key stays in core-api's env");
 });
 
-/** Whether a file can be read: one read, not a check followed by a use. */
-const readable = (file) => {
-  try {
-    readFileSync(file);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 test("deploy/nats/new-env.mjs makes ONE key and ONE password for both sides, and overwrites nothing", async () => {
   const { newEnv, writeEnv, CORE_USER } = await import("./nats/new-env.mjs");
   const { fromSeed } = await import("@nats-io/nkeys");
@@ -1230,34 +1230,48 @@ test("deploy/nats/new-env.mjs makes ONE key and ONE password for both sides, and
   assert.doesNotMatch(generated.nats, /SEED|SA[A-Z2-7]{50}/, "the bus's file holds the public half only");
   assert.notEqual(newEnv().nats, generated.nats, "every run is new");
 
-  const dir = mkdtempSync(path.join(tmpdir(), "nats-new-env-"));
+  // Each scenario gets its own directory, and no path is checked and then used: the files are read, or the
+  // directory is listed, never probed first.
+  const dirs = [];
+  const scenario = (coreApiText) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "nats-new-env-"));
+    dirs.push(dir);
+    if (coreApiText !== undefined) writeFileSync(path.join(dir, "core-api.env"), coreApiText);
+    return { dir, natsFile: path.join(dir, "nats.env"), coreApiFile: path.join(dir, "core-api.env") };
+  };
   try {
-    const natsFile = path.join(dir, "nats.env");
-    const coreApiFile = path.join(dir, "core-api.env");
-    // core-api's env must be there first.
-    assert.match(writeEnv({ natsFile, coreApiFile }), /pnpm env:decrypt:production/);
-    assert.equal(readable(natsFile), false);
-    writeFileSync(coreApiFile, "CORE_API_ADMIN_TOKEN=keep-me");
-    assert.equal(writeEnv({ natsFile, coreApiFile }), undefined);
-    const written = parse(readFileSync(natsFile, "utf8"));
-    const added = parse(readFileSync(coreApiFile, "utf8"));
-    assert.equal(added.CORE_API_ADMIN_TOKEN, "keep-me", "core-api's own lines stay, and the missing newline is added");
-    assert.equal(added.CORE_API_NATS_PASSWORD, written.NATS_CORE_PASSWORD);
-    assert.equal(statSync(natsFile).mode & 0o777, 0o600);
+    // core-api's env must be there first: nothing is written without it.
+    const missing = scenario();
+    assert.match(writeEnv(missing), /pnpm env:decrypt:production/);
+    assert.deepEqual(readdirSync(missing.dir), []);
 
-    // A second run changes nothing: the bus's file exists, and core-api's env already names the variables.
-    const before = [readFileSync(natsFile, "utf8"), readFileSync(coreApiFile, "utf8")];
-    assert.match(writeEnv({ natsFile, coreApiFile }), /already names a CORE_API_NATS_ variable/);
-    rmSync(natsFile);
-    assert.match(writeEnv({ natsFile, coreApiFile }), /already names a CORE_API_NATS_ variable/);
-    assert.equal(readable(natsFile), false, "nothing is written when core-api's env refuses");
-    writeFileSync(natsFile, before[0]);
-    writeFileSync(coreApiFile, "CORE_API_ADMIN_TOKEN=keep-me\n");
-    assert.match(writeEnv({ natsFile, coreApiFile }), /nats\.env already exists/);
-    assert.equal(readFileSync(coreApiFile, "utf8"), "CORE_API_ADMIN_TOKEN=keep-me\n", "core-api's env untouched");
-    assert.equal(readFileSync(natsFile, "utf8"), before[0], "the bus's env untouched");
+    // Both files are written, sharing one password; core-api's own lines stay, and the missing newline is added.
+    const ok = scenario("CORE_API_ADMIN_TOKEN=keep-me");
+    assert.equal(writeEnv(ok), undefined);
+    const written = parse(readFileSync(ok.natsFile, "utf8"));
+    const added = parse(readFileSync(ok.coreApiFile, "utf8"));
+    assert.equal(added.CORE_API_ADMIN_TOKEN, "keep-me");
+    assert.equal(added.CORE_API_NATS_PASSWORD, written.NATS_CORE_PASSWORD);
+    assert.equal(statSync(ok.natsFile).mode & 0o777, 0o600);
+
+    // A second run changes nothing: core-api's env already names the variables.
+    const again = scenario("CORE_API_ADMIN_TOKEN=keep-me\nCORE_API_NATS_USER=core\n");
+    assert.match(writeEnv(again), /already names a CORE_API_NATS_ variable/);
+    assert.deepEqual(readdirSync(again.dir), ["core-api.env"], "nothing is written when core-api's env refuses");
+    assert.equal(readFileSync(again.coreApiFile, "utf8"), "CORE_API_ADMIN_TOKEN=keep-me\nCORE_API_NATS_USER=core\n");
+
+    // The bus's file already exists: it is not overwritten, and core-api's env is not touched.
+    const exists = scenario("CORE_API_ADMIN_TOKEN=keep-me\n");
+    writeFileSync(exists.natsFile, "keep-this\n");
+    assert.match(writeEnv(exists), /nats\.env already exists/);
+    assert.equal(
+      readFileSync(exists.coreApiFile, "utf8"),
+      "CORE_API_ADMIN_TOKEN=keep-me\n",
+      "core-api's env untouched",
+    );
+    assert.equal(readFileSync(exists.natsFile, "utf8"), "keep-this\n", "the bus's env untouched");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   }
 });
 
