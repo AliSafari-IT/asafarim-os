@@ -1,6 +1,6 @@
 /**
  * GitHub and Claude for slice 1's end-to-end test (`pnpm e2e`, Flow's suite): two small local HTTP
- * servers that Docs points at through DOCS_E2E_GITHUB_API_URL and DOCS_E2E_AI_API_URL (honoured only
+ * servers, in a process of their own, that Docs points at through DOCS_E2E_GITHUB_API_URL and DOCS_E2E_AI_API_URL (honoured only
  * on loopback). Nothing here reaches the internet, and no real token or key is used.
  *
  * GitHub: `example-org/demo-app` is public, every other repo private; each has the labels bug,
@@ -10,6 +10,7 @@
  * found in the note, so the spec can tell its runs apart.
  */
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
 
 export const GITHUB_MOCK_PORT = 4191;
 export const AI_MOCK_PORT = 4192;
@@ -118,24 +119,12 @@ function claude() {
   });
 }
 
-/** Start both mocks; resolves once they listen, with a function that stops them. */
-export async function startMocks() {
-  const servers = [
-    [github(), GITHUB_MOCK_PORT],
-    [claude(), AI_MOCK_PORT],
-  ];
-  await Promise.all(
-    servers.map(
-      ([server, port]) =>
-        new Promise((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(port, "127.0.0.1", resolve);
-        }),
-    ),
-  );
-  return {
-    githubUrl: `http://127.0.0.1:${GITHUB_MOCK_PORT}`,
-    aiUrl: `http://127.0.0.1:${AI_MOCK_PORT}`,
-    stop: () => servers.forEach(([server]) => server.close()),
-  };
+export const GITHUB_MOCK_URL = `http://127.0.0.1:${GITHUB_MOCK_PORT}`;
+export const AI_MOCK_URL = `http://127.0.0.1:${AI_MOCK_PORT}`;
+
+// Run as its own process (`node apps/flow/e2e/mocks.mjs`): scripts/dev/e2e.mjs waits on each suite
+// synchronously, so servers in its own process couldn't answer while a suite runs.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  github().listen(GITHUB_MOCK_PORT, "127.0.0.1");
+  claude().listen(AI_MOCK_PORT, "127.0.0.1");
 }

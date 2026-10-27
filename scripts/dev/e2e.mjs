@@ -40,7 +40,7 @@ import {
   waitForGateway,
 } from "./infra.mjs";
 import { DEV, DEV_DIR, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
-import { startMocks } from "../../apps/flow/e2e/mocks.mjs";
+import { AI_MOCK_URL, GITHUB_MOCK_URL } from "../../apps/flow/e2e/mocks.mjs";
 
 const NOTES_DIR = path.join(ROOT, "apps/notes");
 const DOCS_DIR = path.join(ROOT, "apps/docs");
@@ -57,7 +57,6 @@ const TOKEN_TTL = Number(process.env.E2E_TOKEN_TTL ?? 6);
 // `pnpm screenshots` (#70): the same stack, then core/site's screenshot spec instead of the e2e suites.
 const SCREENSHOTS = process.argv.includes("--screenshots");
 const children = [];
-let mocks;
 
 function start(name, args, cwd = ROOT, env = process.env) {
   const child = spawn(process.execPath, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
@@ -205,16 +204,17 @@ try {
     );
     // Last: it writes notes in Docs, which the Docs suites don't expect. Docs drafts and creates
     // issues there, against local mocks of GitHub and Claude (never the real ones; fake credentials).
-    mocks = await startMocks();
+    start("mocks", [path.join(FLOW_DIR, "e2e/mocks.mjs")]);
+    await waitFor(`${GITHUB_MOCK_URL}/user`);
     console.log(bold("Restarting Docs against the GitHub and Claude mocks…"));
     await stopDocs();
     docs = await startDocs({
       DOCS_ISSUES_TOKEN: "e2e-not-a-token",
       DOCS_AI_API_KEY: "e2e-not-a-key",
-      DOCS_E2E_GITHUB_API_URL: mocks.githubUrl,
-      DOCS_E2E_AI_API_URL: mocks.aiUrl,
+      DOCS_E2E_GITHUB_API_URL: GITHUB_MOCK_URL,
+      DOCS_E2E_AI_API_URL: AI_MOCK_URL,
     });
-    results.push(run(["@asafarim/flow", "e2e"], { ...e2eEnv, E2E_GITHUB_MOCK_URL: mocks.githubUrl }));
+    results.push(run(["@asafarim/flow", "e2e"], { ...e2eEnv, E2E_GITHUB_MOCK_URL: GITHUB_MOCK_URL }));
   }
   exitCode = results.find((code) => code !== 0) ?? 0;
   const label = SCREENSHOTS ? "screenshots" : "e2e";
@@ -223,7 +223,6 @@ try {
   console.error(red(`\ne2e setup FAILED: ${err.message}`));
 } finally {
   for (const c of children) c.kill();
-  mocks?.stop();
   stopExternalApp();
   if (process.argv.includes("--down")) compose("down", "--volumes", "--remove-orphans");
 }
