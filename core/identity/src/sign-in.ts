@@ -98,6 +98,11 @@ export interface SignInDeps {
   flows: LoginFlows;
   /** Ends the provider (OIDC) sessions of an account and revokes their grants; returns how many. */
   endProviderSessions: (principalId: string) => Promise<number>;
+  /**
+   * Ends THIS browser's provider (OIDC) session and revokes its grants. Without it, an app's next sign-in would be
+   * answered from that session and go straight back into the same account. Default: none (tests).
+   */
+  endBrowserProviderSession?: (ctx: HttpContext) => Promise<void>;
   log: Logger;
 }
 
@@ -116,6 +121,8 @@ export interface SignIn {
   /** Records that an OIDC sign-in was completed from an existing auth session. */
   auditInteractionLogin(ctx: HttpContext, principalId: string, clientId: string): Promise<void>;
   loginUrl(uid: string, fresh: boolean): string;
+  /** Ends this browser's auth session, if any (the app-initiated sign-out, after identity's own confirmation). */
+  endAuthSession(ctx: HttpContext): Promise<void>;
 }
 
 const UID = /^[\w-]{1,64}$/;
@@ -889,22 +896,29 @@ export function createSignIn(d: SignInDeps): SignIn {
   async function postLogout(ctx: HttpContext) {
     const form = await readForm(ctx);
     const current = await currentSession(ctx);
-    if (current) {
-      if (!form || !sameToken(form.get("csrf"), current.session.csrf)) return expired(ctx);
-      await d.sessions.destroy(current.token);
-      await audit({ event: "logout", principalId: current.session.principalId });
-    }
-    setCookie(ctx, AUTH_COOKIE, null, "/", 0);
+    if (current && (!form || !sameToken(form.get("csrf"), current.session.csrf))) return expired(ctx);
+    await endAuthSession(ctx);
+    // The provider's session too: otherwise an app's next sign-in is answered from it, without asking.
+    await d.endBrowserProviderSession?.(ctx);
     render(
       ctx,
       200,
       messagePage({
         title: "Signed out",
         message:
-          "You're signed out of this sign-in page. Apps you opened keep their own session until you sign out there.",
+          "You're signed out of your ASafariM account on this device, so the next sign-in asks who you are. Apps you already opened keep their own session until you sign out there.",
         link: { href: "/login", label: "Sign in again" },
       }),
     );
+  }
+
+  async function endAuthSession(ctx: HttpContext) {
+    const current = await currentSession(ctx);
+    if (current) {
+      await d.sessions.destroy(current.token);
+      await audit({ event: "logout", principalId: current.session.principalId });
+    }
+    setCookie(ctx, AUTH_COOKIE, null, "/", 0);
   }
 
   // ---- admin ------------------------------------------------------------------------------------
@@ -1132,6 +1146,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     handle,
     authorizedPrincipal,
     auditInteractionLogin,
+    endAuthSession,
     loginUrl: (uid, fresh) => `/login?uid=${encodeURIComponent(uid)}${fresh ? "&fresh=1" : ""}`,
   };
 }

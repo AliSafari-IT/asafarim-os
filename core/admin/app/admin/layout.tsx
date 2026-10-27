@@ -4,16 +4,11 @@ import Link from "next/link";
 import { AdminLogo } from "@/components/AdminLogo";
 import { Nav } from "@/components/Nav";
 import { SignOutIcon } from "@/components/SignOutIcon";
-import { signOut } from "@/lib/auth";
 import { coreApi } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
+import { signOutAction } from "@/lib/sign-out";
 
 export const dynamic = "force-dynamic";
-
-async function signOutAction() {
-  "use server";
-  await signOut({ redirectTo: "/signin" });
-}
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const admin = await requireAdmin(); // a redirect to sign-in, or a 403, before anything is shown

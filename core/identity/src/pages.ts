@@ -159,7 +159,7 @@ export function errorPage(opts: { title?: string; message: string; code?: string
 export function logoutPage(form: string): string {
   return page(
     "Sign out",
-    `<h1>Sign out?</h1><p>You'll be signed out of ASafariM apps that use this sign-in.</p>${form}
+    `<h1>Sign out of ASafariM?</h1><p>This signs you out of your ASafariM account on this device, so the next sign-in asks who you are. Apps you already opened keep their own session until you sign out there.</p>${form}
 <button form="op.logoutForm" name="logout" value="yes" autofocus>Sign out</button>
 <button form="op.logoutForm" class="secondary">Stay signed in</button>`,
   );

@@ -1,13 +1,15 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { ThemeToggle } from "@asafarim/theme/react";
 import { AdminLogo } from "@/components/AdminLogo";
-import { signIn } from "@/lib/auth";
+import { SIGNED_OUT_COOKIE, signIn } from "@/lib/auth";
 import { adminState } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
 async function signInAction() {
   "use server";
+  (await cookies()).delete({ name: SIGNED_OUT_COOKIE, path: "/signin" });
   await signIn("asafarim", { redirectTo: "/admin" });
 }
 

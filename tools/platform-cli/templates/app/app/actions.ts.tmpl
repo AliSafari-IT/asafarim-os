@@ -2,7 +2,8 @@
 
 import { ACCESS_COOKIE_NAME } from "@asafarim/app-sdk";
 import { cookies } from "next/headers";
-import { signIn, signOut } from "@/lib/auth";
+import { redirect } from "next/navigation";
+import { endSessionHref, signIn, signOut } from "@/lib/auth";
 
 export async function signInAction() {
   await signIn("asafarim", { redirectTo: "/" });
@@ -18,5 +19,7 @@ export async function signOutAction() {
     httpOnly: true,
     sameSite: "lax",
   });
-  await signOut({ redirectTo: "/" });
+  await signOut({ redirect: false });
+  // Then out of identity too: otherwise "Sign in" goes straight back into the same account without asking.
+  redirect(await endSessionHref());
 }
