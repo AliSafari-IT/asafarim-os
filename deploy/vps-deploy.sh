@@ -62,6 +62,11 @@
 # sites/asafarim-os.caddy with sites/asafarim-os-flow.caddy appended (written to .vps-deploy-site.caddy). Without that
 # file the deploy is exactly what it was before: no os-flow, and sites/asafarim-os.caddy unchanged. Production has no
 # event bus yet, so Flow runs without one (no ASAFARIM_NATS_URL).
+# The event bus (os-nats, asafarim-os#259; full mode only): when core-api is part of the deploy and the commit has
+# core/nats/.env.production.age, the same steps decrypt it into .env.nats, check core/nats/.env.production.example's
+# names, start os-nats (profile "nats", on top of "core"; on os_core only, no published port) and wait for its health.
+# It publishes nothing on the edge and takes no image sha (the image is pinned in deploy/compose.prod.yml). Without that
+# file the deploy is exactly what it was before: no .env.nats, no nats profile, no os-nats.
 # asafarim.site cutover: remove the asafarim.site and www.asafarim.site blocks from asafarim-com.caddy first
 # (deploy/README.md); until then step 7's validation refuses the duplicate host and keeps the old config.
 #
@@ -72,7 +77,7 @@ set -euo pipefail
 # replace this very file while bash is still reading it; bash has parsed all of main() by then.
 main() {
   local usage="usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>] [<flow-image-commit>] | --site-only <commit> [<site-image-commit>] [<docs-image-commit>]"
-  local site_only=false with_core_api=false with_admin=false with_flow=false
+  local site_only=false with_core_api=false with_admin=false with_flow=false with_nats=false
   if [[ "${1:-}" == "--site-only" ]]; then
     site_only=true
     shift
@@ -229,6 +234,23 @@ main() {
     else
       log "No apps/flow/.env.production.age in this commit: Flow is not part of this deploy."
     fi
+
+    # The event bus joins once its encrypted env is committed, and only next to core-api (it answers the bus's auth callout).
+    if [[ -f core/nats/.env.production.age ]]; then
+      [[ "$with_core_api" == true ]] \
+        || fatal "core/nats/.env.production.age is in this commit but core/core-api/.env.production.age is not: the event bus needs core-api."
+      with_nats=true
+      log "Decrypting core/nats/.env.production.age..."
+      ( umask 077 && age -d -i .age/key.txt core/nats/.env.production.age > .env.nats.tmp ) \
+        || { rm -f .env.nats.tmp; fatal "age could not decrypt core/nats/.env.production.age."; }
+      mv -f .env.nats.tmp .env.nats
+      chmod 600 .env.nats
+      log "Checking the event bus environment (names only)..."
+      require_env_vars .env.nats core/nats/.env.production.example \
+        || fatal "fill the variables named above in core/nats/.env.production (node deploy/nats/new-env.mjs writes them all), re-encrypt it, commit the .age file, and deploy that commit."
+    else
+      log "No core/nats/.env.production.age in this commit: the event bus is not part of this deploy."
+    fi
   fi
   docker network inspect edge_net >/dev/null 2>&1 \
     || fatal "the edge_net network does not exist. The shared edge is not installed on this host."
@@ -247,6 +269,7 @@ main() {
     local profiles=core
     [[ "$with_admin" == true ]] && profiles+=",admin"
     [[ "$with_flow" == true ]] && profiles+=",flow"
+    [[ "$with_nats" == true ]] && profiles+=",nats"
     export COMPOSE_PROFILES="$profiles"
   else
     unset COMPOSE_PROFILES
@@ -269,7 +292,7 @@ main() {
   else
     log "Checking the compose file..."
     "${compose[@]}" config -q
-    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")$([[ "$with_admin" == true ]] && echo ", :admin-${ADMIN_IMAGE_TAG}")$([[ "$with_flow" == true ]] && echo ", :flow-${FLOW_IMAGE_TAG}")..."
+    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")$([[ "$with_admin" == true ]] && echo ", :admin-${ADMIN_IMAGE_TAG}")$([[ "$with_flow" == true ]] && echo ", :flow-${FLOW_IMAGE_TAG}")$([[ "$with_nats" == true ]] && echo " and nats:2.11-alpine")..."
     if ! pull_with_retry "${compose[@]}" pull; then
       fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image, ${ADMIN_IMAGE_TAG} no admin image or ${FLOW_IMAGE_TAG} no flow image (see the 'Identity image', 'Site image', 'Docs image', 'Core API image', 'Admin image' and 'Flow image' workflow runs), or a landing page image pinned in deploy/compose.prod.yml is not published (the 'Site image' run in AliSafari-IT/breinhap, or the 'Landing page image' run in AliSafari-IT/igs-pharma)."
     fi
@@ -308,6 +331,23 @@ main() {
         fatal "os-core-api did not become ready within 120s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 os-postgres os-core-api"
       fi
       log "os-core-api is ready."
+    fi
+
+    if [[ "$with_nats" == true ]]; then
+      # The container's own healthcheck asks the same: JetStream is up. Allow a minute for the first start.
+      log "Waiting for os-nats's /healthz (JetStream)..."
+      local nats_ready=false
+      for _ in $(seq 1 30); do
+        if "${compose[@]}" exec -T os-nats wget -qO- "http://127.0.0.1:8222/healthz?js-enabled-only=true" >/dev/null 2>&1; then
+          nats_ready=true
+          break
+        fi
+        sleep 2
+      done
+      if [[ "$nats_ready" != true ]]; then
+        fatal "os-nats did not become ready within 60s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 os-nats"
+      fi
+      log "os-nats is ready."
     fi
 
     if [[ "$with_admin" == true ]]; then

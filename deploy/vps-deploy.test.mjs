@@ -5,7 +5,17 @@
 //   node --test deploy/vps-deploy.test.mjs          (needs bash)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -23,6 +33,7 @@ const docsExample = path.join(root, "apps", "docs", ".env.production.example");
 const coreApiExample = path.join(root, "core", "core-api", ".env.production.example");
 const adminExample = path.join(root, "core", "admin", ".env.production.example");
 const flowExample = path.join(root, "apps", "flow", ".env.production.example");
+const natsExample = path.join(root, "core", "nats", ".env.production.example");
 
 /** Run require_env_vars on two fixture files; returns { status, output } with stdout and stderr together. */
 function check(envText, exampleText) {
@@ -333,6 +344,8 @@ function runDeploy(
     adminEnvEmpty = false,
     flowEnv = false,
     flowEnvEmpty = false,
+    natsEnv = false,
+    natsEnvEmpty = false,
     pullFails = 0,
     pullAttempts = "",
   } = {},
@@ -358,6 +371,7 @@ function runDeploy(
       "core/core-api/.env.production.example",
       "core/admin/.env.production.example",
       "apps/flow/.env.production.example",
+      "core/nats/.env.production.example",
     ]) {
       cpSync(path.join(root, file), path.join(repo, file), { recursive: true });
     }
@@ -373,6 +387,7 @@ function runDeploy(
     if (coreApiEnv) writeFileSync(path.join(repo, "core/core-api/.env.production.age"), "stand-in ciphertext\n");
     if (adminEnv) writeFileSync(path.join(repo, "core/admin/.env.production.age"), "stand-in ciphertext\n");
     if (flowEnv) writeFileSync(path.join(repo, "apps/flow/.env.production.age"), "stand-in ciphertext\n");
+    if (natsEnv) writeFileSync(path.join(repo, "core/nats/.env.production.age"), "stand-in ciphertext\n");
     const fill = (example) =>
       readFileSync(example, "utf8")
         .match(/^[A-Z][A-Z0-9_]*(?==)/gm)
@@ -392,6 +407,9 @@ function runDeploy(
       `elif [[ "$*" == *apps/flow/* ]]; then`,
       `  [[ -n "$FLOW_ENV_EMPTY" ]] && exit 0`,
       fill(flowExample),
+      `elif [[ "$*" == *core/nats/* ]]; then`,
+      `  [[ -n "$NATS_ENV_EMPTY" ]] && exit 0`,
+      fill(natsExample),
       `else`,
       fill(realExample),
       `fi`,
@@ -448,6 +466,7 @@ function runDeploy(
         CORE_API_ENV_EMPTY: coreApiEnvEmpty ? "1" : "",
         ADMIN_ENV_EMPTY: adminEnvEmpty ? "1" : "",
         FLOW_ENV_EMPTY: flowEnvEmpty ? "1" : "",
+        NATS_ENV_EMPTY: natsEnvEmpty ? "1" : "",
         PULL_FAILS: String(pullFails),
         PULL_COUNT: path.join(dir, "pull-count"),
         DEPLOY_PULL_RETRY_DELAY: "0",
@@ -464,6 +483,7 @@ function runDeploy(
       envCoreApiWritten: existsSync(path.join(repo, ".env.core-api")),
       envAdminWritten: existsSync(path.join(repo, ".env.admin")),
       envFlowWritten: existsSync(path.join(repo, ".env.flow")),
+      envNatsWritten: existsSync(path.join(repo, ".env.nats")),
       generatedSite: existsSync(path.join(repo, ".vps-deploy-site.caddy"))
         ? readFileSync(path.join(repo, ".vps-deploy-site.caddy"), "utf8")
         : null,
@@ -1043,5 +1063,225 @@ test("deploy/flow/new-env.mjs prints file names, never a value", () => {
   const source = readFileSync(path.join(root, "deploy", "flow", "new-env.mjs"), "utf8");
   for (const m of source.matchAll(/console\.(log|error)\(([\s\S]*?)\);/g)) {
     assert.doesNotMatch(m[2], /\benv\.(flow|identity)\b|secret\(|clientSecret/, `it must not print a value: ${m[2]}`);
+  }
+});
+
+// The event bus (os-nats, asafarim-os#259): part of the full deploy next to core-api, once core/nats/.env.production.age is
+// committed. Without it, a deploy must be EXACTLY what it was: the same commands, the same site file, byte for byte.
+test("without core/nats/.env.production.age: no bus env, no nats profile, os-nats never touched, the site file unchanged", () => {
+  for (const [args, opts] of [
+    [[SHA, SHA, SITE_SHA, DOCS_SHA], { full: true }],
+    [[SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], { full: true, coreApiEnv: true }],
+    [[SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA], { full: true, coreApiEnv: true, adminEnv: true }],
+    [[SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, FLOW_SHA], { full: true, coreApiEnv: true, flowEnv: true }],
+  ]) {
+    const r = runDeploy(args, opts);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!r.calls.some((c) => c.includes("core/nats") || c.includes("os-nats")), r.calls.join("\n"));
+    assert.ok(!r.calls.some((c) => /^profiles=\S*nats/.test(c)), "the nats profile is off");
+    assert.equal(r.envNatsWritten, false);
+    // The one line that says it is not part of this deploy, like the Admin console's and Flow's; nothing else names it.
+    const mentions = r.stdout.split("\n").filter((l) => /nats|event bus/i.test(l));
+    assert.equal(mentions.length, 1, mentions.join("\n"));
+    assert.match(
+      mentions[0],
+      /No core\/nats\/\.env\.production\.age in this commit: the event bus is not part of this deploy\./,
+    );
+    assert.equal(r.liveSite?.includes("nats"), false);
+  }
+});
+
+test("without core/nats/.env.production.age: the compose commands are exactly those of the deploy before the bus", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, FLOW_SHA], {
+    full: true,
+    coreApiEnv: true,
+    adminEnv: true,
+    flowEnv: true,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const profiled = r.calls
+    .filter((c) => c.startsWith("profiles=core,admin,flow "))
+    .map((c) => c.slice("profiles=core,admin,flow ".length).replace(`${compose.slice("docker ".length)} `, ""));
+  assert.deepEqual(profiled, [
+    "config -q",
+    "pull",
+    "up -d --remove-orphans",
+    "exec -T identity wget -qO- http://127.0.0.1:3000/readyz",
+    "exec -T os-core-api wget -qO- http://127.0.0.1:4020/readyz",
+    "exec -T os-admin wget -qO- http://127.0.0.1:3000/api/health",
+    "exec -T os-flow wget -qO- http://127.0.0.1:3000/health/ready",
+    "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T breinhap-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T igs-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
+  ]);
+  assert.equal(r.generatedSite, fullSite + flowSite);
+});
+
+test("with core/nats/.env.production.age: decrypts and checks it, starts the nats profile, waits for the bus, publishes the same site file", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], { full: true, coreApiEnv: true, natsEnv: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.calls.includes("age -d -i .age/key.txt core/nats/.env.production.age"));
+  assert.equal(r.envNatsWritten, true, ".env.nats is os-nats's env_file");
+  const profiled = r.calls
+    .filter((c) => c.startsWith("profiles=core,nats "))
+    .map((c) => c.slice("profiles=core,nats ".length).replace(`${compose.slice("docker ".length)} `, ""));
+  assert.deepEqual(profiled, [
+    "config -q",
+    "pull",
+    "up -d --remove-orphans",
+    "exec -T identity wget -qO- http://127.0.0.1:3000/readyz",
+    "exec -T os-core-api wget -qO- http://127.0.0.1:4020/readyz",
+    "exec -T os-nats wget -qO- http://127.0.0.1:8222/healthz?js-enabled-only=true",
+    "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T breinhap-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T igs-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
+  ]);
+  assert.match(r.stdout, /nats:2\.\d+-alpine/, "the pull names the bus image");
+  const natsReadyAt = r.calls.findIndex((c) => c.includes("exec -T os-nats wget"));
+  const edgeAt = r.calls.findIndex((c) => c.startsWith("edge-deploy-site.sh"));
+  assert.ok(natsReadyAt >= 0 && edgeAt > natsReadyAt, r.calls.join("\n"));
+  // The bus publishes nothing on the edge: the site file is the plain full one, byte for byte.
+  assert.equal(r.generatedSite, null);
+  assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os.caddy`), r.calls.join("\n"));
+  assert.equal(r.liveSite, fullSite);
+});
+
+test("with the Admin console, Flow and the bus: all three profiles on top of core", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, FLOW_SHA], {
+    full: true,
+    coreApiEnv: true,
+    adminEnv: true,
+    flowEnv: true,
+    natsEnv: true,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(
+    r.calls.some((c) => c.startsWith("profiles=core,admin,flow,nats ")),
+    r.calls.join("\n"),
+  );
+  assert.equal(r.generatedSite, fullSite + flowSite);
+});
+
+test("a bus env with a variable missing stops the deploy before pulling, naming it and never a value", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], {
+    full: true,
+    coreApiEnv: true,
+    natsEnv: true,
+    natsEnvEmpty: true,
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /missing or empty in \.env\.nats: NATS_AUTH_ISSUER NATS_CORE_PASSWORD/);
+  assert.match(r.stderr, /node deploy\/nats\/new-env\.mjs/);
+  assert.doesNotMatch(r.stderr, /stand-in/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c) || c.startsWith("edge-deploy-site.sh")), r.calls.join("\n"));
+});
+
+test("the bus env without core-api's is refused before anything is pulled: the bus needs core-api", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], { full: true, natsEnv: true });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /the event bus needs core-api/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c)));
+  assert.equal(r.envNatsWritten, false);
+});
+
+test("--site-only never touches the bus, even when its env is committed", () => {
+  const r = runDeploy(["--site-only", SHA], { coreApiEnv: true, natsEnv: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!r.calls.some((c) => c.includes("core/nats") || c.includes("os-nats")), r.calls.join("\n"));
+  assert.equal(r.envNatsWritten, false);
+  assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os-site.caddy`));
+});
+
+test("the bus example requires exactly NATS_AUTH_ISSUER and NATS_CORE_PASSWORD, and never the callout's seed", () => {
+  const text = readFileSync(natsExample, "utf8");
+  assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), ["NATS_AUTH_ISSUER", "NATS_CORE_PASSWORD"]);
+  assert.doesNotMatch(text, /^(# )?\w*SEED\w*=/m, "the signing key stays in core-api's env");
+});
+
+test("deploy/nats/new-env.mjs makes ONE key and ONE password for both sides, and overwrites nothing", async () => {
+  const { newEnv, writeEnv, CORE_USER } = await import("./nats/new-env.mjs");
+  const { fromSeed } = await import("@nats-io/nkeys");
+  const parse = (text) =>
+    Object.fromEntries(
+      text
+        .split("\n")
+        .filter((l) => l && !l.startsWith("#"))
+        .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
+    );
+  const generated = newEnv();
+  const nats = parse(generated.nats);
+  const coreApi = parse(generated.coreApi);
+  assert.equal(check(generated.nats, readFileSync(natsExample, "utf8")).status, 0, "fills the bus example");
+  assert.deepEqual(Object.keys(nats), ["NATS_AUTH_ISSUER", "NATS_CORE_PASSWORD"]);
+  assert.deepEqual(Object.keys(coreApi), ["CORE_API_NATS_USER", "CORE_API_NATS_PASSWORD", "CORE_API_NATS_ISSUER_SEED"]);
+  assert.equal(coreApi.CORE_API_NATS_USER, CORE_USER);
+  assert.equal(CORE_USER, "core", "deploy/nats/nats.conf's one login");
+  assert.equal(coreApi.CORE_API_NATS_PASSWORD, nats.NATS_CORE_PASSWORD, "one password for both sides");
+  assert.ok(nats.NATS_CORE_PASSWORD.length >= 32);
+  // The seed is an account nkey seed (what core-api's parseBusConfig accepts) and its public key is what the bus trusts.
+  assert.match(coreApi.CORE_API_NATS_ISSUER_SEED, /^SA[A-Z2-7]{50,}$/);
+  assert.match(nats.NATS_AUTH_ISSUER, /^A[A-Z2-7]{55}$/);
+  assert.equal(
+    fromSeed(new TextEncoder().encode(coreApi.CORE_API_NATS_ISSUER_SEED)).getPublicKey(),
+    nats.NATS_AUTH_ISSUER,
+  );
+  assert.doesNotMatch(generated.nats, /SEED|SA[A-Z2-7]{50}/, "the bus's file holds the public half only");
+  assert.notEqual(newEnv().nats, generated.nats, "every run is new");
+
+  // Each scenario gets its own directory, and no path is checked and then used: the files are read, or the
+  // directory is listed, never probed first.
+  const dirs = [];
+  const scenario = (coreApiText) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "nats-new-env-"));
+    dirs.push(dir);
+    if (coreApiText !== undefined) writeFileSync(path.join(dir, "core-api.env"), coreApiText);
+    return { dir, natsFile: path.join(dir, "nats.env"), coreApiFile: path.join(dir, "core-api.env") };
+  };
+  try {
+    // core-api's env must be there first: nothing is written without it.
+    const missing = scenario();
+    assert.match(writeEnv(missing), /pnpm env:decrypt:production/);
+    assert.deepEqual(readdirSync(missing.dir), []);
+
+    // Both files are written, sharing one password; core-api's own lines stay, and the missing newline is added.
+    const ok = scenario("CORE_API_ADMIN_TOKEN=keep-me");
+    assert.equal(writeEnv(ok), undefined);
+    const written = parse(readFileSync(ok.natsFile, "utf8"));
+    const added = parse(readFileSync(ok.coreApiFile, "utf8"));
+    assert.equal(added.CORE_API_ADMIN_TOKEN, "keep-me");
+    assert.equal(added.CORE_API_NATS_PASSWORD, written.NATS_CORE_PASSWORD);
+    assert.equal(statSync(ok.natsFile).mode & 0o777, 0o600);
+
+    // A second run changes nothing: core-api's env already names the variables.
+    const again = scenario("CORE_API_ADMIN_TOKEN=keep-me\nCORE_API_NATS_USER=core\n");
+    assert.match(writeEnv(again), /already names a CORE_API_NATS_ variable/);
+    assert.deepEqual(readdirSync(again.dir), ["core-api.env"], "nothing is written when core-api's env refuses");
+    assert.equal(readFileSync(again.coreApiFile, "utf8"), "CORE_API_ADMIN_TOKEN=keep-me\nCORE_API_NATS_USER=core\n");
+
+    // The bus's file already exists: it is not overwritten, and core-api's env is not touched.
+    const exists = scenario("CORE_API_ADMIN_TOKEN=keep-me\n");
+    writeFileSync(exists.natsFile, "keep-this\n");
+    assert.match(writeEnv(exists), /nats\.env already exists/);
+    assert.equal(
+      readFileSync(exists.coreApiFile, "utf8"),
+      "CORE_API_ADMIN_TOKEN=keep-me\n",
+      "core-api's env untouched",
+    );
+    assert.equal(readFileSync(exists.natsFile, "utf8"), "keep-this\n", "the bus's env untouched");
+  } finally {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deploy/nats/new-env.mjs prints file names, never a value", () => {
+  const source = readFileSync(path.join(root, "deploy", "nats", "new-env.mjs"), "utf8");
+  for (const m of source.matchAll(/console\.(log|error)\(([\s\S]*?)\);/g)) {
+    assert.doesNotMatch(
+      m[2],
+      /\benv\.(nats|coreApi)\b|secret\(|getSeed\(|getPublicKey\(|\bpassword\b(?!\w)(?<!_PASSWORD)/,
+      `it must not print a value: ${m[2]}`,
+    );
   }
 });

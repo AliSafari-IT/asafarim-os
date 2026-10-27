@@ -188,13 +188,21 @@ jobs:
           # Empty stand-ins: Compose refuses a missing env_file, and the real ones are secret and git-ignored.
           : > .env.identity
           : > .env.docs
-          IMAGE_TAG=ci SITE_IMAGE_TAG=ci DOCS_IMAGE_TAG=ci CORE_API_IMAGE_TAG=ci ADMIN_IMAGE_TAG=ci docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+          # Every image tag is required (no default), also for a service whose profile is off.
+          export IMAGE_TAG=ci SITE_IMAGE_TAG=ci DOCS_IMAGE_TAG=ci CORE_API_IMAGE_TAG=ci ADMIN_IMAGE_TAG=ci FLOW_IMAGE_TAG=ci
+          docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
           # And with the core profile (os-postgres, os-core-api), as a deploy with core-api's env runs it.
           : > .env.core-api
-          COMPOSE_PROFILES=core IMAGE_TAG=ci SITE_IMAGE_TAG=ci DOCS_IMAGE_TAG=ci CORE_API_IMAGE_TAG=ci ADMIN_IMAGE_TAG=ci docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+          COMPOSE_PROFILES=core docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
           # And with the Admin console on top (os-admin, #175).
           : > .env.admin
-          COMPOSE_PROFILES=core,admin IMAGE_TAG=ci SITE_IMAGE_TAG=ci DOCS_IMAGE_TAG=ci CORE_API_IMAGE_TAG=ci ADMIN_IMAGE_TAG=ci docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+          COMPOSE_PROFILES=core,admin docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+          # And with Flow (os-flow, #258) and the event bus (os-nats, #259): every profile at once.
+          : > .env.flow
+          : > .env.nats
+          COMPOSE_PROFILES=core,flow docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+          COMPOSE_PROFILES=core,nats docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+          COMPOSE_PROFILES=core,admin,flow,nats docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
 
       - name: shellcheck the deploy scripts
         run: shellcheck -S warning deploy/vps-deploy.sh deploy/lib/env-check.sh deploy/lib/live-caddy.sh deploy/redeploy.sh deploy/test-fixtures/run-env-check.sh deploy/core-api/initdb/10-core.sh

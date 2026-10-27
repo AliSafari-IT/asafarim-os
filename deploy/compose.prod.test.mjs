@@ -53,6 +53,7 @@ function render(
     writeFileSync(path.join(dir, ".env.core-api"), "");
     writeFileSync(path.join(dir, ".env.admin"), "");
     writeFileSync(path.join(dir, ".env.flow"), "");
+    writeFileSync(path.join(dir, ".env.nats"), "");
     mkdirSync(path.join(dir, "deploy", "core-api", "initdb"), { recursive: true });
     const run = spawnSync("docker", ["compose", "-f", "compose.prod.yml", "config", "--format", "json"], {
       cwd: path.join(dir, "deploy"),
@@ -566,7 +567,7 @@ test("the README's stop command renders: every image tag it needs is set, with a
     .find((l) => l.includes("docker compose -p asafarim-os") && l.trim().endsWith(" down"));
   assert.ok(line, "the Rollback section's `down` command was not found");
   const vars = Object.fromEntries([...line.matchAll(/\b([A-Z_]+)=(\S+)/g)].map((m) => [m[1], m[2]]));
-  for (const profiles of [vars.COMPOSE_PROFILES ?? "", "", "core,admin,flow"]) {
+  for (const profiles of [vars.COMPOSE_PROFILES ?? "", "", "core,admin,flow,nats"]) {
     const r = render({
       IMAGE_TAG: "",
       SITE_IMAGE_TAG: "",
@@ -764,4 +765,140 @@ test("flow.asafarim.site is in neither the full nor the site-only file: only a d
   const both = `${activeSite}\n${activeFlowSite}`;
   const hosts = [...both.matchAll(/^([a-z0-9.*-]+)\s*\{/gm)].map((m) => m[1]);
   assert.equal(new Set(hosts).size, hosts.length, hosts.join());
+});
+
+// ---- the event bus (asafarim-os#259): its own "nats" profile, on top of "core", turned on once
+// core/nats/.env.production.age is committed.
+const natsConfText = readFileSync(path.join(root, "deploy", "nats", "nats.conf"), "utf8");
+/** nats.conf without comment-only lines and trailing comments. */
+const natsConf = natsConfText
+  .split("\n")
+  .map((l) => l.replace(/\s+#.*$/, ""))
+  .filter((l) => !l.trim().startsWith("#"))
+  .join("\n");
+const natsRendered = render({
+  IMAGE_TAG: "testsha",
+  SITE_IMAGE_TAG: "sitesha",
+  DOCS_IMAGE_TAG: "docssha",
+  CORE_API_IMAGE_TAG: "coresha",
+  COMPOSE_PROFILES: "core,nats",
+});
+assert.equal(natsRendered.status, 0, natsRendered.stderr);
+const natsConfig = JSON.parse(natsRendered.stdout);
+const nats = natsConfig.services["os-nats"];
+
+test("os-nats is only in the nats profile: neither the default stack nor core nor core,admin nor core,flow has it", () => {
+  assert.deepEqual(nats.profiles, ["nats"]);
+  for (const c of [config, coreConfig, adminConfig, flowConfig]) assert.ok(!("os-nats" in c.services));
+  assert.deepEqual(
+    Object.keys(natsConfig.services).sort(),
+    [...Object.keys(coreConfig.services), "os-nats"].sort(),
+    "the nats profile adds os-nats and nothing else",
+  );
+});
+
+test("os-nats runs a pinned minor line of the official image, never a floating tag", () => {
+  assert.match(nats.image, /^nats:2\.\d+-alpine$/);
+});
+
+test("os-nats is hardened like the other services: read_only, no capabilities, a small tmpfs, limits, a healthcheck", () => {
+  assert.equal(nats.read_only, true);
+  assert.deepEqual(nats.cap_drop, ["ALL"]);
+  assert.ok(nats.security_opt.includes("no-new-privileges:true"));
+  assert.ok(nats.tmpfs?.some((t) => t.startsWith("/tmp:")));
+  assert.ok(Number(nats.mem_limit) > 0 && Number(nats.mem_limit) <= 256 * 1024 * 1024, "within the dev bus's 256m");
+  assert.ok(nats.cpus > 0 && nats.cpus <= 0.5);
+  assert.ok(
+    nats.healthcheck?.test?.some((a) => a.includes("127.0.0.1:8222/healthz?js-enabled-only=true")),
+    JSON.stringify(nats.healthcheck),
+  );
+});
+
+test("os-nats keeps its store on a named volume and mounts its config DIRECTORY read-only, not one file", () => {
+  const store = nats.volumes.find((v) => v.target === "/data");
+  assert.equal(store?.type, "volume");
+  assert.equal(store?.source, "os_nats_data");
+  const conf = nats.volumes.find((v) => v.target === "/etc/nats");
+  assert.equal(conf?.type, "bind");
+  assert.equal(conf?.read_only, true);
+  assert.ok(conf.source.endsWith(`${path.sep}nats`), "the directory deploy/nats, not deploy/nats/nats.conf");
+  assert.deepEqual(nats.command.slice(0, 2), ["-c", "/etc/nats/nats.conf"]);
+  assert.ok(nats.command.includes("-js"));
+  assert.equal(nats.command[nats.command.indexOf("-sd") + 1], "/data");
+  assert.ok("os_nats_data" in natsConfig.volumes);
+});
+
+test("os-nats is on os_core ONLY, as os-nats, and publishes no port: never edge_net", () => {
+  assert.deepEqual(networkNames(nats), ["os_core"]);
+  assert.deepEqual(nats.networks.os_core.aliases, ["os-nats"]);
+  assert.ok(!nats.ports || nats.ports.length === 0, "os-nats publishes no port");
+  for (const [name, service] of Object.entries(natsConfig.services)) {
+    if (name === "os-core-api") continue;
+    assert.ok(!service.ports || service.ports.length === 0, `${name} publishes a port`);
+  }
+});
+
+test("only core-api's side of the stack, the database and the apps core-api serves share a network with the bus", () => {
+  const onCore = Object.entries(natsConfig.services)
+    .filter(([, service]) => networkNames(service).includes("os_core"))
+    .map(([name]) => name)
+    .sort();
+  assert.deepEqual(onCore, ["os-core-api", "os-docs", "os-nats", "os-postgres"]);
+  assert.ok(!networkNames(natsConfig.services.identity).includes("os_core"));
+  assert.ok(!networkNames(natsConfig.services["os-redis"]).includes("os_core"));
+});
+
+test("os-nats reads its two values from ../.env.nats only; nothing secret is in its environment", () => {
+  assert.match(composeText, /os-nats:[\s\S]*?env_file:\n\s+- \.\.\/\.env\.nats\n/);
+  for (const name of Object.keys(nats.environment ?? {})) {
+    assert.ok(!/PASSWORD|SEED|SECRET|TOKEN|ISSUER/.test(name), `${name} is a secret: it belongs in .env.nats`);
+  }
+});
+
+test("without a nats profile, the stack is what it was: no other service names os-nats", () => {
+  for (const [name, service] of Object.entries(natsConfig.services)) {
+    if (name === "os-nats") continue;
+    assert.ok(!JSON.stringify(service).includes("os-nats"), `${name} mentions os-nats before the follow-up PR`);
+  }
+});
+
+test("nats.conf refuses anonymous clients: the callout, the one `core` login, and no other way in", () => {
+  assert.match(natsConf, /auth_callout\s*\{[^}]*issuer:\s*\$NATS_AUTH_ISSUER/);
+  assert.match(natsConf, /auth_users:\s*\[\s*core\s*\]/);
+  assert.match(natsConf, /users:\s*\[\s*\{\s*user:\s*core,\s*password:\s*\$NATS_CORE_PASSWORD\s*\}\s*\]/);
+  // Exactly one login is configured, and it is core-api's.
+  assert.equal([...natsConf.matchAll(/\buser:/g)].length, 1);
+  for (const forbidden of [
+    "no_auth_user",
+    "token",
+    "nkey",
+    "allow_anonymous",
+    "tls",
+    "websocket",
+    "leafnodes",
+    "mqtt",
+  ]) {
+    assert.ok(!new RegExp(`\\b${forbidden}\\b`).test(natsConf), `nats.conf must not set ${forbidden}`);
+  }
+  assert.match(natsConf, /OS\s*\{[^}]*jetstream:\s*enabled/);
+});
+
+test("nats.conf holds no secret: both values come from the environment", () => {
+  assert.match(natsConf, /password:\s*\$NATS_CORE_PASSWORD/);
+  assert.doesNotMatch(natsConf, /\bA[A-Z2-7]{55}\b/, "no nkey literal");
+  assert.doesNotMatch(natsConf, /password:\s*(?!\$)\S/, "no literal password");
+});
+
+test("nats.conf is the dev bus's design: the same accounts and callout blocks", () => {
+  const dev = readFileSync(path.join(root, "scripts", "dev", "nats", "nats.conf"), "utf8")
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n")
+    .replace(/\s+/g, " ")
+    .trim();
+  const prod = natsConf
+    .replace(/max_connections:\s*\d+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  assert.equal(prod, dev);
 });
