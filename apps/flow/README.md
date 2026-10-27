@@ -102,8 +102,10 @@ Write a study note with `#issue` in Docs: a run appears on Flow's Overview, wait
 
 ```bash
 pnpm --filter @asafarim/flow test   # unit tests; with FLOW_TEST_ADMIN_URL (a dev Postgres superuser URL) also the integration test
-pnpm e2e                            # flow.spec.ts last: a #issue note in Docs → a waiting run in Flow, through the bus
+pnpm e2e                            # flow.spec.ts last: slice 1 end to end through the bus, GitHub and Claude mocked
 ```
+
+- `e2e/flow.spec.ts` (`pnpm e2e`): a `#issue` note in Docs → Docs' draft under Approvals (repository, public banner, title, body, labels) → Approve creates exactly one issue and the note links it "via Flow", the run `succeeded` with every step timed; Reject ends it `rejected`; a note that got an issue meanwhile fails with `issue_exists`; without `flow.approvals.decide` the pages and the action are 403; without Docs' permission the create step fails with `forbidden`. Each failure's code and message is checked on the Run page. GitHub and Claude are local mocks (`e2e/mocks.mjs`, its own process); `scripts/dev/e2e.mjs` restarts Docs against them (`DOCS_E2E_GITHUB_API_URL`, `DOCS_E2E_AI_API_URL`, loopback only) before this suite, and the spec counts the issues the GitHub mock holds (`E2E_GITHUB_MOCK_URL`).
 
 - `test/definition.test.ts`, `test/conditions.test.ts` and `test/requests.test.ts`: the format, the operators and the request mappings against their schemas.
 - `test/engine.test.ts`: every transition, the sweeper, retry and cancel, and the approval (reached, approved with and without edits, edits outside `editable`, public without acknowledgement, rejected, decided twice, expired, cancelled, retried after it), over an in-memory store (`test/memory-store.ts`) with the real publisher, so `flow.issue.approved.v1` is checked against its schema. The draft is fed to the engine as a `docs.issue-draft.ready.v1` outcome.

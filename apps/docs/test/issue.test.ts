@@ -90,7 +90,16 @@ function memoryStore(): NotesStore & { notes: (Note & { author: string })[] } {
     },
     async create(author, input) {
       const now = new Date().toISOString();
-      const note = { ...input, id: String(next++), author, issueUrl: null, createdAt: now, updatedAt: now };
+      const note = {
+        ...input,
+        id: String(next++),
+        author,
+        issueUrl: null,
+        flowApprovalId: null,
+        flowApprovalAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
       notes.push(note);
       return note;
     },
@@ -108,6 +117,9 @@ function memoryStore(): NotesStore & { notes: (Note & { author: string })[] } {
       const n = own(author, id);
       if (n) n.issueUrl = url;
       return n;
+    },
+    async recordFlowApproval() {
+      throw new Error("the routes never record a Flow approval");
     },
   };
 }
@@ -132,6 +144,10 @@ function fakeTracker(opts: { public?: boolean; noAccess?: string[] } = {}) {
       calls.push({ op: "create", repo, issue });
       check(repo);
       return { url: `https://github.com/${repo}/issues/7`, number: 7 };
+    },
+    async findByMarker(repo) {
+      calls.push({ op: "findByMarker", repo });
+      return null;
     },
   };
   return { tracker, calls };

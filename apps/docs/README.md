@@ -95,6 +95,34 @@ Docs subscribes to **`flow.issue-draft.requested.v1`** (`{ runId, stepId, noteId
 
 `test/issue-draft-handler.test.ts` runs every branch through the SDK's delivery code over `test/fake-db.ts`, with GitHub and the AI mocked, and checks every answer against its schema.
 
+### Creating the approved issue
+
+Once the owner approves the draft in Flow, Docs gets **`flow.issue.approved.v1`** (`{ runId, stepId, approvalId, noteId, onBehalfOf, decidedBy, decidedAt, repo, title, body, labels, acknowledgedPublic }`, [Flow's schema](../flow/events/flow.issue.approved.v1.json)) and answers with exactly one of:
+
+- **`docs.issue.created.v1`** ([schema](events/docs.issue.created.v1.json)): `runId`, `stepId`, `requestId`, `noteId`, `issueUrl`.
+- **`docs.issue.failed.v1`** ([schema](events/docs.issue.failed.v1.json)): `runId`, `stepId`, `requestId`, `noteId`, `code`, `message` (at most 1 000). Nothing was created on GitHub.
+
+The handler (`lib/issue-create-handler.ts`) runs in the inbox transaction like the draft's, in order:
+
+1. An invalid payload is logged and acked: never retried, never answered.
+2. The note must be `onBehalfOf`'s: otherwise `note_not_found`.
+3. `onBehalfOf` needs `docs.read` and `docs.issues.create`, asked now: otherwise `forbidden` (so revoking the permission after the draft stops the issue). An outage is thrown and redelivered.
+4. A note that already has an issue: `issue_exists`. Flow never confirms a second one.
+5. Creating the issue is the same code as "Create issue" (`lib/issue-create.ts`, also used by `POST /api/notes/:id/issue`): a link to the reader is `invalid_issue` (checked first, without asking GitHub); the repo's visibility is asked **now**, and a public repo without `acknowledgedPublic: true` is `public_not_acknowledged`; a label the repo doesn't have is `invalid_issue`, naming it (the route drops such labels instead: its preview only offers the repo's own).
+6. Failures: GitHub's 401/403/404 is `no_repo_access`, a 5xx or a timeout `github_unavailable`. Anything else, and a server without `DOCS_ISSUES_TOKEN`, is thrown: redelivered, then dead-lettered.
+
+Then the issue's URL is saved on the note and `docs.issue.created.v1` published, in the inbox transaction. The note shows **via Flow** next to its issue link (an issue created from the note's own page clears it).
+
+**No duplicate issue after a crash.** GitHub is outside the database's transaction, so the handler:
+
+1. records `flow_approval_id` (and `flow_approval_at`) on the note in a write **committed on its own** (the pool, not the inbox transaction) before asking GitHub to create anything;
+2. ends the issue's body with a hidden marker, `<!-- asafarim-flow:<approvalId> -->`;
+3. on a redelivery that finds that approval recorded but no `issue_url`, first lists the issues the token's user opened in the repo since then (`GET /repos/{o}/{r}/issues?creator=…&since=…&state=all`, a few minutes earlier for clock skew; never the search API, whose index lags) and reuses the one with the marker. Only if there's none does it create the issue.
+
+`test/issue-create-handler.test.ts` covers every branch and the crash (GitHub created the issue, the transaction failed at the answer, the URL or the commit, the event redelivered: one issue, its URL saved), over `test/fake-db.ts`, whose transactions apply their writes row by row at commit so the separately committed approval survives as in Postgres.
+
+**In the e2e** (`pnpm e2e`, Flow's suite), GitHub and Claude are small local mock servers (`apps/flow/e2e/mocks.mjs`): Docs points at them through `DOCS_E2E_GITHUB_API_URL` and `DOCS_E2E_AI_API_URL`, which are honoured only for a loopback URL (`localhost`, `127.0.0.1`, `[::1]`), so a real token never goes to another host.
+
 ## Try it
 
 ```bash

@@ -47,6 +47,8 @@ describe("docs manifest", () => {
       { type: "docs.note.created.v1", schema: "./events/docs.note.created.v1.json" },
       { type: "docs.issue-draft.ready.v1", schema: "./events/docs.issue-draft.ready.v1.json" },
       { type: "docs.issue-draft.failed.v1", schema: "./events/docs.issue-draft.failed.v1.json" },
+      { type: "docs.issue.created.v1", schema: "./events/docs.issue.created.v1.json" },
+      { type: "docs.issue.failed.v1", schema: "./events/docs.issue.failed.v1.json" },
     ]);
     // The schema the app validates with (and uploads for the event catalog) is the file the manifest names.
     expect(EVENT_SCHEMAS).toEqual(loadSchemas(manifest, path.resolve(import.meta.dirname, "..")));
@@ -54,12 +56,15 @@ describe("docs manifest", () => {
       "docs.note.created.v1",
       "docs.issue-draft.ready.v1",
       "docs.issue-draft.failed.v1",
+      "docs.issue.created.v1",
+      "docs.issue.failed.v1",
     ]);
   });
 
-  it("answers Flow's request to draft an issue", () => {
+  it("answers Flow's requests to draft an issue and to create the approved one", () => {
     expect(manifest.events?.subscribes).toEqual([
       { type: "flow.issue-draft.requested.v1", handler: "/events/issue-draft-requested" },
+      { type: "flow.issue.approved.v1", handler: "/events/issue-approved" },
     ]);
   });
 });

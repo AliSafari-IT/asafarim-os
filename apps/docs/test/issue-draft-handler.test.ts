@@ -94,6 +94,10 @@ function fakeTracker(opts: { public?: boolean; fail?: Error } = {}) {
       calls.push(`create ${repo}`);
       throw new Error("never creates an issue");
     },
+    async findByMarker(repo) {
+      calls.push(`findByMarker ${repo}`);
+      throw new Error("never looks for an issue");
+    },
   };
   return { tracker, calls };
 }

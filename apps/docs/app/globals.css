@@ -1133,6 +1133,14 @@ a.issue-link {
   color: var(--accent);
   font-weight: 600;
 }
+/* Flow created the issue (ADR 0001): a small tag next to its link. */
+.via-flow {
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0 0.45em;
+  font-size: 0.8em;
+}
 .issue-failed {
   display: flex;
   flex-wrap: wrap;

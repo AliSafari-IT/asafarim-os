@@ -1,17 +1,25 @@
 /**
- * Flow's slice 1 through the real bus (`pnpm e2e`): a study note written in Docs with `#issue` reaches
- * Flow as `docs.note.created.v1` (Docs' outbox → JetStream → Flow's inbox) and starts a run that waits
- * on its draft step, its request in Flow's outbox; a note without the tag starts a run that is
- * skipped (hidden on Runs unless asked for); Cancel stops a run; the Approvals page opens for the
- * owner. The e2e Docs has no AI key, so it never answers the draft request and the run stays waiting
- * on its draft (the approval itself is covered by the unit and integration tests).
+ * Flow's slice 1 end to end, through the real bus (`pnpm e2e`): a study note written in Docs with
+ * `#issue` reaches Flow as `docs.note.created.v1` and starts a run; Docs drafts the issue
+ * (`flow.issue-draft.requested.v1` → `docs.issue-draft.ready.v1`), the owner approves or rejects it
+ * under Approvals, and Docs creates it (`flow.issue.approved.v1` → `docs.issue.created.v1` or
+ * `docs.issue.failed.v1`). GitHub and Claude are local mocks (e2e/mocks.mjs, started by
+ * scripts/dev/e2e.mjs); Docs points at them, and the spec counts the issues the GitHub mock holds.
+ *
+ * Each test tells its run apart by a marker in its note: the Claude mock puts it in the draft's title.
+ * The spec's acceptance criteria, by number, are named in the tests' titles; criterion 6 (a crash
+ * after GitHub created the issue) and the redelivery of the same event (7) are fault-injection unit
+ * tests in apps/docs/test/issue-create-handler.test.ts: a message can't be redelivered from here.
  */
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
 const CORE_API = process.env.E2E_CORE_API_URL ?? "http://localhost:4020";
 const ADMIN_TOKEN = process.env.E2E_ADMIN_TOKEN ?? "";
 const DOCS = process.env.E2E_DOCS_URL ?? "http://localhost:4110";
+const GITHUB_MOCK = process.env.E2E_GITHUB_MOCK_URL ?? "http://127.0.0.1:4191";
 const SHOTS = "test-results/screens";
+const PUBLIC_DOC = "ventures/demo-app/overview.md"; // example-org/demo-app: public in the GitHub mock
+const PRIVATE_DOC = "index.md"; // example-org/handbook: private
 
 /**
  * One call to core-api's admin API; its status. Bounded to 3 s: a call that times out answers 504, so
@@ -31,6 +39,26 @@ async function admin(method: string, p: string) {
   }
 }
 
+const grant = async (role: string) =>
+  expect.poll(() => admin("PUT", `/admin/v1/roles/${role}/grants/dev-member`)).toBeLessThan(300);
+const revoke = async (role: string) =>
+  expect.poll(() => admin("DELETE", `/admin/v1/roles/${role}/grants/dev-member`)).toBeLessThan(500);
+
+interface MockIssue {
+  repo: string;
+  number: number;
+  html_url: string;
+  title: string;
+  body: string;
+  labels: string[];
+}
+
+/** The issues the GitHub mock holds whose title names `marker`. */
+async function issuesFor(marker: string): Promise<MockIssue[]> {
+  const all = (await (await fetch(`${GITHUB_MOCK}/__issues`)).json()) as MockIssue[];
+  return all.filter((i) => i.title.includes(marker));
+}
+
 /** Sign in through identity and the dev login stub as dev-member, on `base` (identity may remember them). */
 async function signIn(page: Page, base: string) {
   await page.goto(`${base}/`);
@@ -42,23 +70,67 @@ async function signIn(page: Page, base: string) {
 }
 
 /**
- * A note on Docs' fixture index, through Docs' own API, in a browser context of its own: cookies
- * don't keep ports apart, so Docs' session must not share a jar with Flow's.
+ * Docs, signed in, in a browser context of its own: cookies don't keep ports apart, so Docs' session
+ * must not share a jar with Flow's. `fn` gets its page; the context is closed after.
  */
-async function writeNote(browser: Browser, body: string) {
+async function inDocs<T>(browser: Browser, fn: (docs: Page) => Promise<T>): Promise<T> {
   const context = await browser.newContext();
   try {
     const docs = await context.newPage();
     await signIn(docs, DOCS);
-    const res = await docs.request.post(`${DOCS}/api/notes`, {
-      data: { docPath: "index.md", body },
-      headers: { "content-type": "application/json" },
-    });
-    expect(res.status(), await res.text()).toBe(201);
+    return await fn(docs);
   } finally {
     await context.close();
   }
 }
+
+/** A note through Docs' own API; its id. */
+async function writeNote(browser: Browser, body: string, docPath = PRIVATE_DOC): Promise<string> {
+  return inDocs(browser, async (docs) => {
+    const res = await docs.request.post(`${DOCS}/api/notes`, {
+      data: { docPath, body },
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    return String(((await res.json()) as { note: { id: string } }).note.id);
+  });
+}
+
+const newMarker = (what: string) => `e2e-${Date.now().toString(36)}-${what}`;
+
+/** The pending approval whose draft names `marker` (Docs drafted it through the bus): its path. */
+async function approvalFor(page: Page, marker: string, timeout = 60_000): Promise<string> {
+  let found = "";
+  await expect(async () => {
+    const list = await (await page.request.get("/approvals")).text();
+    for (const [, id] of list.matchAll(/href="\/approvals\/([^"]+)"/g)) {
+      if ((await (await page.request.get(`/approvals/${id}`)).text()).includes(marker)) {
+        found = `/approvals/${id}`;
+        return;
+      }
+    }
+    throw new Error(`no approval for ${marker} yet`);
+  }).toPass({ timeout, intervals: [500, 1000] });
+  return found;
+}
+
+/** The run an approval belongs to: its path. */
+async function runOf(page: Page, approval: string): Promise<string> {
+  await page.goto(approval);
+  return (await page.locator('a[href^="/runs/"]').first().getAttribute("href"))!;
+}
+
+/** Wait on the Run page until the run is `status`. */
+async function runEnds(page: Page, run: string, status: string) {
+  await expect(async () => {
+    await page.goto(run);
+    await expect(page.locator("h1").getByTestId("status")).toHaveText(status, { timeout: 1000 });
+  }).toPass({ timeout: 60_000 });
+}
+
+const step = (page: Page, key: string) => page.locator(`[data-step="${key}"]`);
+/** A step's own status (its approval, if any, has one too). */
+const stepStatus = (page: Page, key: string) => step(page, key).locator(".step-head").getByTestId("status");
 
 test.beforeAll(async () => {
   expect(ADMIN_TOKEN, "E2E_ADMIN_TOKEN must be set (pnpm e2e sets it)").not.toBe("");
@@ -74,38 +146,36 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  for (const role of ["docs.owner", "flow.owner"]) await admin("DELETE", `/admin/v1/roles/${role}/grants/dev-member`);
+  for (const role of ["docs.owner", "flow.owner", "flow.viewer"])
+    await admin("DELETE", `/admin/v1/roles/${role}/grants/dev-member`);
 });
 
-test("a #issue note in Docs starts a run that waits on the draft step; Cancel stops it", async ({ page, browser }) => {
+test("(1) a #issue note starts a run within seconds; Docs drafts it and the run waits for approval; Cancel stops it", async ({
+  page,
+  browser,
+}) => {
   await signIn(page, "");
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
 
-  const marker = `e2e-${Date.now()}`;
+  const marker = newMarker("cancel");
   await writeNote(browser, `The guide's install step is out of date (${marker}). #issue`);
-
-  // Through the bus: poll the Overview until the run waits.
-  await expect(async () => {
-    await page.goto("/");
-    await expect(page.getByTestId("waiting").getByTestId("run").first()).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 60_000 });
-  const run = page.getByTestId("waiting").getByTestId("run").first();
-  await expect(run).toContainText("docs-note-to-issue");
-  await expect(run).toContainText("draft");
-  await page.screenshot({ path: `${SHOTS}/overview.png`, fullPage: true });
-
-  await run.getByRole("link").click();
-  await expect(page.locator('[data-step="only-tagged"]').getByTestId("status")).toHaveText("succeeded");
-  await expect(page.locator('[data-step="draft"]').getByTestId("status")).toHaveText("waiting");
-  await expect(page.locator('[data-step="review"]')).toContainText("not reached");
+  // Through the bus: the note's event starts a run, Docs answers the draft request, the run waits on the approval.
+  const approval = await approvalFor(page, marker, 20_000);
+  const run = await runOf(page, approval);
+  await page.goto(run);
+  await expect(stepStatus(page, "only-tagged")).toHaveText("succeeded");
+  await expect(stepStatus(page, "draft")).toHaveText("succeeded");
+  await expect(stepStatus(page, "review")).toHaveText("waiting");
+  await expect(step(page, "create")).toContainText("not reached");
   await page.screenshot({ path: `${SHOTS}/run-waiting.png`, fullPage: true });
 
   await page.getByTestId("cancel").click();
   await expect(page.locator("h1").getByTestId("status")).toHaveText("cancelled");
-  await expect(page.locator('[data-step="draft"]').getByTestId("status")).toHaveText("skipped");
+  await expect(step(page, "review").getByTestId("approval")).toHaveAttribute("data-approval", "cancelled");
+  expect(await issuesFor(marker)).toEqual([]);
 });
 
-test("a note without the tag starts a skipped run, hidden on Runs unless asked for", async ({ page, browser }) => {
+test("(1) a note without the tag starts a skipped run, hidden on Runs unless asked for", async ({ page, browser }) => {
   await signIn(page, "");
   await page.goto("/runs");
   const before = await page.getByTestId("run").count();
@@ -118,6 +188,177 @@ test("a note without the tag starts a skipped run, hidden on Runs unless asked f
   await page.goto("/runs");
   await expect(page.getByTestId("run").filter({ hasText: "skipped" })).toHaveCount(0);
   expect(await page.getByTestId("run").count()).toBe(before);
+});
+
+test("(2, 3) the draft under Approvals, public banner and all; Approve creates exactly one issue, the note links it, the run succeeds with every step timed", async ({
+  page,
+  browser,
+}) => {
+  await signIn(page, "");
+  const marker = newMarker("approve");
+  await writeNote(browser, `The demo app's overview misses the beta (${marker}). #issue`, PUBLIC_DOC);
+  const approval = await approvalFor(page, marker);
+
+  // Listed under Approvals with its document and repository.
+  await page.goto("/approvals");
+  const row = page.getByTestId("approval").filter({ has: page.locator(`a[href="${approval}"]`) });
+  await expect(row).toContainText(PUBLIC_DOC);
+  await expect(row).toContainText("example-org/demo-app");
+
+  // The draft: the repository, the public banner, the title, the body and the repo's own labels.
+  await page.goto(approval);
+  await expect(page.getByTestId("public")).toContainText("This repository is public");
+  await expect(page.getByTestId("repo")).toContainText("example-org/demo-app (public)");
+  await expect(page.locator("#title")).toHaveValue(`Update the install step (${marker})`);
+  await expect(page.locator("#body")).toHaveValue(/## Context[\s\S]*## Done when/);
+  await expect(page.locator("#labels")).toHaveValue("docs");
+  await page.screenshot({ path: `${SHOTS}/approval-public.png`, fullPage: true });
+
+  await page.locator("#acknowledgedPublic").check();
+  await page.getByTestId("approve").click();
+  await expect(page.getByTestId("decided")).toContainText("approved");
+
+  const run = await runOf(page, approval);
+  await runEnds(page, run, "succeeded");
+  for (const key of ["only-tagged", "draft", "review", "create", "end"]) {
+    await expect(stepStatus(page, key)).toHaveText("succeeded");
+    // Timed: a start, and how long it took.
+    await expect(step(page, key).locator("dt:text-is('Took') + dd")).toHaveText(/^\d+ (s|min)/);
+  }
+  await page.screenshot({ path: `${SHOTS}/run-succeeded.png`, fullPage: true });
+
+  // Exactly one issue on GitHub, the approved one, its body ending with the approval's hidden marker.
+  const issues = await issuesFor(marker);
+  expect(issues).toHaveLength(1);
+  expect(issues[0]!.repo).toBe("example-org/demo-app");
+  expect(issues[0]!.labels).toEqual(["docs"]);
+  expect(issues[0]!.body).toMatch(/<!-- asafarim-flow:[^ ]+ -->$/);
+
+  // The note shows its issue, "via Flow".
+  await inDocs(browser, async (docs) => {
+    await docs.goto(`${DOCS}/notes`);
+    const note = docs.getByRole("listitem").filter({ hasText: marker });
+    await expect(note.getByTestId("issue-link")).toHaveAttribute("href", issues[0]!.html_url);
+    await expect(note.getByTestId("via-flow")).toHaveText("via Flow");
+    await docs.screenshot({ path: `${SHOTS}/docs-note-via-flow.png`, fullPage: true });
+  });
+  // Nothing more arrives later (the answer was handled once).
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  expect(await issuesFor(marker)).toHaveLength(1);
+});
+
+test("(4) Reject ends the run rejected and creates nothing", async ({ page, browser }) => {
+  await signIn(page, "");
+  const marker = newMarker("reject");
+  await writeNote(browser, `A thought to file maybe (${marker}). #issue`);
+  const approval = await approvalFor(page, marker);
+  await page.goto(approval);
+  // A private repository: no banner, no box to tick.
+  await expect(page.getByTestId("repo")).toContainText("example-org/handbook (private)");
+  await expect(page.getByTestId("public")).toHaveCount(0);
+  await page.locator("#comment").fill("Not worth an issue.");
+  await page.getByTestId("reject").click();
+  await expect(page.getByTestId("decided")).toContainText("rejected");
+
+  const run = await runOf(page, approval);
+  await runEnds(page, run, "rejected");
+  await expect(step(page, "review").getByTestId("step-error")).toHaveText("rejected");
+  await expect(step(page, "create")).toContainText("not reached");
+  expect(await issuesFor(marker)).toEqual([]);
+});
+
+test("(5, 10) a note that got an issue meanwhile ends the run failed with issue_exists, code and message on the Run page", async ({
+  page,
+  browser,
+}) => {
+  await signIn(page, "");
+  const marker = newMarker("exists");
+  const noteId = await writeNote(browser, `File this one by hand (${marker}). #issue`);
+  const approval = await approvalFor(page, marker);
+
+  // Meanwhile the owner creates the issue from the note in Docs.
+  await inDocs(browser, async (docs) => {
+    const res = await docs.request.post(`${DOCS}/api/notes/${noteId}/issue`, {
+      data: { repo: "example-org/handbook", title: `Filed by hand (${marker})`, body: "By hand.", labels: [] },
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+  });
+
+  await page.goto(approval);
+  await page.getByTestId("approve").click();
+  await expect(page.getByTestId("decided")).toContainText("approved");
+  const run = await runOf(page, approval);
+  await runEnds(page, run, "failed");
+  await expect(page.getByTestId("run-error")).toHaveText("issue_exists");
+  await expect(step(page, "create").getByTestId("step-error")).toHaveText("issue_exists");
+  await expect(step(page, "create")).toContainText("This note already has an issue.");
+  await page.screenshot({ path: `${SHOTS}/run-issue-exists.png`, fullPage: true });
+  // Only the issue filed by hand.
+  const issues = await issuesFor(marker);
+  expect(issues.map((i) => i.title)).toEqual([`Filed by hand (${marker})`]);
+});
+
+test("(8) without flow.approvals.decide: 403 on the page and on the action", async ({ page, browser }) => {
+  await signIn(page, "");
+  const marker = newMarker("decide");
+  await writeNote(browser, `Someone else decides (${marker}). #issue`);
+  const approval = await approvalFor(page, marker);
+  // The form, loaded while dev-member may still decide.
+  const stale = await page.context().newPage();
+  await stale.goto(approval);
+  await expect(stale.getByTestId("approve")).toBeVisible();
+
+  await grant("flow.viewer");
+  await revoke("flow.owner");
+  try {
+    await expect(async () => {
+      expect((await page.goto("/approvals"))?.status()).toBe(403);
+    }).toPass({ timeout: 30_000 });
+    await expect(page.getByTestId("forbidden")).toBeVisible();
+    expect((await page.goto(approval))?.status()).toBe(403);
+    // The action refuses too: back to the approval, which is now a 403.
+    await stale.getByTestId("approve").click();
+    await expect(stale.getByTestId("forbidden")).toBeVisible();
+  } finally {
+    await grant("flow.owner");
+    await revoke("flow.viewer");
+  }
+  // Nothing was decided, nothing created.
+  await expect(async () => {
+    await page.goto(approval);
+    await expect(page.getByTestId("approve")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 30_000 });
+  expect(await issuesFor(marker)).toEqual([]);
+  await page.goto(await runOf(page, approval));
+  await page.getByTestId("cancel").click();
+  await expect(page.locator("h1").getByTestId("status")).toHaveText("cancelled");
+});
+
+test("(9, 10) Docs' permission revoked before Approve: the create step fails with forbidden, code and message on the Run page", async ({
+  page,
+  browser,
+}) => {
+  await signIn(page, "");
+  const marker = newMarker("revoked");
+  await writeNote(browser, `File it, then lose the right to (${marker}). #issue`);
+  const approval = await approvalFor(page, marker);
+
+  // docs.owner is the role that grants docs.issues.create: without it, Docs refuses to create the issue.
+  await revoke("docs.owner");
+  try {
+    await page.goto(approval);
+    await page.getByTestId("approve").click();
+    await expect(page.getByTestId("decided")).toContainText("approved");
+    const run = await runOf(page, approval);
+    await runEnds(page, run, "failed");
+    await expect(step(page, "create").getByTestId("step-error")).toHaveText("forbidden");
+    await expect(step(page, "create")).toContainText("Missing the permission");
+    await page.screenshot({ path: `${SHOTS}/run-forbidden.png`, fullPage: true });
+  } finally {
+    await grant("docs.owner");
+  }
+  expect(await issuesFor(marker)).toEqual([]);
 });
 
 test("Approvals: the owner may decide; the Overview counts what waits for them", async ({ page }) => {

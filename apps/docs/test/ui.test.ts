@@ -3,6 +3,7 @@ import { filterTree } from "../components/DocTree";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createOutcome, createRequest, IssueCreatedUnsaved, PUBLIC_BANNER } from "../components/IssueDialog";
+import { IssueLink } from "../components/IssueLink";
 import { MIN_SCALE, fitWidth, mermaidLabel, themeVariables } from "../components/Mermaid";
 import type { NavNode } from "../components/nav";
 import { searchDocs } from "../components/Search";
@@ -186,6 +187,23 @@ describe("Generate GitHub issue, in the page (#82)", () => {
     expect(html).toContain("example-org/demo-app/issues/7");
     expect(html).toContain("The issue was created, but the link could not be saved on this note.");
     expect(html).toContain('role="alert"');
+  });
+});
+
+describe("a note's issue link", () => {
+  const URL_7 = "https://github.com/example-org/demo-app/issues/7";
+
+  it("shows 'via Flow' next to the link when Flow created the issue (ADR 0001)", () => {
+    const html = renderToStaticMarkup(createElement(IssueLink, { url: URL_7, viaFlow: true }));
+    expect(html).toContain(`href="${URL_7}"`);
+    expect(html).toContain('data-testid="via-flow"');
+    expect(html).toContain("via Flow");
+  });
+
+  it("no label for an issue created from the note itself, and nothing for a URL that isn't a GitHub issue", () => {
+    expect(renderToStaticMarkup(createElement(IssueLink, { url: URL_7, viaFlow: false }))).not.toContain("via Flow");
+    expect(renderToStaticMarkup(createElement(IssueLink, { url: "javascript:alert(1)", viaFlow: true }))).toBe("");
+    expect(renderToStaticMarkup(createElement(IssueLink, { url: null, viaFlow: true }))).toBe("");
   });
 });
 
