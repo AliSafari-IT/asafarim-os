@@ -18,6 +18,8 @@ coverage/
 # Production deploy (#45): the owner's client config and the deploy lock, never committed
 deploy/identity/
 .vps-deploy.lock
+# The site file a deploy with Flow publishes (sites/asafarim-os.caddy + sites/asafarim-os-flow.caddy), generated
+.vps-deploy-site.caddy
 
 # Logs and OS files
 *.log

@@ -52,6 +52,7 @@ function render(
     writeFileSync(path.join(dir, ".env.docs"), "");
     writeFileSync(path.join(dir, ".env.core-api"), "");
     writeFileSync(path.join(dir, ".env.admin"), "");
+    writeFileSync(path.join(dir, ".env.flow"), "");
     mkdirSync(path.join(dir, "deploy", "core-api", "initdb"), { recursive: true });
     const run = spawnSync("docker", ["compose", "-f", "compose.prod.yml", "config", "--format", "json"], {
       cwd: path.join(dir, "deploy"),
@@ -62,6 +63,7 @@ function render(
         DOCS_IMAGE_TAG: "",
         CORE_API_IMAGE_TAG: "coresha",
         ADMIN_IMAGE_TAG: "adminsha",
+        FLOW_IMAGE_TAG: "flowsha",
         COMPOSE_PROFILES: "",
         ...env,
       },
@@ -564,12 +566,14 @@ test("the README's stop command renders: every image tag it needs is set, with a
     .find((l) => l.includes("docker compose -p asafarim-os") && l.trim().endsWith(" down"));
   assert.ok(line, "the Rollback section's `down` command was not found");
   const vars = Object.fromEntries([...line.matchAll(/\b([A-Z_]+)=(\S+)/g)].map((m) => [m[1], m[2]]));
-  for (const profiles of [vars.COMPOSE_PROFILES ?? "", ""]) {
+  for (const profiles of [vars.COMPOSE_PROFILES ?? "", "", "core,admin,flow"]) {
     const r = render({
       IMAGE_TAG: "",
       SITE_IMAGE_TAG: "",
       DOCS_IMAGE_TAG: "",
       CORE_API_IMAGE_TAG: "",
+      ADMIN_IMAGE_TAG: "",
+      FLOW_IMAGE_TAG: "",
       ...vars,
       COMPOSE_PROFILES: profiles,
     });
@@ -646,4 +650,118 @@ test("admin.asafarim.site proxies to os-admin's edge_net alias on port 3000, wit
 
 test("the site-only file has no admin.asafarim.site: the console ships with the full deploy", () => {
   assert.doesNotMatch(siteOnlyText, /admin\.asafarim\.site/);
+});
+
+// ---- Flow (flow.asafarim.site): its own "flow" profile, on top of "core", turned on once apps/flow/.env.production.age
+// is committed. Its site block is a separate file the deploy appends only then.
+const flowManifest = JSON.parse(readFileSync(path.join(root, "apps", "flow", "platform.app.json"), "utf8"));
+const flowSiteText = readFileSync(path.join(root, "sites", "asafarim-os-flow.caddy"), "utf8");
+const activeFlowSite = flowSiteText
+  .split("\n")
+  .filter((l) => !l.trim().startsWith("#"))
+  .join("\n");
+const flowRendered = render({
+  IMAGE_TAG: "testsha",
+  SITE_IMAGE_TAG: "sitesha",
+  DOCS_IMAGE_TAG: "docssha",
+  CORE_API_IMAGE_TAG: "coresha",
+  FLOW_IMAGE_TAG: "flowsha",
+  COMPOSE_PROFILES: "core,flow",
+});
+assert.equal(flowRendered.status, 0, flowRendered.stderr);
+const flowConfig = JSON.parse(flowRendered.stdout);
+const flow = flowConfig.services["os-flow"];
+
+test("os-flow is only in the flow profile: neither the default stack nor core nor core,admin has it", () => {
+  assert.deepEqual(flow.profiles, ["flow"]);
+  for (const c of [config, coreConfig, adminConfig]) assert.ok(!("os-flow" in c.services));
+  assert.deepEqual(
+    Object.keys(flowConfig.services).sort(),
+    [...Object.keys(coreConfig.services), "os-flow"].sort(),
+    "the flow profile adds os-flow and nothing else",
+  );
+});
+
+test("os-flow's image tag comes from FLOW_IMAGE_TAG, and there is no default", () => {
+  assert.equal(flow.image, "ghcr.io/alisafari-it/asafarim-os:flow-flowsha");
+  assert.equal(flowManifest.runtime.image, "flow");
+  const unset = render({
+    IMAGE_TAG: "t",
+    SITE_IMAGE_TAG: "s",
+    DOCS_IMAGE_TAG: "d",
+    CORE_API_IMAGE_TAG: "c",
+    FLOW_IMAGE_TAG: "",
+    COMPOSE_PROFILES: "core,flow",
+  });
+  assert.notEqual(unset.status, 0, "a deploy without FLOW_IMAGE_TAG must fail, not pull flow-");
+  assert.match(unset.stderr, /FLOW_IMAGE_TAG/);
+});
+
+test("os-flow is hardened like os-docs: read_only, no capabilities, non-root tmpfs, the manifest's limits, a healthcheck", () => {
+  assert.equal(flow.read_only, true);
+  assert.deepEqual(flow.cap_drop, ["ALL"]);
+  assert.ok(flow.security_opt.includes("no-new-privileges:true"));
+  assert.equal(flowManifest.runtime.resources.memory, "192m");
+  assert.equal(flow.mem_limit, String(192 * 1024 * 1024));
+  assert.equal(flow.cpus, flowManifest.runtime.resources.cpus);
+  assert.ok(flow.tmpfs?.some((t) => t.startsWith("/tmp:")));
+  assert.ok(flow.tmpfs?.some((t) => t.startsWith("/app/apps/flow/.next/cache:") && t.includes("uid=1000")));
+  assert.ok(!("user" in flow) || flow.user !== "root", "the image's node user, never root");
+  assert.ok(
+    flow.healthcheck?.test?.some((a) => a.endsWith(`:${flowManifest.runtime.port}${flowManifest.runtime.health.live}`)),
+    JSON.stringify(flow.healthcheck),
+  );
+  assert.ok(!flow.ports || flow.ports.length === 0, "os-flow publishes no port");
+});
+
+test("os-flow reads its secrets from ../.env.flow only; its settings: client flow, identity, core-api, Docs, and no bus", () => {
+  assert.match(composeText, /os-flow:[\s\S]*?env_file:\n\s+- \.\.\/\.env\.flow\n/);
+  assert.equal(flow.environment.ASAFARIM_APP_ID, flowManifest.id);
+  assert.equal(flow.environment.OIDC_ISSUER, flowConfig.services.identity.environment.IDENTITY_ISSUER);
+  assert.equal(flow.environment.CORE_API_URL, "http://os-core-api:4020");
+  assert.equal(flow.environment.APP_CONFIG_DOCS_URL, "https://docs.asafarim.site");
+  assert.equal(flow.environment.APP_CONFIG_DOCS_URL, `https://${docsManifest.domains.primary}`);
+  assert.equal(flow.environment.HOSTNAME, "0.0.0.0");
+  assert.ok(!("ASAFARIM_NATS_URL" in flow.environment), "production has no event bus yet");
+  for (const name of ["AUTH_SECRET", "OIDC_CLIENT_SECRET", "DATABASE_URL", "ASAFARIM_REGISTRY_CREDENTIAL"]) {
+    assert.ok(!(name in flow.environment), `${name} is a secret: it belongs in .env.flow`);
+  }
+});
+
+test("os-flow is on edge_net under the unique alias os-flow and on os_core for core-api and os-postgres: never os_net", () => {
+  assert.deepEqual(networkNames(flow), ["edge_net", "os_core"]);
+  assert.deepEqual(flow.networks.edge_net.aliases, ["os-flow"]);
+  assert.ok("os-core-api" in flow.depends_on);
+});
+
+test("core-api polls Flow's health where it runs, on os_core", () => {
+  assert.equal(coreApi.environment.OS_APP_FLOW_UPSTREAM, `os-flow:${flowManifest.runtime.port}`);
+});
+
+test("the Flow site file is ONE block: flow.asafarim.site → os-flow's edge_net alias on the manifest's port", () => {
+  const sites = [...activeFlowSite.matchAll(/^([a-z0-9.*-]+)(?:, [a-z0-9.*-]+)*\s*\{/gm)].map((m) => m[1]);
+  assert.deepEqual(sites, [flowManifest.domains.primary]);
+  assert.equal(flowManifest.domains.primary, "flow.asafarim.site");
+  const block = siteBlock("flow.asafarim.site", activeFlowSite);
+  const upstream = /reverse_proxy ([\w-]+):(\d+)/.exec(block);
+  assert.ok(upstream, "flow.asafarim.site must reverse_proxy to os-flow");
+  assert.ok(flow.networks.edge_net.aliases.includes(upstream[1]), `${upstream[1]} is not os-flow's edge_net alias`);
+  assert.equal(Number(upstream[2]), flowManifest.runtime.port);
+  // The same private-site headers as docs.asafarim.site and admin.asafarim.site.
+  assert.equal(
+    block.replace(/^flow\.asafarim\.site/, "x").replace(/reverse_proxy \S+/, "rp"),
+    siteBlock("admin.asafarim.site")
+      .replace(/^admin\.asafarim\.site/, "x")
+      .replace(/reverse_proxy \S+/, "rp"),
+  );
+  assert.doesNotMatch(block, /Content-Security-Policy/);
+});
+
+test("flow.asafarim.site is in neither the full nor the site-only file: only a deploy with Flow appends it", () => {
+  assert.doesNotMatch(activeSite, /flow\.asafarim\.site|os-flow/);
+  assert.doesNotMatch(activeSiteOnly, /flow\.asafarim\.site|os-flow/);
+  // Appended to the full file, the two still define each host once.
+  const both = `${activeSite}\n${activeFlowSite}`;
+  const hosts = [...both.matchAll(/^([a-z0-9.*-]+)\s*\{/gm)].map((m) => m[1]);
+  assert.equal(new Set(hosts).size, hosts.length, hosts.join());
 });

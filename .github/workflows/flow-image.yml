@@ -1,0 +1,200 @@
+# Build and publish the os-flow image: flow.asafarim.site, the Flow app (apps/flow).
+#
+# deploy/compose.prod.yml runs ghcr.io/alisafari-it/asafarim-os:flow-<tag> as os-flow. This workflow is what
+# puts that image there, the same way site-image.yml publishes os-site's. It builds apps/flow/Dockerfile
+# from the repository root (`docker build -f apps/flow/Dockerfile .`).
+#
+# - push to main: build and push two tags. `flow-<full commit sha>` is immutable, and deploys use it.
+#   `flow-main` moves with every build and is for convenience only. Either is pushed only after the smoke test passed.
+# - pull request: build and smoke-test only. Nothing is pushed and nothing logs in to the registry.
+# - workflow_dispatch: pushes only when run on main. On any other branch it builds without pushing.
+#
+# The registry login uses the built-in GITHUB_TOKEN. No secrets are added to the repository.
+name: Flow image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # The image is apps/flow plus the workspace packages it is built with. The Dockerfile installs with
+      # --frozen-lockfile, so the dependency graph is part of the image too.
+      - "apps/flow/**"
+      - "packages/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/flow-image.yml"
+  pull_request:
+    paths:
+      - "apps/flow/**"
+      - "packages/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/flow-image.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to a PR replaces that PR's stale build. On main every commit gets its OWN group: a group keeps
+  # only one pending run and cancels the others, so a shared group would drop a commit's publish and that commit
+  # would never get its flow-<sha> tag.
+  group: flow-image-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/alisafari-it/asafarim-os
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # packages: write is for this job only (publishing to GHCR). Nothing else gets it.
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # Publish only from main, and never for a pull request.
+      PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The Dockerfile does `COPY . .`: keep the token out of .git (apps/flow/Dockerfile.dockerignore also
+          # leaves .git out of the build context).
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Decide what to publish. (a) The commit tag is immutable: a re-run must never replace it, because the
+      # floating base image may have moved and the same sha would then name a different image. (b) flow-main
+      # only moves FORWARD: it is published only when this commit is still the head of main, so a re-run of an
+      # older commit cannot point it back. If the head lookup fails we publish the new commit tag and leave
+      # flow-main alone; if the tag lookup fails for any reason other than "not found", the step fails.
+      - name: Plan the tags
+        id: plan
+        if: env.PUBLISH == 'true'
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha_tag="${IMAGE}:flow-${SHA}"
+          # Only "the registry says it is not there" means publish. Any other failure (auth, network, GHCR
+          # outage) fails the step: guessing "missing" could replace a tag that exists.
+          if inspect_out="$(docker buildx imagetools inspect "$sha_tag" 2>&1)"; then
+            echo "::notice::${sha_tag} is already published: leaving it unchanged."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif ! grep -Eiq 'not found|manifest unknown|name unknown' <<<"$inspect_out"; then
+            echo "::error::Could not tell whether ${sha_tag} exists; not publishing. Output:"
+            echo "$inspect_out"
+            exit 1
+          fi
+          tags="$sha_tag"
+          head="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | cut -f1 || true)"
+          if [[ "$head" == "$SHA" ]]; then
+            tags+=$'\n'"${IMAGE}:flow-main"
+          else
+            echo "::notice::${SHA} is not the head of main (head: ${head:-unknown}): not moving flow-main."
+          fi
+          {
+            echo "publish=true"
+            echo "tags<<TAGS"
+            echo "$tags"
+            echo "TAGS"
+          } >> "$GITHUB_OUTPUT"
+
+      # Before anything is published: build the image into the local Docker and run it the way production does (read-only
+      # root, no capabilities, non-root, its own Postgres 16 database and NO event bus, as in production today), then
+      # check it migrates and seeds, answers /health/live, gates its pages (401 without a sign-in), and logs that its
+      # subscribers and relay are off. A broken image never gets a tag.
+      - name: Build for the smoke test
+        if: steps.plan.outputs.publish != 'false'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/flow/Dockerfile
+          load: true
+          push: false
+          tags: asafarim-os-flow:smoke
+
+      - name: Smoke test (read-only, non-root, Postgres 16, no event bus)
+        if: steps.plan.outputs.publish != 'false'
+        run: |
+          set -euo pipefail
+          docker network create smoke
+          docker run -d --name smoke-db --network smoke -e POSTGRES_PASSWORD=smoke-provisioner postgres:16-alpine
+          # Over TCP: the image's first-start init runs a temporary server on the Unix socket only, then restarts it.
+          for _ in $(seq 1 60); do docker exec smoke-db pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break; sleep 1; done
+          docker exec smoke-db psql -U postgres -c "CREATE ROLE flow LOGIN PASSWORD 'smoke-flow'" -c "CREATE DATABASE flow OWNER flow"
+          # The production settings of deploy/compose.prod.yml's os-flow, without ASAFARIM_NATS_URL.
+          docker run -d --name smoke-flow --network smoke --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:size=16m --tmpfs /app/apps/flow/.next/cache:size=32m,uid=1000,gid=1000 \
+            -e AUTH_SECRET=smoke-auth-secret-0123456789abcdef0123456789 -e OIDC_CLIENT_SECRET=smoke-client-secret \
+            -e ASAFARIM_APP_ID=flow -e OIDC_ISSUER=https://id.asafarim.site -e CORE_API_URL=http://os-core-api:4020 \
+            -e APP_CONFIG_DOCS_URL=https://docs.asafarim.site \
+            -e DATABASE_URL=postgres://flow:smoke-flow@smoke-db:5432/flow \
+            asafarim-os-flow:smoke
+          ok=false
+          for _ in $(seq 1 30); do
+            if docker exec smoke-flow wget -qO- http://127.0.0.1:3000/health/live 2>/dev/null | grep -q '"app":"flow"'; then ok=true; break; fi
+            sleep 1
+          done
+          # Migrations and seed run on boot, right after the workers start.
+          for _ in $(seq 1 15); do docker logs smoke-flow 2>&1 | grep -q '"db.migrated"' && break; sleep 1; done
+          docker logs smoke-flow
+          [[ "$ok" == true ]] || { echo "::error::Flow did not answer /health/live"; exit 1; }
+          logs="$(docker logs smoke-flow 2>&1)"
+          grep -q '"db.migrated"' <<<"$logs" || { echo "::error::Flow did not migrate its database"; exit 1; }
+          grep -q '"flow.subscribers.no_bus"' <<<"$logs" || { echo "::error::Flow did not log that its subscribers are off without a bus"; exit 1; }
+          grep -q '"events.relay.no_bus"' <<<"$logs" || { echo "::error::Flow did not log that its relay is off without a bus"; exit 1; }
+          docker exec smoke-db psql -U flow -d flow -tAc "SELECT key FROM workflows" | grep -qx docs-note-to-issue \
+            || { echo "::error::Flow did not seed its workflow"; exit 1; }
+          status="$(docker exec smoke-flow sh -c 'wget -S -qO- http://127.0.0.1:3000/ 2>&1 || true' | awk '/HTTP\//{print $2; exit}')"
+          [[ "$status" == 401 ]] || { echo "::error::Flow's Overview answered ${status:-nothing} without a sign-in, not 401"; exit 1; }
+          docker exec smoke-flow sh -c 'id -u' | grep -qx 1000 || { echo "::error::Flow does not run as node (1000)"; exit 1; }
+          [[ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' smoke-flow)" == "true 0" ]] \
+            || { echo "::error::Flow did not keep running"; exit 1; }
+          echo "Flow image: migrated, seeded, live, pages gated, no bus (subscribers and relay off), non-root, read-only root."
+
+      # On a pull request the plan step is skipped: the image is built and smoke-tested, and not pushed.
+      - name: Build (and push, on main)
+        id: build
+        if: steps.plan.outputs.publish != 'false'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/flow/Dockerfile
+          push: ${{ steps.plan.outputs.publish == 'true' }}
+          provenance: ${{ steps.plan.outputs.publish == 'true' }}
+          tags: ${{ steps.plan.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Summary
+        if: env.PUBLISH == 'true'
+        env:
+          PLANNED: ${{ steps.plan.outputs.publish }}
+          TAGS: ${{ steps.plan.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if [[ "$PLANNED" == "false" ]]; then
+            echo "\`${IMAGE}:flow-${GITHUB_SHA}\` was already published: left unchanged." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "Published:"
+            while IFS= read -r tag; do echo "- \`${tag}\`"; done <<< "$TAGS"
+            echo "Digest: \`${DIGEST}\`"
+            echo "On the VPS: \`docker pull ${IMAGE}:flow-${GITHUB_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

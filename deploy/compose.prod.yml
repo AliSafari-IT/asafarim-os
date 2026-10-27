@@ -1,10 +1,10 @@
 # ASafariM OS production stack: the identity service (id.asafarim.site) and its own Redis
 # (asafarim-os#45, part of #22, P2.3), the asafarim.site landing page, os-site (#70), and docs.asafarim.site, os-docs
-# (#83). Also breinhap.asafarim.site, breinhap-site (a landing page built in AliSafari-IT/breinhap), and
+# (#83), and flow.asafarim.site, os-flow (only once its encrypted env is committed). Also breinhap.asafarim.site, breinhap-site (a landing page built in AliSafari-IT/breinhap), and
 # igs.asafarim.site, igs-site (a landing page built in AliSafari-IT/igs-pharma). The owner deploys it with deploy/vps-deploy.sh; nothing else runs this file. See deploy/README.md for the
 # deploy, the rollback and the network rules.
 #
-#   IMAGE_TAG=<sha> SITE_IMAGE_TAG=<sha> DOCS_IMAGE_TAG=<sha> CORE_API_IMAGE_TAG=<sha> ADMIN_IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+#   IMAGE_TAG=<sha> SITE_IMAGE_TAG=<sha> DOCS_IMAGE_TAG=<sha> CORE_API_IMAGE_TAG=<sha> ADMIN_IMAGE_TAG=<sha> FLOW_IMAGE_TAG=<sha> docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
 #
 # Paths here are relative to THIS file (deploy/), not to the repository root.
 name: asafarim-os
@@ -245,6 +245,8 @@ services:
       CORE_API_APP_DB_PORT: "5432"
       # Health polling (P6.1): where each app runs, on os_core.
       OS_APP_DOCS_UPSTREAM: os-docs:3000
+      # Polled only while flow is active, which needs os-flow deployed (the "flow" profile).
+      OS_APP_FLOW_UPSTREAM: os-flow:3000
     volumes:
       # Remove's database backups (CORE_API_BACKUP_DIR in the image), kept across restarts.
       - os_core_api_backups:/var/lib/core-api/backups
@@ -294,6 +296,59 @@ services:
       # core-api, by its name on os_core. Not os_net: the console never reaches identity's Redis.
       os_core:
 
+  os-flow:
+    # flow.asafarim.site: the Flow app's Next.js server (apps/flow/Dockerfile), published by
+    # .github/workflows/flow-image.yml. FLOW_IMAGE_TAG is the full commit sha of that build; deploy/vps-deploy.sh always
+    # sets it. Its own "flow" profile, which deploy/vps-deploy.sh turns on (next to "core") once
+    # apps/flow/.env.production.age is committed: without it the env_file below would not exist, and a deploy is what
+    # it was before.
+    image: ghcr.io/alisafari-it/asafarim-os:flow-${FLOW_IMAGE_TAG:?set FLOW_IMAGE_TAG to the flow image's commit sha}
+    profiles: [flow]
+    restart: unless-stopped
+    read_only: true
+    # uid/gid 1000 is the image's `node` user, the only writer.
+    tmpfs:
+      - /tmp:size=16m
+      - /app/apps/flow/.next/cache:size=32m,uid=1000,gid=1000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # The manifest's resources (apps/flow/platform.app.json).
+    mem_limit: 192m
+    cpus: 0.5
+    # Decrypted from apps/flow/.env.production.age by deploy/vps-deploy.sh, at the repository root: AUTH_SECRET and
+    # OIDC_CLIENT_SECRET, then DATABASE_URL and ASAFARIM_REGISTRY_CREDENTIAL once `deploy/core-api/admin.sh install
+    # flow` gave them (apps/flow/.env.production.example).
+    env_file:
+      - ../.env.flow
+    environment:
+      HOSTNAME: 0.0.0.0
+      ASAFARIM_APP_ID: flow
+      # Sign-in goes through this stack's identity, at its public URL (client `flow` in deploy/identity/clients.json).
+      OIDC_ISSUER: https://id.asafarim.site
+      # Permission checks and self-registration: this stack's core-api, on os_core. Flow's database is on os-postgres
+      # (core-api's install creates it), never the platform's Postgres.
+      CORE_API_URL: http://os-core-api:4020
+      # docs.url: where the approval page links a draft's document.
+      APP_CONFIG_DOCS_URL: https://docs.asafarim.site
+      # No ASAFARIM_NATS_URL: production has no event bus yet. Flow starts, serves its pages and is healthy; its
+      # subscribers and outbox relay stay off (one log line each), so it runs no workflow until a bus is added.
+    depends_on:
+      - os-core-api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health/live"]
+      interval: 30s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    networks:
+      edge_net:
+        # Unique on the shared edge_net; sites/asafarim-os-flow.caddy proxies flow.asafarim.site to it.
+        aliases:
+          - os-flow
+      # core-api and the app's own database (os-postgres). Not os_net: Flow never reaches identity's Redis.
+      os_core:
+
 networks:
   # The shared edge's network, created with the edge. identity joins it to be reachable by the edge's Caddy.
   edge_net:
@@ -305,7 +360,7 @@ networks:
     external: true
     name: identity_db
   os_net:
-  # core-api, its Postgres, the Admin console and the apps it serves (os-docs). identity and os-redis are not on it.
+  # core-api, its Postgres, the Admin console and the apps it serves (os-docs, os-flow). identity and os-redis are not on it.
   os_core:
 
 volumes:

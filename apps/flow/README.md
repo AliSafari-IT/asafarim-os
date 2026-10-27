@@ -88,6 +88,12 @@ Server-rendered, every one gated by `lib/page.ts` (not signed in → 401, withou
 
 - **Workflows** (`/workflows`): the current definition, read-only; **Pause** and **Resume** for `flow.workflows.write`.
 
+## In production
+
+<https://flow.asafarim.site>, the `os-flow` service of [`deploy/compose.prod.yml`](../../deploy/compose.prod.yml) (image from `Dockerfile`, published by the "Flow image" workflow after a smoke test). It is **off until `apps/flow/.env.production.age` is committed**; then the full deploy starts it next to core-api and publishes its site. The owner's steps (env, identity client, install, activate, grant) are in [`deploy/README.md`](../../deploy/README.md#flowasafarimsite).
+
+Production has **no event bus yet** (no `ASAFARIM_NATS_URL`): Flow starts, serves its pages and is healthy, and logs once that its subscribers (`flow.subscribers.no_bus`) and its relay (`events.relay.no_bus`) are off, so it runs no workflow from Docs events until NATS is in production. Before `admin.sh install flow` gives it a database it logs `flow.workers.no_database` and serves pages and health only. `test/workers.test.ts` and the image's smoke test check this.
+
 ## Try it
 
 ```bash

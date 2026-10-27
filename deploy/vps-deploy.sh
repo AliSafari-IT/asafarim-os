@@ -6,7 +6,7 @@
 # images are pinned in deploy/compose.prod.yml, not passed here.
 # Run by the OWNER, from the repository folder (normally /var/repos/asafarim-os). Nothing else runs it.
 #
-#   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>]
+#   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>] [<flow-image-commit>]
 #   deploy/vps-deploy.sh --site-only <commit> [<site-image-commit>] [<docs-image-commit>]
 #
 #   <commit>        the repository state to deploy, as a full 40-character sha: this script, the
@@ -22,6 +22,8 @@
 #                   workflow. Used only when core-api is part of the deploy (below).
 #   <admin-image-commit>  the commit whose Admin console image to run (default: <commit>), with the "Admin image"
 #                   workflow (#175). Used only when the console is part of the deploy (below).
+#   <flow-image-commit>  the commit whose Flow image to run (default: <commit>), with the "Flow image" workflow. Used
+#                   only when Flow is part of the deploy (below).
 #   --site-only     the landing pages and docs, without identity (#97, #83): steps 1, 2 and 3 for the docs env
 #                   only, 4 (edge_net and the edge script only), 5 and 6 for os-site, os-docs, breinhap-site and igs-site
 #                   only, then
@@ -53,6 +55,13 @@
 # The Admin console (admin.asafarim.site, os-admin, #175; full mode only): when core-api is part of the deploy and the
 # commit has core/admin/.env.production.age, the same steps decrypt it into .env.admin, check
 # core/admin/.env.production.example's names, start os-admin (profile "admin", on top of "core") and wait for its /api/health.
+#
+# Flow (flow.asafarim.site, os-flow; full mode only): when core-api is part of the deploy and the commit has
+# apps/flow/.env.production.age, the same steps decrypt it into .env.flow, check apps/flow/.env.production.example's
+# names, start os-flow (profile "flow", on top of "core") and wait for its /health/ready; step 7 then publishes
+# sites/asafarim-os.caddy with sites/asafarim-os-flow.caddy appended (written to .vps-deploy-site.caddy). Without that
+# file the deploy is exactly what it was before: no os-flow, and sites/asafarim-os.caddy unchanged. Production has no
+# event bus yet, so Flow runs without one (no ASAFARIM_NATS_URL).
 # asafarim.site cutover: remove the asafarim.site and www.asafarim.site blocks from asafarim-com.caddy first
 # (deploy/README.md); until then step 7's validation refuses the duplicate host and keeps the old config.
 #
@@ -62,8 +71,8 @@ set -euo pipefail
 # Everything lives in main(), called on ONE line at the very end. Step 1 resets this checkout, which can
 # replace this very file while bash is still reading it; bash has parsed all of main() by then.
 main() {
-  local usage="usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>] | --site-only <commit> [<site-image-commit>] [<docs-image-commit>]"
-  local site_only=false with_core_api=false with_admin=false
+  local usage="usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>] [<flow-image-commit>] | --site-only <commit> [<site-image-commit>] [<docs-image-commit>]"
+  local site_only=false with_core_api=false with_admin=false with_flow=false
   if [[ "${1:-}" == "--site-only" ]]; then
     site_only=true
     shift
@@ -72,13 +81,14 @@ main() {
     # (it defaults to <commit> and is never pulled).
     set -- "${1:-}" "" "${2:-}" "${3:-}"
   fi
-  (($# <= 6)) || { echo "FATAL: ${usage}" >&2; exit 1; }
+  (($# <= 7)) || { echo "FATAL: ${usage}" >&2; exit 1; }
   local commit="${1:?$usage}"
   local image_commit="${2:-$commit}"
   local site_image_commit="${3:-$commit}"
   local docs_image_commit="${4:-$commit}"
   local core_api_image_commit="${5:-$commit}"
   local admin_image_commit="${6:-$commit}"
+  local flow_image_commit="${7:-$commit}"
 
   local repo_dir
   repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -115,6 +125,7 @@ main() {
   [[ "$docs_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<docs-image-commit> must be a full 40-character sha, got '${docs_image_commit}'."
   [[ "$core_api_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<core-api-image-commit> must be a full 40-character sha, got '${core_api_image_commit}'."
   [[ "$admin_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<admin-image-commit> must be a full 40-character sha, got '${admin_image_commit}'."
+  [[ "$flow_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<flow-image-commit> must be a full 40-character sha, got '${flow_image_commit}'."
   # age in both modes: os-docs's env (AUTH_SECRET) is decrypted by a site-only deploy too.
   for tool in git age docker flock; do
     command -v "$tool" >/dev/null 2>&1 || fatal "'${tool}' is not installed on this host."
@@ -201,6 +212,23 @@ main() {
     else
       log "No core/admin/.env.production.age in this commit: the Admin console is not part of this deploy."
     fi
+
+    # Flow joins once its encrypted env is committed, and only next to core-api (its permissions and its database).
+    if [[ -f apps/flow/.env.production.age ]]; then
+      [[ "$with_core_api" == true ]] \
+        || fatal "apps/flow/.env.production.age is in this commit but core/core-api/.env.production.age is not: Flow needs core-api."
+      with_flow=true
+      log "Decrypting apps/flow/.env.production.age..."
+      ( umask 077 && age -d -i .age/key.txt apps/flow/.env.production.age > .env.flow.tmp ) \
+        || { rm -f .env.flow.tmp; fatal "age could not decrypt apps/flow/.env.production.age."; }
+      mv -f .env.flow.tmp .env.flow
+      chmod 600 .env.flow
+      log "Checking the Flow environment (names only)..."
+      require_env_vars .env.flow apps/flow/.env.production.example \
+        || fatal "fill the variables named above in apps/flow/.env.production (node deploy/flow/new-env.mjs writes the first ones), re-encrypt it, commit the .age file, and deploy that commit."
+    else
+      log "No apps/flow/.env.production.age in this commit: Flow is not part of this deploy."
+    fi
   fi
   docker network inspect edge_net >/dev/null 2>&1 \
     || fatal "the edge_net network does not exist. The shared edge is not installed on this host."
@@ -214,9 +242,12 @@ main() {
   # Always set, so the compose file renders; the image is only pulled when the "core" profile is on.
   export CORE_API_IMAGE_TAG="$core_api_image_commit"
   export ADMIN_IMAGE_TAG="$admin_image_commit"
+  export FLOW_IMAGE_TAG="$flow_image_commit"
   if [[ "$with_core_api" == true ]]; then
-    export COMPOSE_PROFILES=core
-    [[ "$with_admin" == true ]] && export COMPOSE_PROFILES=core,admin
+    local profiles=core
+    [[ "$with_admin" == true ]] && profiles+=",admin"
+    [[ "$with_flow" == true ]] && profiles+=",flow"
+    export COMPOSE_PROFILES="$profiles"
   else
     unset COMPOSE_PROFILES
   fi
@@ -238,9 +269,9 @@ main() {
   else
     log "Checking the compose file..."
     "${compose[@]}" config -q
-    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")$([[ "$with_admin" == true ]] && echo ", :admin-${ADMIN_IMAGE_TAG}")..."
+    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")$([[ "$with_admin" == true ]] && echo ", :admin-${ADMIN_IMAGE_TAG}")$([[ "$with_flow" == true ]] && echo ", :flow-${FLOW_IMAGE_TAG}")..."
     if ! pull_with_retry "${compose[@]}" pull; then
-      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image or ${ADMIN_IMAGE_TAG} no admin image (see the 'Identity image', 'Site image', 'Docs image', 'Core API image' and 'Admin image' workflow runs), or a landing page image pinned in deploy/compose.prod.yml is not published (the 'Site image' run in AliSafari-IT/breinhap, or the 'Landing page image' run in AliSafari-IT/igs-pharma)."
+      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image, ${ADMIN_IMAGE_TAG} no admin image or ${FLOW_IMAGE_TAG} no flow image (see the 'Identity image', 'Site image', 'Docs image', 'Core API image', 'Admin image' and 'Flow image' workflow runs), or a landing page image pinned in deploy/compose.prod.yml is not published (the 'Site image' run in AliSafari-IT/breinhap, or the 'Landing page image' run in AliSafari-IT/igs-pharma)."
     fi
     log "Starting the stack..."
     "${compose[@]}" up -d --remove-orphans
@@ -293,6 +324,22 @@ main() {
         fatal "os-admin did not become ready within 60s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 os-admin"
       fi
       log "os-admin is ready."
+    fi
+
+    if [[ "$with_flow" == true ]]; then
+      log "Waiting for os-flow's /health/ready..."
+      local flow_ready=false
+      for _ in $(seq 1 30); do
+        if "${compose[@]}" exec -T os-flow wget -qO- http://127.0.0.1:3000/health/ready >/dev/null 2>&1; then
+          flow_ready=true
+          break
+        fi
+        sleep 2
+      done
+      if [[ "$flow_ready" != true ]]; then
+        fatal "os-flow did not become ready within 60s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 os-flow"
+      fi
+      log "os-flow is ready."
     fi
   fi
 
@@ -359,7 +406,14 @@ main() {
   # 7. Publish the site file. The edge validates the WHOLE config first and restores the old file on failure.
   # Both files are published under the same edge site name, so a full deploy replaces the site-only one.
   local site_file=sites/asafarim-os.caddy
-  [[ "$site_only" == true ]] && site_file=sites/asafarim-os-site.caddy
+  if [[ "$site_only" == true ]]; then
+    site_file=sites/asafarim-os-site.caddy
+  elif [[ "$with_flow" == true ]]; then
+    # flow.asafarim.site only now that os-flow runs and is ready: the full file with the Flow block appended.
+    cat sites/asafarim-os.caddy sites/asafarim-os-flow.caddy > .vps-deploy-site.caddy.tmp
+    mv -f .vps-deploy-site.caddy.tmp .vps-deploy-site.caddy
+    site_file=.vps-deploy-site.caddy
+  fi
   log "Publishing ${site_file} on the shared edge..."
   EDGE_DIR="$edge_dir" bash "${edge_dir}/scripts/edge-deploy-site.sh" asafarim-os "${repo_dir}/${site_file}"
 
@@ -373,7 +427,7 @@ main() {
   if [[ "$site_only" == true ]]; then
     log "Done. Check: curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health && curl -fsSI https://breinhap.asafarim.site/ && curl -fsSI https://igs.asafarim.site/"
   else
-    log "Done. Check: curl -fsS https://id.asafarim.site/.well-known/openid-configuration && curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health && curl -fsSI https://breinhap.asafarim.site/ && curl -fsSI https://igs.asafarim.site/"
+    log "Done. Check: curl -fsS https://id.asafarim.site/.well-known/openid-configuration && curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health && curl -fsSI https://breinhap.asafarim.site/ && curl -fsSI https://igs.asafarim.site/$([[ "$with_flow" == true ]] && echo " && curl -fsS https://flow.asafarim.site/health/live")"
   fi
 }
 

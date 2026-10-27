@@ -24,5 +24,11 @@ export async function register() {
     db().catch((err: unknown) => log.warn("db.prepare_failed", { error: (err as Error).message }));
     startEventRelay();
     startWorkers({ pool: db, engine, wake: wakeRelay });
+  } else {
+    // Production before `admin.sh install flow` gives it a database: pages and health only, no workflow runs.
+    const { log } = await import("./lib/log");
+    log.warn("flow.workers.no_database", {
+      hint: "DATABASE_URL is not set: no relay, subscribers, sweeper or retention",
+    });
   }
 }
