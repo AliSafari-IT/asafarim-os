@@ -22,9 +22,20 @@ export class AiTimeoutError extends Error {
 
 /** The AI service failed or answered without the tool call. */
 export class AiUnavailableError extends Error {
-  constructor(reason: string) {
+  /** The HTTP status of an error answer; undefined when the request itself failed. */
+  readonly status: number | undefined;
+  constructor(reason: string, status?: number) {
     super(`the AI isn't available: ${reason}`);
     this.name = "AiUnavailableError";
+    this.status = status;
+  }
+}
+
+/** The AI answered, but without the issue tool call (or not as JSON): a bad answer, not an outage. */
+export class AiNoIssueError extends AiUnavailableError {
+  constructor() {
+    super("no issue in the answer");
+    this.name = "AiNoIssueError";
   }
 }
 
@@ -113,10 +124,10 @@ export function createAnthropicWriter(opts: {
         if (isAbort(err)) throw new AiTimeoutError();
         throw new AiUnavailableError("the request failed");
       }
-      if (!res.ok) throw new AiUnavailableError(`HTTP ${res.status}`);
+      if (!res.ok) throw new AiUnavailableError(`HTTP ${res.status}`, res.status);
       const data = (await res.json().catch(() => undefined)) as MessagesAnswer | undefined;
       const call = data?.content?.find((c) => c.type === "tool_use" && c.name === ISSUE_TOOL.name);
-      if (!call) throw new AiUnavailableError("no issue in the answer");
+      if (!call) throw new AiNoIssueError();
       return {
         answer: call.input,
         usage: { inputTokens: data?.usage?.input_tokens ?? 0, outputTokens: data?.usage?.output_tokens ?? 0 },

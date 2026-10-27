@@ -3,18 +3,9 @@
  * drafts a GitHub issue from the note for the repo that owns its document (or the `repo` sent).
  * A preview only: nothing is created on GitHub. The body is JSON (`{}` or `{ "repo": "owner/name" }`).
  */
-import {
-  APP_DOMAIN,
-  invalidIssue,
-  issueAccess,
-  issueTracker,
-  issueWriter,
-  logIssue,
-  noteDocument,
-  serviceFailure,
-} from "@/lib/issue-api";
-import { buildIssueContext } from "@/lib/issue-context";
-import { DraftRequest, existingLabels, IssueDraft, issuePrompt, withoutAppLinks } from "@/lib/issue-draft";
+import { invalidIssue, issueAccess, issueTracker, issueWriter, noteDocument, serviceFailure } from "@/lib/issue-api";
+import { DraftRequest } from "@/lib/issue-draft";
+import { draftIssue } from "@/lib/issue-drafting";
 import { json, jsonBody } from "@/lib/notes-api";
 
 export const dynamic = "force-dynamic";
@@ -37,27 +28,17 @@ export async function POST(request: Request, { params }: Params) {
   const repo = input.data.repo ?? doc.ownerRepo;
 
   try {
-    const [target, labels] = await Promise.all([github.tracker.repo(repo), github.tracker.labels(repo)]);
-    const context = buildIssueContext({ docPath: a.note.docPath, markdown: doc.markdown, note: a.note, repo, labels });
-    const { answer, usage } = await ai.writer.draft(issuePrompt(context, target.public));
-    const parsed = IssueDraft.safeParse(answer);
-    logIssue("issue.draft", {
-      note: a.note.id,
-      public: target.public,
-      words: context.words,
-      valid: parsed.success,
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
+    const d = await draftIssue({
+      note: a.note,
+      markdown: doc.markdown,
+      repo,
+      tracker: github.tracker,
+      writer: ai.writer,
     });
-    if (!parsed.success) {
+    if (!d.ok) {
       return json({ error: "invalid_ai_answer", message: "The AI's answer wasn't a usable issue. Try again." }, 502);
     }
-    const draft = withoutAppLinks(
-      { ...parsed.data, labels: existingLabels(parsed.data.labels, labels) },
-      APP_DOMAIN,
-      a.note.docPath,
-    );
-    return json({ repo, public: target.public, draft, labels, issueUrl: a.note.issueUrl });
+    return json({ repo, public: d.public, draft: d.draft, labels: d.labels, issueUrl: a.note.issueUrl });
   } catch (err) {
     return serviceFailure(err);
   }

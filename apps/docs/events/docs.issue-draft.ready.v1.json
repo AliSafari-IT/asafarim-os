@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "asafarim://docs/events/docs.issue-draft.ready.v1.json",
+  "title": "docs.issue-draft.ready.v1",
+  "description": "Docs drafted a GitHub issue from a study note, answering flow.issue-draft.requested.v1. Nothing is created on GitHub yet: the owner approves the draft in Flow first. requestId is the id of the request event answered, so Flow can drop a late answer to an earlier attempt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runId", "stepId", "requestId", "noteId", "docPath", "repo", "public", "title", "body", "labels"],
+  "properties": {
+    "runId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The Flow run (from the request)" },
+    "stepId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "The run's step that waits for the answer (from the request)"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The id of the flow.issue-draft.requested.v1 event this answers"
+    },
+    "noteId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The Docs note" },
+    "docPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "The note's document, its path in the source repository"
+    },
+    "repo": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$",
+      "description": "The target repository (owner/name): the one that owns the document"
+    },
+    "public": { "type": "boolean", "description": "True when the target repository is public" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 256, "description": "The drafted issue's title" },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60000,
+      "description": "The drafted issue's Markdown body"
+    },
+    "labels": {
+      "type": "array",
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": { "type": "string" },
+      "description": "Labels the target repository already has"
+    }
+  }
+}

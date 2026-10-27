@@ -75,6 +75,26 @@ Docs publishes **`docs.note.created.v1`** (schema: [`events/docs.note.created.v1
 
 `test/tags.test.ts` covers the tag parser, `test/note-events.test.ts` when an event is written and what it carries (over a transactional stand-in for Postgres, `test/fake-db.ts`).
 
+### Drafting an issue for Flow
+
+Docs subscribes to **`flow.issue-draft.requested.v1`** (`{ runId, stepId, noteId, onBehalfOf }`) and answers with exactly one of:
+
+- **`docs.issue-draft.ready.v1`** ([schema](events/docs.issue-draft.ready.v1.json)): `runId`, `stepId`, `requestId`, `noteId`, `docPath`, `repo` (owner/name), `public`, `title` (1–256), `body` (1–60 000), `labels` (at most 20, distinct).
+- **`docs.issue-draft.failed.v1`** ([schema](events/docs.issue-draft.failed.v1.json)): `runId`, `stepId`, `requestId`, `noteId`, `code`, `message` (at most 1 000; never the note's text, a token or a stack trace).
+
+`requestId` is always the id of the request event answered, so Flow drops a late answer to an earlier attempt. **Nothing is created on GitHub**: the owner approves the draft in Flow first.
+
+`lib/subscribers.ts` starts the subscriber next to the relay (`instrumentation.ts`), only with a database and a bus; only that file loads the event SDK, never a page. The SDK's inbox runs the handler once per event id, in a transaction of Docs's database that also holds the answer's outbox row. The handler (`lib/issue-draft-handler.ts`), in order:
+
+1. An invalid payload is logged and acked: never retried, never answered.
+2. The note must be `onBehalfOf`'s: otherwise `note_not_found` (someone else's note reads as missing). It's read without a row lock; the transaction stays open during the AI call (up to 60 s).
+3. `onBehalfOf` needs `docs.read` and `docs.issues.create`, asked from core-api every time: otherwise `forbidden`. If core-api can't answer (`AccessUnavailableError`) the handler throws, so the request is redelivered and nothing is answered.
+4. A note that already has an issue: `issue_exists`.
+5. The draft is built by the same code as "Generate GitHub issue" (`lib/issue-drafting.ts`, also used by `POST /api/notes/:id/issue/draft`): the repo that owns the document, its labels only, the validated AI answer, links to the reader replaced by the document's path.
+6. Failures: GitHub's 401/403/404 (or no `DOCS_ISSUES_TOKEN`) is `no_repo_access`; an AI answer that fails validation, has no issue tool call, or grows past the event's limits once links are replaced is `invalid_ai_answer`; an AI timeout, network error, 429 or 5xx (or no `DOCS_AI_API_KEY`) is `ai_unavailable`. Anything else (GitHub's 5xx, the AI's other 4xx, the document gone from the source) is thrown: redelivered with a backoff, then dead-lettered.
+
+`test/issue-draft-handler.test.ts` runs every branch through the SDK's delivery code over `test/fake-db.ts`, with GitHub and the AI mocked, and checks every answer against its schema.
+
 ## Try it
 
 ```bash

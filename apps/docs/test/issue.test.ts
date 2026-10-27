@@ -8,6 +8,7 @@ import path from "node:path";
 import { ForbiddenError } from "@asafarim/app-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  AiNoIssueError,
   AiTimeoutError,
   createAnthropicWriter,
   createGitHubIssues,
@@ -339,6 +340,15 @@ describe("POST /api/notes/:id/issue/draft (#82)", () => {
     }).writer;
     const res = await (await draftRoute()).POST(jsonReq({}), params(noteIdOf));
     expect(res.status).toBe(504);
+  });
+
+  it("an answer without the issue tool call is still 502 ai_unavailable (unchanged by Flow's handler)", async () => {
+    services.writer = fakeWriter(() => {
+      throw new AiNoIssueError();
+    }).writer;
+    const res = await (await draftRoute()).POST(jsonReq({}), params(noteIdOf));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toMatchObject({ error: "ai_unavailable" });
   });
 
   it("not configured: 503", async () => {

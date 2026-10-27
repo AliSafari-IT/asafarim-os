@@ -53,9 +53,15 @@ export default defineApp({
       description: "The owner of the documentation: reads, keeps notes and files issues",
     },
   ],
-  // Flow (ADR 0001): published through the outbox in the same transaction as the note's write (lib/notes.ts).
+  // Flow (ADR 0001): published through the outbox in the same transaction as the note's write (lib/notes.ts),
+  // or as the answer to Flow's request, in the request's inbox transaction (lib/issue-draft-handler.ts).
   events: {
-    publishes: [{ type: "docs.note.created.v1", schema: "./events/docs.note.created.v1.json" }],
+    publishes: [
+      { type: "docs.note.created.v1", schema: "./events/docs.note.created.v1.json" },
+      { type: "docs.issue-draft.ready.v1", schema: "./events/docs.issue-draft.ready.v1.json" },
+      { type: "docs.issue-draft.failed.v1", schema: "./events/docs.issue-draft.failed.v1.json" },
+    ],
+    subscribes: [{ type: "flow.issue-draft.requested.v1", handler: "/events/issue-draft-requested" }],
   },
   config: [
     {
