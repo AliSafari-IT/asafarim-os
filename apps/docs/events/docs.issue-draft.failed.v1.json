@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "asafarim://docs/events/docs.issue-draft.failed.v1.json",
+  "title": "docs.issue-draft.failed.v1",
+  "description": "Docs couldn't draft a GitHub issue from a study note, answering flow.issue-draft.requested.v1. The message is short and never carries the note's text, a token or a stack trace. requestId is the id of the request event answered, so Flow can drop a late answer to an earlier attempt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runId", "stepId", "requestId", "noteId", "code", "message"],
+  "properties": {
+    "runId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The Flow run (from the request)" },
+    "stepId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "The run's step that waits for the answer (from the request)"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The id of the flow.issue-draft.requested.v1 event this answers"
+    },
+    "noteId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The Docs note" },
+    "code": {
+      "type": "string",
+      "enum": ["note_not_found", "forbidden", "issue_exists", "no_repo_access", "invalid_ai_answer", "ai_unavailable"],
+      "description": "Why: no such note of the subject, the subject lacks docs.read or docs.issues.create, the note already has an issue, the target repository can't be reached, the AI's answer wasn't a usable issue, or the AI isn't answering"
+    },
+    "message": { "type": "string", "maxLength": 1000, "description": "A short, human-readable reason" }
+  }
+}

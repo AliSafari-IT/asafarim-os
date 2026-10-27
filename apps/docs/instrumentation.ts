@@ -1,6 +1,6 @@
 /**
  * Runs once when the server starts: turn on telemetry (P6.2), register with core-api (signed, retried, non-fatal), and start
- * the outbox relay when the app has a database and a bus.
+ * the outbox relay and the event subscribers (Flow's requests) when the app has a database and a bus.
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
@@ -16,5 +16,7 @@ export async function register() {
   if (process.env.DATABASE_URL) {
     const { startEventRelay } = await import("./lib/notes");
     await startEventRelay();
+    const { startEventSubscribers } = await import("./lib/subscribers");
+    startEventSubscribers();
   }
 }
