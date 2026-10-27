@@ -1,6 +1,8 @@
 /** The engine's store on Flow's own Postgres database (tables: lib/migrations.ts). */
 import { parseDefinition } from "../workflow/definition";
 import type {
+  ApprovalPatch,
+  ApprovalRow,
   FlowStore,
   RunPatch,
   RunRow,
@@ -64,6 +66,22 @@ export function stepFrom(r: Row): StepRow {
   };
 }
 
+export function approvalFrom(r: Row): ApprovalRow {
+  return {
+    id: r.id as string,
+    runId: r.run_id as string,
+    stepId: r.step_id as string,
+    status: r.status as ApprovalRow["status"],
+    assigneeRole: r.assignee_role as string,
+    deadline: date(r.deadline),
+    decidedBy: (r.decided_by as string | null) ?? null,
+    decidedAt: date(r.decided_at),
+    comment: (r.comment as string | null) ?? null,
+    edited: (r.edited as Record<string, unknown> | null) ?? null,
+    createdAt: r.created_at as Date,
+  };
+}
+
 const workflowFrom = (r: Row): WorkflowRow => ({
   id: r.id as string,
   key: r.key as string,
@@ -85,7 +103,14 @@ const STEP_COLUMNS: Record<keyof StepPatch, string> = {
   errorCode: "error_code",
   errorMessage: "error_message",
 };
-const JSON_COLUMNS = new Set(["input", "output"]);
+const APPROVAL_COLUMNS: Record<keyof ApprovalPatch, string> = {
+  status: "status",
+  decidedBy: "decided_by",
+  decidedAt: "decided_at",
+  comment: "comment",
+  edited: "edited",
+};
+const JSON_COLUMNS = new Set(["input", "output", "edited"]);
 
 /** `UPDATE <table> SET a = $2, b = $3 WHERE id = $1` from a patch; column names come from the maps above only. */
 async function update(tx: Tx, table: string, columns: Record<string, string>, id: string, patch: object) {
@@ -172,13 +197,45 @@ export function pgStore(tx: Tx): FlowStore {
       );
     },
     updateStep: (id, patch) => update(tx, "workflow_run_steps", STEP_COLUMNS, id, patch),
+    async insertApproval(a) {
+      await tx.query(
+        `INSERT INTO approvals (id, run_id, step_id, status, assignee_role, deadline, decided_by, decided_at, comment,
+           edited, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          a.id,
+          a.runId,
+          a.stepId,
+          a.status,
+          a.assigneeRole,
+          a.deadline,
+          a.decidedBy,
+          a.decidedAt,
+          a.comment,
+          a.edited === null ? null : JSON.stringify(a.edited),
+          a.createdAt,
+        ],
+      );
+    },
+    async approval(id) {
+      const [r] = await rows(tx, "SELECT * FROM approvals WHERE id = $1", [id]);
+      return r ? approvalFrom(r) : undefined;
+    },
+    async approvalsOf(runId) {
+      return (await rows(tx, "SELECT * FROM approvals WHERE run_id = $1 ORDER BY created_at, id", [runId])).map(
+        approvalFrom,
+      );
+    },
+    updateApproval: (id, patch) => update(tx, "approvals", APPROVAL_COLUMNS, id, patch),
     async claimOverdueRun(now) {
       const [r] = await rows(
         tx,
         `SELECT r.id FROM workflow_runs r
           WHERE r.status = 'waiting'
-            AND EXISTS (SELECT 1 FROM workflow_run_steps s
-                         WHERE s.run_id = r.id AND s.status = 'waiting' AND s.timeout_at <= $1)
+            AND (EXISTS (SELECT 1 FROM workflow_run_steps s
+                          WHERE s.run_id = r.id AND s.status = 'waiting' AND s.timeout_at <= $1)
+                 OR EXISTS (SELECT 1 FROM approvals a
+                             WHERE a.run_id = r.id AND a.status = 'pending' AND a.deadline <= $1))
           ORDER BY r.started_at
           LIMIT 1
           FOR UPDATE OF r SKIP LOCKED`,

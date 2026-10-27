@@ -76,12 +76,21 @@ export default defineApp({
       { type: "docs.issue.failed.v1", handler: "/internal/events/docs.issue.failed.v1" },
     ],
   },
+  config: [
+    {
+      key: "docs.url",
+      type: "string",
+      default: "https://docs.asafarim.site",
+      description: "Where Docs is served: the approval page links the draft's document there",
+    },
+  ],
   ui: {
     glyph: "FL",
     color: "#2563eb",
     nav: [
       { label: "Overview", href: "/" },
       { label: "Runs", href: "/runs" },
+      { label: "Approvals", href: "/approvals" },
       { label: "Workflows", href: "/workflows" },
     ],
     status: "active",

@@ -9,10 +9,17 @@
  *     done outcome  → output = its payload, the next step
  *     failed        → the run `failed` with the outcome's code and message
  *     timeout       → (the sweeper) the step `timed_out`, the run `failed` with `action_timeout`
- *   approval        → the step and the run `waiting`, `approval_not_implemented` (PR 4 replaces it)
+ *   approval        → a `pending` approval (its deadline), the step and the run `waiting`; the step's
+ *                     input is the draft (the output of the action before it, checked: lib/workflow/approval.ts)
+ *     approve       → the approval `approved` (with the edits), the step `succeeded` (output = the
+ *                     decision), the next step; a public repository must be acknowledged
+ *     reject        → the approval `rejected`, the step `failed`, the run `rejected`
+ *     deadline      → (the sweeper) the approval `expired`, the step `timed_out`, the run `failed`
+ *                     with `approval_expired` (onExpire: stop)
  *   end             → the run `succeeded`
- *   retry           → a failed run's failed step again, with a new request event id (attempts + 1)
- *   cancel          → `cancelled`; a waiting step is `skipped`
+ *   retry           → a failed run's failed step again, with a new request event id (attempts + 1);
+ *                     a decided approval stays decided (an expired one gets a new approval)
+ *   cancel          → `cancelled`; a waiting step is `skipped`, a pending approval `cancelled`
  *
  * Each call returns the audit entries of what it did; the caller writes them once the transaction
  * has committed (lib/audit.ts), so a rolled-back transition is never reported.
@@ -21,9 +28,10 @@ import { z } from "zod";
 import type { AuditEntry } from "../audit";
 import { evaluate } from "../workflow/conditions";
 import type { RunContext } from "../workflow/context";
-import { msOf, type ActionStep, type Step, type WorkflowDefinition } from "../workflow/definition";
+import { applyEdits, COMMENT_MAX, Draft, type Decision } from "../workflow/approval";
+import { msOf, type ActionStep, type ApprovalStep, type Step, type WorkflowDefinition } from "../workflow/definition";
 import { buildRequest, isRequestType, RequestMappingError } from "../workflow/requests";
-import type { FlowStore, RunRow, StepRow, Tx, VersionRow } from "./store";
+import type { ApprovalRow, FlowStore, RunRow, StepRow, Tx, VersionRow } from "./store";
 
 /** The part of a CloudEvents envelope the engine reads. */
 export interface InboundEvent {
@@ -46,7 +54,17 @@ export interface EngineDeps {
   log: EngineLogger;
 }
 
-export type Refusal = "not_found" | "not_retryable" | "not_cancellable";
+export type Refusal =
+  | "not_found"
+  | "not_retryable"
+  | "not_cancellable"
+  /** The approval was decided already, expired or cancelled, or its run doesn't wait on it. */
+  | "not_pending"
+  | "public_not_acknowledged"
+  /** An edit of a field the step doesn't list in `editable`. */
+  | "edit_not_allowed"
+  | "invalid_edits"
+  | "invalid_comment";
 export type Result = { ok: true; audits: AuditEntry[] } | { ok: false; error: Refusal; audits: AuditEntry[] };
 
 /** What an outcome event must carry; anything else in it is the step's output. */
@@ -81,7 +99,12 @@ export function createEngine(deps: EngineDeps) {
     return { ctx: { runId: run.id, trigger: run.trigger, steps }, rows };
   }
 
-  async function finish(c: Call, run: RunRow, status: "succeeded" | "failed" | "skipped", errorCode: string | null) {
+  async function finish(
+    c: Call,
+    run: RunRow,
+    status: "succeeded" | "failed" | "skipped" | "rejected",
+    errorCode: string | null,
+  ) {
     await c.store.updateRun(run.id, { status, endedAt: now(), errorCode });
     c.audits.push({ action: "flow.run.finished", runId: run.id, status, ...(errorCode ? { errorCode } : {}) });
   }
@@ -119,6 +142,53 @@ export function createEngine(deps: EngineDeps) {
       if (s.type === "approval" && Object.hasOwn(ctx.steps, s.key)) return ctx.steps[s.key]!.output;
     }
     return undefined;
+  }
+
+  /** The output of the action step just before `index`: what an approval reviews. */
+  function draftBefore(def: WorkflowDefinition, index: number, ctx: RunContext): unknown {
+    for (let i = index - 1; i >= 0; i--) {
+      const s = def.steps[i]!;
+      if (s.type === "action") return Object.hasOwn(ctx.steps, s.key) ? ctx.steps[s.key]!.output : undefined;
+    }
+    return undefined;
+  }
+
+  /**
+   * Reach an approval step: a `pending` approval due at now + the deadline, the step `waiting` with
+   * the draft as its input, the run `waiting`. A draft that doesn't fit fails the step (`invalid_draft`):
+   * nobody is asked to approve something that can't be published.
+   */
+  async function runApproval(c: Call, run: RunRow, def: WorkflowDefinition, index: number, step: ApprovalStep) {
+    const { ctx, rows } = await contextOf(c, run);
+    const existing = rows.find((r) => r.stepKey === step.key);
+    const draft = Draft.safeParse(draftBefore(def, index, ctx));
+    if (!draft.success) {
+      const where = draft.error.issues.map((i) => i.path.join(".") || "(root)").join(", ");
+      await writeStep(c, run, step.key, existing, {
+        status: "failed",
+        endedAt: now(),
+        errorCode: "invalid_draft",
+        errorMessage: `The draft doesn't fit (${where}).`.slice(0, MAX_ERROR_MESSAGE),
+      });
+      await finish(c, run, "failed", "invalid_draft");
+      return;
+    }
+    const stepId = await writeStep(c, run, step.key, existing, { status: "waiting", input: draft.data });
+    const createdAt = now();
+    await c.store.insertApproval({
+      id: deps.newId(),
+      runId: run.id,
+      stepId,
+      status: "pending",
+      assigneeRole: step.role,
+      deadline: new Date(createdAt.getTime() + msOf(step.deadline)),
+      decidedBy: null,
+      decidedAt: null,
+      comment: null,
+      edited: null,
+      createdAt,
+    });
+    await c.store.updateRun(run.id, { status: "waiting", endedAt: null, errorCode: null });
   }
 
   async function runAction(c: Call, run: RunRow, def: WorkflowDefinition, index: number, step: ActionStep) {
@@ -159,6 +229,7 @@ export function createEngine(deps: EngineDeps) {
     for (let i = index; i < def.steps.length; i++) {
       const step: Step = def.steps[i]!;
       if (step.type === "action") return runAction(c, run, def, i, step);
+      if (step.type === "approval") return runApproval(c, run, def, i, step);
 
       const { ctx, rows } = await contextOf(c, run);
       const existing = rows.find((r) => r.stepKey === step.key);
@@ -172,12 +243,6 @@ export function createEngine(deps: EngineDeps) {
         });
         if (!passed) return finish(c, run, "skipped", null);
         continue;
-      }
-      if (step.type === "approval") {
-        // PR 4 creates the approval here. Until then the run stops and says why.
-        await writeStep(c, run, step.key, existing, { status: "waiting", errorCode: "approval_not_implemented" });
-        await c.store.updateRun(run.id, { status: "waiting", errorCode: "approval_not_implemented" });
-        return;
       }
       await writeStep(c, run, step.key, existing, { status: "succeeded", endedAt: now() });
       return finish(c, run, "succeeded", null);
@@ -279,6 +344,40 @@ export function createEngine(deps: EngineDeps) {
     return c.audits;
   }
 
+  type Decided =
+    | { ok: false; error: Refusal }
+    | {
+        ok: true;
+        run: RunRow;
+        approval: ApprovalRow;
+        row: StepRow;
+        def: WorkflowDefinition;
+        index: number;
+        step: ApprovalStep;
+      };
+
+  /**
+   * An approval that can be decided now, with its run locked: pending, before its deadline, and its
+   * run and step waiting on it. Otherwise `not_pending` (`not_found` when there is no such approval).
+   */
+  async function decidable(c: Call, approvalId: string): Promise<Decided> {
+    const seen = await c.store.approval(approvalId);
+    if (!seen) return { ok: false, error: "not_found" };
+    const run = await c.store.lockRun(seen.runId);
+    // Read again under the run's lock: a decision that committed meanwhile is seen.
+    const approval = await c.store.approval(approvalId);
+    if (!run || !approval) return { ok: false, error: "not_found" };
+    if (approval.status !== "pending" || run.status !== "waiting") return { ok: false, error: "not_pending" };
+    if (approval.deadline && approval.deadline <= now()) return { ok: false, error: "not_pending" };
+    const row = (await c.store.steps(run.id)).find((s) => s.id === approval.stepId);
+    if (row?.status !== "waiting") return { ok: false, error: "not_pending" };
+    const def = (await versionOf(c, run)).definition;
+    const index = def.steps.findIndex((s) => s.key === row.stepKey);
+    const step = def.steps[index];
+    if (step?.type !== "approval") return { ok: false, error: "not_pending" };
+    return { ok: true, run, approval, row, def, index, step };
+  }
+
   return {
     onTrigger,
     onOutcome,
@@ -292,8 +391,10 @@ export function createEngine(deps: EngineDeps) {
     },
 
     /**
-     * The timeout sweeper's unit of work: one overdue run (locked, skipped by other instances), its
-     * overdue step `timed_out` and the run `failed` with `action_timeout`. Undefined when none is due.
+     * The sweeper's unit of work: one overdue run (locked, skipped by other instances). Its overdue
+     * action step `timed_out` and the run `failed` with `action_timeout`; or its pending approval past
+     * the deadline `expired`, the approval step `timed_out` and the run `failed` with
+     * `approval_expired` (onExpire: stop). Undefined when none is due.
      */
     async sweepOne(tx: Tx): Promise<{ runId: string; audits: AuditEntry[] } | undefined> {
       const c = call(tx);
@@ -301,9 +402,22 @@ export function createEngine(deps: EngineDeps) {
       const runId = await c.store.claimOverdueRun(at);
       if (!runId) return undefined;
       const run = (await c.store.lockRun(runId))!;
-      const overdue = (await c.store.steps(runId)).filter(
-        (s) => s.status === "waiting" && s.timeoutAt !== null && s.timeoutAt <= at,
+      const steps = await c.store.steps(runId);
+      const expired = (await c.store.approvalsOf(runId)).filter(
+        (a) => a.status === "pending" && a.deadline !== null && a.deadline <= at,
       );
+      for (const a of expired) {
+        await c.store.updateApproval(a.id, { status: "expired" });
+        const s = steps.find((x) => x.id === a.stepId);
+        if (s?.status !== "waiting") continue;
+        await c.store.updateStep(s.id, {
+          status: "timed_out",
+          endedAt: at,
+          errorCode: "approval_expired",
+          errorMessage: "Nobody decided before the approval's deadline.",
+        });
+      }
+      const overdue = steps.filter((s) => s.status === "waiting" && s.timeoutAt !== null && s.timeoutAt <= at);
       for (const s of overdue) {
         await c.store.updateStep(s.id, {
           status: "timed_out",
@@ -312,8 +426,81 @@ export function createEngine(deps: EngineDeps) {
           errorMessage: "No answer before the step's timeout.",
         });
       }
-      await finish(c, run, "failed", "action_timeout");
+      await finish(c, run, "failed", expired.length ? "approval_expired" : "action_timeout");
       return { runId, audits: c.audits };
+    },
+
+    /**
+     * Approve: `edits` may change the step's `editable` fields only; a draft for a public repository
+     * needs `acknowledgedPublic`. The approval `approved` (who, when, the fields that changed), the step
+     * `succeeded` with the decision as its output, and the run goes on (the next action publishes).
+     */
+    async approve(
+      tx: Tx,
+      approvalId: string,
+      decider: string,
+      edits: unknown,
+      acknowledgedPublic: boolean,
+    ): Promise<Result> {
+      const c = call(tx);
+      const d = await decidable(c, approvalId);
+      if (!d.ok) return { ok: false, error: d.error, audits: [] };
+      const draft = Draft.parse(d.row.input);
+      const applied = applyEdits(draft, d.step, edits);
+      if (!applied.ok) return { ok: false, error: applied.error, audits: [] };
+      if (draft.public && acknowledgedPublic !== true) {
+        return { ok: false, error: "public_not_acknowledged", audits: [] };
+      }
+      const decidedAt = now();
+      await c.store.updateApproval(approvalId, {
+        status: "approved",
+        decidedBy: decider,
+        decidedAt,
+        edited: applied.changed,
+      });
+      const decision: Decision = {
+        noteId: draft.noteId,
+        repo: draft.repo,
+        ...applied.final,
+        acknowledgedPublic: draft.public,
+        approvalId,
+        decidedBy: decider,
+        decidedAt: decidedAt.toISOString(),
+      };
+      await c.store.updateStep(d.row.id, { status: "succeeded", output: decision, endedAt: decidedAt });
+      await c.store.updateRun(d.run.id, { status: "running", errorCode: null });
+      c.audits.push({
+        action: "flow.approval.decided",
+        runId: d.run.id,
+        stepId: d.row.id,
+        approvalId,
+        decision: "approved",
+        actor: decider,
+      });
+      await runFrom(c, { ...d.run, status: "running" }, d.def, d.index + 1);
+      return { ok: true, audits: c.audits };
+    },
+
+    /** Reject, with an optional comment (≤ 1000): the approval `rejected`, the run ends `rejected`. */
+    async reject(tx: Tx, approvalId: string, decider: string, comment?: string | null): Promise<Result> {
+      const c = call(tx);
+      const text = comment?.trim() ? comment.trim() : null;
+      if (text !== null && text.length > COMMENT_MAX) return { ok: false, error: "invalid_comment", audits: [] };
+      const d = await decidable(c, approvalId);
+      if (!d.ok) return { ok: false, error: d.error, audits: [] };
+      const decidedAt = now();
+      await c.store.updateApproval(approvalId, { status: "rejected", decidedBy: decider, decidedAt, comment: text });
+      await c.store.updateStep(d.row.id, { status: "failed", endedAt: decidedAt, errorCode: "rejected" });
+      c.audits.push({
+        action: "flow.approval.decided",
+        runId: d.run.id,
+        stepId: d.row.id,
+        approvalId,
+        decision: "rejected",
+        actor: decider,
+      });
+      await finish(c, d.run, "rejected", null);
+      return { ok: true, audits: c.audits };
     },
 
     /** Retry a failed run: its failed (or timed-out) step again, with a new request event id. */
@@ -339,7 +526,7 @@ export function createEngine(deps: EngineDeps) {
       return { ok: true, audits: c.audits };
     },
 
-    /** Cancel a run that hasn't succeeded or stopped: `cancelled`, a waiting step `skipped`. */
+    /** Cancel a run that hasn't succeeded or stopped: `cancelled`, a waiting step `skipped`, a pending approval `cancelled`. */
     async cancel(tx: Tx, runId: string, actor: string): Promise<Result> {
       const c = call(tx);
       const run = await c.store.lockRun(runId);
@@ -356,6 +543,9 @@ export function createEngine(deps: EngineDeps) {
             errorCode: "cancelled",
           });
         }
+      }
+      for (const a of await c.store.approvalsOf(run.id)) {
+        if (a.status === "pending") await c.store.updateApproval(a.id, { status: "cancelled" });
       }
       await c.store.updateRun(run.id, { status: "cancelled", endedAt: now() });
       c.audits.push({ action: "flow.run.cancelled", runId: run.id, actor });

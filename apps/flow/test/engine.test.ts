@@ -3,7 +3,9 @@
  * so every request is checked against its JSON Schema: a trigger starts a run on the current version,
  * conditions skip or go on, an action waits with its request in the outbox, outcomes move it on or
  * fail it (late and duplicate ones are ignored), the sweeper times it out, retry sends a new request,
- * cancel stops it, and a paused workflow starts nothing.
+ * cancel stops it, and a paused workflow starts nothing. The approval step: reached with the draft,
+ * approved (with or without edits, a public repository acknowledged), rejected, decided twice,
+ * expired, cancelled, and retried after it was approved.
  */
 import { ulid } from "@asafarim/app-sdk/events";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -17,6 +19,21 @@ const NOTE = "docs.note.created.v1";
 const DRAFT_READY = "docs.issue-draft.ready.v1";
 const DRAFT_FAILED = "docs.issue-draft.failed.v1";
 const DRAFT_REQUESTED = "flow.issue-draft.requested.v1";
+const ISSUE_APPROVED = "flow.issue.approved.v1";
+const ISSUE_CREATED = "docs.issue.created.v1";
+const ISSUE_FAILED = "docs.issue.failed.v1";
+const DAY = 24 * 60 * 60_000;
+
+/** `docs.issue-draft.ready.v1` minus runId, stepId and requestId: what the approver reviews. */
+const DRAFT = {
+  noteId: "42",
+  docPath: "guides/getting-started.md",
+  repo: "AliSafari-IT/asafarim-docs",
+  public: false,
+  title: "Fix the getting-started guide",
+  body: "## Context\n\nThe install step is out of date.",
+  labels: ["docs"],
+};
 
 const note = (over: Partial<Record<string, unknown>> = {}): InboundEvent => ({
   id: ulid(),
@@ -156,9 +173,9 @@ describe("a trigger event", () => {
 });
 
 describe("an action's outcome", () => {
-  it("done: output = its payload, the run moves to the approval step and waits there (approval_not_implemented)", async () => {
+  it("done: output = its payload, the run moves to the approval step and waits there", async () => {
     const t = await waitingOnDraft();
-    const ready = t.outcome(DRAFT_READY, { runId: t.run.id, stepId: t.draft.id, title: "Fix the guide", body: "…" });
+    const ready = t.outcome(DRAFT_READY, { runId: t.run.id, stepId: t.draft.id, ...DRAFT });
     await t.engine.handle(t.mem.tx, ready);
 
     expect(t.step("draft")).toMatchObject({
@@ -168,8 +185,8 @@ describe("an action's outcome", () => {
       endedAt: t.clock.now,
       timeoutAt: null,
     });
-    expect(t.step("review")).toMatchObject({ status: "waiting", errorCode: "approval_not_implemented" });
-    expect(t.onlyRun()).toMatchObject({ status: "waiting", errorCode: "approval_not_implemented", endedAt: null });
+    expect(t.step("review")).toMatchObject({ status: "waiting", errorCode: null });
+    expect(t.onlyRun()).toMatchObject({ status: "waiting", errorCode: null, endedAt: null });
     expect(t.mem.outbox).toHaveLength(1);
   });
 
@@ -258,10 +275,10 @@ describe("the timeout sweeper", () => {
     expect(await t.engine.sweepOne(t.mem.tx)).toBeUndefined();
   });
 
-  it("doesn't touch a run waiting on an approval (no timeout_at)", async () => {
+  it("doesn't touch a run waiting on an approval before its deadline", async () => {
     const t = await waitingOnDraft();
-    await t.engine.handle(t.mem.tx, t.outcome(DRAFT_READY, { runId: t.run.id, stepId: t.draft.id }));
-    t.advance(30 * 24 * 60 * 60_000);
+    await t.engine.handle(t.mem.tx, t.outcome(DRAFT_READY, { runId: t.run.id, stepId: t.draft.id, ...DRAFT }));
+    t.advance(7 * DAY - 1);
     expect(await t.engine.sweepOne(t.mem.tx)).toBeUndefined();
   });
 });
@@ -329,6 +346,293 @@ describe("retry and cancel", () => {
       ok: false,
       error: "not_cancellable",
     });
+  });
+});
+
+/** A run of the slice-1 workflow that waits on its review step, with `draft` as Docs' answer. */
+async function waitingOnReview(draft: Record<string, unknown> = DRAFT) {
+  const t = await waitingOnDraft();
+  await t.engine.handle(
+    t.mem.tx,
+    t.outcome(DRAFT_READY, { runId: t.run.id, stepId: t.draft.id, requestId: t.draft.requestEventId, ...draft }),
+  );
+  const approval = t.mem.approvals.at(-1)!;
+  return { ...t, review: t.step("review"), approval };
+}
+
+describe("the approval step", () => {
+  it("reached: a pending approval due in 7 days, the step waiting with the draft as input, the run waiting", async () => {
+    const t = await waitingOnReview();
+    expect(t.mem.approvals).toHaveLength(1);
+    expect(t.approval).toMatchObject({
+      runId: t.run.id,
+      stepId: t.review.id,
+      status: "pending",
+      assigneeRole: "flow.approver",
+      deadline: new Date(t.clock.now.getTime() + 7 * DAY),
+      decidedBy: null,
+      decidedAt: null,
+      edited: null,
+    });
+    // The draft without the outcome's runId, stepId and requestId.
+    expect(t.review).toMatchObject({ status: "waiting", input: DRAFT, errorCode: null, timeoutAt: null });
+    expect(t.onlyRun()).toMatchObject({ status: "waiting", errorCode: null });
+    expect(t.mem.outbox).toHaveLength(1);
+  });
+
+  it("a draft that doesn't fit the contract fails the step with invalid_draft; nobody is asked", async () => {
+    const t = await waitingOnReview({ ...DRAFT, repo: "not a repo", labels: Array(21).fill("x") });
+    expect(t.mem.approvals).toHaveLength(0);
+    expect(t.step("review")).toMatchObject({ status: "failed", errorCode: "invalid_draft" });
+    expect(t.step("review").errorMessage).toContain("repo");
+    expect(t.onlyRun()).toMatchObject({ status: "failed", errorCode: "invalid_draft" });
+  });
+
+  it("approve without edits: approved, the step's output is the decision, flow.issue.approved.v1 goes out", async () => {
+    const t = await waitingOnReview();
+    t.advance(60_000);
+    const r = await t.engine.approve(t.mem.tx, t.approval.id, "dev-approver", {}, false);
+    expect(r).toEqual({
+      ok: true,
+      audits: [
+        {
+          action: "flow.approval.decided",
+          runId: t.run.id,
+          stepId: t.review.id,
+          approvalId: t.approval.id,
+          decision: "approved",
+          actor: "dev-approver",
+        },
+      ],
+    });
+    expect(t.mem.approvals[0]).toMatchObject({
+      status: "approved",
+      decidedBy: "dev-approver",
+      decidedAt: t.clock.now,
+      edited: null,
+    });
+    const decision = {
+      noteId: "42",
+      repo: DRAFT.repo,
+      title: DRAFT.title,
+      body: DRAFT.body,
+      labels: DRAFT.labels,
+      acknowledgedPublic: false,
+      approvalId: t.approval.id,
+      decidedBy: "dev-approver",
+      decidedAt: t.clock.now.toISOString(),
+    };
+    expect(t.step("review")).toMatchObject({ status: "succeeded", output: decision, endedAt: t.clock.now });
+
+    const create = t.step("create");
+    expect(create).toMatchObject({ status: "waiting", attempts: 1 });
+    expect(t.mem.outbox).toHaveLength(2);
+    const row = t.mem.outbox[1]!;
+    expect(row.type).toBe(ISSUE_APPROVED);
+    expect(create.requestEventId).toBe(row.id);
+    // onBehalfOf is the note's author (trigger.author), not the approver.
+    expect(row.envelope.data).toEqual({
+      runId: t.run.id,
+      stepId: create.id,
+      approvalId: t.approval.id,
+      noteId: "42",
+      onBehalfOf: "dev-admin",
+      decidedBy: "dev-approver",
+      decidedAt: t.clock.now.toISOString(),
+      repo: DRAFT.repo,
+      title: DRAFT.title,
+      body: DRAFT.body,
+      labels: DRAFT.labels,
+      acknowledgedPublic: false,
+    });
+    expect(() => publisher.validate(ISSUE_APPROVED, row.envelope.data)).not.toThrow();
+    expect(t.onlyRun()).toMatchObject({ status: "waiting", errorCode: null });
+
+    // Docs creates the issue: the run ends succeeded.
+    const audits = await t.engine.handle(
+      t.mem.tx,
+      t.outcome(ISSUE_CREATED, { runId: t.run.id, stepId: create.id, requestId: row.id, number: 7 }),
+    );
+    expect(t.onlyRun()).toMatchObject({ status: "succeeded" });
+    expect(audits.at(-1)).toMatchObject({ action: "flow.run.finished", status: "succeeded" });
+  });
+
+  it("approve with edits: only the fields that changed are recorded, the request carries the final draft", async () => {
+    const t = await waitingOnReview();
+    const edits = { title: "Update the install step", body: DRAFT.body, labels: ["docs", "good first issue"] };
+    expect((await t.engine.approve(t.mem.tx, t.approval.id, "dev-approver", edits, false)).ok).toBe(true);
+    expect(t.mem.approvals[0]!.edited).toEqual({ title: edits.title, labels: edits.labels });
+    expect(t.step("review").output).toMatchObject({ title: edits.title, body: DRAFT.body, labels: edits.labels });
+    expect(t.mem.outbox[1]!.envelope.data).toMatchObject({ title: edits.title, labels: edits.labels });
+  });
+
+  it("edits outside the step's editable fields, or past the limits, are refused and change nothing", async () => {
+    const t = await waitingOnReview();
+    const refused = async (edits: unknown) => (await t.engine.approve(t.mem.tx, t.approval.id, "a", edits, true)).ok;
+    for (const [edits, error] of [
+      [{ repo: "someone/else" }, "edit_not_allowed"],
+      [{ public: false }, "edit_not_allowed"],
+      [{ title: "" }, "invalid_edits"],
+      [{ title: "x".repeat(257) }, "invalid_edits"],
+      [{ body: "" }, "invalid_edits"],
+      [{ body: "x".repeat(60_001) }, "invalid_edits"],
+      [{ labels: Array.from({ length: 21 }, (_, i) => `l${i}`) }, "invalid_edits"],
+      [{ labels: ["a", "a"] }, "invalid_edits"],
+      [{ labels: ["x".repeat(51)] }, "invalid_edits"],
+      [{ labels: [""] }, "invalid_edits"],
+    ] as const) {
+      expect(await t.engine.approve(t.mem.tx, t.approval.id, "a", edits, true)).toEqual({
+        ok: false,
+        error,
+        audits: [],
+      });
+    }
+    expect(await refused({ title: "ok" })).toBe(true); // still pending until then
+  });
+
+  it("a step whose editable list leaves a field out refuses an edit of it", async () => {
+    const def = structuredClone(DOCS_NOTE_TO_ISSUE.definition);
+    const review = def.steps.find((s) => s.type === "approval")!;
+    if (review.type === "approval") review.editable = ["title"];
+    const t = setup(def);
+    await t.engine.handle(t.mem.tx, note());
+    const draft = t.step("draft");
+    await t.engine.handle(t.mem.tx, t.outcome(DRAFT_READY, { runId: t.onlyRun().id, stepId: draft.id, ...DRAFT }));
+    const id = t.mem.approvals[0]!.id;
+    expect(await t.engine.approve(t.mem.tx, id, "a", { body: "Changed" }, false)).toMatchObject({
+      ok: false,
+      error: "edit_not_allowed",
+    });
+    expect((await t.engine.approve(t.mem.tx, id, "a", { title: "Changed" }, false)).ok).toBe(true);
+  });
+
+  it("a public repository: refused without acknowledgedPublic, approved with it", async () => {
+    const t = await waitingOnReview({ ...DRAFT, public: true });
+    expect(await t.engine.approve(t.mem.tx, t.approval.id, "dev-approver", {}, false)).toEqual({
+      ok: false,
+      error: "public_not_acknowledged",
+      audits: [],
+    });
+    expect(t.mem.approvals[0]!.status).toBe("pending");
+    expect(t.mem.outbox).toHaveLength(1);
+    expect((await t.engine.approve(t.mem.tx, t.approval.id, "dev-approver", {}, true)).ok).toBe(true);
+    expect(t.mem.outbox[1]!.envelope.data).toMatchObject({ acknowledgedPublic: true });
+  });
+
+  it("reject: the approval rejected with the comment, the run ends rejected, nothing is published", async () => {
+    const t = await waitingOnReview();
+    const r = await t.engine.reject(t.mem.tx, t.approval.id, "dev-approver", "  Not an issue, a question.  ");
+    expect(r).toEqual({
+      ok: true,
+      audits: [
+        {
+          action: "flow.approval.decided",
+          runId: t.run.id,
+          stepId: t.review.id,
+          approvalId: t.approval.id,
+          decision: "rejected",
+          actor: "dev-approver",
+        },
+        { action: "flow.run.finished", runId: t.run.id, status: "rejected" },
+      ],
+    });
+    expect(t.mem.approvals[0]).toMatchObject({
+      status: "rejected",
+      decidedBy: "dev-approver",
+      decidedAt: t.clock.now,
+      comment: "Not an issue, a question.",
+    });
+    expect(t.step("review")).toMatchObject({ status: "failed", errorCode: "rejected" });
+    expect(t.onlyRun()).toMatchObject({ status: "rejected", endedAt: t.clock.now, errorCode: null });
+    expect(t.mem.outbox).toHaveLength(1);
+    // A rejected run isn't retried.
+    expect(await t.engine.retry(t.mem.tx, t.run.id, "dev-admin")).toMatchObject({ ok: false, error: "not_retryable" });
+  });
+
+  it("reject: no comment is fine, one over 1000 characters is refused", async () => {
+    const t = await waitingOnReview();
+    expect(await t.engine.reject(t.mem.tx, t.approval.id, "a", "x".repeat(1001))).toMatchObject({
+      ok: false,
+      error: "invalid_comment",
+    });
+    expect((await t.engine.reject(t.mem.tx, t.approval.id, "a", "")).ok).toBe(true);
+    expect(t.mem.approvals[0]!.comment).toBeNull();
+  });
+
+  it("deciding twice, or an approval that doesn't exist, is refused (not_pending, not_found)", async () => {
+    const t = await waitingOnReview();
+    expect((await t.engine.approve(t.mem.tx, t.approval.id, "a", {}, false)).ok).toBe(true);
+    const before = structuredClone({ approvals: t.mem.approvals, steps: t.mem.steps, outbox: t.mem.outbox });
+    expect(await t.engine.approve(t.mem.tx, t.approval.id, "b", {}, false)).toEqual({
+      ok: false,
+      error: "not_pending",
+      audits: [],
+    });
+    expect(await t.engine.reject(t.mem.tx, t.approval.id, "b")).toMatchObject({ ok: false, error: "not_pending" });
+    expect({ approvals: t.mem.approvals, steps: t.mem.steps, outbox: t.mem.outbox }).toEqual(before);
+    expect(await t.engine.approve(t.mem.tx, "nope", "a", {}, false)).toMatchObject({ ok: false, error: "not_found" });
+  });
+
+  it("a run that no longer waits on the approval refuses a decision (not_pending)", async () => {
+    const t = await waitingOnReview();
+    // As if the run had moved on without the approval (a bug, or a hand edit): the guard holds.
+    t.mem.runs.get(t.run.id)!.status = "running";
+    expect(await t.engine.approve(t.mem.tx, t.approval.id, "a", {}, false)).toMatchObject({ error: "not_pending" });
+  });
+
+  it("expiry: past the deadline nobody can decide; the sweeper expires it and fails the run (approval_expired)", async () => {
+    const t = await waitingOnReview();
+    t.advance(7 * DAY);
+    expect(await t.engine.approve(t.mem.tx, t.approval.id, "a", {}, false)).toMatchObject({ error: "not_pending" });
+    t.mem.lockedElsewhere.add(t.run.id);
+    expect(await t.engine.sweepOne(t.mem.tx)).toBeUndefined(); // SKIP LOCKED
+    t.mem.lockedElsewhere.clear();
+    const swept = await t.engine.sweepOne(t.mem.tx);
+    expect(swept).toEqual({
+      runId: t.run.id,
+      audits: [{ action: "flow.run.finished", runId: t.run.id, status: "failed", errorCode: "approval_expired" }],
+    });
+    expect(t.mem.approvals[0]).toMatchObject({ status: "expired", decidedBy: null });
+    expect(t.step("review")).toMatchObject({ status: "timed_out", errorCode: "approval_expired" });
+    expect(t.onlyRun()).toMatchObject({ status: "failed", errorCode: "approval_expired" });
+    expect(await t.engine.sweepOne(t.mem.tx)).toBeUndefined();
+    expect(await t.engine.reject(t.mem.tx, t.approval.id, "a")).toMatchObject({ error: "not_pending" });
+
+    // A retry asks again: a NEW approval; the expired one stays expired.
+    expect((await t.engine.retry(t.mem.tx, t.run.id, "dev-admin")).ok).toBe(true);
+    expect(t.mem.approvals.map((a) => a.status)).toEqual(["expired", "pending"]);
+    expect(t.step("review")).toMatchObject({ status: "waiting", attempts: 2, input: DRAFT });
+  });
+
+  it("cancel of a run with a pending approval cancels the approval; it can't be decided after", async () => {
+    const t = await waitingOnReview();
+    expect((await t.engine.cancel(t.mem.tx, t.run.id, "dev-admin")).ok).toBe(true);
+    expect(t.mem.approvals[0]!.status).toBe("cancelled");
+    expect(t.step("review")).toMatchObject({ status: "skipped", errorCode: "cancelled" });
+    expect(await t.engine.approve(t.mem.tx, t.approval.id, "a", {}, false)).toMatchObject({ error: "not_pending" });
+  });
+
+  it("retry after the approval: the failed create step again, the approval stays decided", async () => {
+    const t = await waitingOnReview();
+    await t.engine.approve(t.mem.tx, t.approval.id, "dev-approver", { title: "Edited" }, false);
+    const create = t.step("create");
+    await t.engine.handle(
+      t.mem.tx,
+      t.outcome(ISSUE_FAILED, { runId: t.run.id, stepId: create.id, code: "github_unavailable" }),
+    );
+    expect(t.onlyRun()).toMatchObject({ status: "failed", errorCode: "github_unavailable" });
+
+    const r = await t.engine.retry(t.mem.tx, t.run.id, "dev-admin");
+    expect(r.audits).toEqual([
+      { action: "flow.run.retried", runId: t.run.id, stepId: create.id, attempt: 2, actor: "dev-admin" },
+    ]);
+    expect(t.mem.approvals).toHaveLength(1);
+    expect(t.mem.approvals[0]).toMatchObject({ status: "approved", edited: { title: "Edited" } });
+    expect(t.step("review").status).toBe("succeeded");
+    expect(t.step("create")).toMatchObject({ status: "waiting", attempts: 2 });
+    expect(t.mem.outbox.map((o) => o.type)).toEqual([DRAFT_REQUESTED, ISSUE_APPROVED, ISSUE_APPROVED]);
+    expect(t.mem.outbox[2]!.envelope.data).toMatchObject({ approvalId: t.approval.id, title: "Edited" });
+    expect(t.mem.outbox[2]!.id).not.toBe(t.mem.outbox[1]!.id);
   });
 });
 

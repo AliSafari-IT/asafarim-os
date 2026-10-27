@@ -11,3 +11,16 @@ export function took(from: Date | null, to: Date | null): string {
 
 /** A run id as the URL takes it: a ULID, nothing else. */
 export const RUN_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/** How long until `d`, roughly: "in 6 d 23 h", "in 12 min", or "overdue". */
+export function until(d: Date | null, now = new Date()): string {
+  if (!d) return "–";
+  const s = Math.round((d.getTime() - now.getTime()) / 1000);
+  if (s <= 0) return "overdue";
+  if (s < 3600) return `in ${Math.max(1, Math.floor(s / 60))} min`;
+  if (s < 86_400) return `in ${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+  return `in ${Math.floor(s / 86_400)} d ${Math.floor((s % 86_400) / 3600)} h`;
+}
+
+/** An approval id as the URL takes it: a ULID too. */
+export const APPROVAL_ID = RUN_ID;
