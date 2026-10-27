@@ -2,7 +2,7 @@
 
 **Flow**, ASafariM Flow (ADR 0001): workflows across the OS apps, **through events only**. It subscribes to an app's fact events (triggers), publishes request events under its own `flow.*` namespace, and waits for the acting app's outcome events. It never calls another app's HTTP API or reads its database.
 
-Its first workflow (slice 1): the owner writes `#issue` in a Docs study note → Flow starts a run → Docs drafts a GitHub issue → the owner approves in Flow → Docs creates the issue. Flow has the engine (Flow PR 3) and the approval step with its Approvals page (PR 4b); Docs's handlers (PRs 4 and 5) answer the requests.
+Its first workflow (slice 1): the owner writes `#issue` in a Docs study note → Flow starts a run → Docs drafts a GitHub issue → the owner approves in Flow → Docs creates the issue. Flow has the engine (Flow PR 3) and the approval step with its Approvals page (PR 4b); Docs answers the draft request (PR 4a, [#254](https://github.com/AliSafari-IT/asafarim-os/pull/254)); creating the issue comes in PR 5.
 
 It follows the same steps as [`apps/notes`](../notes/README.md): install → register → sign in → an admin grants a role.
 
@@ -25,7 +25,7 @@ It follows the same steps as [`apps/notes`](../notes/README.md): install → reg
 | subscribes | `docs.issue.created.v1`         | the issue                                                                                                                                                                               |
 | subscribes | `docs.issue.failed.v1`          | `{ runId, stepId, code, message }`                                                                                                                                                      |
 
-Both schemas have `additionalProperties: false`, and ids are strings. Docs doesn't publish the four outcomes yet, so core-api reports them as `waiting_for_publisher` and `pnpm platform manifest review` lists them (`subscription-not-published`): expected until PRs 4 and 5. An outcome must carry the `runId` and `stepId` of the request; it may also carry `requestId` (the request's event id), and then an answer to an earlier attempt of a retried step is ignored.
+Both schemas have `additionalProperties: false`, and ids are strings. Docs publishes the two draft outcomes (#254) but not yet `docs.issue.created.v1` and `docs.issue.failed.v1`, so core-api reports those as `waiting_for_publisher` and `pnpm platform manifest review` lists them (`subscription-not-published`): expected until PR 5. An outcome must carry the `runId` and `stepId` of the request; it may also carry `requestId` (the request's event id), and then an answer to an earlier attempt of a retried step is ignored.
 
 ## Workflows
 

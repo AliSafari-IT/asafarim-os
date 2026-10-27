@@ -3,8 +3,8 @@
  * Flow as `docs.note.created.v1` (Docs' outbox → JetStream → Flow's inbox) and starts a run that waits
  * on its draft step, its request in Flow's outbox; a note without the tag starts a run that is
  * skipped (hidden on Runs unless asked for); Cancel stops a run; the Approvals page opens for the
- * owner. Docs doesn't answer the draft request on main yet, so the run stays waiting on its draft (the
- * approval itself is covered by the unit and integration tests).
+ * owner. The e2e Docs has no AI key, so it never answers the draft request and the run stays waiting
+ * on its draft (the approval itself is covered by the unit and integration tests).
  */
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
