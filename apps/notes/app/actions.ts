@@ -4,7 +4,7 @@ import { ACCESS_COOKIE_NAME } from "@asafarim/app-sdk";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { signIn, signOut } from "@/lib/auth";
+import { endSessionHref, signIn, signOut } from "@/lib/auth";
 import { countNotes, createNote } from "@/lib/db";
 import { gate } from "@/lib/gate";
 import { getPlatform } from "@/lib/platform";
@@ -23,7 +23,9 @@ export async function signOutAction() {
     httpOnly: true,
     sameSite: "lax",
   });
-  await signOut({ redirectTo: "/" });
+  await signOut({ redirect: false });
+  // Then out of identity too: otherwise "Sign in" goes straight back into the same account without asking.
+  redirect(await endSessionHref());
 }
 
 export async function createNoteAction(formData: FormData) {

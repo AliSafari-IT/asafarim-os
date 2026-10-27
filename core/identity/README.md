@@ -16,7 +16,7 @@ It runs [`oidc-provider`](https://github.com/panva/node-oidc-provider) (major ve
 | ID token          | `ES256`                                                                                                                                                                                                |
 | Access token      | 10 min                                                                                                                                                                                                 |
 | Refresh token     | only with `offline_access` (which needs `prompt=consent`), rotated on every use; reusing an old one fails                                                                                              |
-| Logout            | RP-initiated logout, plus back-channel logout to every client in the session                                                                                                                           |
+| Logout            | RP-initiated logout (which also ends the local sign-in session), plus back-channel logout to every client in the session; identity's own Sign out ends both sessions too                               |
 | Consent           | none shown: every client is a first-party ASafariM app; the grant covers exactly the scopes requested                                                                                                  |
 | Accounts          | `hub`: the platform's `identity_accounts_v` view, read-only. `sms`: a principal with an **active connection** in the service's own database. Either way, an inactive or unknown account gets no tokens |
 | Outbound requests | oidc-provider's SSRF guard stays on: back-channel logout never calls loopback or private addresses                                                                                                     |
@@ -201,6 +201,7 @@ age -d -i .age/key.txt core/identity/.env.production.age > .env.identity   # the
 - Every redirect, post-logout and back-channel URI must be `https` on **exactly** `primary_domain` (no subdomains, no fragments).
 - `client_secret_env` names the env var holding the secret; omit it for a public client (PKCE still required).
 - `name` (optional, with an optional `description`) lists the app under **Where to next** on `/account`, linked to its first post-logout URI (else `https://<primary_domain>/`). A client without a `name`, such as a test client, isn't listed. Listing grants nothing: core-api still decides who may open the app.
+- `post_logout_redirect_uris` defaults to `["https://<primary_domain>/"]` when left out, so an app's sign-out can always come back to its home page.
 - Later (P3) this file is generated from the app manifests.
 
 See `clients.example.json`.

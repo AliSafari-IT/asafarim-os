@@ -569,7 +569,7 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     let res = await get(end.href, jar);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("Sign out?");
+    expect(html).toContain("Sign out of ASafariM?");
     const xsrf = /name="xsrf" value="([^"]+)"/.exec(html)![1]!;
 
     backchannel.length = 0;

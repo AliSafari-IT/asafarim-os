@@ -21,7 +21,7 @@ import { RedisAuthSessions, RedisEphemeral, RedisLoginFlows } from "../src/auth-
 import { loadClients } from "../src/clients.ts";
 import { createLogger } from "../src/log.ts";
 import { OTP_TTL_SECONDS, RedisOtpChallenges, RedisRateLimiter } from "../src/otp.ts";
-import { createProvider } from "../src/provider.ts";
+import { createProvider, endBrowserSession } from "../src/provider.ts";
 import { KEY_PREFIX, endSessionsOfAccount, redisAdapterFactory } from "../src/redis-adapter.ts";
 import { createSignIn } from "../src/sign-in.ts";
 import { PgIdentityStore, PrincipalAccounts } from "../src/store.ts";
@@ -339,6 +339,7 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
     issuer = `http://localhost:${(op.address() as AddressInfo).port}`;
 
     const log = createLogger((l) => process.env.IDENTITY_TEST_LOG && console.log(l));
+    const late: { provider?: ReturnType<typeof createProvider> } = {};
     const signIn = createSignIn({
       issuer,
       homeUrl: `${rpBase}/`,
@@ -351,6 +352,9 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
       sessions: new RedisAuthSessions(redis),
       flows: new RedisLoginFlows(redis),
       endProviderSessions: (id) => endSessionsOfAccount(redis, id),
+      endBrowserProviderSession: async (ctx) => {
+        if (late.provider) await endBrowserSession(late.provider, ctx);
+      },
       log,
     });
     const provider = createProvider({
@@ -379,6 +383,7 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
       readiness: async () => ({ redis: true, database: true }),
       log,
     });
+    late.provider = provider;
     op.on("request", provider.callback());
   });
 
@@ -495,6 +500,68 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
     }
     expect(new URL(location).searchParams.get("code")).toBeTruthy();
     expect(mailer.sent.length).toBe(sent);
+  });
+
+  /** A connected address of its own per test, clear of the per-address code limits. */
+  async function connected(email: string): Promise<string> {
+    const adminId = (await store.connections()).find((c) => c.label === ADMIN)!.principalId;
+    await store.addConnection("email", email, adminId);
+    return email;
+  }
+
+  /** Starts an app sign-in in this browser and says where identity sends it: the app's callback, or the sign-in page. */
+  async function nextSignIn(jar: Jar): Promise<string> {
+    const { challenge } = pkce();
+    let res = await get(authUrl(challenge), jar);
+    let location = new URL(res.headers.get("location")!, issuer).href;
+    for (let i = 0; i < 6 && !location.startsWith(`${rpBase}/cb`) && !location.includes("/login?"); i++) {
+      res = await get(location, jar);
+      location = new URL(res.headers.get("location")!, issuer).href;
+    }
+    return location;
+  }
+
+  it("an app's sign-out ends identity's sessions too: the next sign-in asks who you are", async () => {
+    const jar = new Jar();
+    await signInAs(await connected("out1@example.test"), jar);
+    expect(await nextSignIn(jar)).toMatch(new RegExp(`^${rpBase}/cb`)); // single sign-on, before
+
+    // RP-initiated logout, as the app SDK's endSessionUrl sends it. The client lists no post-logout URI,
+    // so its home page on the primary domain is the registered one.
+    const end = new URL(`${issuer}/session/end`);
+    end.searchParams.set("client_id", CLIENT_ID);
+    end.searchParams.set("post_logout_redirect_uri", "https://demo.example/");
+    let res = await get(end.href, jar);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Sign out of ASafariM?");
+    const xsrf = /name="xsrf" value="([^"]+)"/.exec(html)![1]!;
+    res = await post("/session/end/confirm", jar, { xsrf, logout: "yes" });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("https://demo.example/");
+
+    expect(await nextSignIn(jar)).toMatch(/\/login\?uid=/);
+    expect((await store.recentAudit(5)).map((a) => a.event)).toContain("logout");
+  });
+
+  it('"Stay signed in" keeps identity\'s session', async () => {
+    const jar = new Jar();
+    await signInAs(await connected("out2@example.test"), jar);
+    const end = new URL(`${issuer}/session/end`);
+    end.searchParams.set("client_id", CLIENT_ID);
+    const xsrf = /name="xsrf" value="([^"]+)"/.exec(await (await get(end.href, jar)).text())![1]!;
+    expect((await post("/session/end/confirm", jar, { xsrf })).status).toBe(303);
+    expect(await nextSignIn(jar)).toMatch(new RegExp(`^${rpBase}/cb`));
+  });
+
+  it("identity's own Sign out ends the provider session too", async () => {
+    const jar = new Jar();
+    await signInAs(await connected("out3@example.test"), jar);
+    const csrf = csrfOf(await (await get("/account", jar)).text());
+    const res = await post("/logout", jar, { csrf });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("the next sign-in asks who you are");
+    expect(await nextSignIn(jar)).toMatch(/\/login\?uid=/);
   });
 
   it("an unconnected number proves itself but gets no code for the app", async () => {

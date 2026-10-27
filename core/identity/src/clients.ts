@@ -118,7 +118,8 @@ export function loadClients(
       ...(secret ? { client_secret: secret } : {}),
       token_endpoint_auth_method: secret ? "client_secret_basic" : "none",
       redirect_uris: c.redirect_uris,
-      post_logout_redirect_uris: c.post_logout_redirect_uris ?? [],
+      // None listed: the app's home page, so an app's sign-out can come back to it (RP-initiated logout).
+      post_logout_redirect_uris: c.post_logout_redirect_uris ?? [`https://${c.primary_domain}/`],
       ...(c.backchannel_logout_uri
         ? { backchannel_logout_uri: c.backchannel_logout_uri, backchannel_logout_session_required: true }
         : {}),

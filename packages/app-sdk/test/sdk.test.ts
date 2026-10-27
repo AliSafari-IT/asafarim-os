@@ -11,10 +11,12 @@ import {
   backoffDelay,
   createAccess,
   createConfig,
+  endSessionUrl,
   envNameForConfigKey,
   isAccessUnavailableError,
   registerApp,
   startApp,
+  visitorOrigin,
 } from "../src/index.ts";
 
 /** A throwaway credential plus the matching public key, like `platform app install` issues. */
@@ -709,5 +711,42 @@ describe("asafarimAuthConfig: the ID token and session lifetime (the Admin conso
     });
     expect(JSON.stringify(session)).not.toContain("a.b.c");
     expect(cfg.session).toEqual({ strategy: "jwt", maxAge: 3600 });
+  });
+});
+
+describe("sign-out: identity's end-session URL", () => {
+  it("names the client and where to come back to", () => {
+    const url = new URL(
+      endSessionUrl({
+        issuer: "https://id.asafarim.site/",
+        clientId: "docs",
+        postLogoutRedirectUri: "https://docs.asafarim.site/",
+      }),
+    );
+    expect(url.origin + url.pathname).toBe("https://id.asafarim.site/session/end");
+    expect(url.searchParams.get("client_id")).toBe("docs");
+    expect(url.searchParams.get("post_logout_redirect_uri")).toBe("https://docs.asafarim.site/");
+  });
+
+  it("leaves the return address out when there is none (identity shows its own signed-out page)", () => {
+    const url = new URL(
+      endSessionUrl({ issuer: "http://localhost:4010", clientId: "notes", postLogoutRedirectUri: null }),
+    );
+    expect(url.searchParams.has("post_logout_redirect_uri")).toBe(false);
+  });
+
+  it("finds the visitor's origin behind the gateway, or from Host", () => {
+    const h = (o: Record<string, string>) => new Headers(o);
+    expect(
+      visitorOrigin(
+        h({ host: "localhost:4100", "x-forwarded-host": "docs.asafarim.site", "x-forwarded-proto": "https" }),
+      ),
+    ).toBe("https://docs.asafarim.site");
+    expect(visitorOrigin(h({ host: "docs.asafarim.site" }))).toBe("https://docs.asafarim.site");
+    expect(visitorOrigin(h({ host: "notes.localhost:8080" }))).toBe("http://notes.localhost:8080");
+    expect(visitorOrigin(h({ host: "docs.asafarim.site", "x-forwarded-host": "evil.example/x" }))).toBe(
+      "https://docs.asafarim.site",
+    );
+    expect(visitorOrigin(h({}))).toBeNull();
   });
 });

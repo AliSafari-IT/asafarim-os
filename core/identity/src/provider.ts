@@ -474,7 +474,47 @@ export function createProvider(deps: ProviderDeps): Provider {
     if (login.method === "local" && (await login.signIn.handle(ctx as unknown as HttpContext))) return;
 
     await next();
+
+    // An app's sign-out (RP-initiated logout), confirmed with "Sign out": oidc-provider has ended its own session;
+    // end the local sign-in's auth session too, or the next sign-in would be finished from it without asking.
+    if (
+      login.method === "local" &&
+      path === "/session/end/confirm" &&
+      ctx.method === "POST" &&
+      ctx.status === 303 &&
+      ctx.oidc?.params?.logout
+    ) {
+      await login.signIn.endAuthSession(ctx as unknown as HttpContext);
+      log.info("logout.app", { clientId: ctx.oidc.client?.clientId ?? "" });
+    }
   });
 
   return provider;
+}
+
+/**
+ * Ends this browser's provider session, as RP-initiated logout's "Sign out" does: revokes the grants (and their
+ * tokens) it holds, destroys it, and drops its cookie. For identity's own Sign out button (sign-in.ts).
+ */
+export async function endBrowserSession(provider: Provider, ctx: HttpContext): Promise<void> {
+  const koa = ctx as unknown as Parameters<Provider["Session"]["get"]>[0];
+  const session = await provider.Session.get(koa);
+  for (const { grantId } of Object.values(session.authorizations ?? {})) {
+    if (!grantId) continue;
+    await Promise.all([
+      provider.AccessToken.revokeByGrantId(grantId),
+      provider.RefreshToken.revokeByGrantId(grantId),
+      provider.AuthorizationCode.revokeByGrantId(grantId),
+      provider.Grant.adapter.destroy(grantId),
+    ]);
+  }
+  if (session.accountId) await session.destroy();
+  ctx.cookies.set(provider.cookieName("session"), null, {
+    path: "/",
+    httpOnly: true,
+    sameSite: "lax",
+    secure: ctx.secure,
+    signed: true,
+    overwrite: true,
+  });
 }
