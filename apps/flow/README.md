@@ -73,7 +73,7 @@ Server-rendered, every one gated by `lib/page.ts` (not signed in → 401, withou
 ## Try it
 
 ```bash
-pnpm dev                                          # installs and activates flow: http://flow.localhost:8080 (or localhost:4120)
+pnpm dev                                          # installs and activates flow: http://flow.localhost:8080 (or localhost:4130)
 pnpm platform role grant flow.owner dev-admin     # nobody holds a flow role by default
 pnpm platform role grant docs.owner dev-admin     # to write the note in Docs
 ```

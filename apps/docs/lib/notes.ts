@@ -9,12 +9,14 @@ import "server-only";
  * without its event or an event without its note. The relay sends the rows to the bus.
  */
 import { createHash } from "node:crypto";
-import { OUTBOX_SQL, startAppRelay, type Queryable, type Relay } from "@asafarim/app-sdk/events";
+// Types only: the SDK's events entry (the NATS client, ajv) and the publisher (it compiles the event's
+// JSON Schema) load on first use, not with every page that imports this file.
+import type { Queryable, Relay } from "@asafarim/app-sdk/events";
 import { databaseNameOf, traceDatabasePool } from "@asafarim/telemetry";
 import pg from "pg";
 import { z } from "zod";
 import manifest from "../platform.app";
-import { NOTE_CREATED, publisher, type NoteCreatedV1 } from "./events";
+import type { NoteCreatedV1 } from "./events";
 import { tagsOf } from "./tags";
 
 const SCHEMA = `
@@ -31,7 +33,7 @@ CREATE TABLE IF NOT EXISTS notes (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS notes_author_doc ON notes (author, doc_path);
-${OUTBOX_SQL}`;
+`;
 
 /** The tag that asks Flow to draft a GitHub issue from a note. */
 export const ISSUE_TAG = "issue";
@@ -114,10 +116,12 @@ const migrated = new WeakMap<pg.Pool, Promise<unknown>>();
 async function migrate(pool: pg.Pool): Promise<pg.Pool> {
   let ready = migrated.get(pool);
   if (!ready) {
-    ready = pool.query(SCHEMA).catch((err: unknown) => {
-      migrated.delete(pool);
-      throw err;
-    });
+    ready = import("@asafarim/app-sdk/events")
+      .then(({ OUTBOX_SQL }) => pool.query(`${SCHEMA}${OUTBOX_SQL}`))
+      .catch((err: unknown) => {
+        migrated.delete(pool);
+        throw err;
+      });
     migrated.set(pool, ready);
   }
   await ready;
@@ -126,6 +130,7 @@ async function migrate(pool: pg.Pool): Promise<pg.Pool> {
 
 /** Write `docs.note.created.v1` for `note` to the outbox, through the caller's transaction. */
 async function publishNoteCreated(tx: Queryable, author: string, note: Note) {
+  const { NOTE_CREATED, publisher } = await import("./events");
   await publisher.publish<NoteCreatedV1>(
     tx,
     NOTE_CREATED,
@@ -257,10 +262,11 @@ export function getNotes(): NotesStore | null {
  * Start the outbox relay once per process (on boot: instrumentation.ts), so events left in the
  * outbox by an earlier run go out too. Without DATABASE_URL or ASAFARIM_NATS_URL there is none.
  */
-export function startEventRelay(): Relay | undefined {
+export async function startEventRelay(): Promise<Relay | undefined> {
   if (g.docsRelay === undefined) {
     const pool = docsPool();
-    g.docsRelay = pool ? (startAppRelay({ appId: manifest.id, pool: () => migrate(pool) }) ?? null) : null;
+    const { startAppRelay } = await import("@asafarim/app-sdk/events");
+    g.docsRelay ??= pool ? (startAppRelay({ appId: manifest.id, pool: () => migrate(pool) }) ?? null) : null;
   }
   return g.docsRelay ?? undefined;
 }

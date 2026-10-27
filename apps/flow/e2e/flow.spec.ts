@@ -50,8 +50,11 @@ test.beforeAll(async () => {
   expect(ADMIN_TOKEN, "E2E_ADMIN_TOKEN must be set (pnpm e2e sets it)").not.toBe("");
   for (const app of ["docs", "flow"])
     expect([200, 409]).toContain(await admin("POST", `/admin/v1/apps/${app}/activate`));
+  // flow.owner exists once Flow has registered (on boot, in the background): wait for it.
   for (const role of ["docs.owner", "flow.owner"]) {
-    expect(await admin("PUT", `/admin/v1/roles/${role}/grants/dev-member`)).toBeLessThan(300);
+    await expect
+      .poll(() => admin("PUT", `/admin/v1/roles/${role}/grants/dev-member`), { timeout: 30_000 })
+      .toBeLessThan(300);
   }
   await new Promise((resolve) => setTimeout(resolve, 1500));
 });
