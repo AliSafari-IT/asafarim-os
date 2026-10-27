@@ -15,6 +15,6 @@ export async function register() {
   getPlatform();
   if (process.env.DATABASE_URL) {
     const { startEventRelay } = await import("./lib/notes");
-    startEventRelay();
+    await startEventRelay();
   }
 }
