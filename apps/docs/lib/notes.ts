@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS notes (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS notes_author_doc ON notes (author, doc_path);
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS flow_approval_id text CHECK (flow_approval_id IS NULL OR length(flow_approval_id) <= 64);
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS flow_approval_at timestamptz;
 `;
 
 /** The tag that asks Flow to draft a GitHub issue from a note. */
@@ -49,6 +51,10 @@ export interface Note {
   /** The version of the document the note was written on (sha-256 of its Markdown). */
   docSha: string;
   issueUrl: string | null;
+  /** The Flow approval whose issue is (being) created from this note; its issue came through Flow. */
+  flowApprovalId: string | null;
+  /** When that approval was recorded, before GitHub was asked (lib/issue-create-handler.ts). */
+  flowApprovalAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -61,6 +67,8 @@ interface Row {
   body: string;
   doc_sha: string;
   issue_url: string | null;
+  flow_approval_id: string | null;
+  flow_approval_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -73,11 +81,18 @@ const toNote = (r: Row): Note => ({
   body: r.body,
   docSha: r.doc_sha,
   issueUrl: r.issue_url,
+  flowApprovalId: r.flow_approval_id,
+  flowApprovalAt: r.flow_approval_at?.toISOString() ?? null,
   createdAt: r.created_at.toISOString(),
   updatedAt: r.updated_at.toISOString(),
 });
 
-const COLUMNS = "id, doc_path, heading_id, quote, body, doc_sha, issue_url, created_at, updated_at";
+const COLUMNS =
+  "id, doc_path, heading_id, quote, body, doc_sha, issue_url, flow_approval_id, flow_approval_at, created_at, updated_at";
+
+/** The note's issue came through Flow (shown as "via Flow" next to its link). */
+export const issueViaFlow = (note: Pick<Note, "issueUrl" | "flowApprovalId">) =>
+  note.issueUrl !== null && note.flowApprovalId !== null;
 
 /** The version of a document a note is written on. */
 export const docShaOf = (markdown: string) => createHash("sha256").update(markdown).digest("hex");
@@ -106,8 +121,16 @@ export interface NotesStore {
   /** null: no such note of this author. */
   update(author: string, id: string, body: string): Promise<Note | null>;
   remove(author: string, id: string): Promise<boolean>;
-  /** The GitHub issue made from the note (#82). null: no such note of this author. */
+  /**
+   * The GitHub issue made from the note by its owner (#82), not through Flow (so it isn't shown as
+   * "via Flow"). null: no such note of this author.
+   */
   setIssueUrl(author: string, id: string, url: string): Promise<Note | null>;
+  /**
+   * Records, committed on its own (not in the caller's transaction), that Flow's approval
+   * `approvalId` is about to create the note's issue, and when. false: no such note of this author.
+   */
+  recordFlowApproval(author: string, id: string, approvalId: string): Promise<boolean>;
 }
 
 const migrated = new WeakMap<pg.Pool, Promise<unknown>>();
@@ -137,6 +160,18 @@ export async function findNote(q: Queryable, author: string, id: string): Promis
   const { rows } = (await q.query(`SELECT ${COLUMNS} FROM notes WHERE id = $2 AND author = $1`, [author, id])) as {
     rows: Row[];
   };
+  return rows[0] ? toNote(rows[0]) : null;
+}
+
+/**
+ * Saves the URL of the issue Flow's approval created, through the caller's transaction (the inbox
+ * transaction that also publishes the answer). null: no such note of this author.
+ */
+export async function saveFlowIssueUrl(q: Queryable, author: string, id: string, url: string): Promise<Note | null> {
+  const { rows } = (await q.query(
+    `UPDATE notes SET issue_url = $3, updated_at = now() WHERE id = $2 AND author = $1 RETURNING ${COLUMNS}`,
+    [author, id, url],
+  )) as { rows: Row[] };
   return rows[0] ? toNote(rows[0]) : null;
 }
 
@@ -238,10 +273,22 @@ export function createNotesStore(pool: pg.Pool, opts: NotesStoreOptions = {}): N
       const { rows } = await (
         await db()
       ).query<Row>(
-        `UPDATE notes SET issue_url = $3, updated_at = now() WHERE id = $2 AND author = $1 RETURNING ${COLUMNS}`,
+        `UPDATE notes SET issue_url = $3, flow_approval_id = NULL, flow_approval_at = NULL, updated_at = now()
+         WHERE id = $2 AND author = $1 RETURNING ${COLUMNS}`,
         [author, id, url],
       );
       return rows[0] ? toNote(rows[0]) : null;
+    },
+    // Autocommit on the pool: committed before GitHub is asked, whatever happens to the inbox transaction.
+    async recordFlowApproval(author, id, approvalId) {
+      const res = await (
+        await db()
+      ).query("UPDATE notes SET flow_approval_id = $3, flow_approval_at = now() WHERE id = $2 AND author = $1", [
+        author,
+        id,
+        approvalId,
+      ]);
+      return (res.rowCount ?? 0) > 0;
     },
   };
 }

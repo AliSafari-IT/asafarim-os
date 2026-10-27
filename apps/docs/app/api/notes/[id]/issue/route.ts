@@ -7,16 +7,9 @@
  * `acknowledgedPublic: true` (the preview showed its banner); without it the answer is 409
  * `public_not_acknowledged` and nothing is created, whatever the client shows.
  */
-import {
-  APP_DOMAIN,
-  invalidIssue,
-  issueAccess,
-  issueTracker,
-  logIssue,
-  saveIssueUrl,
-  serviceFailure,
-} from "@/lib/issue-api";
-import { CreateRequest, existingLabels, linksToApp } from "@/lib/issue-draft";
+import { invalidIssue, issueAccess, issueTracker, logIssue, saveIssueUrl, serviceFailure } from "@/lib/issue-api";
+import { createIssue } from "@/lib/issue-create";
+import { CreateRequest } from "@/lib/issue-draft";
 import { json, jsonBody } from "@/lib/notes-api";
 
 export const dynamic = "force-dynamic";
@@ -32,39 +25,28 @@ export async function POST(request: Request, { params }: Params) {
   if (!input.success) {
     return invalidIssue("An issue needs a repository (owner/name), a title (1–200) and a body (1–20 000).");
   }
-  const { repo, title, confirm, acknowledgedPublic } = input.data;
+  const { repo, confirm } = input.data;
   if (a.note.issueUrl && !confirm) {
     return json(
       { error: "issue_exists", issueUrl: a.note.issueUrl, message: "This note already has an issue. Create another?" },
       409,
     );
   }
-  if (linksToApp(title, APP_DOMAIN) || linksToApp(input.data.body, APP_DOMAIN)) {
-    return invalidIssue(`Links to ${APP_DOMAIN} can't be opened by anyone else: name the document's path instead.`);
-  }
   const github = issueTracker();
   if (!github.ok) return github.res;
 
-  let labels: string[];
-  let issue: { url: string; number: number };
+  let created;
   try {
-    // Asked at create time: the repo may have been made public since the draft.
-    if ((await github.tracker.repo(repo)).public && !acknowledgedPublic) {
-      return json(
-        {
-          error: "public_not_acknowledged",
-          repo,
-          public: true,
-          message: `${repo} is public: everything in this issue will be visible to everyone. Check it, then create again.`,
-        },
-        409,
-      );
-    }
-    labels = existingLabels(input.data.labels, await github.tracker.labels(repo));
-    issue = await github.tracker.create(repo, { title, body: input.data.body, labels });
+    // The preview only offers the repo's labels; any other is dropped, not refused.
+    created = await createIssue(github.tracker, input.data, { unknownLabels: "drop" });
   } catch (err) {
     return serviceFailure(err);
   }
+  if (!created.ok) {
+    if (created.error === "invalid_issue") return invalidIssue(created.message);
+    return json({ error: created.error, repo, public: true, message: created.message }, 409);
+  }
+  const { issue, labels } = created;
   logIssue("issue.created", { note: a.note.id, issue: issue.number, labels: labels.length, again: confirm });
   // The issue exists now: a failure from here on answers with it, never as a retryable error.
   const saved = await saveIssueUrl(a.store, a.subject, a.note.id, issue);

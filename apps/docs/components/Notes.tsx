@@ -11,9 +11,9 @@
  */
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { issueHref } from "@/lib/issue-link";
 import { findQuote } from "@/lib/quote";
 import { IssueDialog } from "./IssueDialog";
+import { IssueLink } from "./IssueLink";
 
 export interface NoteView {
   id: string;
@@ -27,6 +27,8 @@ export interface NoteView {
   updatedAt: string;
   /** The GitHub issue made from this note (#82). */
   issueUrl: string | null;
+  /** Flow created that issue from an approved draft (ADR 0001). */
+  viaFlow: boolean;
   /** The body, rendered on the server (sanitized). */
   rendered: React.ReactNode;
 }
@@ -399,17 +401,7 @@ export function Notes({
                   <div className="note-body">{n.rendered}</div>
                   <p className="note-foot muted">
                     <span>{n.updatedAt.slice(0, 10)}</span>
-                    {issueHref(n.issueUrl) ? (
-                      <a
-                        className="issue-link"
-                        href={issueHref(n.issueUrl)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        data-testid="issue-link"
-                      >
-                        Issue created ✓
-                      </a>
-                    ) : null}
+                    <IssueLink url={n.issueUrl} viaFlow={n.viaFlow} />
                     <IssueButton
                       issues={issues}
                       className="link"

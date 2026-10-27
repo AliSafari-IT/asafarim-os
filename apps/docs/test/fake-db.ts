@@ -1,7 +1,8 @@
 /**
  * Postgres, as far as the notes store and the event handlers use it: the `notes` table, the event
- * outbox and the inbox, every statement recorded. A client from `connect()` works on its own copy between BEGIN and COMMIT, and
- * ROLLBACK drops it, so a test sees what a failed transaction leaves behind. `failOn` makes the
+ * outbox and the inbox, every statement recorded. A client from `connect()` works on its own copy between BEGIN and COMMIT;
+ * COMMIT applies its writes to the committed rows (so a write committed on its own meanwhile stays, as
+ * in Postgres), and ROLLBACK drops them, so a test sees what a failed transaction leaves behind. `failOn` makes the
  * first matching statement throw (a lost connection, a constraint).
  */
 export interface FakeDb {
@@ -26,7 +27,7 @@ const copy = (t: Tables): Tables => ({
 });
 
 export function fakeDb(): FakeDb {
-  let committed: Tables = { notes: [], outbox: [], inbox: [] };
+  const committed: Tables = { notes: [], outbox: [], inbox: [] };
   let next = 1;
   const db: FakeDb = {
     pool: undefined as never,
@@ -51,27 +52,24 @@ export function fakeDb(): FakeDb {
     }
   };
 
-  const run = async (t: Tables, sql: string, params: unknown[]) => {
-    if (sql.includes("CREATE TABLE")) return { rows: [], rowCount: 0 };
+  /** A write, as a change that can be applied to any copy of the tables (a transaction's, then the committed one). */
+  type Change = (t: Tables) => { rows: unknown[]; rowCount?: number };
+
+  const change = (sql: string, params: unknown[]): Change | undefined => {
     if (sql.startsWith("INSERT INTO asafarim_outbox")) {
       const [id, type, envelope] = params as [string, string, string];
-      t.outbox.push({ id, type, envelope: JSON.parse(envelope) });
-      return { rows: [], rowCount: 1 };
+      const entry = { id, type, envelope: JSON.parse(envelope) };
+      return (t) => {
+        t.outbox.push(entry);
+        return { rows: [], rowCount: 1 };
+      };
     }
     if (sql.startsWith("INSERT INTO asafarim_inbox")) {
       const [eventId] = params as [string];
-      if (t.inbox.includes(eventId)) return { rows: [], rowCount: 0 };
-      t.inbox.push(eventId);
-      return { rows: [], rowCount: 1 };
-    }
-    if (sql.startsWith("SELECT")) {
-      if (sql.includes("FOR UPDATE") || sql.includes("WHERE id = $2 AND author = $1")) {
-        const [author, id] = params;
-        return { rows: t.notes.filter((r) => r.author === author && r.id === id).map((r) => ({ ...r })) };
-      }
-      const [author, doc] = params;
-      return {
-        rows: t.notes.filter((r) => r.author === author && (doc === null || r.doc_path === doc)).map((r) => ({ ...r })),
+      return (t) => {
+        if (t.inbox.includes(eventId)) return { rows: [], rowCount: 0 };
+        t.inbox.push(eventId);
+        return { rows: [], rowCount: 1 };
       };
     }
     if (sql.startsWith("INSERT INTO notes")) {
@@ -86,52 +84,92 @@ export function fakeDb(): FakeDb {
         body,
         doc_sha,
         issue_url: null,
+        flow_approval_id: null,
+        flow_approval_at: null,
         created_at: now,
         updated_at: now,
       };
-      t.notes.push(row);
-      return { rows: [{ ...row }] };
+      return (t) => {
+        t.notes.push({ ...row });
+        return { rows: [{ ...row }] };
+      };
     }
     if (sql.startsWith("UPDATE")) {
       const [author, id, value] = params;
-      const row = t.notes.find((r) => r.id === id && r.author === author);
-      const column = sql.includes("issue_url =") ? "issue_url" : "body";
-      if (row) Object.assign(row, { [column]: value, updated_at: new Date() });
-      return { rows: row ? [{ ...row }] : [] };
+      // Only the columns the statement sets, on the row as it is where the change is applied (row-level, as in Postgres).
+      const set: Record<string, unknown> = sql.includes("flow_approval_id = $3")
+        ? { flow_approval_id: value, flow_approval_at: new Date() }
+        : sql.includes("issue_url =")
+          ? {
+              issue_url: value,
+              updated_at: new Date(),
+              ...(sql.includes("flow_approval_id = NULL") ? { flow_approval_id: null, flow_approval_at: null } : {}),
+            }
+          : { body: value, updated_at: new Date() };
+      return (t) => {
+        const row = t.notes.find((r) => r.id === id && r.author === author);
+        if (row) Object.assign(row, set);
+        return { rows: row ? [{ ...row }] : [], rowCount: row ? 1 : 0 };
+      };
     }
     if (sql.startsWith("DELETE")) {
       const [author, id] = params;
-      const i = t.notes.findIndex((r) => r.id === id && r.author === author);
-      if (i !== -1) t.notes.splice(i, 1);
-      return { rows: [], rowCount: i === -1 ? 0 : 1 };
+      return (t) => {
+        const i = t.notes.findIndex((r) => r.id === id && r.author === author);
+        if (i !== -1) t.notes.splice(i, 1);
+        return { rows: [], rowCount: i === -1 ? 0 : 1 };
+      };
+    }
+    return undefined;
+  };
+
+  const read = (t: Tables, sql: string, params: unknown[]) => {
+    if (sql.includes("CREATE TABLE")) return { rows: [], rowCount: 0 };
+    if (sql.startsWith("SELECT")) {
+      if (sql.includes("FOR UPDATE") || sql.includes("WHERE id = $2 AND author = $1")) {
+        const [author, id] = params;
+        return { rows: t.notes.filter((r) => r.author === author && r.id === id).map((r) => ({ ...r })) };
+      }
+      const [author, doc] = params;
+      return {
+        rows: t.notes.filter((r) => r.author === author && (doc === null || r.doc_path === doc)).map((r) => ({ ...r })),
+      };
     }
     throw new Error(`unexpected SQL: ${sql}`);
   };
 
   const query = async (sql: string, params: unknown[] = []) => {
     record(sql, params);
-    return run(committed, sql, params);
+    return change(sql, params)?.(committed) ?? read(committed, sql, params);
   };
 
   const connect = async () => {
     let tx: Tables | undefined;
+    let pending: Change[] = [];
     return {
       async query(sql: string, params: unknown[] = []) {
         record(sql, params);
         if (sql === "BEGIN") {
           tx = copy(committed);
+          pending = [];
           return { rows: [] };
         }
         if (sql === "COMMIT") {
-          if (tx) committed = tx;
+          // The transaction's writes, applied to what is committed now (others may have committed meanwhile).
+          for (const c of pending) c(committed);
           tx = undefined;
+          pending = [];
           return { rows: [] };
         }
         if (sql === "ROLLBACK") {
           tx = undefined;
+          pending = [];
           return { rows: [] };
         }
-        return run(tx ?? committed, sql, params);
+        const c = change(sql, params);
+        if (!c) return read(tx ?? committed, sql, params);
+        if (tx) pending.push(c);
+        return c(tx ?? committed);
       },
       release() {},
     };

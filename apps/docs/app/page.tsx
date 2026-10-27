@@ -16,7 +16,7 @@ import { gate } from "@/lib/gate";
 import { homeOf, neighboursOf } from "@/lib/home";
 import { issuesConfigured } from "@/lib/issue-api";
 import { docHref } from "@/lib/links";
-import { getNotes } from "@/lib/notes";
+import { getNotes, issueViaFlow } from "@/lib/notes";
 import { readableName, tocOf } from "@/lib/outline";
 import { getPlatform } from "@/lib/platform";
 import { docParam, loadReader, type TreeNode } from "@/lib/reader";
@@ -113,6 +113,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
             status: at.status,
             updatedAt: n.updatedAt,
             issueUrl: n.issueUrl,
+            viaFlow: issueViaFlow(n),
             rendered: (
               <Markdown
                 markdown={n.body}

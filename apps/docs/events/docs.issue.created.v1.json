@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "asafarim://docs/events/docs.issue.created.v1.json",
+  "title": "docs.issue.created.v1",
+  "description": "Docs created the GitHub issue a person approved in Flow, answering flow.issue.approved.v1, and saved its URL on the note. requestId is the id of the request event answered, so Flow can drop a late answer to an earlier attempt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runId", "stepId", "requestId", "noteId", "issueUrl"],
+  "properties": {
+    "runId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The Flow run (from the request)" },
+    "stepId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "The run's step that waits for the answer (from the request)"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The id of the flow.issue.approved.v1 event this answers"
+    },
+    "noteId": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The Docs note" },
+    "issueUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "The created issue's URL on GitHub"
+    }
+  }
+}

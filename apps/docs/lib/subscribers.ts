@@ -9,12 +9,14 @@ import "server-only";
 import { busAuthFromEnv, subscribe, type EventHandler, type Subscription } from "@asafarim/app-sdk/events";
 import { traceEventHandler } from "@asafarim/telemetry";
 import manifest from "../platform.app";
+import { createIssueCreateHandler, ISSUE_APPROVED } from "./issue-create-handler";
 import { createIssueDraftHandler, ISSUE_DRAFT_REQUESTED } from "./issue-draft-handler";
 import { migratedPool, wakeEventRelay } from "./notes";
 
 /** The handler of each type the manifest subscribes to. */
 const HANDLERS: Record<string, () => EventHandler> = {
   [ISSUE_DRAFT_REQUESTED]: () => createIssueDraftHandler(),
+  [ISSUE_APPROVED]: () => createIssueCreateHandler(),
 };
 
 const g = globalThis as unknown as { docsSubscriptions?: Subscription[] };

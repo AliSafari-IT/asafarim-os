@@ -1,7 +1,7 @@
 /**
  * The events docs publishes (Flow, ADR 0001). The publisher checks every payload against the JSON
  * Schema the manifest references before anything is written; lib/notes.ts publishes inside the
- * note's own transaction, lib/issue-draft-handler.ts inside the inbox transaction of Flow's request. Each event carries the W3C trace context of the request that caused it;
+ * note's own transaction, lib/issue-draft-handler.ts and lib/issue-create-handler.ts inside the inbox transaction of Flow's request. Each event carries the W3C trace context of the request that caused it;
  * with telemetry off it carries none.
  */
 import { createPublisher } from "@asafarim/app-sdk/events";
@@ -57,6 +57,42 @@ export interface IssueDraftFailedV1 {
   requestId: string;
   noteId: string;
   code: IssueDraftFailure;
+  /** Short; never the note's text, a token or a stack trace. */
+  message: string;
+}
+
+export const ISSUE_CREATED = "docs.issue.created.v1";
+export const ISSUE_FAILED = "docs.issue.failed.v1";
+
+/** What `docs.issue.created.v1` carries (events/docs.issue.created.v1.json). */
+export interface IssueCreatedV1 {
+  runId: string;
+  stepId: string;
+  /** The id of the flow.issue.approved.v1 event this answers. */
+  requestId: string;
+  noteId: string;
+  issueUrl: string;
+}
+
+export const ISSUE_FAILURES = [
+  "note_not_found",
+  "forbidden",
+  "issue_exists",
+  "no_repo_access",
+  "public_not_acknowledged",
+  "invalid_issue",
+  "github_unavailable",
+] as const;
+export type IssueFailure = (typeof ISSUE_FAILURES)[number];
+
+/** What `docs.issue.failed.v1` carries (events/docs.issue.failed.v1.json). */
+export interface IssueFailedV1 {
+  runId: string;
+  stepId: string;
+  /** The id of the flow.issue.approved.v1 event this answers. */
+  requestId: string;
+  noteId: string;
+  code: IssueFailure;
   /** Short; never the note's text, a token or a stack trace. */
   message: string;
 }

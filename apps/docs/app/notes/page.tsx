@@ -3,12 +3,12 @@ import { ThemeToggle } from "@asafarim/theme/react";
 import { forbidden, unauthorized } from "next/navigation";
 import { signOutAction } from "../actions";
 import { SignOutIcon } from "@/components/SignOutIcon";
+import { IssueLink } from "@/components/IssueLink";
 import { Markdown } from "@/components/Markdown";
 import { anchorNote, sectionsOf, type Section } from "@/lib/anchor";
 import { auth } from "@/lib/auth";
 import { gate } from "@/lib/gate";
-import { issueHref } from "@/lib/issue-link";
-import { getNotes, type Note } from "@/lib/notes";
+import { getNotes, issueViaFlow, type Note } from "@/lib/notes";
 import { readableName } from "@/lib/outline";
 import { getPlatform } from "@/lib/platform";
 import { docParam } from "@/lib/reader";
@@ -200,17 +200,7 @@ export default async function NotesPage({
                             </div>
                             <p className="note-foot muted">
                               <span>{n.updatedAt.slice(0, 10)}</span>
-                              {issueHref(n.issueUrl) ? (
-                                <a
-                                  className="issue-link"
-                                  href={issueHref(n.issueUrl)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  data-testid="issue-link"
-                                >
-                                  Issue created ✓
-                                </a>
-                              ) : null}
+                              <IssueLink url={n.issueUrl} viaFlow={issueViaFlow(n)} />
                             </p>
                           </article>
                         </li>

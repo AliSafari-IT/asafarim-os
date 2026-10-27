@@ -1613,12 +1613,8 @@ describe("platform manifest review", () => {
       reviews: { app: string; findings: { app: string; kind: string; subject: string }[] }[];
     };
     expect(reviews.map((r) => r.app)).toEqual(expect.arrayContaining(["docs", "flow", "notes"]));
-    // Flow (ADR 0001) subscribes to Docs' outcome events ahead of them: Docs publishes them from Flow
-    // PR 5, which removes these lines (PR 4a removed the draft outcomes). Only these exact findings are expected.
-    const waitingForDocs = ["docs.issue.created.v1", "docs.issue.failed.v1"];
-    const expected = (f: { app: string; kind: string; subject: string }) =>
-      f.app === "flow" && f.kind === "subscription-not-published" && waitingForDocs.includes(f.subject);
-    expect(reviews.flatMap((r) => r.findings).filter((f) => !expected(f))).toEqual([]);
+    // Docs publishes every outcome Flow subscribes to (Flow PR 5): no findings at all.
+    expect(reviews.flatMap((r) => r.findings)).toEqual([]);
   });
   it("reports code that reads DATABASE_URL when the manifest declares no database", () => {
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);

@@ -61,12 +61,24 @@
       {
         "type": "docs.issue-draft.failed.v1",
         "schema": "./events/docs.issue-draft.failed.v1.json"
+      },
+      {
+        "type": "docs.issue.created.v1",
+        "schema": "./events/docs.issue.created.v1.json"
+      },
+      {
+        "type": "docs.issue.failed.v1",
+        "schema": "./events/docs.issue.failed.v1.json"
       }
     ],
     "subscribes": [
       {
         "type": "flow.issue-draft.requested.v1",
         "handler": "/events/issue-draft-requested"
+      },
+      {
+        "type": "flow.issue.approved.v1",
+        "handler": "/events/issue-approved"
       }
     ]
   },
