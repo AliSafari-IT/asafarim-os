@@ -117,7 +117,7 @@ async function migrate(pool: pg.Pool): Promise<pg.Pool> {
   let ready = migrated.get(pool);
   if (!ready) {
     ready = import("@asafarim/app-sdk/events")
-      .then(({ OUTBOX_SQL }) => pool.query(`${SCHEMA}${OUTBOX_SQL}`))
+      .then(({ INBOX_SQL, OUTBOX_SQL }) => pool.query(`${SCHEMA}${OUTBOX_SQL}${INBOX_SQL}`))
       .catch((err: unknown) => {
         migrated.delete(pool);
         throw err;
@@ -126,6 +126,18 @@ async function migrate(pool: pg.Pool): Promise<pg.Pool> {
   }
   await ready;
   return pool;
+}
+
+/**
+ * The note `id` of `author`, read through the caller's transaction (an event handler's), without
+ * locking the row. null: no such note of this author, or an id that isn't one.
+ */
+export async function findNote(q: Queryable, author: string, id: string): Promise<Note | null> {
+  if (!noteId(id)) return null;
+  const { rows } = (await q.query(`SELECT ${COLUMNS} FROM notes WHERE id = $2 AND author = $1`, [author, id])) as {
+    rows: Row[];
+  };
+  return rows[0] ? toNote(rows[0]) : null;
 }
 
 /** Write `docs.note.created.v1` for `note` to the outbox, through the caller's transaction. */
@@ -257,6 +269,15 @@ export function getNotes(): NotesStore | null {
   }
   return g.docsNotes;
 }
+
+/** The app's pool, migrated (inbox and outbox included); null without DATABASE_URL. */
+export function migratedPool(): (() => Promise<pg.Pool>) | null {
+  const pool = docsPool();
+  return pool ? () => migrate(pool) : null;
+}
+
+/** Send what a committed transaction wrote to the outbox now, not at the relay's next poll. */
+export const wakeEventRelay = () => g.docsRelay?.wake();
 
 /**
  * Start the outbox relay once per process (on boot: instrumentation.ts), so events left in the

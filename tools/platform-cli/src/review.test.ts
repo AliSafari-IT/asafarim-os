@@ -1614,13 +1614,8 @@ describe("platform manifest review", () => {
     };
     expect(reviews.map((r) => r.app)).toEqual(expect.arrayContaining(["docs", "flow", "notes"]));
     // Flow (ADR 0001) subscribes to Docs' outcome events ahead of them: Docs publishes them from Flow
-    // PRs 4 and 5, which remove these lines. Only these exact findings are expected.
-    const waitingForDocs = [
-      "docs.issue-draft.ready.v1",
-      "docs.issue-draft.failed.v1",
-      "docs.issue.created.v1",
-      "docs.issue.failed.v1",
-    ];
+    // PR 5, which removes these lines (PR 4a removed the draft outcomes). Only these exact findings are expected.
+    const waitingForDocs = ["docs.issue.created.v1", "docs.issue.failed.v1"];
     const expected = (f: { app: string; kind: string; subject: string }) =>
       f.app === "flow" && f.kind === "subscription-not-published" && waitingForDocs.includes(f.subject);
     expect(reviews.flatMap((r) => r.findings).filter((f) => !expected(f))).toEqual([]);

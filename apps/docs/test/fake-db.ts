@@ -1,6 +1,6 @@
 /**
- * Postgres, as far as the notes store uses it: the `notes` table and the event outbox, every
- * statement recorded. A client from `connect()` works on its own copy between BEGIN and COMMIT, and
+ * Postgres, as far as the notes store and the event handlers use it: the `notes` table, the event
+ * outbox and the inbox, every statement recorded. A client from `connect()` works on its own copy between BEGIN and COMMIT, and
  * ROLLBACK drops it, so a test sees what a failed transaction leaves behind. `failOn` makes the
  * first matching statement throw (a lost connection, a constraint).
  */
@@ -9,18 +9,24 @@ export interface FakeDb {
   statements: { sql: string; params: unknown[] }[];
   notes: Record<string, unknown>[];
   outbox: { id: string; type: string; envelope: { subject?: string; data: Record<string, unknown> } }[];
+  inbox: string[];
   failOn?: (sql: string) => boolean;
 }
 
 interface Tables {
   notes: Record<string, unknown>[];
   outbox: FakeDb["outbox"];
+  inbox: string[];
 }
 
-const copy = (t: Tables): Tables => ({ notes: t.notes.map((r) => ({ ...r })), outbox: [...t.outbox] });
+const copy = (t: Tables): Tables => ({
+  notes: t.notes.map((r) => ({ ...r })),
+  outbox: [...t.outbox],
+  inbox: [...t.inbox],
+});
 
 export function fakeDb(): FakeDb {
-  let committed: Tables = { notes: [], outbox: [] };
+  let committed: Tables = { notes: [], outbox: [], inbox: [] };
   let next = 1;
   const db: FakeDb = {
     pool: undefined as never,
@@ -30,6 +36,9 @@ export function fakeDb(): FakeDb {
     },
     get outbox() {
       return committed.outbox;
+    },
+    get inbox() {
+      return committed.inbox;
     },
   };
 
@@ -49,8 +58,14 @@ export function fakeDb(): FakeDb {
       t.outbox.push({ id, type, envelope: JSON.parse(envelope) });
       return { rows: [], rowCount: 1 };
     }
+    if (sql.startsWith("INSERT INTO asafarim_inbox")) {
+      const [eventId] = params as [string];
+      if (t.inbox.includes(eventId)) return { rows: [], rowCount: 0 };
+      t.inbox.push(eventId);
+      return { rows: [], rowCount: 1 };
+    }
     if (sql.startsWith("SELECT")) {
-      if (sql.includes("FOR UPDATE")) {
+      if (sql.includes("FOR UPDATE") || sql.includes("WHERE id = $2 AND author = $1")) {
         const [author, id] = params;
         return { rows: t.notes.filter((r) => r.author === author && r.id === id).map((r) => ({ ...r })) };
       }

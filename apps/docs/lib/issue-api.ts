@@ -5,7 +5,6 @@ import "server-only";
  * answers for each failure. Logs carry ids, counts and token usage only: never the prompt, the note
  * or the generated text.
  */
-import manifest from "../platform.app";
 import { gate } from "./gate";
 import {
   AiTimeoutError,
@@ -17,14 +16,13 @@ import {
   type IssueTracker,
   type IssueWriter,
 } from "./issue-clients";
+import { loadNoteDocument, logIssue } from "./issue-drafting";
 import { json, notFound } from "./notes-api";
 import { getNotes, noteId, type Note, type NotesStore } from "./notes";
-import { ownerOf } from "./owners";
 import { getPlatform } from "./platform";
-import { DocNotFoundError, getSource, SourceUnavailableError } from "./source";
+import { DocNotFoundError, SourceUnavailableError } from "./source";
 
-/** The reader's own domain: links to it are useless in an issue (nobody else can open them). */
-export const APP_DOMAIN = manifest.domains?.primary ?? "docs.asafarim.site";
+export { APP_DOMAIN, logIssue } from "./issue-drafting";
 
 const fail = (status: number, error: string, message: string, extra: Record<string, unknown> = {}) =>
   json({ error, message, ...extra }, status);
@@ -68,17 +66,8 @@ export function issueWriter(): { ok: true; writer: IssueWriter } | { ok: false; 
 export async function noteDocument(
   docPath: string,
 ): Promise<{ ok: true; markdown: string; ownerRepo: string } | { ok: false; res: Response }> {
-  const config = getPlatform().config;
-  const sourceRepo = config.getString("source.repo");
-  const source = getSource({ repo: sourceRepo, branch: config.getString("source.branch") });
   try {
-    const [listing, markdown] = await Promise.all([source.listDocs(), source.readDoc(docPath)]);
-    const owners = listing.owners?.ok ? listing.owners.config : undefined;
-    return {
-      ok: true,
-      markdown,
-      ownerRepo: ownerOf(docPath, { config: owners, markdown, fallbackRepo: sourceRepo }).repo,
-    };
+    return { ok: true, ...(await loadNoteDocument(docPath)) };
   } catch (err) {
     if (err instanceof DocNotFoundError) {
       return { ok: false, res: fail(422, "doc_gone", "The note's document isn't in the source any more.") };
@@ -129,15 +118,4 @@ export async function saveIssueUrl(
     return { ok: false, res: fail(410, "note_gone", message, { issue }) };
   }
   return { ok: true, note };
-}
-
-/** One log line: ids, counts and token usage only. */
-export function logIssue(
-  msg: string,
-  fields: Record<string, string | number | boolean>,
-  level: "info" | "warn" = "info",
-) {
-  const line = JSON.stringify({ app: "docs", level, msg, ...fields });
-  if (level === "warn") console.warn(line);
-  else console.info(line);
 }

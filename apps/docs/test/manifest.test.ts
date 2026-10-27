@@ -42,12 +42,24 @@ describe("docs manifest", () => {
     expect(manifest.runtime.resources).toEqual({ memory: "256m", cpus: 0.5 });
   });
 
-  it("publishes docs.note.created.v1 (Flow), and hands the SDK the schema file the manifest names", () => {
+  it("publishes its Flow events, and hands the SDK the schema files the manifest names", () => {
     expect(manifest.events?.publishes).toEqual([
       { type: "docs.note.created.v1", schema: "./events/docs.note.created.v1.json" },
+      { type: "docs.issue-draft.ready.v1", schema: "./events/docs.issue-draft.ready.v1.json" },
+      { type: "docs.issue-draft.failed.v1", schema: "./events/docs.issue-draft.failed.v1.json" },
     ]);
     // The schema the app validates with (and uploads for the event catalog) is the file the manifest names.
     expect(EVENT_SCHEMAS).toEqual(loadSchemas(manifest, path.resolve(import.meta.dirname, "..")));
-    expect(publisher.types).toEqual(["docs.note.created.v1"]);
+    expect(publisher.types).toEqual([
+      "docs.note.created.v1",
+      "docs.issue-draft.ready.v1",
+      "docs.issue-draft.failed.v1",
+    ]);
+  });
+
+  it("answers Flow's request to draft an issue", () => {
+    expect(manifest.events?.subscribes).toEqual([
+      { type: "flow.issue-draft.requested.v1", handler: "/events/issue-draft-requested" },
+    ]);
   });
 });
