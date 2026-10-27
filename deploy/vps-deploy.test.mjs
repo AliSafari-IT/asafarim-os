@@ -1190,6 +1190,16 @@ test("the bus example requires exactly NATS_AUTH_ISSUER and NATS_CORE_PASSWORD, 
   assert.doesNotMatch(text, /^(# )?\w*SEED\w*=/m, "the signing key stays in core-api's env");
 });
 
+/** Whether a file can be read: one read, not a check followed by a use. */
+const readable = (file) => {
+  try {
+    readFileSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 test("deploy/nats/new-env.mjs makes ONE key and ONE password for both sides, and overwrites nothing", async () => {
   const { newEnv, writeEnv, CORE_USER } = await import("./nats/new-env.mjs");
   const { fromSeed } = await import("@nats-io/nkeys");
@@ -1226,7 +1236,7 @@ test("deploy/nats/new-env.mjs makes ONE key and ONE password for both sides, and
     const coreApiFile = path.join(dir, "core-api.env");
     // core-api's env must be there first.
     assert.match(writeEnv({ natsFile, coreApiFile }), /pnpm env:decrypt:production/);
-    assert.equal(existsSync(natsFile), false);
+    assert.equal(readable(natsFile), false);
     writeFileSync(coreApiFile, "CORE_API_ADMIN_TOKEN=keep-me");
     assert.equal(writeEnv({ natsFile, coreApiFile }), undefined);
     const written = parse(readFileSync(natsFile, "utf8"));
@@ -1240,7 +1250,7 @@ test("deploy/nats/new-env.mjs makes ONE key and ONE password for both sides, and
     assert.match(writeEnv({ natsFile, coreApiFile }), /already names a CORE_API_NATS_ variable/);
     rmSync(natsFile);
     assert.match(writeEnv({ natsFile, coreApiFile }), /already names a CORE_API_NATS_ variable/);
-    assert.equal(existsSync(natsFile), false, "nothing is written when core-api's env refuses");
+    assert.equal(readable(natsFile), false, "nothing is written when core-api's env refuses");
     writeFileSync(natsFile, before[0]);
     writeFileSync(coreApiFile, "CORE_API_ADMIN_TOKEN=keep-me\n");
     assert.match(writeEnv({ natsFile, coreApiFile }), /nats\.env already exists/);

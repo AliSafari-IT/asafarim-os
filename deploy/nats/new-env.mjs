@@ -15,7 +15,7 @@
 // core-api's env already names any CORE_API_NATS_ variable: two different keys would never match. It changes nothing
 // unless it can write both.
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAccount } from "@nats-io/nkeys";
@@ -49,9 +49,14 @@ export function writeEnv({
   coreApiFile = path.join(root, "core/core-api/.env.production"),
 } = {}) {
   const rel = (p) => path.relative(root, p);
-  if (!existsSync(coreApiFile))
+  // One read, not a check and then a read: the file cannot change between the two.
+  let coreApiText;
+  try {
+    coreApiText = readFileSync(coreApiFile, "utf8");
+  } catch (err) {
+    if (err?.code !== "ENOENT") throw err;
     return `${rel(coreApiFile)} does not exist: run pnpm env:decrypt:production first (core-api needs the other half of the key).`;
-  const coreApiText = readFileSync(coreApiFile, "utf8");
+  }
   if (/^CORE_API_NATS_/m.test(coreApiText))
     return `${rel(coreApiFile)} already names a CORE_API_NATS_ variable: not replacing it. Remove those lines first only if no deploy has used them.`;
   const env = newEnv();
