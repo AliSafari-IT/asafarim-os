@@ -35,7 +35,8 @@ export default defineApp({
   },
   auth: {
     client: "oidc",
-    publicPaths: ["/health/live", "/health/ready"],
+    // /hooks/<id>: webhook in, signed with the hook's secret instead of a sign-in (lib/hooks/receive.ts).
+    publicPaths: ["/health/live", "/health/ready", "/hooks/*"],
   },
   permissions: [
     { key: "flow.read", description: "See workflows and their runs" },

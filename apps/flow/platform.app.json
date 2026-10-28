@@ -25,7 +25,7 @@
   },
   "auth": {
     "client": "oidc",
-    "publicPaths": ["/health/live", "/health/ready"]
+    "publicPaths": ["/health/live", "/health/ready", "/hooks/*"]
   },
   "permissions": [
     {

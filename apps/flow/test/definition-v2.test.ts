@@ -252,20 +252,35 @@ describe("triggers", () => {
     expect(problems(twice)).toContainEqual({ path: "trigger.input", message: "field names must be distinct" });
   });
 
-  it("webhook and github: their schemas (their entry points come with PR 2.4)", () => {
+  it("webhook and github: their schemas, each naming its hook", () => {
     const base = { ...clone(ECHO_FLOW), nodes: [{ key: "done", type: "end" }], start: "done" };
-    expect(
-      problems({ ...base, trigger: { type: "webhook", input: [{ name: "id", type: "number", required: true }] } }),
-    ).toEqual([]);
+    const hook = "AAAAAAAAAAAAAAAAAAAAAA";
     expect(
       problems({
         ...base,
-        trigger: { type: "github", repo: "AliSafari-IT/asafarim-os", events: ["issues.opened", "push"] },
+        trigger: { type: "webhook", hook, input: [{ name: "id", type: "number", required: true }] },
       }),
     ).toEqual([]);
-    expect(problems({ ...base, trigger: { type: "github", repo: "nope", events: [] } }).map((p) => p.path)).toEqual(
-      expect.arrayContaining(["trigger.repo", "trigger.events"]),
-    );
+    expect(problems({ ...base, trigger: { type: "webhook", input: [] } }).map((p) => p.path)).toContain("trigger.hook");
+    expect(
+      problems({
+        ...base,
+        trigger: {
+          type: "github",
+          hook,
+          repos: ["AliSafari-IT/asafarim-os"],
+          events: ["issues.opened", "pull_request.closed+merged", "push"],
+        },
+      }),
+    ).toEqual([]);
+    expect(
+      problems({ ...base, trigger: { type: "github", hook: "short", repos: ["nope"], events: [] } }).map((p) => p.path),
+    ).toEqual(expect.arrayContaining(["trigger.hook", "trigger.repos.0", "trigger.events"]));
+    expect(
+      problems({ ...base, trigger: { type: "github", hook, repos: [], events: ["issues.opened+merged"] } }).map(
+        (p) => p.path,
+      ),
+    ).toEqual(expect.arrayContaining(["trigger.repos", "trigger.events.0"]));
   });
 
   it("the data of a run against the input fields", () => {
