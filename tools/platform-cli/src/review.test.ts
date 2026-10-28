@@ -524,6 +524,11 @@ describe("platform manifest review", () => {
     // a comment, a test, a longer name or a string that only contains the name don't start the relay
     put("apps/shop/lib/boot.ts", `// startAppRelay({ appId: "shop", pool });\nrestartRelayLater(); "startRelay soon";`);
     put("apps/shop/lib/boot.test.ts", `startAppRelay({ appId: "shop", pool });`);
+    // nor does importing or re-exporting a starter without calling it
+    put(
+      "apps/shop/lib/bus.ts",
+      `export { startAppRelay } from "@asafarim/app-sdk/events";\nimport { startRelay } from "@asafarim/events";`,
+    );
     expect(kinds()).toEqual(["event-relay-not-started events.publishes"]);
     expect(json().reviews[0]!.findings[0]).toEqual({
       app: "shop",
@@ -537,10 +542,10 @@ describe("platform manifest review", () => {
     expect(review().ok).toBe(true);
     expect(review(["--strict"]).ok).toBe(false);
 
-    // Either starter counts, wherever the app's runtime code calls it.
+    // Either starter counts, wherever the app's runtime code calls it, also through a namespace import.
     put(
       "apps/shop/app/instrumentation.ts",
-      `import { startRelay } from "@asafarim/events";\nstartRelay({ appId: "shop", pool, servers });`,
+      `import * as events from "@asafarim/events";\nevents.startRelay ({ appId: "shop", pool, servers });`,
     );
     expect(kinds()).toEqual([]);
     rmSync(path.join(root, "apps/shop/app/instrumentation.ts"));

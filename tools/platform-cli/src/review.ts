@@ -190,12 +190,13 @@
  *   `@asafarim/events`). core-api refuses the whole upload, and the SDK only logs a warning, so the
  *   catalog shows none of the app's schemas. One finding per oversized type, and one per app (subject
  *   `events.publishes`) for an oversized upload.
- * - `event-relay-not-started`: the manifest declares `events.publishes`, but no runtime code names
- *   `startAppRelay` (`@asafarim/app-sdk/events`) or `startRelay` (`@asafarim/events`) as a whole word
- *   in code (comments and string contents ignored). Publishing only writes a row to the app's outbox in the caller's transaction;
- *   the relay is what moves those rows to the bus. Without it the events pile up in the outbox with no
- *   error, and every subscriber waits for events that never arrive. Usually the publisher was added
- *   without the boot code that starts the relay. One finding per app (subject `events.publishes`).
+ * - `event-relay-not-started`: the manifest declares `events.publishes`, but no runtime code calls
+ *   `startAppRelay` (`@asafarim/app-sdk/events`) or `startRelay` (`@asafarim/events`), comments and
+ *   string contents ignored (an import or re-export alone starts nothing). Publishing only writes a row
+ *   to the app's outbox in the caller's transaction; the relay is what moves those rows to the bus.
+ *   Without it the events pile up in the outbox with no error, and every subscriber waits for events
+ *   that never arrive. Usually the publisher was added without the boot code that starts the relay.
+ *   One finding per app (subject `events.publishes`).
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -652,13 +653,15 @@ const SESSION_HANDOFF = /\bcreateSessionHandler\s*\(/;
  */
 export const FRAMEWORK_SECRET = /^(?:AUTH|NEXT|OTEL|ASAFARIM)_/;
 
-/** The functions that start an app's outbox relay: the app SDK's wrapper and `@asafarim/events`' own. */
-export const RELAY_STARTERS = ["startAppRelay", "startRelay"] as const;
+/**
+ * A call of a function that starts an app's outbox relay: the app SDK's `startAppRelay` or
+ * `@asafarim/events`' own `startRelay`. An import or re-export alone starts nothing.
+ */
+const RELAY_START_CALL = /(?<![\w$])(?:startAppRelay|startRelay)\s*\(/;
 
-/** True when `text` names one of `RELAY_STARTERS` as code: comments and string contents don't count. */
+/** True when `text` calls a relay starter in code: comments and string contents don't count. */
 export function startsRelay(text: string): boolean {
-  const code = blankStrings(stripComments(text));
-  return RELAY_STARTERS.some((name) => new RegExp(`(?<![\\w$])${name}(?![\\w$])`).test(code));
+  return RELAY_START_CALL.test(blankStrings(stripComments(text)));
 }
 
 /** True when `text` (comments ignored) names `name` as a whole word: `process.env.X`, `env["X"]`, `"X"`. */
