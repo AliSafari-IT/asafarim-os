@@ -1,4 +1,4 @@
-import { runNowAction, setWorkflowStatusAction } from "@/app/actions";
+import { duplicateWorkflowAction, runNowAction, setWorkflowStatusAction } from "@/app/actions";
 import { ErrorNotice, Unavailable } from "@/components/Notice";
 import { Status } from "@/components/Runs";
 import { Shell } from "@/components/Shell";
@@ -74,9 +74,38 @@ function RunNow({ workflow, trigger }: { workflow: string; trigger: Extract<Trig
   );
 }
 
+/** Duplicate: the new workflow's name and key; the builder opens on its draft. */
+function DuplicateForm({ workflow, name }: { workflow: string; name: string }) {
+  return (
+    <details className="duplicate">
+      <summary>Duplicate</summary>
+      <form action={duplicateWorkflowAction} className="inline-form" data-testid="duplicate">
+        <input type="hidden" name="workflow" value={workflow} />
+        <label htmlFor={`${workflow}-dup-name`}>Name</label>
+        <input id={`${workflow}-dup-name`} name="name" defaultValue={`${name} (copy)`} required maxLength={200} />
+        <label htmlFor={`${workflow}-dup-key`}>Key</label>
+        <input
+          id={`${workflow}-dup-key`}
+          name="key"
+          defaultValue={`${workflow}-copy`.slice(0, 64)}
+          required
+          maxLength={64}
+          pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*"
+          aria-describedby={`${workflow}-dup-hint`}
+        />
+        <p id={`${workflow}-dup-hint`} className="muted hint">
+          Lower case letters, digits and dashes; it can&apos;t be changed later.
+        </p>
+        <button type="submit">Duplicate</button>
+      </form>
+    </details>
+  );
+}
+
 /**
  * The workflows and their current definition, read-only; Pause and Resume for flow.workflows.write;
- * "Run now" for a manual trigger, with flow.runs.start.
+ * "Run now" for a manual trigger, with flow.runs.start. New workflow, Edit (the builder) and Duplicate
+ * with flow.workflows.write; View in the builder, read-only, otherwise.
  */
 export default async function Workflows({
   searchParams,
@@ -97,36 +126,68 @@ export default async function Workflows({
   const canStart = access.permissions.includes("flow.runs.start");
   return (
     <Shell current="/workflows">
-      <h1>Workflows</h1>
+      <div className="page-head">
+        <h1>Workflows</h1>
+        {canWrite ? (
+          <a className="button" href="/workflows/new" data-testid="new-workflow">
+            New workflow
+          </a>
+        ) : null}
+      </div>
       <ErrorNotice error={error} permission={permission} />
       {workflows.map((w) => {
-        const trigger = triggerOf(w.current.definition);
+        const trigger = w.current ? triggerOf(w.current.definition) : undefined;
         return (
           <section key={w.key} className="card" data-testid="workflow" data-workflow={w.key}>
             <h2>
               {w.name} <Status value={w.status} />
             </h2>
             <p className="muted">
-              <span className="mono">{w.key}</span> · version {w.current.version} of {w.versions} · published{" "}
-              {at(w.current.publishedAt)} · <TriggerText trigger={trigger} />
+              <span className="mono">{w.key}</span> ·{" "}
+              {w.current ? (
+                <>
+                  version {w.current.version} of {w.versions} · published {at(w.current.publishedAt)}
+                </>
+              ) : (
+                <>not published yet</>
+              )}
+              {trigger ? (
+                <>
+                  {" "}
+                  · <TriggerText trigger={trigger} />
+                </>
+              ) : null}
               {w.draftUpdatedAt ? <> · a draft saved {at(w.draftUpdatedAt)}</> : null}
             </p>
-            {canWrite ? (
-              <form action={setWorkflowStatusAction}>
-                <input type="hidden" name="workflow" value={w.key} />
-                <input type="hidden" name="status" value={w.status === "active" ? "paused" : "active"} />
-                <button type="submit" className="secondary" data-testid="toggle">
-                  {w.status === "active" ? "Pause" : "Resume"}
-                </button>
-              </form>
-            ) : null}
-            {canStart && trigger.type === "manual" && w.status === "active" ? (
+            <div className="actions">
+              <a className="button" href={`/workflows/${w.key}/edit`} data-testid="edit">
+                {canWrite ? "Edit" : "View"}
+              </a>
+              {w.versions ? (
+                <a className="button secondary" href={`/workflows/${w.key}/versions`}>
+                  Versions
+                </a>
+              ) : null}
+              {canWrite && w.current ? (
+                <form action={setWorkflowStatusAction}>
+                  <input type="hidden" name="workflow" value={w.key} />
+                  <input type="hidden" name="status" value={w.status === "active" ? "paused" : "active"} />
+                  <button type="submit" className="secondary" data-testid="toggle">
+                    {w.status === "active" ? "Pause" : "Resume"}
+                  </button>
+                </form>
+              ) : null}
+            </div>
+            {canWrite ? <DuplicateForm workflow={w.key} name={w.name} /> : null}
+            {canStart && trigger?.type === "manual" && w.status === "active" ? (
               <RunNow workflow={w.key} trigger={trigger} />
             ) : null}
-            <details open>
-              <summary>Definition (read-only)</summary>
-              <pre data-testid="definition">{JSON.stringify(w.current.definition, null, 2)}</pre>
-            </details>
+            {w.current ? (
+              <details open>
+                <summary>Definition (read-only)</summary>
+                <pre data-testid="definition">{JSON.stringify(w.current.definition, null, 2)}</pre>
+              </details>
+            ) : null}
           </section>
         );
       })}

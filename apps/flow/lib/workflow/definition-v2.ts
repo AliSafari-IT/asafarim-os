@@ -142,6 +142,8 @@ const BUILTIN = {
   "docs.issue-create": IssueCreateNode,
 } as const;
 export type BuiltinType = keyof typeof BUILTIN;
+/** Each built-in node type's schema (the builder's settings forms are made from them). */
+export const BUILTIN_NODES: { readonly [T in BuiltinType]: z.ZodType } = BUILTIN;
 export const BUILTIN_TYPES = Object.keys(BUILTIN) as BuiltinType[];
 
 export type ConditionNode = z.infer<typeof ConditionNode>;

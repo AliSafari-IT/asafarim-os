@@ -46,17 +46,37 @@ const ACTIONS: Record<string, string | null> = {
   saveEgressHostsAction: "flow.settings.write",
   saveEmailRecipientsAction: "flow.settings.write",
   setPausedAllAction: "flow.settings.write",
+  createWorkflowAction: "flow.workflows.write",
+  duplicateWorkflowAction: "flow.workflows.write",
 };
 /** Actions that answer their form (useActionState) instead of redirecting: (state, formData). */
 const STATE_ACTIONS = new Set(["createCredentialAction", "rotateCredentialAction"]);
-/** The builder's server functions (PR 2.6 calls them): they answer with a result, not a redirect. */
+/** The builder's server functions (components/builder): they answer with a result, not a redirect. */
 const DRAFT_FUNCTIONS: Record<
   string,
-  { engine: string; call: (fn: (...a: unknown[]) => Promise<unknown>) => Promise<unknown> }
+  {
+    engine: string;
+    call: (fn: (...a: unknown[]) => Promise<unknown>) => Promise<unknown>;
+    /** The same call with input that doesn't fit: refused after the gate, before the engine. */
+    bad: (fn: (...a: unknown[]) => Promise<unknown>) => Promise<unknown>;
+  }
 > = {
-  saveDraft: { engine: "saveDraft", call: (fn) => fn("my-flow", { version: 2, key: "my-flow" }) },
-  publishDraft: { engine: "publishDraft", call: (fn) => fn("my-flow") },
-  testDraft: { engine: "startDraftRun", call: (fn) => fn("my-flow", {}, true) },
+  saveDraft: {
+    engine: "saveDraft",
+    call: (fn) => fn("my-flow", { version: 2, key: "my-flow" }, null),
+    bad: (fn) => fn("my-flow", { version: 2, key: "my-flow" }, "yesterday"),
+  },
+  validateDraft: {
+    engine: "checkDefinition",
+    call: (fn) => fn("my-flow", { version: 2, key: "my-flow" }),
+    bad: (fn) => fn("../etc", { version: 2 }),
+  },
+  publishDraft: { engine: "publishDraft", call: (fn) => fn("my-flow"), bad: (fn) => fn({ key: "my-flow" }) },
+  testDraft: {
+    engine: "startDraftRun",
+    call: (fn) => fn("my-flow", {}, true),
+    bad: (fn) => fn("my-flow", [], "yes"),
+  },
 };
 
 /** Pages that ask for more than flow.read. */
@@ -64,6 +84,7 @@ const PAGE_PERMISSION: Record<string, string> = {
   "approvals/page.tsx": "flow.approvals.decide",
   "approvals/[id]/page.tsx": "flow.approvals.decide",
   "credentials/page.tsx": "flow.credentials.write",
+  "workflows/new/page.tsx": "flow.workflows.write",
 };
 
 const who = vi.hoisted(() => ({ subject: undefined as string | undefined, permissions: [] as string[] }));
@@ -128,7 +149,14 @@ vi.mock("@/lib/db", () => {
       approve: record("approve"),
       reject: record("reject"),
       startRun: record("startRun"),
-      saveDraft: record("saveDraft"),
+      saveDraft: async () => {
+        calls.engine.push("saveDraft");
+        return { ok: true, problems: [], workflowId: "w", draftUpdatedAt: new Date(0), audits: [] };
+      },
+      checkDefinition: () => {
+        calls.engine.push("checkDefinition");
+        return [];
+      },
       publishDraft: record("publishDraft"),
       startDraftRun: record("startDraftRun"),
     },
@@ -165,6 +193,21 @@ vi.mock("@/lib/queries", () => ({
   listRuns: async () => [],
   getRun: async () => undefined,
   listWorkflows: async () => [],
+  getBuilderWorkflow: async (_p: unknown, key: string) =>
+    key === "docs-note-to-issue"
+      ? {
+          id: "w1",
+          key,
+          name: "Docs note to issue",
+          status: "active",
+          draft: null,
+          draftUpdatedAt: null,
+          draftUpdatedBy: null,
+          versions: [],
+          current: null,
+        }
+      : undefined,
+  getVersions: async () => [],
   listPendingApprovals: async () => [],
   getApproval: async () => undefined,
 }));
@@ -186,7 +229,10 @@ async function interruptOf(run: () => Promise<unknown>): Promise<Interrupt | und
 const RUN = "01JZ8Q0000000000000000000A";
 async function renderPage(file: string) {
   const { default: Page } = await load<{ default: (p: unknown) => Promise<unknown> }>(file);
-  return Page({ searchParams: Promise.resolve({}), params: Promise.resolve({ id: RUN }) });
+  return Page({
+    searchParams: Promise.resolve({}),
+    params: Promise.resolve({ id: RUN, key: "docs-note-to-issue" }),
+  });
 }
 
 function form(values: Record<string, string>) {
@@ -205,6 +251,8 @@ const FORM = {
   name: "Hook",
   entries: "hooks.example.com",
   pausedAll: "on",
+  key: "my-flow",
+  trigger: "manual",
 };
 type Action = (...a: unknown[]) => Promise<unknown>;
 /** Run an action the way its form does: a redirect is an Interrupt, a state action's answer is returned. */
@@ -233,6 +281,9 @@ describe("the routes on disk", () => {
       "runs/[id]/page.tsx",
       "runs/page.tsx",
       "settings/page.tsx",
+      "workflows/[key]/edit/page.tsx",
+      "workflows/[key]/versions/page.tsx",
+      "workflows/new/page.tsx",
       "workflows/page.tsx",
     ]);
     // No API of its own yet: the route files are sign-in plumbing and health.
@@ -354,10 +405,39 @@ describe("the builder's server functions (flow.workflows.write)", () => {
       who.subject = "dev-owner";
       who.permissions = ["flow.read", "flow.workflows.write"];
       const mod = await load<Record<string, (...a: unknown[]) => Promise<unknown>>>("actions.ts");
-      expect(await d.call(mod[name]!)).toEqual({ ok: true });
+      expect(await d.call(mod[name]!)).toMatchObject({ ok: true });
       expect(calls.engine).toEqual([d.engine]);
     },
   );
+
+  it.each(Object.entries(DRAFT_FUNCTIONS))(
+    "%s with it, and input that doesn't fit: invalid_input, the engine isn't called",
+    async (name, d) => {
+      who.subject = "dev-owner";
+      who.permissions = ["flow.read", "flow.workflows.write"];
+      const mod = await load<Record<string, (...a: unknown[]) => Promise<unknown>>>("actions.ts");
+      expect(await d.bad(mod[name]!)).toEqual({ ok: false, error: "invalid_input" });
+      expect(calls.engine).toEqual([]);
+    },
+  );
+
+  it("New and Duplicate refuse a key that isn't one, before the engine", async () => {
+    who.subject = "dev-owner";
+    who.permissions = ["flow.read", "flow.workflows.write"];
+    const mod = await load<Record<string, (f: FormData) => Promise<void>>>("actions.ts");
+    expect(await interruptOf(() => mod.createWorkflowAction!(form({ ...FORM, key: "Not A Key" })))).toMatchObject({
+      to: "/workflows/new?error=invalid_workflow",
+    });
+    expect(
+      await interruptOf(() => mod.createWorkflowAction!(form({ ...FORM, trigger: "carrier-pigeon" }))),
+    ).toMatchObject({
+      to: "/workflows/new?error=invalid_workflow",
+    });
+    expect(await interruptOf(() => mod.duplicateWorkflowAction!(form({ ...FORM, key: "../x" })))).toMatchObject({
+      to: "/workflows?error=invalid_workflow",
+    });
+    expect(calls.engine).toEqual([]);
+  });
 });
 
 describe("the decisions", () => {

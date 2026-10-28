@@ -139,7 +139,8 @@ export interface WorkflowView {
   key: string;
   name: string;
   status: WorkflowStatus;
-  current: VersionRow;
+  /** The published version runs start on; null for a workflow that only has a draft so far. */
+  current: VersionRow | null;
   versions: number;
   /** When the unpublished draft was saved; null without one. */
   draftUpdatedAt: Date | null;
@@ -150,15 +151,61 @@ export async function listWorkflows(p: pg.Pool): Promise<WorkflowView[]> {
     `SELECT w.key AS w_key, w.name AS w_name, w.status AS w_status, w.draft_updated_at AS w_draft_updated_at, v.*,
             (SELECT count(*) FROM workflow_versions x WHERE x.workflow_id = w.id)::int AS versions
        FROM workflows w
-       JOIN LATERAL (SELECT * FROM workflow_versions WHERE workflow_id = w.id ORDER BY version DESC LIMIT 1) v ON true
+       LEFT JOIN LATERAL (SELECT * FROM workflow_versions WHERE workflow_id = w.id ORDER BY version DESC LIMIT 1) v ON true
       ORDER BY w.key`,
   );
   return rows.map((r) => ({
     key: r.w_key,
     name: r.w_name,
     status: r.w_status,
-    current: versionFrom(r),
+    current: r.id ? versionFrom(r) : null,
     versions: r.versions,
     draftUpdatedAt: r.w_draft_updated_at ?? null,
   }));
+}
+
+export interface BuilderWorkflow {
+  id: string;
+  key: string;
+  name: string;
+  status: WorkflowStatus;
+  /** The unpublished draft as saved (any JSON); null without one. */
+  draft: unknown;
+  draftUpdatedAt: Date | null;
+  draftUpdatedBy: string | null;
+  /** The published versions, newest first; the definition of the newest only. */
+  versions: { version: number; publishedAt: Date }[];
+  current: VersionRow | null;
+}
+
+/** A workflow as the builder opens it. */
+export async function getBuilderWorkflow(p: pg.Pool, key: string): Promise<BuilderWorkflow | undefined> {
+  const { rows } = await p.query("SELECT * FROM workflows WHERE key = $1", [key]);
+  const w = rows[0];
+  if (!w) return undefined;
+  const [versions, current] = await Promise.all([
+    p.query("SELECT version, published_at FROM workflow_versions WHERE workflow_id = $1 ORDER BY version DESC", [w.id]),
+    p.query("SELECT * FROM workflow_versions WHERE workflow_id = $1 ORDER BY version DESC LIMIT 1", [w.id]),
+  ]);
+  return {
+    id: w.id,
+    key: w.key,
+    name: w.name,
+    status: w.status,
+    draft: w.draft_definition ?? null,
+    draftUpdatedAt: w.draft_updated_at ?? null,
+    draftUpdatedBy: w.draft_updated_by ?? null,
+    versions: versions.rows.map((r) => ({ version: r.version, publishedAt: r.published_at })),
+    current: current.rows[0] ? versionFrom(current.rows[0]) : null,
+  };
+}
+
+/** Published versions of a workflow, by number: the ones asked for that exist. */
+export async function getVersions(p: pg.Pool, key: string, numbers: readonly number[]): Promise<VersionRow[]> {
+  const { rows } = await p.query(
+    `SELECT v.* FROM workflow_versions v JOIN workflows w ON w.id = v.workflow_id
+      WHERE w.key = $1 AND v.version = ANY($2::int[]) ORDER BY v.version`,
+    [key, [...numbers]],
+  );
+  return rows.map(versionFrom);
 }

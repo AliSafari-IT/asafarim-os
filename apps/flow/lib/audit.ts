@@ -16,6 +16,8 @@ export type AuditAction =
   | "flow.workflow.resumed"
   | "flow.workflow.draft_saved"
   | "flow.workflow.published"
+  /** A new workflow made from another's definition (the builder's Duplicate). */
+  | "flow.workflow.duplicated"
   /** A trigger arrived while Settings `paused_all` was on: no run started. */
   | "flow.run.refused"
   | "flow.all.paused"
@@ -33,6 +35,11 @@ export interface AuditEntry {
   /** What the approver decided (flow.approval.decided). */
   decision?: "approved" | "rejected";
   workflow?: string;
+  /** The workflow's id (its key may be reused once it is gone; the id never is). */
+  workflowId?: string;
+  /** flow.workflow.duplicated: the workflow it was made from (its key and id). */
+  source?: string;
+  sourceId?: string;
   version?: number;
   triggerEventId?: string;
   /** How a run ended (flow.run.finished). */

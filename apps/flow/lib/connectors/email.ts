@@ -19,6 +19,7 @@ import { ConnectorError } from "../engine/connector-error";
 import type { Connector, ConnectorContext } from "../engine/connectors";
 import { SmtpEgressError } from "../egress/smtp";
 import { getSettings, isRecipientAllowed } from "../settings";
+import { credentialField, emailRecipient } from "../workflow/fields";
 import { templatedText } from "../workflow/templates";
 
 export const EMAIL_LIMIT_PER_WORKFLOW = 100;
@@ -27,8 +28,11 @@ export const MAX_RECIPIENTS = 10;
 
 const Input = z.strictObject({
   /** The smtp credential's id. */
-  credential: z.string().min(1).max(64),
-  to: z.array(templatedText(254)).min(1).max(MAX_RECIPIENTS),
+  credential: credentialField("smtp"),
+  to: z
+    .array(emailRecipient(templatedText(254)))
+    .min(1)
+    .max(MAX_RECIPIENTS),
   subject: templatedText(200),
   body: templatedText(50_000),
 });

@@ -123,7 +123,11 @@ export type Refusal =
   /** Drafts: the definition doesn't validate (or doesn't fit the manifest). */
   | "invalid_definition"
   /** Drafts: not a JSON object, larger than DRAFT_MAX_BYTES, or its key isn't the workflow's. */
-  | "invalid_draft";
+  | "invalid_draft"
+  /** saveDraft: someone saved the draft (or published it) since the one this save was made from. */
+  | "stale_draft"
+  /** saveDraft of a new workflow: one with its key exists already. */
+  | "exists";
 export type Result = { ok: true; audits: AuditEntry[] } | { ok: false; error: Refusal; audits: AuditEntry[] };
 export type StartResult =
   | { ok: true; runId: string; audits: AuditEntry[] }
@@ -685,6 +689,12 @@ export function createEngine(deps: EngineDeps) {
     onOutcome,
     startRun,
 
+    /** What is wrong with a definition (the draft's checks: validation, then the manifest); none: it publishes. */
+    checkDefinition(value: unknown): Problem[] {
+      const checked = checkDraft(value);
+      return checked.ok ? [] : checked.problems;
+    },
+
     /** Every subscribed event: it may start runs, and when it names a run and a step, it is an outcome. */
     async handle(tx: Tx, event: InboundEvent): Promise<AuditEntry[]> {
       const audits = await onTrigger(tx, event);
@@ -1068,49 +1078,81 @@ export function createEngine(deps: EngineDeps) {
       status: "active" | "paused",
       actor: string,
     ): Promise<{ ok: true; audits: AuditEntry[] } | { ok: false; error: "not_found"; audits: AuditEntry[] }> {
-      const previous = await deps.store(tx).setWorkflowStatus(key, status);
-      if (previous === undefined) return { ok: false, error: "not_found", audits: [] };
+      const store = deps.store(tx);
+      const workflow = await store.workflow(key, { lock: true });
+      const previous = workflow ? await store.setWorkflowStatus(key, status) : undefined;
+      if (!workflow || previous === undefined) return { ok: false, error: "not_found", audits: [] };
       if (previous === status) return { ok: true, audits: [] };
       const action = status === "paused" ? "flow.workflow.paused" : "flow.workflow.resumed";
-      return { ok: true, audits: [{ action, workflow: key, actor }] };
+      return { ok: true, audits: [{ action, workflow: key, workflowId: workflow.id, actor }] };
     },
 
     /**
      * Save a workflow's draft (a new workflow when there is none with its key, named `name`): stored as
      * it is, valid or not, with the problems found, each with its node's key. Refused when it isn't a
      * JSON object of at most DRAFT_MAX_BYTES whose `key` is `workflowKey`.
+     *
+     * `expect` (the builder): `"new"` refuses (`exists`) when the workflow exists already; a
+     * `draftUpdatedAt` refuses (`stale_draft`) unless the draft saved now is the one the editor last saw
+     * (null: none, as after a publish), so a save never overwrites someone else's; `not_found` when
+     * there is no such workflow. Without it, the draft is saved whatever is there.
      */
     async saveDraft(
       tx: Tx,
-      opts: { workflowKey: string; name?: string; definition: unknown; actor: string },
+      opts: {
+        workflowKey: string;
+        name?: string;
+        definition: unknown;
+        actor: string;
+        expect?: "new" | { draftUpdatedAt: Date | null };
+      },
     ): Promise<
-      { ok: true; problems: Problem[]; audits: AuditEntry[] } | { ok: false; error: Refusal; audits: AuditEntry[] }
+      | { ok: true; problems: Problem[]; workflowId: string; draftUpdatedAt: Date; audits: AuditEntry[] }
+      | { ok: false; error: Refusal; audits: AuditEntry[] }
     > {
       const def = opts.definition;
       if (!isRecord(def) || def.key !== opts.workflowKey || JSON.stringify(def).length > DRAFT_MAX_BYTES) {
         return { ok: false, error: "invalid_draft", audits: [] };
       }
       const c = call(tx);
-      const workflow =
-        (await c.store.workflow(opts.workflowKey, { lock: true })) ??
-        (await c.store.createWorkflow({
-          id: deps.newId(),
+      const expect = opts.expect;
+      let workflow = await c.store.workflow(opts.workflowKey, { lock: true });
+      if (workflow && expect === "new") return { ok: false, error: "exists", audits: [] };
+      if (!workflow && expect !== undefined && expect !== "new") return { ok: false, error: "not_found", audits: [] };
+      if (workflow && expect !== undefined && expect !== "new") {
+        if ((workflow.draftUpdatedAt?.getTime() ?? null) !== (expect.draftUpdatedAt?.getTime() ?? null))
+          return { ok: false, error: "stale_draft", audits: [] };
+      }
+      if (!workflow) {
+        const id = deps.newId();
+        workflow = await c.store.createWorkflow({
+          id,
           key: opts.workflowKey,
           name: opts.name?.trim().slice(0, 200) || opts.workflowKey,
-        }));
-      await c.store.setDraft(workflow.id, { definition: def, at: now(), by: opts.actor });
+        });
+        // Another transaction created it first (createWorkflow keeps the existing one).
+        if (expect === "new" && workflow.id !== id) return { ok: false, error: "exists", audits: [] };
+      }
+      const at = now();
+      await c.store.setDraft(workflow.id, { definition: def, at, by: opts.actor });
       const checked = checkDraft(def);
       return {
         ok: true,
         problems: checked.ok ? [] : checked.problems,
+        workflowId: workflow.id,
+        draftUpdatedAt: at,
         audits: [{ action: "flow.workflow.draft_saved", workflow: workflow.key, actor: opts.actor }],
       };
     },
 
-    /** Publish a workflow's draft as its next version (immutable) and clear the draft; runs start on it from now. */
+    /**
+     * Publish a workflow's draft as its next version (immutable) and clear the draft; runs start on it from now.
+     * `check`: more problems that refuse it (the builder's: credentials, allow-lists), asked once the
+     * workflow is locked, so they are about the draft that would be published.
+     */
     async publishDraft(
       tx: Tx,
-      opts: { workflowKey: string; actor: string },
+      opts: { workflowKey: string; actor: string; check?: (draft: unknown) => Promise<Problem[]> },
     ): Promise<
       | { ok: true; version: number; audits: AuditEntry[] }
       | { ok: false; error: Refusal; problems?: Problem[]; audits: AuditEntry[] }
@@ -1120,7 +1162,14 @@ export function createEngine(deps: EngineDeps) {
       if (!workflow) return { ok: false, error: "not_found", audits: [] };
       if (workflow.draftDefinition === null) return { ok: false, error: "no_draft", audits: [] };
       const checked = checkDraft(workflow.draftDefinition);
-      if (!checked.ok) return { ok: false, error: "invalid_definition", problems: checked.problems, audits: [] };
+      const more = opts.check ? await opts.check(workflow.draftDefinition) : [];
+      if (!checked.ok || more.length)
+        return {
+          ok: false,
+          error: "invalid_definition",
+          problems: [...(checked.ok ? [] : checked.problems), ...more],
+          audits: [],
+        };
       const version = ((await c.store.currentVersion(workflow.id))?.version ?? 0) + 1;
       await c.store.insertVersion({
         id: deps.newId(),
@@ -1133,7 +1182,15 @@ export function createEngine(deps: EngineDeps) {
       return {
         ok: true,
         version,
-        audits: [{ action: "flow.workflow.published", workflow: workflow.key, version, actor: opts.actor }],
+        audits: [
+          {
+            action: "flow.workflow.published",
+            workflow: workflow.key,
+            workflowId: workflow.id,
+            version,
+            actor: opts.actor,
+          },
+        ],
       };
     },
 

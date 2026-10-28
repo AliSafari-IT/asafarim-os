@@ -544,6 +544,8 @@ describe("drafts", () => {
     expect(saved).toEqual({
       ok: true,
       problems: [{ node: "shout", path: "next", message: 'goes to "nowhere", which isn\'t a node' }],
+      workflowId: t.mem.workflows[0]!.id,
+      draftUpdatedAt: t.clock.now,
       audits: [{ action: "flow.workflow.draft_saved", workflow: "echo-flow", actor: "dev-owner" }],
     });
     expect(t.mem.workflows[0]).toMatchObject({
@@ -594,7 +596,15 @@ describe("drafts", () => {
     expect(published).toEqual({
       ok: true,
       version: 2,
-      audits: [{ action: "flow.workflow.published", workflow: "echo-flow", version: 2, actor: "dev-owner" }],
+      audits: [
+        {
+          action: "flow.workflow.published",
+          workflow: "echo-flow",
+          workflowId: t.mem.workflows[0]!.id,
+          version: 2,
+          actor: "dev-owner",
+        },
+      ],
     });
     expect(t.mem.workflows[0]!.draftDefinition).toBeNull();
     expect(t.mem.versions.map((v) => v.version)).toEqual([1, 2]);
@@ -628,6 +638,87 @@ describe("drafts", () => {
         error: "invalid_draft",
       });
     }
+  });
+
+  it("a save made from a draft someone else saved since is refused (stale_draft), not saved over theirs", async () => {
+    const t = setup();
+    const def = clone(ECHO_FLOW);
+    const save = (draftUpdatedAt: Date | null, actor: string) =>
+      t.engine.saveDraft(t.mem.tx, { workflowKey: "echo-flow", definition: def, actor, expect: { draftUpdatedAt } });
+    // No draft yet: the editor saw none.
+    const first = await save(null, "ada");
+    if (!first.ok) throw new Error(first.error);
+    // Bo opened it before Ada's save: Bo's save names "no draft", which is stale now.
+    t.advance(1000);
+    expect(await save(null, "bo")).toEqual({ ok: false, error: "stale_draft", audits: [] });
+    t.advance(1000);
+    expect(t.mem.workflows[0]).toMatchObject({ draftUpdatedBy: "ada", draftUpdatedAt: first.draftUpdatedAt });
+    // Ada's next save names her last one: it goes through, and the one after names it in turn.
+    const second = await save(first.draftUpdatedAt, "ada");
+    if (!second.ok) throw new Error(second.error);
+    expect(second.draftUpdatedAt.getTime()).toBeGreaterThan(first.draftUpdatedAt.getTime());
+    expect(await save(first.draftUpdatedAt, "ada")).toMatchObject({ error: "stale_draft" });
+    // After a publish there is no draft: the next save names none.
+    await t.engine.publishDraft(t.mem.tx, { workflowKey: "echo-flow", actor: "ada" });
+    expect(await save(second.draftUpdatedAt, "ada")).toMatchObject({ error: "stale_draft" });
+    expect(await save(null, "ada")).toMatchObject({ ok: true });
+    // A workflow that doesn't exist isn't made by such a save.
+    expect(
+      await t.engine.saveDraft(t.mem.tx, {
+        workflowKey: "nope",
+        definition: { ...def, key: "nope" },
+        actor: "ada",
+        expect: { draftUpdatedAt: null },
+      }),
+    ).toMatchObject({ error: "not_found" });
+    expect(t.mem.workflows.map((w) => w.key)).not.toContain("nope");
+  });
+
+  it('expect "new" makes a workflow, and refuses a key that exists (exists)', async () => {
+    const t = setup();
+    const def = { ...clone(ECHO_FLOW), key: "fresh" };
+    expect(
+      await t.engine.saveDraft(t.mem.tx, { workflowKey: "fresh", definition: def, actor: "a", expect: "new" }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await t.engine.saveDraft(t.mem.tx, { workflowKey: "fresh", definition: def, actor: "b", expect: "new" }),
+    ).toEqual({ ok: false, error: "exists", audits: [] });
+    expect(t.mem.workflows.find((w) => w.key === "fresh")?.draftUpdatedBy).toBe("a");
+  });
+
+  it("publishDraft's check refuses a draft that validates, with its problems", async () => {
+    const t = setup();
+    await t.engine.saveDraft(t.mem.tx, { workflowKey: "echo-flow", definition: clone(ECHO_FLOW), actor: "a" });
+    const seen: unknown[] = [];
+    const refused = await t.engine.publishDraft(t.mem.tx, {
+      workflowKey: "echo-flow",
+      actor: "a",
+      check: async (draft) => {
+        seen.push(draft);
+        return [{ node: "shout", path: "input.credential", message: "choose a credential" }];
+      },
+    });
+    expect(refused).toEqual({
+      ok: false,
+      error: "invalid_definition",
+      problems: [{ node: "shout", path: "input.credential", message: "choose a credential" }],
+      audits: [],
+    });
+    expect(seen).toEqual([clone(ECHO_FLOW)]);
+    expect(t.mem.versions.map((v) => v.version)).toEqual([1]);
+    expect(
+      await t.engine.publishDraft(t.mem.tx, { workflowKey: "echo-flow", actor: "a", check: async () => [] }),
+    ).toMatchObject({ ok: true, version: 2 });
+  });
+
+  it("checkDefinition: the problems a draft would be refused with", () => {
+    const t = setup();
+    expect(t.engine.checkDefinition(clone(ECHO_FLOW))).toEqual([]);
+    const bad = clone(ECHO_FLOW) as unknown as { nodes: Record<string, unknown>[] };
+    bad.nodes[1]!.next = "nowhere";
+    expect(t.engine.checkDefinition(bad)).toEqual([
+      { node: "shout", path: "next", message: 'goes to "nowhere", which isn\'t a node' },
+    ]);
   });
 
   it("a draft must fit the manifest to be published", async () => {
