@@ -190,6 +190,14 @@
  *   `@asafarim/events`). core-api refuses the whole upload, and the SDK only logs a warning, so the
  *   catalog shows none of the app's schemas. One finding per oversized type, and one per app (subject
  *   `events.publishes`) for an oversized upload.
+ * - `events-without-database`: the manifest declares events (`events.publishes` or `events.subscribes`)
+ *   while `database.engine` is `"none"` and `DATABASE_URL` isn't a declared secret. `@asafarim/events`
+ *   keeps both ends in the app's own Postgres: `publish(tx, …)` writes an outbox row in the caller's
+ *   transaction (the relay sends it from there), and `subscribe` inserts the inbox row and runs the
+ *   handler in one transaction. The platform hands an app `DATABASE_URL` only for `engine: "postgres"`,
+ *   so the app has no outbox or inbox and none of its events flow. One finding per app, subject
+ *   `events`, pointing at the manifest. An app already reported as `database-not-declared` is skipped:
+ *   the fix is the same.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -255,6 +263,7 @@ export const FINDING_KINDS = [
   "route-permissions-stacked",
   "subscription-declared-twice",
   "event-schema-too-large",
+  "events-without-database",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];
@@ -1597,6 +1606,30 @@ export function reviewApp(
       subject: `subscription: ${type}`,
       file: rel(path.join(appDir, MANIFEST_FILE)),
       message: `events.subscribes lists ${type} ${paths.length} times (${distinct.length > 1 ? `handlers ${joinNames(distinct)}` : `each with the handler ${distinct[0]}`}), but core-api keeps one subscription per app and event type, so registering the app fails and it can't be installed or upgraded (keep one subscription for the type, with one handler)`,
+    });
+  }
+
+  // 35. Events need the app's own database: the outbox and the inbox are tables in it.
+  const publishes = manifest.events?.publishes ?? [];
+  const subscribes = manifest.events?.subscribes ?? [];
+  if (
+    (publishes.length > 0 || subscribes.length > 0) &&
+    manifest.database.engine === "none" &&
+    !(manifest.secrets ?? []).includes("DATABASE_URL") &&
+    !findings.some((f) => f.kind === "database-not-declared")
+  ) {
+    const declared = [
+      ...(publishes.length > 0 ? [`publishes ${publishes.length} event type${publishes.length === 1 ? "" : "s"}`] : []),
+      ...(subscribes.length > 0
+        ? [`subscribes to ${subscribes.length} event type${subscribes.length === 1 ? "" : "s"}`]
+        : []),
+    ].join(" and ");
+    findings.push({
+      app,
+      kind: "events-without-database",
+      subject: "events",
+      file: rel(path.join(appDir, MANIFEST_FILE)),
+      message: `the manifest ${declared}, but says database.engine: "none"; @asafarim/events writes the outbox and inbox rows in the app's own Postgres transaction, and the platform provisions no database, so none of the app's events flow (declare database.engine: "postgres" with its migrations, or list DATABASE_URL in secrets for a database the app brings itself)`,
     });
   }
 
