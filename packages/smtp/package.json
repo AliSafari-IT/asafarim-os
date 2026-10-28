@@ -1,0 +1,29 @@
+{
+  "name": "@asafarim/smtp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ASafariM OS's dependency-free SMTP client (RFC 5321, plain text): TLS or STARTTLS required, certificates always verified, AUTH only over TLS, a deadline on every step, no TLS only for a loopback host. Used by identity (sign-in codes) and Flow's email connector.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.2",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

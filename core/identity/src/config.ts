@@ -4,13 +4,13 @@
  * client config, which names env vars for client secrets instead of holding them.
  */
 import { readFileSync } from "node:fs";
+import type { SmtpConfig, SmtpSecurity } from "@asafarim/smtp";
 import { importJWK, type CryptoKey, type JWK, type KeyObject } from "jose";
 import { appLinks, loadClients, type AppLink, type ClientConfigFile, type OidcClient } from "./clients.ts";
 import { normalizeEmail } from "./email.ts";
 import type { GoogleConfig } from "./google.ts";
 import { isE164, normalizePhone, parsePrefixes } from "./phone.ts";
 import type { TwilioConfig } from "./sms.ts";
-import type { SmtpConfig, SmtpSecurity } from "./smtp.ts";
 import type { Identity } from "./store.ts";
 
 /** IDENTITY_LOGIN_METHOD=hub (the default): login delegated to Hub (ADR 0002, Addendum A). */
@@ -38,7 +38,7 @@ export interface LocalLoginConfig {
   /** "Continue with Google", when on (IDENTITY_GOOGLE_CLIENT_ID / _SECRET). */
   google: GoogleConfig | null;
   email: {
-    mailer: { kind: "smtp"; smtp: Omit<SmtpConfig, "heloName"> } | { kind: "dev-log" };
+    mailer: { kind: "smtp"; smtp: Omit<SmtpConfig, "heloName"> & { from: string } } | { kind: "dev-log" };
     dailyLimit: number;
   } | null;
   sms: {
