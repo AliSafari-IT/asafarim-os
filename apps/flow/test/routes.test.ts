@@ -39,6 +39,7 @@ const ACTIONS: Record<string, string | null> = {
   setWorkflowStatusAction: "flow.workflows.write",
   approveAction: "flow.approvals.decide",
   rejectAction: "flow.approvals.decide",
+  runNowAction: "flow.runs.start",
   createCredentialAction: "flow.credentials.write",
   rotateCredentialAction: "flow.credentials.write",
   deleteCredentialAction: "flow.credentials.write",
@@ -48,6 +49,16 @@ const ACTIONS: Record<string, string | null> = {
 };
 /** Actions that answer their form (useActionState) instead of redirecting: (state, formData). */
 const STATE_ACTIONS = new Set(["createCredentialAction", "rotateCredentialAction"]);
+/** The builder's server functions (PR 2.6 calls them): they answer with a result, not a redirect. */
+const DRAFT_FUNCTIONS: Record<
+  string,
+  { engine: string; call: (fn: (...a: unknown[]) => Promise<unknown>) => Promise<unknown> }
+> = {
+  saveDraft: { engine: "saveDraft", call: (fn) => fn("my-flow", { version: 2, key: "my-flow" }) },
+  publishDraft: { engine: "publishDraft", call: (fn) => fn("my-flow") },
+  testDraft: { engine: "startDraftRun", call: (fn) => fn("my-flow", {}, true) },
+};
+
 /** Pages that ask for more than flow.read. */
 const PAGE_PERMISSION: Record<string, string> = {
   "approvals/page.tsx": "flow.approvals.decide",
@@ -116,6 +127,10 @@ vi.mock("@/lib/db", () => {
       setWorkflowStatus: record("setWorkflowStatus"),
       approve: record("approve"),
       reject: record("reject"),
+      startRun: record("startRun"),
+      saveDraft: record("saveDraft"),
+      publishDraft: record("publishDraft"),
+      startDraftRun: record("startDraftRun"),
     },
   };
 });
@@ -230,7 +245,7 @@ describe("the routes on disk", () => {
     const exported = Object.entries(mod)
       .filter(([, fn]) => typeof fn === "function")
       .map(([name]) => name);
-    expect(exported.sort()).toEqual(Object.keys(ACTIONS).sort());
+    expect(exported.sort()).toEqual([...Object.keys(ACTIONS), ...Object.keys(DRAFT_FUNCTIONS)].sort());
   });
 });
 
@@ -321,6 +336,30 @@ describe("server actions", () => {
   });
 });
 
+describe("the builder's server functions (flow.workflows.write)", () => {
+  it.each(Object.entries(DRAFT_FUNCTIONS))(
+    "%s without it: refused, naming it; the engine isn't called",
+    async (name, d) => {
+      who.subject = "dev-viewer";
+      who.permissions = ["flow.read", "flow.runs.start"];
+      const mod = await load<Record<string, (...a: unknown[]) => Promise<unknown>>>("actions.ts");
+      expect(await d.call(mod[name]!)).toEqual({ ok: false, error: "forbidden", permission: "flow.workflows.write" });
+      expect(calls.engine).toEqual([]);
+    },
+  );
+
+  it.each(Object.entries(DRAFT_FUNCTIONS))(
+    "%s with it: the engine does it, the audits stay inside",
+    async (name, d) => {
+      who.subject = "dev-owner";
+      who.permissions = ["flow.read", "flow.workflows.write"];
+      const mod = await load<Record<string, (...a: unknown[]) => Promise<unknown>>>("actions.ts");
+      expect(await d.call(mod[name]!)).toEqual({ ok: true });
+      expect(calls.engine).toEqual([d.engine]);
+    },
+  );
+});
+
 describe("the decisions", () => {
   it("an approval id that isn't one goes back to Approvals, before anything else", async () => {
     who.subject = "dev-approver";
@@ -331,5 +370,28 @@ describe("the decisions", () => {
       expect(stop).toMatchObject({ kind: "redirect", to: "/approvals" });
     }
     expect(calls.engine).toEqual([]);
+  });
+});
+
+describe("Run now under the kill switch", () => {
+  it("startRun's paused_all comes back to the Workflows page with its own message", async () => {
+    who.subject = "dev-owner";
+    who.permissions = ["flow.read", "flow.runs.start"];
+    const { engine } = (await import("@/lib/db")) as unknown as {
+      engine: { startRun: (...a: unknown[]) => Promise<unknown> };
+    };
+    const startRun = engine.startRun;
+    engine.startRun = async () => ({ ok: false, error: "paused_all", audits: [] });
+    try {
+      const mod = await load<Record<string, (f: FormData) => Promise<void>>>("actions.ts");
+      const stop = await interruptOf(() => mod.runNowAction!(form({ workflow: "echo-flow" })));
+      expect(stop).toMatchObject({ kind: "redirect", to: "/workflows?error=paused_all" });
+    } finally {
+      engine.startRun = startRun;
+    }
+    const { ErrorNotice } = await import("@/components/Notice");
+    expect(JSON.stringify(ErrorNotice({ error: "paused_all" }))).toContain(
+      "All workflows are paused. Resume them in Settings to run this one.",
+    );
   });
 });

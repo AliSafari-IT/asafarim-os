@@ -15,7 +15,7 @@ export async function register() {
   const { getPlatform } = await import("./lib/platform");
   getPlatform();
   if (process.env.DATABASE_URL) {
-    const [{ db, engine, startEventRelay, wakeRelay }, { startWorkers }, { log }] = await Promise.all([
+    const [{ afterCommit, db, engine, startEventRelay, wakeRelay }, { startWorkers }, { log }] = await Promise.all([
       import("./lib/db"),
       import("./lib/engine/workers"),
       import("./lib/log"),
@@ -23,7 +23,7 @@ export async function register() {
     // Migrate and seed now rather than on the first request; a failure is retried on the next use.
     db().catch((err: unknown) => log.warn("db.prepare_failed", { error: (err as Error).message }));
     startEventRelay();
-    startWorkers({ pool: db, engine, wake: wakeRelay });
+    afterCommit(startWorkers({ pool: db, engine, wake: wakeRelay }).kick);
   } else {
     // Production before `admin.sh install flow` gives it a database: pages and health only, no workflow runs.
     const { log } = await import("./lib/log");

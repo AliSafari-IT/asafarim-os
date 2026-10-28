@@ -4,7 +4,7 @@
  * The Postgres store is covered by test/flow.integration.test.ts.
  */
 import type { ApprovalRow, FlowStore, RunRow, StepRow, VersionRow, WorkflowRow } from "../lib/engine/store";
-import type { WorkflowDefinition } from "../lib/workflow/definition";
+import { triggerOf, type AnyWorkflowDefinition } from "../lib/workflow/definition";
 
 export interface OutboxRow {
   id: string;
@@ -40,6 +40,32 @@ export function memoryDb() {
   };
 
   const store: FlowStore = {
+    async workflow(key) {
+      const w = workflows.find((x) => x.key === key);
+      return w ? { ...w } : undefined;
+    },
+    async createWorkflow(w) {
+      let found = workflows.find((x) => x.key === w.key);
+      if (!found) {
+        found = { ...w, status: "active", draftDefinition: null, draftUpdatedAt: null, draftUpdatedBy: null };
+        workflows.push(found);
+      }
+      return { ...found };
+    },
+    async setDraft(id, draft) {
+      const w = workflows.find((x) => x.id === id)!;
+      w.draftDefinition = draft ? structuredClone(draft.definition) : null;
+      w.draftUpdatedAt = draft?.at ?? null;
+      w.draftUpdatedBy = draft?.by ?? null;
+    },
+    async currentVersion(workflowId) {
+      return versions.filter((v) => v.workflowId === workflowId).sort((a, b) => b.version - a.version)[0];
+    },
+    async insertVersion(v) {
+      if (versions.some((x) => x.workflowId === v.workflowId && x.version === v.version))
+        throw new Error("duplicate (workflow_id, version)");
+      versions.push({ ...v });
+    },
     async triggeredBy(eventType) {
       return workflows
         .filter((w) => w.status === "active")
@@ -47,7 +73,10 @@ export function memoryDb() {
           workflow: w,
           version: versions.filter((v) => v.workflowId === w.id).sort((a, b) => b.version - a.version)[0]!,
         }))
-        .filter(({ version }) => version?.definition.trigger.event === eventType);
+        .filter(({ version }) => {
+          const t = version ? triggerOf(version.definition) : undefined;
+          return t?.type === "event" && t.event === eventType;
+        });
     },
     async createRun(run) {
       if ([...runs.values()].some((r) => r.triggerEventId === run.triggerEventId)) return null;
@@ -107,6 +136,17 @@ export function memoryDb() {
       }
       return undefined;
     },
+    async claimDueStep(now) {
+      for (const r of runs.values()) {
+        if (r.status !== "running" || lockedElsewhere.has(r.id)) continue;
+        const due = steps.some(
+          (s) =>
+            s.runId === r.id && (s.status === "pending" || s.status === "running") && s.timeoutAt && s.timeoutAt <= now,
+        );
+        if (due) return r.id;
+      }
+      return undefined;
+    },
     async setWorkflowStatus(key, status) {
       const w = workflows.find((x) => x.key === key);
       if (!w) return undefined;
@@ -127,10 +167,20 @@ export function memoryDb() {
     lockedElsewhere,
     settings,
     /** A workflow with one version (or a new version of an existing workflow). */
-    publish(definition: WorkflowDefinition, status: WorkflowRow["status"] = "active") {
+    workflows,
+    versions,
+    publish(definition: AnyWorkflowDefinition, status: WorkflowRow["status"] = "active") {
       let w = workflows.find((x) => x.key === definition.key);
       if (!w) {
-        w = { id: `wf-${++n}`, key: definition.key, name: definition.key, status };
+        w = {
+          id: `wf-${++n}`,
+          key: definition.key,
+          name: definition.key,
+          status,
+          draftDefinition: null,
+          draftUpdatedAt: null,
+          draftUpdatedBy: null,
+        };
         workflows.push(w);
       }
       const version = versions.filter((v) => v.workflowId === w.id).length + 1;

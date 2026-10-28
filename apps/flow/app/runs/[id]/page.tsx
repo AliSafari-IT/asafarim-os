@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { at, RUN_ID, took } from "@/lib/format";
 import { pageAccess } from "@/lib/page";
 import { getRun } from "@/lib/queries";
+import { graphOf } from "@/lib/workflow/graph";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ export default async function RunPage({
   const { error, permission } = await searchParams;
   const found = RUN_ID.test(id) ? await getRun(await db(), id) : undefined;
   if (!found) notFound();
-  const { run, version, steps, approvals } = found;
+  const { run, definition, steps, approvals } = found;
   const canStart = access.permissions.includes("flow.runs.start");
   const canDecide = access.permissions.includes("flow.approvals.decide");
   const reached = new Map(steps.map((s) => [s.stepKey, s]));
@@ -43,7 +44,14 @@ export default async function RunPage({
         <a href="/runs">Runs</a> / <span className="mono">{run.id}</span>
       </p>
       <h1>
-        {run.workflowKey} <span className="muted">v{run.version}</span> <Status value={run.status} />
+        {run.workflowKey} <span className="muted">{run.version === null ? "draft" : `v${run.version}`}</span>{" "}
+        <Status value={run.status} />
+        {run.test ? (
+          <span className="muted" data-testid="test-run">
+            {" "}
+            · {run.dryRun ? "dry run" : "test run"}
+          </span>
+        ) : null}
       </h1>
       <ErrorNotice error={error} permission={permission} />
       <dl className="facts card">
@@ -86,7 +94,7 @@ export default async function RunPage({
 
       <h2>Steps</h2>
       <ol className="steps">
-        {version.definition.steps.map((def) => {
+        {graphOf(definition).list.map((def) => {
           const s = reached.get(def.key);
           return (
             <li key={def.key} className="card step" data-testid="step" data-step={def.key}>
@@ -94,7 +102,7 @@ export default async function RunPage({
                 <strong className="mono">{def.key}</strong> <span className="muted">{def.type}</span>{" "}
                 {s ? <Status value={s.status} /> : <span className="muted">not reached</span>}
               </div>
-              {s && def.type === "approval"
+              {s && def.kind === "approval"
                 ? approvals
                     .filter((a) => a.stepId === s.id)
                     .map((a) => (
@@ -127,7 +135,7 @@ export default async function RunPage({
                     <dd>{took(s.startedAt, s.endedAt)}</dd>
                     {s.timeoutAt && s.status === "waiting" ? (
                       <>
-                        <dt>Times out</dt>
+                        <dt>{def.kind === "wait" ? "Resumes" : "Times out"}</dt>
                         <dd>{at(s.timeoutAt)}</dd>
                       </>
                     ) : null}

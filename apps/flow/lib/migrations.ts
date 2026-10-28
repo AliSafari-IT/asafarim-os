@@ -141,6 +141,35 @@ CREATE TABLE settings (
   updated_by text NOT NULL
 );`,
   },
+  {
+    version: 4,
+    name: "definition v2: drafts, test and dry runs, connector steps",
+    sql: `
+-- What the builder saved and hasn't published (any JSON: a draft may not validate yet).
+ALTER TABLE workflows
+  ADD COLUMN draft_definition jsonb,
+  ADD COLUMN draft_updated_at timestamptz,
+  ADD COLUMN draft_updated_by text;
+
+-- A test run of a draft isn't pinned to a version: it carries the definition it runs.
+ALTER TABLE workflow_runs
+  ADD COLUMN workflow_id text REFERENCES workflows (id),
+  ADD COLUMN draft_definition jsonb,
+  ADD COLUMN test boolean NOT NULL DEFAULT false,
+  ADD COLUMN dry_run boolean NOT NULL DEFAULT false,
+  ALTER COLUMN version_id DROP NOT NULL;
+UPDATE workflow_runs r SET workflow_id = v.workflow_id FROM workflow_versions v WHERE v.id = r.version_id;
+ALTER TABLE workflow_runs
+  ALTER COLUMN workflow_id SET NOT NULL,
+  ADD CONSTRAINT workflow_runs_dry_run_is_test CHECK (test OR NOT dry_run),
+  ADD CONSTRAINT workflow_runs_pinned CHECK ((version_id IS NULL) = (draft_definition IS NOT NULL)),
+  ADD CONSTRAINT workflow_runs_draft_is_test CHECK (version_id IS NOT NULL OR test);
+CREATE INDEX workflow_runs_workflow ON workflow_runs (workflow_id, started_at DESC);
+
+-- A connector step: the retries after a retryable failure; due when pending, lease when running.
+ALTER TABLE workflow_run_steps ADD COLUMN auto_retries integer NOT NULL DEFAULT 0;
+CREATE INDEX workflow_run_steps_due ON workflow_run_steps (timeout_at) WHERE status IN ('pending', 'running');`,
+  },
 ];
 
 /** Run the migrations not applied yet, in one transaction under an advisory lock. */

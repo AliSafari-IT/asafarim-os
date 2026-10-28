@@ -22,14 +22,19 @@ async function rows(tx: Tx, text: string, values: unknown[] = []): Promise<Row[]
 
 const date = (v: unknown) => (v === null || v === undefined ? null : (v as Date));
 
+/** A stored definition: published (or a test run's), so it validated once; a connector gone since isn't a reason to refuse it. */
+function storedDefinition(value: unknown, what: string) {
+  const parsed = parseDefinition(value, { connectors: false });
+  if (!parsed.ok) throw new Error(`${what} has an invalid definition: ${parsed.problems[0]}`);
+  return parsed.definition;
+}
+
 export function versionFrom(r: Row): VersionRow {
-  const parsed = parseDefinition(r.definition);
-  if (!parsed.ok) throw new Error(`workflow version ${String(r.id)} has an invalid definition: ${parsed.problems[0]}`);
   return {
     id: r.id as string,
     workflowId: r.workflow_id as string,
     version: r.version as number,
-    definition: parsed.definition,
+    definition: storedDefinition(r.definition, `workflow version ${String(r.id)}`),
     publishedAt: r.published_at as Date,
   };
 }
@@ -37,7 +42,11 @@ export function versionFrom(r: Row): VersionRow {
 export function runFrom(r: Row): RunRow {
   return {
     id: r.id as string,
-    versionId: r.version_id as string,
+    workflowId: r.workflow_id as string,
+    versionId: (r.version_id as string | null) ?? null,
+    draftDefinition: r.draft_definition ? storedDefinition(r.draft_definition, `run ${String(r.id)}`) : null,
+    test: r.test === true,
+    dryRun: r.dry_run === true,
     triggerEventId: r.trigger_event_id as string,
     trigger: r.trigger as Record<string, unknown>,
     status: r.status as RunRow["status"],
@@ -58,6 +67,7 @@ export function stepFrom(r: Row): StepRow {
     input: r.input ?? null,
     output: r.output ?? null,
     attempts: r.attempts as number,
+    autoRetries: (r.auto_retries as number | undefined) ?? 0,
     startedAt: date(r.started_at),
     endedAt: date(r.ended_at),
     timeoutAt: date(r.timeout_at),
@@ -82,11 +92,14 @@ export function approvalFrom(r: Row): ApprovalRow {
   };
 }
 
-const workflowFrom = (r: Row): WorkflowRow => ({
+export const workflowFrom = (r: Row): WorkflowRow => ({
   id: r.id as string,
   key: r.key as string,
   name: r.name as string,
   status: r.status as WorkflowStatus,
+  draftDefinition: r.draft_definition ?? null,
+  draftUpdatedAt: date(r.draft_updated_at),
+  draftUpdatedBy: (r.draft_updated_by as string | null) ?? null,
 });
 
 const RUN_COLUMNS: Record<keyof RunPatch, string> = { status: "status", endedAt: "ended_at", errorCode: "error_code" };
@@ -97,6 +110,7 @@ const STEP_COLUMNS: Record<keyof StepPatch, string> = {
   input: "input",
   output: "output",
   attempts: "attempts",
+  autoRetries: "auto_retries",
   startedAt: "started_at",
   endedAt: "ended_at",
   timeoutAt: "timeout_at",
@@ -128,6 +142,39 @@ async function update(tx: Tx, table: string, columns: Record<string, string>, id
 
 export function pgStore(tx: Tx): FlowStore {
   return {
+    async workflow(key, opts) {
+      const [r] = await rows(tx, `SELECT * FROM workflows WHERE key = $1${opts?.lock ? " FOR UPDATE" : ""}`, [key]);
+      return r ? workflowFrom(r) : undefined;
+    },
+    async createWorkflow(w) {
+      await tx.query("INSERT INTO workflows (id, key, name) VALUES ($1, $2, $3) ON CONFLICT (key) DO NOTHING", [
+        w.id,
+        w.key,
+        w.name,
+      ]);
+      const [r] = await rows(tx, "SELECT * FROM workflows WHERE key = $1 FOR UPDATE", [w.key]);
+      return workflowFrom(r!);
+    },
+    async setDraft(workflowId, draft) {
+      await tx.query(
+        "UPDATE workflows SET draft_definition = $2, draft_updated_at = $3, draft_updated_by = $4 WHERE id = $1",
+        [workflowId, draft ? JSON.stringify(draft.definition) : null, draft?.at ?? null, draft?.by ?? null],
+      );
+    },
+    async currentVersion(workflowId) {
+      const [r] = await rows(
+        tx,
+        "SELECT * FROM workflow_versions WHERE workflow_id = $1 ORDER BY version DESC LIMIT 1",
+        [workflowId],
+      );
+      return r ? versionFrom(r) : undefined;
+    },
+    async insertVersion(v) {
+      await tx.query(
+        "INSERT INTO workflow_versions (id, workflow_id, version, definition, published_at) VALUES ($1, $2, $3, $4, $5)",
+        [v.id, v.workflowId, v.version, JSON.stringify(v.definition), v.publishedAt],
+      );
+    },
     async triggeredBy(eventType) {
       const found = await rows(
         tx,
@@ -146,10 +193,22 @@ export function pgStore(tx: Tx): FlowStore {
     async createRun(run) {
       const [r] = await rows(
         tx,
-        `INSERT INTO workflow_runs (id, version_id, trigger_event_id, trigger, status, started_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO workflow_runs (id, workflow_id, version_id, draft_definition, test, dry_run, trigger_event_id,
+           trigger, status, started_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (trigger_event_id) DO NOTHING RETURNING *`,
-        [run.id, run.versionId, run.triggerEventId, JSON.stringify(run.trigger), run.status, run.startedAt],
+        [
+          run.id,
+          run.workflowId,
+          run.versionId,
+          run.draftDefinition === null ? null : JSON.stringify(run.draftDefinition),
+          run.test,
+          run.dryRun,
+          run.triggerEventId,
+          JSON.stringify(run.trigger),
+          run.status,
+          run.startedAt,
+        ],
       );
       return r ? runFrom(r) : null;
     },
@@ -176,8 +235,8 @@ export function pgStore(tx: Tx): FlowStore {
     async insertStep(s) {
       await tx.query(
         `INSERT INTO workflow_run_steps (id, run_id, step_key, status, request_event_id, outcome_event_id, input, output,
-           attempts, started_at, ended_at, timeout_at, error_code, error_message)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+           attempts, started_at, ended_at, timeout_at, error_code, error_message, auto_retries)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
         [
           s.id,
           s.runId,
@@ -193,6 +252,7 @@ export function pgStore(tx: Tx): FlowStore {
           s.timeoutAt,
           s.errorCode,
           s.errorMessage,
+          s.autoRetries,
         ],
       );
     },
@@ -236,6 +296,20 @@ export function pgStore(tx: Tx): FlowStore {
                           WHERE s.run_id = r.id AND s.status = 'waiting' AND s.timeout_at <= $1)
                  OR EXISTS (SELECT 1 FROM approvals a
                              WHERE a.run_id = r.id AND a.status = 'pending' AND a.deadline <= $1))
+          ORDER BY r.started_at
+          LIMIT 1
+          FOR UPDATE OF r SKIP LOCKED`,
+        [now],
+      );
+      return r?.id as string | undefined;
+    },
+    async claimDueStep(now) {
+      const [r] = await rows(
+        tx,
+        `SELECT r.id FROM workflow_runs r
+          WHERE r.status = 'running'
+            AND EXISTS (SELECT 1 FROM workflow_run_steps s
+                         WHERE s.run_id = r.id AND s.status IN ('pending', 'running') AND s.timeout_at <= $1)
           ORDER BY r.started_at
           LIMIT 1
           FOR UPDATE OF r SKIP LOCKED`,

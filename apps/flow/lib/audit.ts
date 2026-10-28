@@ -14,6 +14,8 @@ export type AuditAction =
   | "flow.approval.decided"
   | "flow.workflow.paused"
   | "flow.workflow.resumed"
+  | "flow.workflow.draft_saved"
+  | "flow.workflow.published"
   /** A trigger arrived while Settings `paused_all` was on: no run started. */
   | "flow.run.refused"
   | "flow.all.paused"
@@ -37,6 +39,9 @@ export interface AuditEntry {
   status?: string;
   errorCode?: string;
   attempt?: number;
+  /** A test run, and a dry one (flow.run.started). */
+  test?: boolean;
+  dryRun?: boolean;
   /** A credential's id and kind; never its name, its meta or its secret. */
   credentialId?: string;
   kind?: string;

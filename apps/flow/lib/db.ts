@@ -21,6 +21,7 @@ const globalForDb = globalThis as unknown as {
   flowPool?: pg.Pool;
   flowSchema?: Promise<void>;
   flowRelay?: Relay | null;
+  flowAfterCommit?: () => void;
 };
 
 function pool(): pg.Pool {
@@ -102,6 +103,7 @@ export async function inTransaction<T extends { audits: AuditEntry[] }>(
     await client.query("COMMIT");
     writeAudit(result.audits);
     globalForDb.flowRelay?.wake();
+    globalForDb.flowAfterCommit?.();
     return result;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -111,9 +113,15 @@ export async function inTransaction<T extends { audits: AuditEntry[] }>(
   }
 }
 
-/** The engine on this database: Postgres store, the manifest-checked publisher. */
+/** What runs after each `inTransaction` commit: the workers' kick (a connector step may be due). */
+export function afterCommit(fn: () => void): void {
+  globalForDb.flowAfterCommit = fn;
+}
+
+/** The engine on this database: Postgres store, the manifest-checked publisher; drafts checked against the manifest. */
 export const engine: Engine = createEngine({
   store: pgStore,
+  manifest,
   publish: (tx, type, data, subject) => publisher.publish(tx, type, data, { subject }),
   newId: () => ulid(),
   log,

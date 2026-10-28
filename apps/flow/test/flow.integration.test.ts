@@ -10,7 +10,10 @@
  *  4. the sweeper times a run out, skipping one another connection holds (FOR UPDATE SKIP LOCKED);
  *     retry publishes a new request; retention clears old payloads; versions are immutable;
  *  5. the approval: Docs' draft opens a pending approval; approve (with edits) publishes
- *     flow.issue.approved.v1 in the same transaction; reject, expiry (the sweeper) and cancel.
+ *     flow.issue.approved.v1 in the same transaction; reject, expiry (the sweeper) and cancel;
+ *  6. definition v2: a draft saved, published as version 2 and run by hand, `manual → condition →
+ *     test.echo → end`, the connector called by the worker (`runDueConnectors`); a crashed call claimed
+ *     again, skipping a run another connection holds; a wait resumed by the sweeper; a dry run.
  *
  * Needs FLOW_TEST_ADMIN_URL (or EVENTS_TEST_ADMIN_URL): a superuser URL on a DEV Postgres. Skipped
  * without it. It uses a throwaway database, dropped afterwards. No bus: the relay isn't started, so
@@ -28,8 +31,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // Types only: lib/db is imported dynamically, after DATABASE_URL points at the throwaway database.
 import type * as FlowDb from "../lib/db";
 import type * as Workers from "../lib/engine/workers";
+import type { AuditEntry } from "../lib/audit";
 import { MIGRATIONS } from "../lib/migrations";
 import type * as Queries from "../lib/queries";
+import { echo, registerEcho } from "./echo-connector";
+import { clone, ECHO_FLOW } from "./v2-fixtures";
 
 const ADMIN_URL = process.env.FLOW_TEST_ADMIN_URL ?? process.env.EVENTS_TEST_ADMIN_URL;
 const dbName = `flow_test_${Date.now().toString(36)}`;
@@ -104,6 +110,7 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
     q("SELECT id, type, envelope FROM asafarim_outbox WHERE envelope ->> 'subject' = $1 ORDER BY seq", [runId]);
 
   beforeAll(async () => {
+    registerEcho();
     admin = new pg.Client({ connectionString: ADMIN_URL });
     await admin.connect();
     await admin.query(`CREATE DATABASE ${dbName}`);
@@ -368,7 +375,7 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
     expect(o.waiting.every((r) => r.status === "waiting")).toBe(true);
     expect(o.failures.length).toBeGreaterThanOrEqual(1);
     const one = await queries.getRun(pool, shown[0]!.id);
-    expect(one?.version.definition.key).toBe("docs-note-to-issue");
+    expect(one?.definition.key).toBe("docs-note-to-issue");
     expect(one?.steps.length).toBeGreaterThan(0);
     expect(await queries.listWorkflows(pool)).toMatchObject([
       { key: "docs-note-to-issue", status: "active", versions: 1 },
@@ -390,5 +397,187 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
       )
     )[0];
     expect(recent.input).not.toBeNull();
+  });
+
+  describe("definition v2", () => {
+    const tx = <T extends { audits: AuditEntry[] }>(fn: (c: pg.PoolClient) => Promise<T>) =>
+      flow.inTransaction<T>(pool, fn);
+
+    it("a draft is saved, refused while invalid, published as a new version; Run now runs manual → condition → test.echo → end", async () => {
+      echo.reset();
+      const bad = clone(ECHO_FLOW) as unknown as { nodes: Record<string, unknown>[] };
+      bad.nodes[1]!.input = { text: "{{steps.done.output}}" };
+      const saved = await tx((c) =>
+        flow.engine.saveDraft(c, { workflowKey: "echo-flow", name: "Echo", definition: bad, actor: "dev-owner" }),
+      );
+      expect(saved).toMatchObject({
+        ok: true,
+        problems: [
+          {
+            node: "shout",
+            path: "input.text",
+            message: 'reads "done", which isn\'t upstream of this node on every path',
+          },
+        ],
+      });
+      expect(
+        await q(
+          "SELECT name, draft_updated_by, draft_definition ->> 'key' AS key FROM workflows WHERE key = 'echo-flow'",
+        ),
+      ).toEqual([{ name: "Echo", draft_updated_by: "dev-owner", key: "echo-flow" }]);
+      expect(
+        await tx((c) => flow.engine.publishDraft(c, { workflowKey: "echo-flow", actor: "dev-owner" })),
+      ).toMatchObject({
+        ok: false,
+        error: "invalid_definition",
+      });
+      await tx((c) =>
+        flow.engine.saveDraft(c, { workflowKey: "echo-flow", definition: ECHO_FLOW, actor: "dev-owner" }),
+      );
+      expect(
+        await tx((c) => flow.engine.publishDraft(c, { workflowKey: "echo-flow", actor: "dev-owner" })),
+      ).toMatchObject({
+        ok: true,
+        version: 1,
+      });
+      expect(await q("SELECT draft_definition FROM workflows WHERE key = 'echo-flow'")).toEqual([
+        { draft_definition: null },
+      ]);
+      expect((await queries.listWorkflows(pool)).map((w) => w.key)).toEqual(["docs-note-to-issue", "echo-flow"]);
+
+      const started = await tx((c) =>
+        flow.engine.startRun(c, {
+          workflowKey: "echo-flow",
+          trigger: "manual",
+          data: { name: "Ada", loud: true },
+          actor: "dev-owner",
+        }),
+      );
+      if (!started.ok) throw new Error(started.error);
+      const runId = started.runId;
+      expect((await stepsOf(runId)).map((s) => [s.step_key, s.status])).toEqual([
+        ["check", "succeeded"],
+        ["shout", "pending"],
+      ]);
+      expect(await workers.runDueConnectors(pool, flow.engine)).toBe(1);
+      expect(await workers.runDueConnectors(pool, flow.engine)).toBe(0);
+      expect(echo.calls).toEqual([expect.objectContaining({ input: { text: "Hello Ada!" } })]);
+      const steps = await stepsOf(runId);
+      expect(steps.map((s) => [s.step_key, s.status])).toEqual([
+        ["check", "succeeded"],
+        ["shout", "succeeded"],
+        ["done", "succeeded"],
+      ]);
+      expect(steps[1]).toMatchObject({
+        attempts: 1,
+        auto_retries: 0,
+        output: { text: "Hello Ada!" },
+        timeout_at: null,
+      });
+      expect(
+        (
+          await q("SELECT status, test, dry_run, version_id IS NOT NULL AS pinned FROM workflow_runs WHERE id = $1", [
+            runId,
+          ])
+        )[0],
+      ).toEqual({
+        status: "succeeded",
+        test: false,
+        dry_run: false,
+        pinned: true,
+      });
+      const one = await queries.getRun(pool, runId);
+      expect(one).toMatchObject({
+        run: { workflowKey: "echo-flow", version: 1 },
+        definition: { version: 2, key: "echo-flow" },
+      });
+    });
+
+    it("a dry run of the draft carries its definition and calls nothing", async () => {
+      echo.reset();
+      await tx((c) =>
+        flow.engine.saveDraft(c, { workflowKey: "echo-flow", definition: ECHO_FLOW, actor: "dev-owner" }),
+      );
+      const r = await tx((c) =>
+        flow.engine.startDraftRun(c, {
+          workflowKey: "echo-flow",
+          data: { name: "Bo", loud: true },
+          dryRun: true,
+          actor: "dev-owner",
+        }),
+      );
+      if (!r.ok) throw new Error(r.error);
+      expect(await workers.runDueConnectors(pool, flow.engine)).toBe(0);
+      expect(echo.calls).toEqual([]);
+      expect((await stepsOf(r.runId))[1]).toMatchObject({
+        status: "succeeded",
+        output: { text: "(simulated) Hello Bo!" },
+      });
+      const run = await queries.getRun(pool, r.runId);
+      expect(run?.run).toMatchObject({ status: "succeeded", test: true, dryRun: true, version: null, versionId: null });
+      expect(run?.definition).toMatchObject({ key: "echo-flow" });
+      // Neither a dry run that isn't a test run nor a run with no version and no definition gets in.
+      await expect(q("UPDATE workflow_runs SET test = false WHERE id = $1", [r.runId])).rejects.toThrow(
+        /workflow_runs_/,
+      );
+      await expect(q("UPDATE workflow_runs SET draft_definition = NULL WHERE id = $1", [r.runId])).rejects.toThrow(
+        /workflow_runs_pinned/,
+      );
+    });
+
+    it("a crashed call is claimed again once its lease ran out, skipping a run another connection holds", async () => {
+      echo.reset();
+      const start = () =>
+        tx((c) =>
+          flow.engine.startRun(c, { workflowKey: "echo-flow", trigger: "manual", data: { name: "Cy", loud: true } }),
+        );
+      const [a, b] = [await start(), await start()];
+      if (!a.ok || !b.ok) throw new Error("not started");
+      const ids = [a.runId, b.runId];
+      // Both called once by a process that died: running, past their lease.
+      await q(
+        "UPDATE workflow_run_steps SET status = 'running', attempts = 1, timeout_at = now() - interval '1 second' WHERE run_id = ANY($1) AND step_key = 'shout'",
+        [ids],
+      );
+      const other = await pool.connect();
+      try {
+        await other.query("BEGIN");
+        await other.query("SELECT id FROM workflow_runs WHERE id = $1 FOR UPDATE", [ids[0]]);
+        expect(await workers.runDueConnectors(pool, flow.engine)).toBe(1);
+        expect((await q("SELECT status FROM workflow_runs WHERE id = $1", [ids[0]]))[0].status).toBe("running");
+        await other.query("COMMIT");
+      } finally {
+        other.release();
+      }
+      expect(await workers.runDueConnectors(pool, flow.engine)).toBe(1);
+      for (const id of ids) {
+        expect((await stepsOf(id))[1]).toMatchObject({ status: "succeeded", attempts: 2, auto_retries: 1 });
+        expect((await q("SELECT status FROM workflow_runs WHERE id = $1", [id]))[0].status).toBe("succeeded");
+      }
+    });
+
+    it("a wait is resumed by the sweeper", async () => {
+      const waiting = {
+        ...clone(ECHO_FLOW),
+        key: "wait-flow",
+        start: "pause",
+        nodes: [
+          { key: "pause", type: "wait", duration: "PT1H", next: "done" },
+          { key: "done", type: "end" },
+        ],
+      };
+      await tx((c) => flow.engine.saveDraft(c, { workflowKey: "wait-flow", definition: waiting, actor: "dev-owner" }));
+      await tx((c) => flow.engine.publishDraft(c, { workflowKey: "wait-flow", actor: "dev-owner" }));
+      const r = await flow.inTransaction(pool, (c) =>
+        flow.engine.startRun(c, { workflowKey: "wait-flow", trigger: "manual", data: { name: "x" } }),
+      );
+      if (!r.ok) throw new Error(r.error);
+      expect((await q("SELECT status FROM workflow_runs WHERE id = $1", [r.runId]))[0].status).toBe("waiting");
+      await workers.sweepTimeouts(pool, flow.engine);
+      expect((await q("SELECT status FROM workflow_runs WHERE id = $1", [r.runId]))[0].status).toBe("waiting");
+      await q("UPDATE workflow_run_steps SET timeout_at = now() - interval '1 second' WHERE run_id = $1", [r.runId]);
+      expect(await workers.sweepTimeouts(pool, flow.engine)).toBe(1);
+      expect((await q("SELECT status FROM workflow_runs WHERE id = $1", [r.runId]))[0].status).toBe("succeeded");
+    });
   });
 });

@@ -40,7 +40,8 @@ export function RunTable({ runs, empty, testId }: { runs: RunSummary[]; empty: s
                 </a>
               </td>
               <td>
-                {r.workflowKey} <span className="muted">v{r.version}</span>
+                {r.workflowKey} <span className="muted">{r.version === null ? "draft" : `v${r.version}`}</span>
+                {r.test ? <span className="muted"> · {r.dryRun ? "dry run" : "test"}</span> : null}
               </td>
               <td>
                 <Status value={r.status} />
