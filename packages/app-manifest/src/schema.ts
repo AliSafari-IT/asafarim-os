@@ -10,7 +10,12 @@
 import { validRange } from "semver";
 import { z } from "zod";
 
-/** Ids the platform keeps for itself (hosts, namespaces, core services). */
+/**
+ * Ids the platform keeps for itself (hosts, namespaces, core services). `deadletter` is the event
+ * bus's: the shared DEADLETTER stream is on `deadletter.>`, and an app's namespace on the bus is
+ * `<id>.>`, so an app with that id could publish dead letters in any app's name, and its own stream
+ * would overlap DEADLETTER (JetStream refuses to create it).
+ */
 export const RESERVED_APP_IDS = [
   "admin",
   "api",
@@ -20,6 +25,7 @@ export const RESERVED_APP_IDS = [
   "assets",
   "auth",
   "core",
+  "deadletter",
   "gateway",
   "id",
   "identity",

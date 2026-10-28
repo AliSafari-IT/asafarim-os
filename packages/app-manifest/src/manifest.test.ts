@@ -68,6 +68,12 @@ describe("id, version, platform", () => {
     expectProblem({ ...minimal(), id: "core" }, "id", /reserved/);
   });
 
+  it("reserves deadletter, the event bus's dead-letter namespace (deadletter.>)", () => {
+    expectProblem({ ...minimal(), id: "deadletter" }, "id", /reserved/);
+    // Only the exact id: an app whose id merely starts with it has its own namespace (`deadletters.>`).
+    expect(validateManifest({ ...minimal(), id: "deadletters" })).toMatchObject({ ok: true });
+  });
+
   it("refuses a non-semver version and an invalid platform range", () => {
     expectProblem({ ...minimal(), version: "v1.0.0" }, "version", /semver/);
     expectProblem({ ...minimal(), platform: "one point oh" }, "platform", /semver range/);
@@ -296,6 +302,7 @@ describe("helpers and the JSON Schema", () => {
       additionalProperties: boolean;
     };
     expect(schema.properties.id.not.enum).toContain("admin");
+    expect(schema.properties.id.not.enum).toContain("deadletter");
     expect(new RegExp(schema.properties.secrets.items.pattern).test("GITHUB_TOKEN")).toBe(true);
     expect(schema.additionalProperties).toBe(false);
   });

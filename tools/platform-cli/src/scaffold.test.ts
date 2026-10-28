@@ -142,7 +142,7 @@ describe("scaffoldApp", () => {
     expect(tree()).toEqual([]);
   });
 
-  it.each(["admin", "core", "platform", "identity", "www"])("refuses the reserved id %s", (id) => {
+  it.each(["admin", "core", "platform", "identity", "www", "deadletter"])("refuses the reserved id %s", (id) => {
     const result = scaffoldApp(root, { id });
     expect(result).toMatchObject({ ok: false });
     expect(result.lines.join("\n")).toContain("reserved");
