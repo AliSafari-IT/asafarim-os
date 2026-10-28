@@ -18,7 +18,7 @@ import {
   GoogleError,
 } from "../src/google.ts";
 import type { SmsSender } from "../src/sms.ts";
-import type { MailMessage, Mailer } from "../src/smtp.ts";
+import type { MailMessage, Mailer } from "../src/mailer.ts";
 import type {
   AuditEntry,
   AuditRow,
