@@ -6,7 +6,9 @@ FROM node:24-alpine AS build
 WORKDIR /repo
 RUN corepack enable
 COPY . .
+# The workspace packages it imports export dist/ (@asafarim/smtp), or plain files (@asafarim/theme's theme.css).
 RUN pnpm install --frozen-lockfile --filter @asafarim/identity... \
+ && pnpm --filter "@asafarim/identity^..." run build \
  && pnpm --filter @asafarim/identity deploy --prod --legacy /out \
  && rm -rf /out/test /out/scripts
 

@@ -11,6 +11,7 @@
  * every use. Until a code is proved, every answer is the same whether or not the address is known.
  * A signed-in person adds passkeys on /account.
  */
+import { SmtpError } from "@asafarim/smtp";
 import {
   type AuthSession,
   type AuthSessions,
@@ -28,6 +29,7 @@ import { maskEmail, normalizeEmail } from "./email.ts";
 import { type GoogleSignIn, GoogleError, pkcePair } from "./google.ts";
 import { type HttpContext, clientIp, queryValue, readForm, readJson, sendHtml } from "./http.ts";
 import type { Logger } from "./log.ts";
+import type { Mailer } from "./mailer.ts";
 import {
   LIMITS,
   OTP_TTL_SECONDS,
@@ -42,7 +44,6 @@ import {
 import { PASSKEY_JS } from "./passkey-client.ts";
 import { maskPhone, normalizePhone, prefixAllowed } from "./phone.ts";
 import { type SmsSender, SmsError, codeMessage } from "./sms.ts";
-import { type Mailer, MailError } from "./smtp.ts";
 import {
   NOTE_MAX,
   PAGE_CSP,
@@ -214,7 +215,7 @@ export function createSignIn(d: SignInDeps): SignIn {
       try {
         await d.email.mailer.send({ to: address, subject, text });
       } catch (err) {
-        d.log.warn("notify.failed", { reason: err instanceof MailError ? err.reason : "error" });
+        d.log.warn("notify.failed", { reason: err instanceof SmtpError ? err.reason : "error" });
       }
     }
   }
@@ -415,7 +416,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     try {
       await channel.send(identifier, code);
     } catch (err) {
-      const reason = err instanceof SmsError || err instanceof MailError ? err.reason : "error";
+      const reason = err instanceof SmsError || err instanceof SmtpError ? err.reason : "error";
       d.log.error("code.send_failed", { reason: `${via}:${reason}` });
       await audit({ event: "otp.send_failed", method: via, subjectHandle: subject, ipHandle: ip, detail: { reason } });
       const error = "We couldn't send a code right now. Please try again in a few minutes.";
