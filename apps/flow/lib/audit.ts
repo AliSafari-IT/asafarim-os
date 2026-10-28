@@ -15,7 +15,15 @@ export type AuditAction =
   | "flow.workflow.paused"
   | "flow.workflow.resumed"
   | "flow.workflow.draft_saved"
-  | "flow.workflow.published";
+  | "flow.workflow.published"
+  /** A trigger arrived while Settings `paused_all` was on: no run started. */
+  | "flow.run.refused"
+  | "flow.all.paused"
+  | "flow.all.resumed"
+  | "flow.settings.changed"
+  | "flow.credential.created"
+  | "flow.credential.rotated"
+  | "flow.credential.deleted";
 
 export interface AuditEntry {
   action: AuditAction;
@@ -34,6 +42,12 @@ export interface AuditEntry {
   /** A test run, and a dry one (flow.run.started). */
   test?: boolean;
   dryRun?: boolean;
+  /** A credential's id and kind; never its name, its meta or its secret. */
+  credentialId?: string;
+  kind?: string;
+  /** The setting that changed, and how many entries its list holds now (flow.settings.changed). */
+  setting?: string;
+  count?: number;
   /** The subject who did it; absent when the engine did it on its own. */
   actor?: string;
 }

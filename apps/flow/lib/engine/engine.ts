@@ -44,6 +44,7 @@
 import { z } from "zod";
 import type { AuditEntry } from "../audit";
 import { applyEdits, COMMENT_MAX, Draft, type Decision } from "../workflow/approval";
+import { isPausedAll, pausedAllRefusal } from "../settings";
 import { evaluate } from "../workflow/conditions";
 import type { RunContext } from "../workflow/context";
 import {
@@ -110,6 +111,8 @@ export type Refusal =
   | "invalid_input"
   /** startRun: this trigger event started a run already. */
   | "duplicate"
+  /** startRun: Settings `paused_all` is on (only a dry run, which calls nothing, still starts). */
+  | "paused_all"
   /** Drafts: there is none to publish or run. */
   | "no_draft"
   /** Drafts: the definition doesn't validate (or doesn't fit the manifest). */
@@ -494,6 +497,7 @@ export function createEngine(deps: EngineDeps) {
     });
     const trigger = triggerOf(definition);
     if (trigger.type !== opts.trigger) return refuse("wrong_trigger");
+    if (opts.dryRun !== true && (await isPausedAll(c.tx))) return refuse("paused_all");
     if (!isRecord(opts.data)) return refuse("invalid_input", [{ path: "", message: "must be an object" }]);
     if (trigger.type === "manual" || trigger.type === "webhook") {
       const problems = inputProblems(trigger.input, opts.data);
@@ -555,6 +559,7 @@ export function createEngine(deps: EngineDeps) {
       deps.log.warn("flow.trigger.ignored", { eventId: event.id, type: event.type, reason: "data_not_an_object" });
       return [];
     }
+    if (await isPausedAll(tx)) return pausedAllRefusal(deps.log, event);
     const audits: AuditEntry[] = [];
     for (const { workflow } of await deps.store(tx).triggeredBy(event.type)) {
       const r = await startRun(tx, {

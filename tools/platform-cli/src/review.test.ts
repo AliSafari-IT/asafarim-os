@@ -94,6 +94,11 @@ function writeApp(m: Record<string, unknown>) {
   put("apps/shop/app/api/health/route.ts", "export function GET() {}");
 }
 
+/** Writes app code that starts the outbox relay, as an app that publishes events must (`event-relay-not-started`). */
+function writeRelayStart(id = "shop") {
+  put(`apps/${id}/lib/relay.ts`, `startAppRelay({ appId: "${id}", pool });`);
+}
+
 /** Writes a second app `id` (no permissions, its own image) with the given `domains`, and its health route. */
 function writeOtherApp(id: string, domains?: Record<string, unknown>) {
   put(
@@ -341,6 +346,7 @@ describe("helpers", () => {
 
 describe("platform manifest review", () => {
   it("reports nothing for an app whose code matches its manifest", () => {
+    writeRelayStart();
     writeApp(
       withDatabase(
         manifest({
@@ -375,6 +381,7 @@ describe("platform manifest review", () => {
   });
 
   it("reports a missing or broken event schema", () => {
+    writeRelayStart();
     writeApp(
       withDatabase(
         manifest({
@@ -406,6 +413,7 @@ describe("platform manifest review", () => {
   });
 
   it("reports an event schema that doesn't compile as the publisher compiles it (strict JSON Schema 2020-12)", () => {
+    writeRelayStart();
     writeApp(
       withDatabase(
         manifest({
@@ -453,6 +461,7 @@ describe("platform manifest review", () => {
   });
 
   it("reports an event schema larger than core-api's upload limits, per type and for the whole upload", () => {
+    writeRelayStart();
     const at = (n: number) => `shop.order.s${n}.v1`;
     const schemaOf = (size: number) => {
       const base = { type: "object", description: "" };
@@ -509,6 +518,70 @@ describe("platform manifest review", () => {
     // Small schemas: nothing to report.
     for (let i = 0; i < n; i++) put(`apps/shop/events/s${i}.json`, JSON.stringify(schemaOf(1024)));
     expect(kinds()).toEqual([]);
+  }, 30_000); // reviews twice with nine 64 KiB schemas; a busy CI runner can take over the default 5 s
+
+  it("reports an app that publishes events but never starts the outbox relay", () => {
+    writeApp(
+      withDatabase(
+        manifest({
+          events: {
+            publishes: [
+              { type: "shop.order.placed.v1", schema: "./events/placed.json" },
+              { type: "shop.order.paid.v1", schema: "./events/paid.json" },
+            ],
+          },
+        }),
+      ),
+    );
+    put("apps/shop/events/placed.json", JSON.stringify({ type: "object" }));
+    put("apps/shop/events/paid.json", JSON.stringify({ type: "object" }));
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write";
+      await publisher.publish(tx, "shop.order.placed.v1", {}); await publisher.publish(tx, "shop.order.paid.v1", {});`,
+    );
+    // a comment, a test, a longer name or a string that only contains the name don't start the relay
+    put("apps/shop/lib/boot.ts", `// startAppRelay({ appId: "shop", pool });\nrestartRelayLater(); "startRelay soon";`);
+    put("apps/shop/lib/boot.test.ts", `startAppRelay({ appId: "shop", pool });`);
+    // nor does importing or re-exporting a starter without calling it
+    put(
+      "apps/shop/lib/bus.ts",
+      `export { startAppRelay } from "@asafarim/app-sdk/events";\nimport { startRelay } from "@asafarim/events";`,
+    );
+    expect(kinds()).toEqual(["event-relay-not-started events.publishes"]);
+    expect(json().reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "event-relay-not-started",
+      subject: "events.publishes",
+      file: "apps/shop/platform.app.json",
+      message:
+        "the manifest publishes shop.order.placed.v1 and shop.order.paid.v1, but no code starts the outbox relay (startAppRelay from @asafarim/app-sdk/events, or startRelay from @asafarim/events), so published events stay in the app's outbox and never reach the bus or any subscriber (start the relay when the app boots)",
+    });
+    expect(review(["--markdown"]).lines[0]!).toContain("| event-relay-not-started | events.publishes |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // Either starter counts, wherever the app's runtime code calls it, also through a namespace import.
+    put(
+      "apps/shop/app/instrumentation.ts",
+      `import * as events from "@asafarim/events";\nevents.startRelay ({ appId: "shop", pool, servers });`,
+    );
+    expect(kinds()).toEqual([]);
+    rmSync(path.join(root, "apps/shop/app/instrumentation.ts"));
+    writeRelayStart();
+    expect(kinds()).toEqual([]);
+  });
+
+  it("doesn't ask an app that publishes nothing to start the relay", () => {
+    writeApp(
+      withDatabase(
+        manifest({ events: { subscribes: [{ type: "billing.invoice.paid.v1", handler: "/events/paid" }] } }),
+      ),
+    );
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write"; "billing.invoice.paid.v1";`);
+    expect(kinds()).toEqual([]);
+    writeApp(withDatabase(manifest({ events: { publishes: [] } })));
+    expect(kinds()).toEqual([]);
   });
 
   it("reports a permission nothing asks for; a gateway route or a test doesn't count as code, but a route does count", () => {
@@ -550,6 +623,7 @@ describe("platform manifest review", () => {
   });
 
   it("reports an event type the code names in its own namespace that the manifest doesn't publish", () => {
+    writeRelayStart();
     writeApp(
       withDatabase(
         manifest({
@@ -1569,6 +1643,7 @@ describe("platform manifest review", () => {
   });
 
   it("reports a subscription to a type its publisher in this repo doesn't publish", () => {
+    writeRelayStart();
     writeApp(
       withDatabase(
         manifest({
@@ -1737,6 +1812,7 @@ describe("platform manifest review", () => {
 
     put("apps/shop/lib/events.ts", `export const PLACED = "shop.order.placed.v1";`);
     put("apps/shop/app/events/paid/route.ts", `import "@/lib/x";\nexport function POST() {}`);
+    writeRelayStart();
     put("apps/shop/events/placed.json", JSON.stringify({ type: "object" }));
     const publishes = [{ type: "shop.order.placed.v1", schema: "./events/placed.json" }];
     const subscribes = [{ type: "core.app.installed.v1", handler: "/events/paid" }];

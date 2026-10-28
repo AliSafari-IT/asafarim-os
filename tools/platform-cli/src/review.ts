@@ -198,6 +198,13 @@
  *   so the app has no outbox or inbox and none of its events flow. One finding per app, subject
  *   `events`, pointing at the manifest. An app already reported as `database-not-declared` is skipped:
  *   the fix is the same.
+ * - `event-relay-not-started`: the manifest declares `events.publishes`, but no runtime code calls
+ *   `startAppRelay` (`@asafarim/app-sdk/events`) or `startRelay` (`@asafarim/events`), comments and
+ *   string contents ignored (an import or re-export alone starts nothing). Publishing only writes a row
+ *   to the app's outbox in the caller's transaction; the relay is what moves those rows to the bus.
+ *   Without it the events pile up in the outbox with no error, and every subscriber waits for events
+ *   that never arrive. Usually the publisher was added without the boot code that starts the relay.
+ *   One finding per app (subject `events.publishes`).
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -264,6 +271,7 @@ export const FINDING_KINDS = [
   "subscription-declared-twice",
   "event-schema-too-large",
   "events-without-database",
+  "event-relay-not-started",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];
@@ -653,6 +661,17 @@ const SESSION_HANDOFF = /\bcreateSessionHandler\s*\(/;
  * `ASAFARIM_NATS_PASSWORD`, …).
  */
 export const FRAMEWORK_SECRET = /^(?:AUTH|NEXT|OTEL|ASAFARIM)_/;
+
+/**
+ * A call of a function that starts an app's outbox relay: the app SDK's `startAppRelay` or
+ * `@asafarim/events`' own `startRelay`. An import or re-export alone starts nothing.
+ */
+const RELAY_START_CALL = /(?<![\w$])(?:startAppRelay|startRelay)\s*\(/;
+
+/** True when `text` calls a relay starter in code: comments and string contents don't count. */
+export function startsRelay(text: string): boolean {
+  return RELAY_START_CALL.test(blankStrings(stripComments(text)));
+}
 
 /** True when `text` (comments ignored) names `name` as a whole word: `process.env.X`, `env["X"]`, `"X"`. */
 export function mentionsName(text: string, name: string): boolean {
@@ -1630,6 +1649,18 @@ export function reviewApp(
       subject: "events",
       file: rel(path.join(appDir, MANIFEST_FILE)),
       message: `the manifest ${declared}, but says database.engine: "none"; @asafarim/events writes the outbox and inbox rows in the app's own Postgres transaction, and the platform provisions no database, so none of the app's events flow (declare database.engine: "postgres" with its migrations, or list DATABASE_URL in secrets for a database the app brings itself)`,
+    });
+  }
+
+  // 36. Publishing only writes the outbox: the relay moves it to the bus, so a publisher must start it.
+  const outbound = manifest.events?.publishes ?? [];
+  if (outbound.length > 0 && !files.some((f) => startsRelay(f.text))) {
+    findings.push({
+      app,
+      kind: "event-relay-not-started",
+      subject: "events.publishes",
+      file: rel(path.join(appDir, MANIFEST_FILE)),
+      message: `the manifest publishes ${joinNames(outbound.map((e) => e.type))}, but no code starts the outbox relay (startAppRelay from @asafarim/app-sdk/events, or startRelay from @asafarim/events), so published events stay in the app's outbox and never reach the bus or any subscriber (start the relay when the app boots)`,
     });
   }
 

@@ -57,6 +57,7 @@ h1 {
   white-space: pre-wrap;
 }
 input,
+select,
 textarea {
   width: 100%;
   font: inherit;
@@ -336,4 +337,11 @@ textarea[readonly] {
 .markdown .dead-link,
 .markdown .missing-image {
   color: var(--muted);
+}
+
+/* Credentials: a secret shown once wraps instead of overflowing. */
+[data-testid="shown-once"] pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
 }

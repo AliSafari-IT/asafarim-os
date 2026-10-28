@@ -1,14 +1,17 @@
 /**
  * Every page and server action of the app, found on disk: a page added later is checked without anyone
  * remembering to. Not signed in → the 401 sign-in page; signed in without flow.read → 403; the
- * Approvals pages are 403 without flow.approvals.decide, even with flow.read; and each server action
- * asks for its own permission (flow.runs.start, flow.workflows.write, flow.approvals.decide) before it
+ * Approvals pages are 403 without flow.approvals.decide and Credentials without
+ * flow.credentials.write, even with flow.read; and each server action
+ * asks for its own permission (flow.runs.start, flow.workflows.write, flow.approvals.decide,
+ * flow.credentials.write, flow.settings.write) before it
  * changes anything. The database and the engine are stand-ins that record what was asked of them.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { ForbiddenError } from "@asafarim/app-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as Settings from "@/lib/settings";
 
 const APP = path.resolve(import.meta.dirname, "../app");
 const files = readdirSync(APP, { recursive: true })
@@ -37,7 +40,15 @@ const ACTIONS: Record<string, string | null> = {
   approveAction: "flow.approvals.decide",
   rejectAction: "flow.approvals.decide",
   runNowAction: "flow.runs.start",
+  createCredentialAction: "flow.credentials.write",
+  rotateCredentialAction: "flow.credentials.write",
+  deleteCredentialAction: "flow.credentials.write",
+  saveEgressHostsAction: "flow.settings.write",
+  saveEmailRecipientsAction: "flow.settings.write",
+  setPausedAllAction: "flow.settings.write",
 };
+/** Actions that answer their form (useActionState) instead of redirecting: (state, formData). */
+const STATE_ACTIONS = new Set(["createCredentialAction", "rotateCredentialAction"]);
 /** The builder's server functions (PR 2.6 calls them): they answer with a result, not a redirect. */
 const DRAFT_FUNCTIONS: Record<
   string,
@@ -52,6 +63,7 @@ const DRAFT_FUNCTIONS: Record<
 const PAGE_PERMISSION: Record<string, string> = {
   "approvals/page.tsx": "flow.approvals.decide",
   "approvals/[id]/page.tsx": "flow.approvals.decide",
+  "credentials/page.tsx": "flow.credentials.write",
 };
 
 const who = vi.hoisted(() => ({ subject: undefined as string | undefined, permissions: [] as string[] }));
@@ -80,6 +92,7 @@ vi.mock("next/navigation", () => ({
     throw new Interrupt("redirect", to);
   },
 }));
+vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined, set: () => undefined }) }));
 vi.mock("@/lib/auth", () => ({
   auth: async () => (who.subject ? { user: { id: who.subject, name: who.subject } } : null),
@@ -121,6 +134,32 @@ vi.mock("@/lib/db", () => {
     },
   };
 });
+vi.mock("@/lib/credentials/store", () => {
+  const record = (name: string) => async () => {
+    calls.engine.push(name);
+    return { ok: true, id: "x", kind: "webhook-secret", audits: [] };
+  };
+  return {
+    createCredential: record("createCredential"),
+    rotateCredential: record("rotateCredential"),
+    deleteCredential: record("deleteCredential"),
+    listCredentials: async () => [],
+    credentialsAvailable: () => true,
+  };
+});
+vi.mock("@/lib/settings", async (importActual) => {
+  const actual = await importActual<typeof Settings>();
+  const record = (name: string) => async () => {
+    calls.engine.push(name);
+    return { audits: [] };
+  };
+  return {
+    ...actual,
+    getSettings: async () => ({ egressHosts: [], emailRecipients: [], pausedAll: false }),
+    setList: record("setList"),
+    setPausedAll: record("setPausedAll"),
+  };
+});
 vi.mock("@/lib/queries", () => ({
   overview: async () => ({ waiting: [], failures: [], latest: [] }),
   listRuns: async () => [],
@@ -155,7 +194,27 @@ function form(values: Record<string, string>) {
   for (const [k, v] of Object.entries(values)) f.set(k, v);
   return f;
 }
-const FORM = { runId: RUN, approvalId: RUN, workflow: "docs-note-to-issue", status: "paused", title: "T" };
+const FORM = {
+  runId: RUN,
+  approvalId: RUN,
+  credentialId: RUN,
+  workflow: "docs-note-to-issue",
+  status: "paused",
+  title: "T",
+  kind: "webhook-secret",
+  name: "Hook",
+  entries: "hooks.example.com",
+  pausedAll: "on",
+};
+type Action = (...a: unknown[]) => Promise<unknown>;
+/** Run an action the way its form does: a redirect is an Interrupt, a state action's answer is returned. */
+async function runAction(name: string): Promise<{ stop?: Interrupt; answer?: unknown }> {
+  const mod = await load<Record<string, Action>>("actions.ts");
+  if (name === "saveEmailRecipientsAction")
+    return { stop: await interruptOf(() => mod[name]!(form({ ...FORM, entries: "@example.com" }))) };
+  if (STATE_ACTIONS.has(name)) return { answer: await mod[name]!({ status: "idle" }, form(FORM)) };
+  return { stop: await interruptOf(() => mod[name]!(form(FORM))) };
+}
 
 beforeEach(() => {
   who.subject = undefined;
@@ -169,9 +228,11 @@ describe("the routes on disk", () => {
     expect(pages).toEqual([
       "approvals/[id]/page.tsx",
       "approvals/page.tsx",
+      "credentials/page.tsx",
       "page.tsx",
       "runs/[id]/page.tsx",
       "runs/page.tsx",
+      "settings/page.tsx",
       "workflows/page.tsx",
     ]);
     // No API of its own yet: the route files are sign-in plumbing and health.
@@ -245,19 +306,23 @@ describe("server actions", () => {
   it.each(gated)("%s without %s: refused (naming it), the engine isn't called", async (name, permission) => {
     who.subject = "dev-viewer";
     who.permissions = ["flow.read"];
-    const mod = await load<Record<string, (f: FormData) => Promise<void>>>("actions.ts");
-    const stop = await interruptOf(() => mod[name]!(form(FORM)));
-    expect(stop?.kind).toBe("redirect");
-    expect(stop?.to).toContain("error=forbidden");
-    expect(stop?.to).toContain(`permission=${permission}`);
+    const { stop, answer } = await runAction(name);
+    if (STATE_ACTIONS.has(name)) {
+      expect(answer).toEqual({ status: "error", error: "forbidden", permission });
+    } else {
+      expect(stop?.kind).toBe("redirect");
+      expect(stop?.to).toContain("error=forbidden");
+      expect(stop?.to).toContain(`permission=${permission}`);
+    }
     expect(calls.engine).toEqual([]);
   });
 
   it.each(gated)("%s with %s: the engine does it", async (name, permission) => {
     who.subject = "dev-owner";
     who.permissions = ["flow.read", permission];
-    const mod = await load<Record<string, (f: FormData) => Promise<void>>>("actions.ts");
-    expect((await interruptOf(() => mod[name]!(form(FORM))))?.kind).toBe("redirect");
+    const { stop, answer } = await runAction(name);
+    if (STATE_ACTIONS.has(name)) expect(answer).toMatchObject({ status: "done" });
+    else expect(stop?.kind).toBe("redirect");
     expect(calls.engine).toHaveLength(1);
   });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SmtpError, addressOf, buildMessage } from "@asafarim/smtp";
 import { createServer, type Socket } from "node:net";
 import { decodeCbor } from "../src/cbor.ts";
 import { ConfigError, parseLocalLogin } from "../src/config.ts";
@@ -8,7 +9,7 @@ import { maskPhone, normalizePhone, parsePrefixes, prefixAllowed } from "../src/
 import { DevLogSmsSender, SmsError, TwilioSmsSender, codeMessage } from "../src/sms.ts";
 import { FAVICON_SVG, THEME_JS, continuePage, errorPage, loggedOutPage, page, setHomeUrl } from "../src/pages.ts";
 import { PAGE_CSP, accountPage, adminPage, codePage, loginPage } from "../src/sign-in-pages.ts";
-import { MailError, SmtpMailer, addressOf, buildMessage } from "../src/smtp.ts";
+import { SmtpMailer } from "../src/mailer.ts";
 import { encodeCbor } from "./authenticator.ts";
 
 describe("phone numbers", () => {
@@ -157,10 +158,12 @@ describe("CBOR", () => {
 
 describe("SMTP", () => {
   it("builds a message that can't be injected into and that is dot-safe", () => {
-    const m = buildMessage("ASafariM <no-reply@asafarim.site>", { to: "a@b.c", subject: "Hi", text: ".hi" });
+    const m = buildMessage({ from: "ASafariM <no-reply@asafarim.site>", to: ["a@b.c"], subject: "Hi", text: ".hi" });
     expect(m).toContain("From: ASafariM <no-reply@asafarim.site>\r\nTo: <a@b.c>\r\nSubject: Hi");
     expect(m.split("\r\n").some((l) => l.startsWith("."))).toBe(false);
-    expect(() => buildMessage("x@y.z", { to: "a@b.c\r\nBcc: e@f.g", subject: "s", text: "t" })).toThrow(MailError);
+    expect(() => buildMessage({ from: "x@y.z", to: ["a@b.c\r\nBcc: e@f.g"], subject: "s", text: "t" })).toThrow(
+      SmtpError,
+    );
     expect(addressOf("ASafariM <no-reply@asafarim.site>")).toBe("no-reply@asafarim.site");
   });
 
@@ -241,7 +244,7 @@ describe("SMTP", () => {
       } catch (e) {
         error = e;
       }
-      expect((error as MailError).reason).toBe("starttls_unavailable");
+      expect((error as SmtpError).reason).toBe("starttls_unavailable");
       expect(f.seen.some((l) => l.startsWith("AUTH"))).toBe(false);
     } finally {
       f.server.close();

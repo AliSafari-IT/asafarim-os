@@ -102,6 +102,47 @@ CREATE UNIQUE INDEX approvals_one_pending ON approvals (step_id) WHERE status = 
   },
   {
     version: 3,
+    name: "connector_calls, credentials, settings (Flow slice 2: egress)",
+    sql: `
+-- One row per outbound call (lib/egress): never a header, a body or a query string.
+CREATE TABLE connector_calls (
+  id          text PRIMARY KEY,
+  run_id      text,
+  step_id     text,
+  connector   text NOT NULL,
+  host        text,
+  status      integer,
+  duration_ms integer NOT NULL,
+  error_code  text,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX connector_calls_run ON connector_calls (run_id, created_at) WHERE run_id IS NOT NULL;
+CREATE INDEX connector_calls_created ON connector_calls (created_at);
+
+-- Secrets sealed with AES-256-GCM (lib/credentials/cipher.ts); meta holds only what isn't secret.
+CREATE TABLE credentials (
+  id           text PRIMARY KEY,
+  name         text NOT NULL UNIQUE,
+  kind         text NOT NULL CHECK (kind IN ('smtp', 'github-token', 'webhook-secret')),
+  ciphertext   bytea NOT NULL,
+  iv           bytea NOT NULL,
+  key_version  integer NOT NULL CHECK (key_version >= 1),
+  meta         jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  created_by   text NOT NULL,
+  rotated_at   timestamptz,
+  last_used_at timestamptz
+);
+
+CREATE TABLE settings (
+  key        text PRIMARY KEY CHECK (key IN ('egress_hosts', 'email_recipients', 'paused_all')),
+  value      jsonb NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by text NOT NULL
+);`,
+  },
+  {
+    version: 4,
     name: "definition v2: drafts, test and dry runs, connector steps",
     sql: `
 -- What the builder saved and hasn't published (any JSON: a draft may not validate yet).

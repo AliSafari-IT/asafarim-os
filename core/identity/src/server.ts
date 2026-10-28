@@ -19,7 +19,7 @@ import { RedisPendingLogins } from "./pending.ts";
 import { RedisReplayGuard, endSessionsOfAccount, redisAdapterFactory } from "./redis-adapter.ts";
 import { createSignIn } from "./sign-in.ts";
 import { DevLogSmsSender, TwilioSmsSender } from "./sms.ts";
-import { DevLogMailer, SmtpMailer } from "./smtp.ts";
+import { DevLogMailer, SmtpMailer } from "./mailer.ts";
 import { PgIdentityStore, PrincipalAccounts } from "./store.ts";
 
 const log = createLogger();

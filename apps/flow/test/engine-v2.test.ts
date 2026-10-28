@@ -126,6 +126,15 @@ describe("startRun", () => {
     expect(t.mem.runs.size).toBe(1);
   });
 
+  it("Settings paused_all: no run starts, whatever the trigger; only a dry run (which calls nothing) does", async () => {
+    const t = setup();
+    t.mem.settings.pausedAll = true;
+    expect(await t.start({ name: "a" })).toMatchObject({ ok: false, error: "paused_all" });
+    expect(await t.start({ name: "a" }, { test: true })).toMatchObject({ ok: false, error: "paused_all" });
+    expect(await t.start({ name: "a" }, { dryRun: true })).toMatchObject({ ok: true });
+    expect([...t.mem.runs.values()].map((r) => r.dryRun)).toEqual([true]);
+  });
+
   it("an event trigger: the event starts the v2 workflow through startRun", async () => {
     const t = setup(DOCS_FLOW);
     const audits = await t.engine.handle(t.mem.tx, {
