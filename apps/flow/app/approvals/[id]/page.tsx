@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { approveAction, rejectAction } from "@/app/actions";
 import { DraftForm } from "@/components/DraftForm";
 import { ErrorNotice, Unavailable } from "@/components/Notice";
 import { Status } from "@/components/Runs";
@@ -7,6 +8,7 @@ import { db } from "@/lib/db";
 import { docsLink } from "@/lib/docs-link";
 import { APPROVAL_ID, at, until } from "@/lib/format";
 import { pageAccess } from "@/lib/page";
+import { COMMENT_MAX } from "@/lib/workflow/limits";
 import { getApproval } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +47,7 @@ export default async function ApprovalPage({
         <a href="/approvals">Approvals</a> / <span className="mono">{approval.id}</span>
       </p>
       <h1>
-        Review the issue <Status value={approval.status} />
+        {step.reviews === "draft" ? "Review the issue" : "Approve the run"} <Status value={approval.status} />
       </h1>
       <ErrorNotice error={error} permission={permission} />
       {draft?.public ? (
@@ -107,7 +109,34 @@ export default async function ApprovalPage({
         ) : null}
       </dl>
 
-      {!draft ? (
+      {step.reviews === "nothing" ? (
+        open ? (
+          <div className="decide">
+            <form action={approveAction} className="card">
+              <input type="hidden" name="approvalId" value={approval.id} />
+              <div className="actions">
+                <button type="submit" data-testid="approve">
+                  Approve
+                </button>
+              </div>
+            </form>
+            <form action={rejectAction} className="card">
+              <input type="hidden" name="approvalId" value={approval.id} />
+              <label htmlFor="comment">Comment (optional)</label>
+              <textarea id="comment" name="comment" maxLength={COMMENT_MAX} rows={3} />
+              <div className="actions">
+                <button type="submit" className="secondary" data-testid="reject">
+                  Reject
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : (
+          <p className="notice" role="status" data-testid="closed">
+            This approval is {approval.status}; nothing is left to decide.
+          </p>
+        )
+      ) : !draft ? (
         <p className="notice" role="status">
           The draft is no longer kept (it is cleared 30 days after the run ended).
         </p>

@@ -10,6 +10,9 @@ const MESSAGES: Record<string, string> = {
   invalid_edits:
     "The edits don't fit: a title of 1 to 256 characters, a body of 1 to 60 000, at most 20 labels of 1 to 50 characters each.",
   invalid_comment: "The comment can be 1000 characters at most.",
+  not_active: "This workflow is paused: resume it to run it.",
+  wrong_trigger: "This workflow isn't started that way.",
+  invalid_input: "The fields don't fit: fill in every required one, numbers as numbers.",
   app_inactive: "The app isn't active.",
   unauthenticated: "Sign in first.",
   permissions_unavailable: "Permissions can't be checked right now.",

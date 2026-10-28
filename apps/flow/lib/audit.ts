@@ -13,7 +13,9 @@ export type AuditAction =
   | "flow.run.cancelled"
   | "flow.approval.decided"
   | "flow.workflow.paused"
-  | "flow.workflow.resumed";
+  | "flow.workflow.resumed"
+  | "flow.workflow.draft_saved"
+  | "flow.workflow.published";
 
 export interface AuditEntry {
   action: AuditAction;
@@ -29,6 +31,9 @@ export interface AuditEntry {
   status?: string;
   errorCode?: string;
   attempt?: number;
+  /** A test run, and a dry one (flow.run.started). */
+  test?: boolean;
+  dryRun?: boolean;
   /** The subject who did it; absent when the engine did it on its own. */
   actor?: string;
 }

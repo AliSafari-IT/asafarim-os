@@ -3,11 +3,13 @@ import type pg from "pg";
 import { approvalFrom, runFrom, stepFrom, versionFrom } from "./engine/pg-store";
 import type { ApprovalRow, RunRow, StepRow, VersionRow, WorkflowStatus } from "./engine/store";
 import { Draft } from "./workflow/approval";
-import type { ApprovalStep } from "./workflow/definition";
+import type { AnyWorkflowDefinition } from "./workflow/definition";
+import { graphOf, type GraphNode } from "./workflow/graph";
 
 export interface RunSummary extends RunRow {
   workflowKey: string;
-  version: number;
+  /** The version the run is pinned to; null for a test run of a draft. */
+  version: number | null;
   /** The step the run is at (the last one it reached). */
   currentStep: string | null;
 }
@@ -16,13 +18,13 @@ const SUMMARY = `
   SELECT r.*, w.key AS workflow_key, v.version AS version_number,
          (SELECT s.step_key FROM workflow_run_steps s WHERE s.run_id = r.id ORDER BY s.seq DESC LIMIT 1) AS current_step
     FROM workflow_runs r
-    JOIN workflow_versions v ON v.id = r.version_id
-    JOIN workflows w ON w.id = v.workflow_id`;
+    JOIN workflows w ON w.id = r.workflow_id
+    LEFT JOIN workflow_versions v ON v.id = r.version_id`;
 
 const summaryFrom = (r: Record<string, unknown>): RunSummary => ({
   ...runFrom(r),
   workflowKey: r.workflow_key as string,
-  version: r.version_number as number,
+  version: (r.version_number as number | null) ?? null,
   currentStep: (r.current_step as string | null) ?? null,
 });
 
@@ -52,18 +54,21 @@ export async function listRuns(p: pg.Pool, opts: { skipped: boolean; limit?: num
 export async function getRun(
   p: pg.Pool,
   id: string,
-): Promise<{ run: RunSummary; version: VersionRow; steps: StepRow[]; approvals: ApprovalRow[] } | undefined> {
+): Promise<
+  { run: RunSummary; definition: AnyWorkflowDefinition; steps: StepRow[]; approvals: ApprovalRow[] } | undefined
+> {
   const { rows } = await p.query(`${SUMMARY} WHERE r.id = $1`, [id]);
   if (!rows[0]) return undefined;
   const run = summaryFrom(rows[0]);
   const [version, steps, approvals] = await Promise.all([
-    p.query("SELECT * FROM workflow_versions WHERE id = $1", [run.versionId]),
+    run.versionId ? p.query("SELECT * FROM workflow_versions WHERE id = $1", [run.versionId]) : undefined,
     p.query("SELECT * FROM workflow_run_steps WHERE run_id = $1 ORDER BY seq", [id]),
     p.query("SELECT * FROM approvals WHERE run_id = $1 ORDER BY created_at, id", [id]),
   ]);
   return {
     run,
-    version: versionFrom(version.rows[0]),
+    // The draft a test run carries, or its version's.
+    definition: run.draftDefinition ?? versionFrom(version!.rows[0]).definition,
     steps: steps.rows.map(stepFrom),
     approvals: approvals.rows.map(approvalFrom),
   };
@@ -87,8 +92,7 @@ export async function listPendingApprovals(p: pg.Pool, now = new Date(), limit =
        FROM approvals a
        JOIN workflow_run_steps s ON s.id = a.step_id
        JOIN workflow_runs r ON r.id = a.run_id
-       JOIN workflow_versions v ON v.id = r.version_id
-       JOIN workflows w ON w.id = v.workflow_id
+       JOIN workflows w ON w.id = r.workflow_id
       WHERE a.status = 'pending' AND a.deadline > $1
       ORDER BY a.created_at, a.id
       LIMIT $2`,
@@ -110,8 +114,8 @@ export async function listPendingApprovals(p: pg.Pool, now = new Date(), limit =
 export interface ApprovalView {
   approval: ApprovalRow;
   run: RunSummary;
-  /** The step's definition: its role, deadline and editable fields. */
-  step: ApprovalStep;
+  /** The step's node: its role, deadline, editable fields and whether it reviews a draft. */
+  step: Extract<GraphNode, { kind: "approval" }>;
   /** The draft shown (the step's input); undefined once retention cleared it. */
   draft?: Draft;
 }
@@ -125,8 +129,8 @@ export async function getApproval(p: pg.Pool, id: string): Promise<ApprovalView 
   if (!r) return undefined;
   const approval = approvalFrom(r);
   const found = await getRun(p, approval.runId);
-  const step = found?.version.definition.steps.find((s) => s.key === r.step_key);
-  if (!found || step?.type !== "approval") return undefined;
+  const step = found ? graphOf(found.definition).nodes.get(r.step_key) : undefined;
+  if (!found || step?.kind !== "approval") return undefined;
   const draft = Draft.safeParse(r.step_input);
   return { approval, run: found.run, step, ...(draft.success ? { draft: draft.data } : {}) };
 }
@@ -137,11 +141,13 @@ export interface WorkflowView {
   status: WorkflowStatus;
   current: VersionRow;
   versions: number;
+  /** When the unpublished draft was saved; null without one. */
+  draftUpdatedAt: Date | null;
 }
 
 export async function listWorkflows(p: pg.Pool): Promise<WorkflowView[]> {
   const { rows } = await p.query(
-    `SELECT w.key AS w_key, w.name AS w_name, w.status AS w_status, v.*,
+    `SELECT w.key AS w_key, w.name AS w_name, w.status AS w_status, w.draft_updated_at AS w_draft_updated_at, v.*,
             (SELECT count(*) FROM workflow_versions x WHERE x.workflow_id = w.id)::int AS versions
        FROM workflows w
        JOIN LATERAL (SELECT * FROM workflow_versions WHERE workflow_id = w.id ORDER BY version DESC LIMIT 1) v ON true
@@ -153,5 +159,6 @@ export async function listWorkflows(p: pg.Pool): Promise<WorkflowView[]> {
     status: r.w_status,
     current: versionFrom(r),
     versions: r.versions,
+    draftUpdatedAt: r.w_draft_updated_at ?? null,
   }));
 }

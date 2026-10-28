@@ -108,3 +108,26 @@ export const isRequestType = (type: string): type is RequestType => Object.hasOw
 export function buildRequest(type: RequestType, ctx: RequestContext): object {
   return MAPPINGS[type](ctx);
 }
+
+/**
+ * What a dry run records as the outcome of a request it doesn't send: the shape the acting app answers
+ * with (docs.issue-draft.ready.v1, docs.issue.created.v1, minus runId, stepId and requestId), with
+ * placeholder content, so the steps after it run on something that fits.
+ */
+const SIMULATED: { [T in RequestType]: (request: ReturnType<(typeof MAPPINGS)[T]>) => object } = {
+  [ISSUE_DRAFT_REQUESTED]: (r) => ({
+    noteId: r.noteId,
+    docPath: "dry-run.md",
+    repo: "dry-run/dry-run",
+    public: false,
+    title: "Dry run: the issue Docs would draft",
+    body: "A dry run doesn't ask Docs for a draft.",
+    labels: [],
+  }),
+  [ISSUE_APPROVED]: (r) => ({ noteId: r.noteId, issueUrl: `https://github.com/${r.repo}/issues/0` }),
+};
+
+/** The outcome a dry run records for `request` (built by `buildRequest(type, …)`). */
+export function simulatedOutcome(type: RequestType, request: object): object {
+  return (SIMULATED[type] as (r: object) => object)(request);
+}

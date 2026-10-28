@@ -36,7 +36,18 @@ const ACTIONS: Record<string, string | null> = {
   setWorkflowStatusAction: "flow.workflows.write",
   approveAction: "flow.approvals.decide",
   rejectAction: "flow.approvals.decide",
+  runNowAction: "flow.runs.start",
 };
+/** The builder's server functions (PR 2.6 calls them): they answer with a result, not a redirect. */
+const DRAFT_FUNCTIONS: Record<
+  string,
+  { engine: string; call: (fn: (...a: unknown[]) => Promise<unknown>) => Promise<unknown> }
+> = {
+  saveDraft: { engine: "saveDraft", call: (fn) => fn("my-flow", { version: 2, key: "my-flow" }) },
+  publishDraft: { engine: "publishDraft", call: (fn) => fn("my-flow") },
+  testDraft: { engine: "startDraftRun", call: (fn) => fn("my-flow", {}, true) },
+};
+
 /** Pages that ask for more than flow.read. */
 const PAGE_PERMISSION: Record<string, string> = {
   "approvals/page.tsx": "flow.approvals.decide",
@@ -103,6 +114,10 @@ vi.mock("@/lib/db", () => {
       setWorkflowStatus: record("setWorkflowStatus"),
       approve: record("approve"),
       reject: record("reject"),
+      startRun: record("startRun"),
+      saveDraft: record("saveDraft"),
+      publishDraft: record("publishDraft"),
+      startDraftRun: record("startDraftRun"),
     },
   };
 });
@@ -169,7 +184,7 @@ describe("the routes on disk", () => {
     const exported = Object.entries(mod)
       .filter(([, fn]) => typeof fn === "function")
       .map(([name]) => name);
-    expect(exported.sort()).toEqual(Object.keys(ACTIONS).sort());
+    expect(exported.sort()).toEqual([...Object.keys(ACTIONS), ...Object.keys(DRAFT_FUNCTIONS)].sort());
   });
 });
 
@@ -254,6 +269,30 @@ describe("server actions", () => {
     expect(stop).toMatchObject({ kind: "redirect", to: "/runs" });
     expect(calls.engine).toEqual([]);
   });
+});
+
+describe("the builder's server functions (flow.workflows.write)", () => {
+  it.each(Object.entries(DRAFT_FUNCTIONS))(
+    "%s without it: refused, naming it; the engine isn't called",
+    async (name, d) => {
+      who.subject = "dev-viewer";
+      who.permissions = ["flow.read", "flow.runs.start"];
+      const mod = await load<Record<string, (...a: unknown[]) => Promise<unknown>>>("actions.ts");
+      expect(await d.call(mod[name]!)).toEqual({ ok: false, error: "forbidden", permission: "flow.workflows.write" });
+      expect(calls.engine).toEqual([]);
+    },
+  );
+
+  it.each(Object.entries(DRAFT_FUNCTIONS))(
+    "%s with it: the engine does it, the audits stay inside",
+    async (name, d) => {
+      who.subject = "dev-owner";
+      who.permissions = ["flow.read", "flow.workflows.write"];
+      const mod = await load<Record<string, (...a: unknown[]) => Promise<unknown>>>("actions.ts");
+      expect(await d.call(mod[name]!)).toEqual({ ok: true });
+      expect(calls.engine).toEqual([d.engine]);
+    },
+  );
 });
 
 describe("the decisions", () => {

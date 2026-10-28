@@ -7,6 +7,8 @@ import { signIn, signOut } from "@/lib/auth";
 import { db, engine, inTransaction } from "@/lib/db";
 import { APPROVAL_ID, RUN_ID } from "@/lib/format";
 import { gate } from "@/lib/gate";
+import type { Problem } from "@/lib/workflow/definition";
+import { manualInputOf } from "@/lib/workflow/manual";
 
 export async function signInAction() {
   await signIn("asafarim", { redirectTo: "/" });
@@ -54,6 +56,70 @@ export async function setWorkflowStatusAction(formData: FormData) {
   if (!g.ok) redirect(`/workflows?error=${g.body.error}${g.body.permission ? `&permission=${g.body.permission}` : ""}`);
   const r = await inTransaction(await db(), (tx) => engine.setWorkflowStatus(tx, key, status, g.subject));
   redirect(r.ok ? "/workflows" : `/workflows?error=${r.error}`);
+}
+
+/**
+ * "Run now" for a workflow whose current version has a manual trigger (flow.runs.start): the form's
+ * fields as its input (lib/workflow/manual.ts), then the run's page, or back with the refusal.
+ */
+export async function runNowAction(formData: FormData) {
+  const key = String(formData.get("workflow") ?? "");
+  const g = await gate("flow.runs.start");
+  if (!g.ok) redirect(`/workflows?error=${g.body.error}${g.body.permission ? `&permission=${g.body.permission}` : ""}`);
+  const r = await inTransaction(await db(), (tx) =>
+    engine.startRun(tx, {
+      workflowKey: key,
+      trigger: "manual",
+      data: manualInputOf(formData),
+      actor: g.subject,
+    }),
+  );
+  redirect(r.ok ? `/runs/${r.runId}` : `/workflows?error=${r.error}`);
+}
+
+/**
+ * The builder's server functions (its UI comes with PR 2.6), gated by flow.workflows.write and
+ * audited (ids only). Each answers with the result rather than a redirect.
+ */
+export interface DraftResult {
+  ok: boolean;
+  /** A refusal: the gate's (`forbidden`, …) or the engine's (`invalid_definition`, …). */
+  error?: string;
+  permission?: string;
+  /** What is wrong with the definition, by node. */
+  problems?: Problem[];
+  /** publishDraft: the version published. */
+  version?: number;
+  /** testDraft: the run started. */
+  runId?: string;
+}
+
+async function asWriter(fn: (subject: string) => Promise<DraftResult>): Promise<DraftResult> {
+  const g = await gate("flow.workflows.write");
+  if (!g.ok) return { ok: false, error: g.body.error, ...(g.body.permission ? { permission: g.body.permission } : {}) };
+  return fn(g.subject);
+}
+const strip = <T extends { audits: unknown }>({ audits: _audits, ...rest }: T) => rest;
+
+/** Save a workflow's draft (a new workflow when the key is new): the problems found in it, by node. */
+export async function saveDraft(workflowKey: string, definition: unknown, name?: string): Promise<DraftResult> {
+  return asWriter(async (actor) =>
+    strip(await inTransaction(await db(), (tx) => engine.saveDraft(tx, { workflowKey, name, definition, actor }))),
+  );
+}
+
+/** Publish a workflow's draft as its next version. */
+export async function publishDraft(workflowKey: string): Promise<DraftResult> {
+  return asWriter(async (actor) =>
+    strip(await inTransaction(await db(), (tx) => engine.publishDraft(tx, { workflowKey, actor }))),
+  );
+}
+
+/** A test run of a workflow's draft (a dry run with `dryRun`), `data` as its trigger's data. */
+export async function testDraft(workflowKey: string, data: unknown, dryRun: boolean): Promise<DraftResult> {
+  return asWriter(async (actor) =>
+    strip(await inTransaction(await db(), (tx) => engine.startDraftRun(tx, { workflowKey, data, dryRun, actor }))),
+  );
 }
 
 /** The labels as typed: comma- or line-separated, trimmed, empty ones dropped, each once. */
