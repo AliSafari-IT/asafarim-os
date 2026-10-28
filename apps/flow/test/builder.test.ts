@@ -252,6 +252,41 @@ describe("the edits", () => {
     expect(startRenamed.start).toBe("gate");
   });
 
+  it("renaming a key with regex metacharacters rewrites exact reads only, and nothing in the new key is a pattern", () => {
+    const odd = "a.(b\\";
+    const draft: Draft = {
+      version: 2,
+      key: "odd",
+      trigger: { type: "manual", input: [] },
+      start: odd,
+      nodes: [
+        { key: odd, type: "wait", duration: "PT1M", next: "say" },
+        {
+          key: "say",
+          type: "email.send",
+          input: {
+            to: ["a@example.com"],
+            subject: `{{steps.${odd}.output.x}} and {{ steps.${odd}.output }}`,
+            // A "." that matched any character, or a "(" read as a group, would rewrite these.
+            body: "{{steps.aX(b\\.output.x}} {{steps.a.(b\\c.output}} {{steps.a.(b.output}}",
+          },
+          next: "end",
+        },
+        { key: "end", type: "end" },
+      ],
+    };
+    const renamed = renameNode(draft, odd, "fresh");
+    expect(renamed.start).toBe("fresh");
+    expect(renamed.nodes[0]!.key).toBe("fresh");
+    expect(renamed.nodes[1]!.input).toEqual({
+      to: ["a@example.com"],
+      subject: "{{steps.fresh.output.x}} and {{ steps.fresh.output }}",
+      body: (draft.nodes[1]!.input as { body: string }).body,
+    });
+    // A "$" can't be in a key (isNodeKey), and the replacement is a function either way.
+    expect(renameNode(draft, odd, "$&")).toBe(draft);
+  });
+
   it('connect sets an edge, or with "" removes it; updateNode replaces one node', () => {
     const draft = draftOf(NOTIFY);
     expect(connect(draft, "mail", "next", "skip").nodes[1]!.next).toBe("skip");

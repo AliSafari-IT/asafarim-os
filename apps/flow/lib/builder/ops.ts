@@ -111,13 +111,19 @@ export function updateNode(draft: Draft, id: string, node: RawNode): Draft {
   return { ...draft, nodes: draft.nodes.map((n, j) => (j === i ? node : n)) };
 }
 
-/** Every string in `value` with `{{steps.<from>.output…}}` reading `<to>` instead. */
+/** `s` as a regular expression that matches it literally. */
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Every string in `value` with `{{steps.<from>.output…}}` reading `<to>` instead. `from` is a key as
+ * the draft has it (not checked yet), so it is matched literally; the replacement is a function, so
+ * nothing in `to` acts as a pattern.
+ */
 function renameReads(value: unknown, from: string, to: string): unknown {
-  if (typeof value === "string")
-    return value.replace(
-      new RegExp(`(\\{\\{\\s*steps\\.)${from.replace(/-/g, "\\-")}(\\.output[^}]*\\}\\})`, "g"),
-      `$1${to}$2`,
-    );
+  if (typeof value === "string") {
+    const read = new RegExp(`(\\{\\{\\s*steps\\.)${escapeRegExp(from)}(\\.output[^}]*\\}\\})`, "g");
+    return value.replace(read, (_, head: string, tail: string) => `${head}${to}${tail}`);
+  }
   if (Array.isArray(value)) return value.map((v) => renameReads(v, from, to));
   if (value && typeof value === "object")
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, renameReads(v, from, to)]));
