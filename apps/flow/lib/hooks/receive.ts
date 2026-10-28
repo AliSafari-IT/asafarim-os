@@ -2,6 +2,7 @@
  * POST /hooks/<id>: Flow's only unauthenticated path. Everything is checked before the body is parsed,
  * in this order, and the first check that fails answers:
  *
+ *   over 600 calls a minute (all)      429  with Retry-After, before any lookup (lib/hooks/limiter.ts)
  *   unknown hook                       404  {error:"rejected"}, after the same body read and HMAC a bad
  *                                           signature costs (the body and the work are the same)
  *   Content-Length over 256 KiB        413  before a byte is read
@@ -38,7 +39,10 @@ export interface ReceiveDeps {
   start(hook: ReceivingHook, opts: StartRunOptions): Promise<StartResult>;
   /** Set the hook's last_called_at (a ping). */
   touch(hook: ReceivingHook): Promise<void>;
+  /** Per hook (RATE_LIMIT). */
   limiter: RateLimiter;
+  /** Every call, under one key (GLOBAL_RATE_LIMIT). */
+  globalLimiter: RateLimiter;
   now(): Date;
   log: { info(msg: string, fields?: Record<string, unknown>): void };
 }
@@ -65,6 +69,10 @@ export async function receiveHook(request: Request, id: string, deps: ReceiveDep
   };
 
   try {
+    // First, before the lookup: bounds the database and CPU work a flood of unknown ids can cause. A
+    // per-address limit belongs to the edge proxy, which sees the client's address.
+    if (!deps.globalLimiter.take("all", deps.now().getTime()))
+      return answer(429, { error: "rate_limited" }, { "Retry-After": "60" });
     let hook: ReceivingHook | undefined;
     try {
       hook = shaped ? await deps.findHook(id) : undefined;

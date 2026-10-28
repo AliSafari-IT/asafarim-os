@@ -4,14 +4,17 @@
  * authenticates a call.
  */
 import { db, engine, inTransaction } from "@/lib/db";
-import { createRateLimiter } from "@/lib/hooks/limiter";
+import { createRateLimiter, GLOBAL_RATE_LIMIT } from "@/lib/hooks/limiter";
 import { receiveHook, type ReceiveDeps } from "@/lib/hooks/receive";
 import { findHook, touchHook } from "@/lib/hooks/store";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
-const globalForHooks = globalThis as unknown as { flowHookLimiter?: ReturnType<typeof createRateLimiter> };
+const globalForHooks = globalThis as unknown as {
+  flowHookLimiter?: ReturnType<typeof createRateLimiter>;
+  flowHookGlobalLimiter?: ReturnType<typeof createRateLimiter>;
+};
 
 const deps: ReceiveDeps = {
   findHook: async (id) => findHook(await db(), id),
@@ -22,6 +25,7 @@ const deps: ReceiveDeps = {
     }),
   touch: async (hook) => touchHook(await db(), hook.id),
   limiter: (globalForHooks.flowHookLimiter ??= createRateLimiter()),
+  globalLimiter: (globalForHooks.flowHookGlobalLimiter ??= createRateLimiter(GLOBAL_RATE_LIMIT)),
   now: () => new Date(),
   log,
 };

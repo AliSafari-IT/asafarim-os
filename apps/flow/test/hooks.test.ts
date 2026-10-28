@@ -17,7 +17,7 @@ import { publisher } from "../lib/events";
 import { BODY_MAX_BYTES, readCapped } from "../lib/hooks/body";
 import { curlExample, sampleBody } from "../lib/hooks/example";
 import { githubAccepts, githubEventNames } from "../lib/hooks/github";
-import { createRateLimiter } from "../lib/hooks/limiter";
+import { createRateLimiter, GLOBAL_RATE_LIMIT } from "../lib/hooks/limiter";
 import { receiveHook, type ReceiveDeps } from "../lib/hooks/receive";
 import { signGeneric, signGithub, verifyGeneric } from "../lib/hooks/signature";
 import type { ReceivingHook } from "../lib/hooks/store";
@@ -116,6 +116,7 @@ function setup() {
     },
     touch: async (hook) => void touched.push(hook.id),
     limiter: createRateLimiter(),
+    globalLimiter: createRateLimiter(GLOBAL_RATE_LIMIT),
     now: () => clock.now,
     log,
   };
@@ -239,6 +240,21 @@ describe("rejected before the body is parsed, in order", () => {
     expect((await t.github("ping", { zen: "z" })).status).toBe(200);
     t.clock.now = new Date(NOW.getTime() + 60_000);
     expect((await t.generic(BIG, { "x-flow-delivery": "d-61" }, T + 60)).status).toBe(202);
+  });
+
+  it("429 past 600 calls a minute in all, before the lookup: a flood of unknown ids doesn't reach findHook", async () => {
+    const t = setup();
+    const randomId = () => crypto.randomBytes(16).toString("base64url");
+    for (let i = 0; i < GLOBAL_RATE_LIMIT; i++) expect((await t.post(randomId(), "{}")).status).toBe(404);
+    expect(t.found).toHaveLength(GLOBAL_RATE_LIMIT);
+    const limited = await t.post(randomId(), "{}");
+    expect(limited).toMatchObject({ status: 429, body: { error: "rate_limited" } });
+    expect(limited.headers.get("retry-after")).toBe("60");
+    expect(t.found).toHaveLength(GLOBAL_RATE_LIMIT);
+    // A known hook too, until the minute has passed.
+    expect((await t.generic(BIG)).status).toBe(429);
+    t.clock.now = new Date(NOW.getTime() + 60_000);
+    expect((await t.generic(BIG, {}, T + 60)).status).toBe(202);
   });
 
   it("401 for a missing, malformed or wrong signature, or a changed body; the body is never parsed", async () => {
