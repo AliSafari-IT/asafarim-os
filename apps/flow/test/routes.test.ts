@@ -78,7 +78,7 @@ const DRAFT_FUNCTIONS: Record<
   validateDraft: {
     engine: "checkDefinition",
     call: (fn) => fn("my-flow", { version: 2, key: "my-flow" }),
-    bad: (fn) => fn("../etc", { version: 2 }),
+    bad: (fn) => fn("my-flow", { version: 2, key: "my-flow", pad: "x".repeat(300_000) }),
   },
   publishDraft: { engine: "publishDraft", call: (fn) => fn("my-flow"), bad: (fn) => fn({ key: "my-flow" }) },
   testDraft: {

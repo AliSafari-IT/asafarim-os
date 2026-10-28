@@ -410,4 +410,6 @@ jobs:
             core/admin/playwright-report/
             apps/docs/test-results/
             apps/docs/playwright-report/
+            apps/flow/test-results/
+            apps/flow/playwright-report/
           if-no-files-found: ignore

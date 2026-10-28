@@ -10,6 +10,9 @@
  * The spec's acceptance criteria, by number, are named in the tests' titles; criterion 6 (a crash
  * after GitHub created the issue) and the redelivery of the same event (7) are fault-injection unit
  * tests in apps/docs/test/issue-create-handler.test.ts: a message can't be redelivered from here.
+ *
+ * The builder's test (Flow slice 2, PR 2.6) makes a workflow from nothing with the keyboard-reachable
+ * controls only (palette, node list, settings panel), validates, publishes and dry-runs it.
  */
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
@@ -380,4 +383,87 @@ test("Workflows shows the definition read-only; the owner pauses and resumes it"
   await page.screenshot({ path: `${SHOTS}/workflows.png`, fullPage: true });
   await wf.getByTestId("toggle").click();
   await expect(wf.getByTestId("status")).toHaveText("active");
+});
+
+test("the builder: webhook → condition → email.send → end, validated, published and test-run (dry)", async ({
+  page,
+}) => {
+  await signIn(page, "");
+  const key = `built-${Date.now().toString(36)}`;
+  const credential = `Mail ${key}`;
+
+  // What the email step needs: an allowed recipient (Settings) and an smtp credential (never used: a dry run).
+  await page.goto("/settings");
+  const recipients = page.getByTestId("email-recipients").locator("textarea");
+  await recipients.fill([await recipients.inputValue(), "ops@example.com"].filter(Boolean).join("\n"));
+  await page.getByTestId("email-recipients").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("email-recipients").locator("textarea")).toHaveValue(/ops@example\.com/);
+  await page.goto("/credentials");
+  const add = page.getByTestId("add-credential");
+  await add.getByLabel("Kind").selectOption("smtp");
+  await add.getByLabel("Name").fill(credential);
+  await add.getByLabel("Host").fill("smtp.example.com");
+  await add.getByLabel("From").fill("flow@example.com");
+  await add.getByLabel("Username").fill("flow");
+  await add.getByLabel("Password").fill("e2e-only");
+  await add.getByRole("button", { name: "Add" }).click();
+  await expect(page.getByTestId("credential-saved")).toBeVisible();
+
+  // New workflow, started by a webhook: the builder opens on its first draft.
+  await page.goto("/workflows");
+  await page.getByTestId("new-workflow").click();
+  await page.getByTestId("new-name").fill("Built in the e2e");
+  await page.getByTestId("new-key").fill(key);
+  await page.getByTestId("new-trigger").selectOption("webhook");
+  await page.getByTestId("new-submit").click();
+  await expect(page).toHaveURL(new RegExp(`/workflows/${key}/edit$`));
+  await expect(page.getByTestId("builder")).toHaveAttribute("data-editable", "true");
+
+  // The trigger's settings: its hook (the Workflows page's hook panel), then an input field.
+  await page.getByTestId("create-hook").getByRole("button").click();
+  await expect(page.getByTestId("hook-shown-once")).toBeVisible();
+  await page.reload();
+  const trigger = page.locator(`[data-testid="node-settings"][data-node="@trigger"]`);
+  await trigger.getByTestId("trigger-hook").selectOption({ index: 1 });
+  await trigger.getByRole("button", { name: "Add input" }).click();
+  await trigger.getByLabel(/^Name/).fill("title");
+
+  // The nodes, from the palette and the settings panel only: no dragging.
+  await page.getByTestId("palette-condition").click();
+  const condition = page.locator('[data-testid="node-settings"][data-node="condition"]');
+  await condition.getByLabel("Field", { exact: true }).fill("trigger.title");
+  await condition.getByLabel("Op", { exact: true }).selectOption("contains");
+  await condition.getByLabel("Value", { exact: true }).fill("bug");
+  // Added after the condition: on its then branch, going on to the end.
+  await page.getByTestId("palette-email.send").click();
+  const mail = page.locator('[data-testid="node-settings"][data-node="email-send"]');
+  await mail.getByLabel(/^Credential/).selectOption({ label: credential });
+  await mail.getByLabel(/^To 1/).fill("ops@example.com");
+  await mail.getByLabel(/^Subject/).fill("Bug: {{trigger.title}}");
+  await mail.getByLabel(/^Body/).fill("{{trigger.title}} was reported.");
+  await expect(mail.getByLabel("Then go to")).toHaveValue("end");
+  await expect(page.getByTestId("node-list-item")).toHaveCount(4);
+  await expect(page.getByTestId("save-state")).toHaveText("Saved");
+
+  await page.getByTestId("validate").click();
+  await expect(page.getByTestId("builder-notice")).toHaveText("No problems: it can be published.");
+  await page.getByTestId("publish").click();
+  await expect(page.getByTestId("builder-notice")).toHaveText(/^Published version 1/);
+  await page.screenshot({ path: `${SHOTS}/builder.png`, fullPage: true });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.screenshot({ path: `${SHOTS}/builder-dark.png`, fullPage: true });
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // Test run: a dry run unless unticked; it opens the run.
+  await page.getByTestId("test-run-open").click();
+  await expect(page.getByTestId("dry-run")).toBeChecked();
+  await page.getByTestId("test-data").fill(JSON.stringify({ title: "a bug found in the e2e" }));
+  await page.getByTestId("test-run").click();
+  await expect(page).toHaveURL(/\/runs\/[0-9A-Z]{26}$/);
+  await runEnds(page, page.url().slice(page.url().indexOf("/runs/")), "succeeded");
+  await expect(stepStatus(page, "email-send")).toHaveText("succeeded");
+
+  // Version 1 is on the Versions page.
+  await page.goto(`/workflows/${key}/versions`);
+  await expect(page.getByTestId("versions")).toContainText("Version 1");
 });

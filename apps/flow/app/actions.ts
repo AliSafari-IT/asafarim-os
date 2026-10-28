@@ -13,6 +13,7 @@ import { newTrigger, starterDraft } from "@/lib/builder/ops";
 import { creationFrom, rotationFrom, type CredentialFormState } from "@/lib/credentials/form";
 import { createCredential, deleteCredential, rotateCredential } from "@/lib/credentials/store";
 import { db, engine, inTransaction } from "@/lib/db";
+import { DRAFT_MAX_BYTES } from "@/lib/engine/engine";
 import { APPROVAL_ID, CREDENTIAL_ID, RUN_ID } from "@/lib/format";
 import { gate, type GateResult } from "@/lib/gate";
 import type { HookFormState } from "@/lib/hooks/example";
@@ -119,8 +120,13 @@ async function asWriter(fn: (subject: string) => Promise<DraftResult>): Promise<
 }
 const strip = <T extends { audits: unknown }>({ audits: _audits, ...rest }: T) => rest;
 
-const SaveInput = z.object({ workflowKey, lastSeen: z.iso.datetime().nullable() });
+/** A draft as the builder sends it: any JSON object (it may not validate yet), at most DRAFT_MAX_BYTES. */
+const Definition = z
+  .record(z.string(), z.unknown())
+  .refine((d) => JSON.stringify(d).length <= DRAFT_MAX_BYTES, "too large");
+const SaveInput = z.object({ workflowKey, definition: Definition, lastSeen: z.iso.datetime().nullable() });
 const KeyInput = z.object({ workflowKey });
+const ValidateInput = z.object({ workflowKey, definition: Definition });
 const TestInput = z.object({ workflowKey, data: z.record(z.string(), z.unknown()), dryRun: z.boolean() });
 
 /**
@@ -129,7 +135,7 @@ const TestInput = z.object({ workflowKey, data: z.record(z.string(), z.unknown()
  */
 export async function saveDraft(workflowKey: unknown, definition: unknown, lastSeen: unknown): Promise<DraftResult> {
   return asWriter(async (actor) => {
-    const input = SaveInput.safeParse({ workflowKey, lastSeen });
+    const input = SaveInput.safeParse({ workflowKey, definition, lastSeen });
     if (!input.success) return { ok: false, error: "invalid_input" };
     const { workflowKey: key, lastSeen: seen } = input.data;
     return inTransaction(await db(), async (tx) => {
@@ -149,7 +155,7 @@ export async function saveDraft(workflowKey: unknown, definition: unknown, lastS
 /** Every problem of `definition` (the draft as the editor has it), without saving it. */
 export async function validateDraft(workflowKey: unknown, definition: unknown): Promise<DraftResult> {
   return asWriter(async () => {
-    const input = KeyInput.safeParse({ workflowKey });
+    const input = ValidateInput.safeParse({ workflowKey, definition });
     if (!input.success) return { ok: false, error: "invalid_input" };
     const data = await checkDataOf(await db());
     return { ok: true, problems: builderProblems(definition, engine.checkDefinition(definition), data) };

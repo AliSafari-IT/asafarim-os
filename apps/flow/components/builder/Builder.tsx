@@ -109,48 +109,54 @@ export function Builder(props: BuilderProps) {
   const inflight = useRef<Promise<boolean> | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  /** Save the draft as it is now, after any save in flight; true once what is shown is saved. */
-  const flush = useCallback(async (): Promise<boolean> => {
-    clearTimeout(timer.current);
-    while (inflight.current) await inflight.current;
-    if (conflict.current) return false;
-    const d = latest.current;
-    const json = JSON.stringify(d);
-    if (json === savedJson.current) return true;
-    setSave("saving");
-    const run = (async () => {
-      try {
-        const r = await saveDraft(workflowKey, d, lastSeen.current);
-        if (r.ok) {
-          lastSeen.current = r.draftUpdatedAt ?? null;
-          savedJson.current = json;
-          setProblems(r.problems ?? []);
-          return true;
-        }
-        if (r.error === "stale_draft") {
-          conflict.current = true;
-          setSave("conflict");
-        } else {
+  /**
+   * Save the draft as it is now, after any save in flight; true once what is shown is saved. `force`:
+   * save it even unchanged when there is no draft (after a publish), for a test run, which runs one.
+   */
+  const flush = useCallback(
+    async (force = false): Promise<boolean> => {
+      clearTimeout(timer.current);
+      while (inflight.current) await inflight.current;
+      if (conflict.current) return false;
+      const d = latest.current;
+      const json = JSON.stringify(d);
+      if (json === savedJson.current && !(force && lastSeen.current === null)) return true;
+      setSave("saving");
+      const run = (async () => {
+        try {
+          const r = await saveDraft(workflowKey, d, lastSeen.current);
+          if (r.ok) {
+            lastSeen.current = r.draftUpdatedAt ?? null;
+            savedJson.current = json;
+            setProblems(r.problems ?? []);
+            return true;
+          }
+          if (r.error === "stale_draft") {
+            conflict.current = true;
+            setSave("conflict");
+          } else {
+            setSave("failed");
+            setNotice({ kind: "bad", text: refusal(r) });
+          }
+          return false;
+        } catch {
           setSave("failed");
-          setNotice({ kind: "bad", text: refusal(r) });
+          setNotice({ kind: "bad", text: "The draft couldn't be saved: check your connection, then edit again." });
+          return false;
         }
-        return false;
-      } catch {
-        setSave("failed");
-        setNotice({ kind: "bad", text: "The draft couldn't be saved: check your connection, then edit again." });
-        return false;
+      })();
+      inflight.current = run;
+      const ok = await run;
+      inflight.current = null;
+      if (ok) {
+        const more = JSON.stringify(latest.current) !== savedJson.current;
+        setSave(more ? "unsaved" : "saved");
+        if (more) timer.current = setTimeout(() => void flush(), AUTOSAVE_MS);
       }
-    })();
-    inflight.current = run;
-    const ok = await run;
-    inflight.current = null;
-    if (ok) {
-      const more = JSON.stringify(latest.current) !== savedJson.current;
-      setSave(more ? "unsaved" : "saved");
-      if (more) timer.current = setTimeout(() => void flush(), AUTOSAVE_MS);
-    }
-    return ok && JSON.stringify(latest.current) === savedJson.current;
-  }, [workflowKey]);
+      return ok && JSON.stringify(latest.current) === savedJson.current;
+    },
+    [workflowKey],
+  );
 
   useEffect(() => {
     latest.current = draft;
@@ -265,7 +271,7 @@ export function Builder(props: BuilderProps) {
     }
     setBusy(true);
     try {
-      if (!(await flush())) return setNotice({ kind: "bad", text: "No test run: the draft isn't saved." });
+      if (!(await flush(true))) return setNotice({ kind: "bad", text: "No test run: the draft isn't saved." });
       const r = await testDraft(workflowKey, data, dryRun);
       if (r.problems) setProblems(r.problems);
       if (!r.ok || !r.runId) return setNotice({ kind: "bad", text: refusal(r) });
