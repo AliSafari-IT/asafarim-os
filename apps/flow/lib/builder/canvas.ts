@@ -161,3 +161,21 @@ export function fromCanvas(base: Draft, canvas: Canvas): Draft {
 export function moveNode(draft: Draft, id: string, position: Position): Draft {
   return { ...draft, layout: { ...draft.layout, [id]: { x: Math.round(position.x), y: Math.round(position.y) } } };
 }
+
+/**
+ * What a delete on the canvas does to the draft, for React Flow's `onDelete` (it passes a deleted
+ * node's edges with it): the nodes to delete, and the edges to remove on their own, leaving out those
+ * that touch a deleted node, so `deleteNode` can still join the chain around it.
+ */
+export function deletion(
+  nodes: readonly { id: string }[],
+  edges: readonly { source: string; sourceHandle?: string | null; target: string }[],
+): { nodes: string[]; edges: { source: string; field: EdgeField | typeof START_HANDLE }[] } {
+  const gone = new Set(nodes.map((n) => n.id).filter((id) => id !== TRIGGER_ID));
+  return {
+    nodes: [...gone],
+    edges: edges
+      .filter((e) => !gone.has(e.source) && !gone.has(e.target))
+      .map((e) => ({ source: e.source, field: (e.sourceHandle ?? "next") as EdgeField | typeof START_HANDLE })),
+  };
+}

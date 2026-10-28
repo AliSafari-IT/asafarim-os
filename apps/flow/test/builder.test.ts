@@ -8,7 +8,7 @@
 import { ulid } from "@asafarim/app-sdk/events";
 import { describe, expect, it } from "vitest";
 import { buildCatalog } from "../lib/builder/catalog";
-import { fromCanvas, moveNode, nodeIds, toCanvas, TRIGGER_ID } from "../lib/builder/canvas";
+import { deletion, fromCanvas, moveNode, nodeIds, toCanvas, TRIGGER_ID } from "../lib/builder/canvas";
 import { dataProblems, type CheckData } from "../lib/builder/checks";
 import { lineDiff, sortedJson } from "../lib/builder/diff";
 import { upstreamOf } from "../lib/builder/graph";
@@ -152,6 +152,41 @@ describe("definition ⇄ canvas", () => {
     }
   });
 
+  it("deleting a node on the canvas leaves its edges to it, so the chain around it is joined", () => {
+    const draft = draftOf({
+      version: 2,
+      key: "chain",
+      trigger: { type: "manual", input: [] },
+      start: "a",
+      nodes: [
+        { key: "a", type: "wait", duration: "PT1M", next: "x" },
+        { key: "x", type: "wait", duration: "PT1M", next: "y" },
+        { key: "y", type: "end" },
+      ],
+    });
+    // React Flow passes the deleted node's edges along with it.
+    const d = deletion(
+      [{ id: "x" }],
+      [
+        { source: "a", sourceHandle: "next", target: "x" },
+        { source: "x", sourceHandle: "next", target: "y" },
+      ],
+    );
+    expect(d).toEqual({ nodes: ["x"], edges: [] });
+    let next = draft;
+    for (const e of d.edges) next = connect(next, e.source, e.field, "");
+    for (const id of d.nodes) next = deleteNode(next, id);
+    expect(next.nodes.map((n) => [n.key, n.next])).toEqual([
+      ["a", "y"],
+      ["y", undefined],
+    ]);
+    // An edge deleted on its own is still removed; the trigger is never deleted.
+    expect(deletion([{ id: TRIGGER_ID }], [{ source: "a", sourceHandle: "next", target: "x" }])).toEqual({
+      nodes: [],
+      edges: [{ source: "a", field: "next" }],
+    });
+  });
+
   it("an edge drawn on the canvas is the field it is", () => {
     const draft = draftOf(ECHO_FLOW);
     const canvas = toCanvas(draft);
@@ -285,6 +320,31 @@ describe("the edits", () => {
     });
     // A "$" can't be in a key (isNodeKey), and the replacement is a function either way.
     expect(renameNode(draft, odd, "$&")).toBe(draft);
+  });
+
+  it("renaming a node without a key, or sharing one, renames that node only, and nothing that names the old key", () => {
+    const draft = draftOf({
+      version: 2,
+      key: "dup",
+      trigger: { type: "manual", input: [] },
+      start: "a",
+      nodes: [
+        { key: "a", type: "wait", duration: "PT1M", next: "b" },
+        { key: "b", type: "end" },
+        { key: "b", type: "end", status: "skipped" },
+        { type: "end" },
+      ],
+      layout: { "#2": { x: 5, y: 6 } },
+    });
+    expect(nodeIds(draft)).toEqual(["a", "#1", "#2", "#3"]);
+    const second = renameNode(draft, "#2", "skip");
+    expect(second.nodes.map((n) => n.key)).toEqual(["a", "b", "skip", undefined]);
+    // "b" named either node: a's edge is left as written (now the remaining "b").
+    expect(second.nodes[0]!.next).toBe("b");
+    expect(second.layout).toEqual({ skip: { x: 5, y: 6 } });
+    const keyless = renameNode(draft, "#3", "orphan");
+    expect(keyless.nodes[3]).toEqual({ type: "end", key: "orphan" });
+    expect(keyless.nodes.slice(0, 3)).toEqual(draft.nodes.slice(0, 3));
   });
 
   it('connect sets an edge, or with "" removes it; updateNode replaces one node', () => {
@@ -479,6 +539,36 @@ describe("placeholder suggestions", () => {
     const cyclic = { ...FORK, nodes: FORK.nodes.map((n) => (n.key === "d" ? { ...n, next: "a" } : n)) };
     expect([...new Set(suggestionsFor(cyclic, "d", catalog).map((s) => s.path.split(".")[0]))]).toEqual(["trigger"]);
     expect(suggestionsFor({ ...FORK, start: "b" }, "a", catalog).every((s) => s.from === "trigger")).toBe(true);
+  });
+
+  it("a draft's reads can't reach a prototype: __proto__, prototype and constructor are skipped", () => {
+    const draft: Draft = {
+      ...draftOf(NOTIFY),
+      trigger: {
+        type: "manual",
+        input: [
+          { name: "__proto__", type: "string" },
+          { name: "ok", type: "string" },
+        ],
+      },
+      nodes: [
+        {
+          key: "mail",
+          type: "email.send",
+          input: {
+            subject: "{{trigger.__proto__.polluted}} {{trigger.constructor.prototype.polluted}}",
+            body: "{{trigger.a.__proto__.polluted}} {{trigger.prototype.polluted}} {{trigger.fine.field}}",
+          },
+          next: "done",
+        },
+        { key: "done", type: "end" },
+      ],
+    };
+    const example = triggerExample(draft);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.prototype).not.toHaveProperty("polluted");
+    expect(Object.getPrototypeOf(example)).toBe(Object.prototype);
+    expect(example).toEqual({ ok: "example ok", fine: { field: "" } });
   });
 
   it("the trigger's example: its input fields, a GitHub delivery's, and what the draft reads", () => {

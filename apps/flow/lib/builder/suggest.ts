@@ -30,13 +30,24 @@ function triggerReads(draft: Draft): string[] {
   return [...found].sort();
 }
 
+/** Segments that would reach an object's prototype instead of a field of its own. */
+const UNSAFE = new Set(["__proto__", "prototype", "constructor"]);
+
+/**
+ * `value` at `parts` in `target`, unless something is there already. A path read from a draft (any
+ * JSON, not checked yet): a segment that would reach a prototype makes it skipped, and only own
+ * properties are walked, so a draft can't write to Object.prototype in the editor's page.
+ */
 function set(target: Record<string, unknown>, parts: string[], value: unknown) {
+  if (!parts.length || parts.some((p) => UNSAFE.has(p))) return;
   let at = target;
   for (const p of parts.slice(0, -1)) {
-    if (typeof at[p] !== "object" || at[p] === null || Array.isArray(at[p])) at[p] = {};
+    const next = Object.hasOwn(at, p) ? at[p] : undefined;
+    if (typeof next !== "object" || next === null || Array.isArray(next)) at[p] = {};
     at = at[p] as Record<string, unknown>;
   }
-  if (!(parts.at(-1)! in at)) at[parts.at(-1)!] = value;
+  const last = parts.at(-1)!;
+  if (!Object.hasOwn(at, last)) at[last] = value;
 }
 
 /**
@@ -49,7 +60,7 @@ export function triggerExample(draft: Draft): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if ((t.type === "manual" || t.type === "webhook") && Array.isArray(t.input)) {
     for (const f of t.input as { name?: unknown; type?: unknown }[]) {
-      if (typeof f?.name !== "string") continue;
+      if (typeof f?.name !== "string" || UNSAFE.has(f.name)) continue;
       out[f.name] = f.type === "number" ? 1 : f.type === "boolean" ? true : `example ${f.name}`;
     }
   }

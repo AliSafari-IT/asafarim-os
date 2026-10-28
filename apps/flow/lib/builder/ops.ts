@@ -131,14 +131,20 @@ function renameReads(value: unknown, from: string, to: string): unknown {
 }
 
 /**
- * Rename node `from` to `to`: its edges in, the start, its layout, and what reads it (placeholders,
- * a condition's fields, an approval's draft, an issue's approval) follow. Unchanged when `to` isn't a
+ * Rename node `id` (its canvas id) to `to`. When its key was its own (no other node had it), its edges
+ * in, the start and what reads it (placeholders, a condition's fields, an approval's draft, an issue's
+ * approval) follow; a node without a key, or sharing one, is only given its new key: what names the
+ * old one can't tell which node it meant. Its layout follows either way. Unchanged when `to` isn't a
  * key or is taken.
  */
-export function renameNode(draft: Draft, from: string, to: string): Draft {
-  if (!isNodeKey(to) || draft.nodes.some((n) => keyOf(n) === to) || indexOf(draft, from) < 0) return draft;
-  const nodes = draft.nodes.map((n) => {
-    let m: RawNode = keyOf(n) === from ? { ...n, key: to } : { ...n };
+export function renameNode(draft: Draft, id: string, to: string): Draft {
+  const i = indexOf(draft, id);
+  if (!isNodeKey(to) || draft.nodes.some((n) => keyOf(n) === to) || i < 0) return draft;
+  const from = keyOf(draft.nodes[i]!);
+  const unique = from !== undefined && draft.nodes.filter((n) => keyOf(n) === from).length === 1;
+  const nodes = draft.nodes.map((n, j) => {
+    let m: RawNode = j === i ? { ...n, key: to } : { ...n };
+    if (!unique) return m;
     for (const f of EDGE_FIELDS) if (m[f] === from) m[f] = to;
     if (m.type === "approval" && m.draft === from) m.draft = to;
     if (m.type === "docs.issue-create" && m.approval === from) m.approval = to;
@@ -154,11 +160,12 @@ export function renameNode(draft: Draft, from: string, to: string): Draft {
     return m;
   });
   let layout = draft.layout;
-  if (layout?.[from]) {
-    const { [from]: at, ...rest } = layout;
+  if (layout?.[id]) {
+    const { [id]: at, ...rest } = layout;
     layout = { ...rest, [to]: at! };
   }
-  return { ...draft, start: draft.start === from ? to : draft.start, nodes, ...(layout ? { layout } : {}) };
+  const start = unique && draft.start === from ? to : draft.start;
+  return { ...draft, start, nodes, ...(layout ? { layout } : {}) };
 }
 
 /**

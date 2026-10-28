@@ -20,7 +20,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/base.css";
 import { memo, useMemo, useState } from "react";
-import { START_HANDLE, toCanvas, TRIGGER_ID, type Position } from "@/lib/builder/canvas";
+import { deletion, START_HANDLE, toCanvas, TRIGGER_ID, type Position } from "@/lib/builder/canvas";
 import type { Catalog, Draft, EdgeField } from "@/lib/builder/types";
 
 interface StepData extends Record<string, unknown> {
@@ -87,6 +87,9 @@ export function Canvas({
   const canvas = useMemo(() => toCanvas(draft), [draft]);
   // Where a node is while it is dragged; the draft's layout changes when it is dropped.
   const [dragging, setDragging] = useState<Record<string, Position>>({});
+  // Each node's size as React Flow measured it, handed back on every render (the nodes are rebuilt
+  // from the draft); never part of the draft: its layout holds positions only.
+  const [measured, setMeasured] = useState<Record<string, { width: number; height: number }>>({});
 
   const nodes: Node<StepData>[] = canvas.nodes.map((c) => {
     if (c.type === "trigger") {
@@ -95,6 +98,7 @@ export function Canvas({
         id: c.id,
         type: "trigger",
         position: dragging[c.id] ?? c.position,
+        ...(measured[c.id] ? { measured: measured[c.id] } : {}),
         selected: selected === c.id,
         deletable: false,
         ariaLabel: `Trigger: ${catalog.triggers.find((t) => t.type === type)?.label ?? type}`,
@@ -114,6 +118,7 @@ export function Canvas({
       id: c.id,
       type: "step",
       position: dragging[c.id] ?? c.position,
+      ...(measured[c.id] ? { measured: measured[c.id] } : {}),
       selected: selected === c.id,
       deletable: editable,
       ariaLabel: `${spec?.label ?? String(node.type)}: ${key}`,
@@ -146,6 +151,11 @@ export function Canvas({
           setDragging(({ [c.id]: _done, ...rest }) => rest);
           onMove(c.id, at);
         }
+      } else if (c.type === "dimensions" && c.dimensions) {
+        const size = c.dimensions;
+        setMeasured((m) =>
+          m[c.id]?.width === size.width && m[c.id]?.height === size.height ? m : { ...m, [c.id]: size },
+        );
       } else if (c.type === "select" && c.selected) onSelect(c.id);
     }
   };
@@ -163,10 +173,12 @@ export function Canvas({
             onConnect(c.source, (c.sourceHandle ?? "next") as EdgeField | "start", c.target);
         }}
         isValidConnection={(c) => c.source !== c.target && c.target !== TRIGGER_ID}
-        onNodesDelete={(gone) => gone.forEach((n) => n.id !== TRIGGER_ID && onDelete(n.id))}
-        onEdgesDelete={(gone) =>
-          gone.forEach((e) => onDisconnect(e.source, (e.sourceHandle ?? "next") as EdgeField | "start"))
-        }
+        onDelete={({ nodes: goneNodes, edges: goneEdges }) => {
+          // A deleted node's edges come along: they are its to rejoin, not removed on their own first.
+          const d = deletion(goneNodes, goneEdges);
+          d.edges.forEach((e) => onDisconnect(e.source, e.field));
+          d.nodes.forEach(onDelete);
+        }}
         nodesDraggable={editable}
         nodesConnectable={editable}
         elementsSelectable
