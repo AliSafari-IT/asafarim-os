@@ -85,6 +85,11 @@ function writeApp(m: Record<string, unknown>) {
   put("apps/shop/app/api/health/route.ts", "export function GET() {}");
 }
 
+/** Writes app code that starts the outbox relay, as an app that publishes events must (`event-relay-not-started`). */
+function writeRelayStart(id = "shop") {
+  put(`apps/${id}/lib/relay.ts`, `startAppRelay({ appId: "${id}", pool });`);
+}
+
 /** Writes a second app `id` (no permissions, its own image) with the given `domains`, and its health route. */
 function writeOtherApp(id: string, domains?: Record<string, unknown>) {
   put(
@@ -332,6 +337,7 @@ describe("helpers", () => {
 
 describe("platform manifest review", () => {
   it("reports nothing for an app whose code matches its manifest", () => {
+    writeRelayStart();
     writeApp(
       manifest({
         routes: [
@@ -364,6 +370,7 @@ describe("platform manifest review", () => {
   });
 
   it("reports a missing or broken event schema", () => {
+    writeRelayStart();
     writeApp(
       manifest({
         events: {
@@ -393,6 +400,7 @@ describe("platform manifest review", () => {
   });
 
   it("reports an event schema that doesn't compile as the publisher compiles it (strict JSON Schema 2020-12)", () => {
+    writeRelayStart();
     writeApp(
       manifest({
         events: {
@@ -438,6 +446,7 @@ describe("platform manifest review", () => {
   });
 
   it("reports an event schema larger than core-api's upload limits, per type and for the whole upload", () => {
+    writeRelayStart();
     const at = (n: number) => `shop.order.s${n}.v1`;
     const schemaOf = (size: number) => {
       const base = { type: "object", description: "" };
@@ -494,6 +503,59 @@ describe("platform manifest review", () => {
     expect(kinds()).toEqual([]);
   });
 
+  it("reports an app that publishes events but never starts the outbox relay", () => {
+    writeApp(
+      manifest({
+        events: {
+          publishes: [
+            { type: "shop.order.placed.v1", schema: "./events/placed.json" },
+            { type: "shop.order.paid.v1", schema: "./events/paid.json" },
+          ],
+        },
+      }),
+    );
+    put("apps/shop/events/placed.json", JSON.stringify({ type: "object" }));
+    put("apps/shop/events/paid.json", JSON.stringify({ type: "object" }));
+    put(
+      "apps/shop/lib/x.ts",
+      `"shop.orders.read"; "shop.orders.write";
+      await publisher.publish(tx, "shop.order.placed.v1", {}); await publisher.publish(tx, "shop.order.paid.v1", {});`,
+    );
+    // a comment, a test, a longer name or a string that only contains the name don't start the relay
+    put("apps/shop/lib/boot.ts", `// startAppRelay({ appId: "shop", pool });\nrestartRelayLater(); "startRelay soon";`);
+    put("apps/shop/lib/boot.test.ts", `startAppRelay({ appId: "shop", pool });`);
+    expect(kinds()).toEqual(["event-relay-not-started events.publishes"]);
+    expect(json().reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "event-relay-not-started",
+      subject: "events.publishes",
+      file: "apps/shop/platform.app.json",
+      message:
+        "the manifest publishes shop.order.placed.v1 and shop.order.paid.v1, but no code starts the outbox relay (startAppRelay from @asafarim/app-sdk/events, or startRelay from @asafarim/events), so published events stay in the app's outbox and never reach the bus or any subscriber (start the relay when the app boots)",
+    });
+    expect(review(["--markdown"]).lines[0]!).toContain("| event-relay-not-started | events.publishes |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // Either starter counts, wherever the app's runtime code calls it.
+    put(
+      "apps/shop/app/instrumentation.ts",
+      `import { startRelay } from "@asafarim/events";\nstartRelay({ appId: "shop", pool, servers });`,
+    );
+    expect(kinds()).toEqual([]);
+    rmSync(path.join(root, "apps/shop/app/instrumentation.ts"));
+    writeRelayStart();
+    expect(kinds()).toEqual([]);
+  });
+
+  it("doesn't ask an app that publishes nothing to start the relay", () => {
+    writeApp(manifest({ events: { subscribes: [{ type: "billing.invoice.paid.v1", handler: "/events/paid" }] } }));
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write"; "billing.invoice.paid.v1";`);
+    expect(kinds()).toEqual([]);
+    writeApp(manifest({ events: { publishes: [] } }));
+    expect(kinds()).toEqual([]);
+  });
+
   it("reports a permission nothing asks for; a gateway route or a test doesn't count as code, but a route does count", () => {
     writeApp(manifest({ routes: [{ path: "/api/orders", permission: "shop.orders.write" }] }));
     put("apps/shop/app/api/orders/route.ts", "export function POST() {}");
@@ -533,6 +595,7 @@ describe("platform manifest review", () => {
   });
 
   it("reports an event type the code names in its own namespace that the manifest doesn't publish", () => {
+    writeRelayStart();
     writeApp(
       manifest({
         events: {
@@ -1548,6 +1611,7 @@ describe("platform manifest review", () => {
   });
 
   it("reports a subscription to a type its publisher in this repo doesn't publish", () => {
+    writeRelayStart();
     writeApp(
       manifest({
         events: {
