@@ -17,6 +17,7 @@
           "assets",
           "auth",
           "core",
+          "deadletter",
           "gateway",
           "id",
           "identity",
