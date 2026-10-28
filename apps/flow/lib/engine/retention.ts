@@ -1,7 +1,8 @@
 /**
  * Retention: a step's `input` and `output` may hold what the acting app sent (a drafted issue, for
  * one), and an approval's `edited` and `comment` what the approver wrote, so they are cleared 30 days
- * after the run ended. The metadata stays: statuses, timing, ids, who decided and error codes.
+ * after the run ended. The metadata stays: statuses, timing, ids, who decided and error codes. The email
+ * rate limit's rows (`email_sends`) count for a day; they go after two.
  */
 import type { Tx } from "./store";
 
@@ -22,5 +23,6 @@ export async function clearOldPayloads(tx: Tx, now: Date, days = RETENTION_DAYS)
       WHERE a.run_id = r.id AND r.ended_at < $1 AND (a.edited IS NOT NULL OR a.comment IS NOT NULL)`,
     [before],
   );
+  await tx.query("DELETE FROM email_sends WHERE created_at < $1", [new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000)]);
   return r.rowCount ?? 0;
 }

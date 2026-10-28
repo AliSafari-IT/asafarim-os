@@ -145,10 +145,15 @@ describe("node types", () => {
       path: "type",
       message: "must be a node type",
     });
-    expect(problems(echo((d) => (node(d, "shout").type = "email.send")))).toContainEqual({
+    expect(problems(echo((d) => (node(d, "shout").type = "a.b.c.d.e")))).toContainEqual({
       node: "shout",
       path: "type",
-      message: "no connector email.send",
+      message: "must be a node type",
+    });
+    expect(problems(echo((d) => (node(d, "shout").type = "sms.send")))).toContainEqual({
+      node: "shout",
+      path: "type",
+      message: "no connector sms.send",
     });
   });
 

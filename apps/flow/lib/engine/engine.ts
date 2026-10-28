@@ -63,7 +63,10 @@ import {
   ConnectorError,
   connectors as defaultConnectors,
   DEFAULT_TIMEOUT_MS,
+  NO_SERVICES,
+  servicesFor,
   type ConnectorRegistry,
+  type ConnectorServices,
 } from "./connectors";
 import type { ApprovalRow, FlowStore, RunRow, StepRow, Tx, WorkflowRow } from "./store";
 
@@ -88,6 +91,8 @@ export interface EngineDeps {
   log: EngineLogger;
   /** The connectors nodes may use: the process's registry by default. */
   connectors?: ConnectorRegistry;
+  /** What a connector's context reaches the world with (lib/db.ts); none by default (unit tests). */
+  services?: ConnectorServices;
   /** The app's manifest: what a draft is checked against before it is published or test-run. */
   manifest?: EventsManifest;
 }
@@ -142,7 +147,10 @@ export interface StartRunOptions {
 /** A connector step a worker claimed: what it calls, and what identifies this call. */
 export interface ConnectorClaim {
   runId: string;
+  workflowId: string;
+  runStartedAt: Date;
   stepId: string;
+  stepKey: string;
   /** The step's `attempts` once claimed: the result is written only while it is still this call's. */
   attempt: number;
   type: string;
@@ -785,7 +793,18 @@ export function createEngine(deps: EngineDeps) {
         timeoutAt: new Date(at.getTime() + timeoutMs + LEASE_MARGIN_MS),
       });
       return {
-        claim: { runId, stepId: row.id, attempt, type: connector.type, input: row.input, test: run.test, timeoutMs },
+        claim: {
+          runId,
+          workflowId: run.workflowId,
+          runStartedAt: run.startedAt,
+          stepId: row.id,
+          stepKey: row.stepKey,
+          attempt,
+          type: connector.type,
+          input: row.input,
+          test: run.test,
+          timeoutMs,
+        },
         audits: [],
       };
     },
@@ -818,7 +837,10 @@ export function createEngine(deps: EngineDeps) {
           connector.run(
             {
               runId: claim.runId,
+              workflowId: claim.workflowId,
+              runStartedAt: claim.runStartedAt,
               stepId: claim.stepId,
+              stepKey: claim.stepKey,
               attempt: claim.attempt,
               test: claim.test,
               signal: controller.signal,
@@ -826,8 +848,11 @@ export function createEngine(deps: EngineDeps) {
                 info: (msg, f) => deps.log.info(msg, { ...fields, ...f }),
                 warn: (msg, f) => deps.log.warn(msg, { ...fields, ...f }),
               },
-              egress: { available: false },
-              credentials: { available: false },
+              ...servicesFor(deps.services ?? NO_SERVICES, {
+                connector: claim.type,
+                runId: claim.runId,
+                stepId: claim.stepId,
+              }),
             },
             input.data,
           ),

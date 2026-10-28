@@ -4,7 +4,8 @@
  *
  * - Only a field the node's schema marks with `templatedText()` takes them; a `{{` anywhere else in the
  *   node is refused by validation (lib/workflow/definition-v2.ts), as is a placeholder that reads a node
- *   that isn't upstream of this one on every path.
+ *   that isn't upstream of this one on every path. A JSON value's schema (a union of `templatedText()`,
+ *   other scalars, arrays and records of itself, behind `z.lazy`) marks the strings in it, never a key.
  * - Each is replaced as plain text, once, in one pass: a string as it is, any other value as its JSON. A
  *   value that itself contains `{{` is never evaluated again, so data can't inject a placeholder.
  * - A value that is missing (or null) fails the step with `missing_value`: nothing is sent half-filled.
@@ -62,16 +63,46 @@ type Visit = (path: Path, text: string, isTemplated: boolean) => string | void;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** The schema under optional, nullable and default wrappers. */
+interface Def {
+  type: string;
+  innerType?: z.ZodType;
+  getter?: () => z.ZodType;
+  options?: readonly z.ZodType[];
+  shape?: Record<string, z.ZodType>;
+  element?: z.ZodType;
+  valueType?: z.ZodType;
+}
+
+/** The schema under optional, nullable, default and lazy wrappers. */
 function unwrap(schema: z.ZodType): z.ZodType {
   let s = schema;
   for (;;) {
     if (templated.has(s)) return s;
-    const def = s.def as { type: string; innerType?: z.ZodType };
+    const def = s.def as Def;
     if ((def.type === "optional" || def.type === "nullable" || def.type === "default") && def.innerType) {
       s = def.innerType;
+    } else if (def.type === "lazy" && def.getter) {
+      s = def.getter();
     } else return s;
   }
+}
+
+/**
+ * The option of a union that fits the shape of `value` (a string, an array, an object), so a JSON
+ * value's schema (`z.union([templatedText(), …, z.array(…), z.record(…)])`) marks its strings.
+ */
+function branch(schema: z.ZodType | undefined, value: unknown): z.ZodType | undefined {
+  const def = schema?.def as Def | undefined;
+  if (def?.type !== "union" || !def.options) return schema;
+  const fits = (option: z.ZodType) => {
+    const s = unwrap(option);
+    const type = (s.def as Def).type;
+    if (typeof value === "string") return templated.has(s) || type === "string";
+    if (Array.isArray(value)) return type === "array";
+    return isRecord(value) && (type === "object" || type === "record");
+  };
+  const found = def.options.find(fits);
+  return found ? unwrap(found) : undefined;
 }
 
 /**
@@ -79,20 +110,21 @@ function unwrap(schema: z.ZodType): z.ZodType {
  * schema marks it templated, and what it returns replaces it. A new value; `value` is left as it was.
  */
 export function walkStrings(schema: z.ZodType | undefined, value: unknown, visit: Visit, path: Path = []): unknown {
-  const s = schema ? unwrap(schema) : undefined;
+  const s = branch(schema ? unwrap(schema) : undefined, value);
   if (typeof value === "string") {
     const out = visit(path, value, s !== undefined && templated.has(s));
     return out ?? value;
   }
-  const def = s?.def as { type?: string; shape?: Record<string, z.ZodType>; element?: z.ZodType } | undefined;
+  const def = s?.def as Def | undefined;
   if (Array.isArray(value)) {
     const element = def?.type === "array" ? def.element : undefined;
     return value.map((v, i) => walkStrings(element, v, visit, [...path, i]));
   }
   if (isRecord(value)) {
     const shape = def?.type === "object" ? def.shape : undefined;
+    const values = def?.type === "record" ? def.valueType : undefined;
     return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [k, walkStrings(shape?.[k], v, visit, [...path, k])]),
+      Object.entries(value).map(([k, v]) => [k, walkStrings(shape?.[k] ?? values, v, visit, [...path, k])]),
     );
   }
   return value;
