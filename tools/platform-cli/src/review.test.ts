@@ -79,6 +79,15 @@ function manifest(over: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * The manifest `m` with a postgres database, and runtime code in its app that reads `DATABASE_URL`: events
+ * need the app's own database, since the outbox and the inbox are tables in it (`events-without-database`).
+ */
+function withDatabase(m: Record<string, unknown>): Record<string, unknown> {
+  put(`apps/${String(m.id)}/lib/db.ts`, "export const url = process.env.DATABASE_URL;");
+  return { ...m, database: { engine: "postgres", migrations: "sql" } };
+}
+
 /** Writes the manifest, and the `/api/health` route `manifest()` declares as its health paths. */
 function writeApp(m: Record<string, unknown>) {
   put("apps/shop/platform.app.json", JSON.stringify(m));
@@ -339,13 +348,15 @@ describe("platform manifest review", () => {
   it("reports nothing for an app whose code matches its manifest", () => {
     writeRelayStart();
     writeApp(
-      manifest({
-        routes: [
-          { path: "/api/orders", methods: ["GET"], permission: "shop.orders.read" },
-          { path: "/internal/**", expose: false },
-        ],
-        events: { publishes: [{ type: "shop.order.placed.v1", schema: "./events/placed.json" }] },
-      }),
+      withDatabase(
+        manifest({
+          routes: [
+            { path: "/api/orders", methods: ["GET"], permission: "shop.orders.read" },
+            { path: "/internal/**", expose: false },
+          ],
+          events: { publishes: [{ type: "shop.order.placed.v1", schema: "./events/placed.json" }] },
+        }),
+      ),
     );
     put("apps/shop/events/placed.json", JSON.stringify({ type: "object" }));
     put("apps/shop/app/api/health/route.ts", "export function GET() {}");
@@ -372,16 +383,18 @@ describe("platform manifest review", () => {
   it("reports a missing or broken event schema", () => {
     writeRelayStart();
     writeApp(
-      manifest({
-        events: {
-          publishes: [
-            { type: "shop.order.placed.v1", schema: "./events/placed.json" },
-            { type: "shop.order.paid.v1", schema: "./events/paid.json" },
-            { type: "shop.order.sent.v1", schema: "./events/sent.json" },
-            { type: "shop.order.lost.v1", schema: "./events/lost.json" },
-          ],
-        },
-      }),
+      withDatabase(
+        manifest({
+          events: {
+            publishes: [
+              { type: "shop.order.placed.v1", schema: "./events/placed.json" },
+              { type: "shop.order.paid.v1", schema: "./events/paid.json" },
+              { type: "shop.order.sent.v1", schema: "./events/sent.json" },
+              { type: "shop.order.lost.v1", schema: "./events/lost.json" },
+            ],
+          },
+        }),
+      ),
     );
     put("apps/shop/events/paid.json", "{ nope");
     put("apps/shop/events/sent.json", "[1]");
@@ -402,16 +415,18 @@ describe("platform manifest review", () => {
   it("reports an event schema that doesn't compile as the publisher compiles it (strict JSON Schema 2020-12)", () => {
     writeRelayStart();
     writeApp(
-      manifest({
-        events: {
-          publishes: [
-            { type: "shop.order.placed.v1", schema: "./events/placed.json" },
-            { type: "shop.order.paid.v1", schema: "./events/paid.json" },
-            { type: "shop.order.sent.v1", schema: "./events/sent.json" },
-            { type: "shop.order.lost.v1", schema: "./events/lost.json" },
-          ],
-        },
-      }),
+      withDatabase(
+        manifest({
+          events: {
+            publishes: [
+              { type: "shop.order.placed.v1", schema: "./events/placed.json" },
+              { type: "shop.order.paid.v1", schema: "./events/paid.json" },
+              { type: "shop.order.sent.v1", schema: "./events/sent.json" },
+              { type: "shop.order.lost.v1", schema: "./events/lost.json" },
+            ],
+          },
+        }),
+      ),
     );
     // Compiles: a plain object schema with a known format.
     put(
@@ -455,11 +470,13 @@ describe("platform manifest review", () => {
     };
     const publish = (n: number) =>
       writeApp(
-        manifest({
-          events: {
-            publishes: Array.from({ length: n }, (_, i) => ({ type: at(i), schema: `./events/s${i}.json` })),
-          },
-        }),
+        withDatabase(
+          manifest({
+            events: {
+              publishes: Array.from({ length: n }, (_, i) => ({ type: at(i), schema: `./events/s${i}.json` })),
+            },
+          }),
+        ),
       );
     const code = (n: number) =>
       put(
@@ -505,14 +522,16 @@ describe("platform manifest review", () => {
 
   it("reports an app that publishes events but never starts the outbox relay", () => {
     writeApp(
-      manifest({
-        events: {
-          publishes: [
-            { type: "shop.order.placed.v1", schema: "./events/placed.json" },
-            { type: "shop.order.paid.v1", schema: "./events/paid.json" },
-          ],
-        },
-      }),
+      withDatabase(
+        manifest({
+          events: {
+            publishes: [
+              { type: "shop.order.placed.v1", schema: "./events/placed.json" },
+              { type: "shop.order.paid.v1", schema: "./events/paid.json" },
+            ],
+          },
+        }),
+      ),
     );
     put("apps/shop/events/placed.json", JSON.stringify({ type: "object" }));
     put("apps/shop/events/paid.json", JSON.stringify({ type: "object" }));
@@ -554,10 +573,14 @@ describe("platform manifest review", () => {
   });
 
   it("doesn't ask an app that publishes nothing to start the relay", () => {
-    writeApp(manifest({ events: { subscribes: [{ type: "billing.invoice.paid.v1", handler: "/events/paid" }] } }));
+    writeApp(
+      withDatabase(
+        manifest({ events: { subscribes: [{ type: "billing.invoice.paid.v1", handler: "/events/paid" }] } }),
+      ),
+    );
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write"; "billing.invoice.paid.v1";`);
     expect(kinds()).toEqual([]);
-    writeApp(manifest({ events: { publishes: [] } }));
+    writeApp(withDatabase(manifest({ events: { publishes: [] } })));
     expect(kinds()).toEqual([]);
   });
 
@@ -602,12 +625,14 @@ describe("platform manifest review", () => {
   it("reports an event type the code names in its own namespace that the manifest doesn't publish", () => {
     writeRelayStart();
     writeApp(
-      manifest({
-        events: {
-          publishes: [{ type: "shop.order.placed.v1", schema: "./events/placed.json" }],
-          subscribes: [{ type: "billing.invoice.paid.v1", handler: "/events/invoice-paid" }],
-        },
-      }),
+      withDatabase(
+        manifest({
+          events: {
+            publishes: [{ type: "shop.order.placed.v1", schema: "./events/placed.json" }],
+            subscribes: [{ type: "billing.invoice.paid.v1", handler: "/events/invoice-paid" }],
+          },
+        }),
+      ),
     );
     put("apps/shop/events/placed.json", JSON.stringify({ type: "object" }));
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
@@ -1595,16 +1620,18 @@ describe("platform manifest review", () => {
 
   it("reports a subscription with no route serving its handler and no code naming its type", () => {
     writeApp(
-      manifest({
-        events: {
-          subscribes: [
-            { type: "billing.invoice.paid.v1", handler: "/events/invoice-paid" },
-            { type: "billing.invoice.void.v1", handler: "/events/billing/void" },
-            { type: "crm.lead.won.v1", handler: "/events/lead-won" },
-            { type: "crm.lead.lost.v1", handler: "/events/lead-lost" },
-          ],
-        },
-      }),
+      withDatabase(
+        manifest({
+          events: {
+            subscribes: [
+              { type: "billing.invoice.paid.v1", handler: "/events/invoice-paid" },
+              { type: "billing.invoice.void.v1", handler: "/events/billing/void" },
+              { type: "crm.lead.won.v1", handler: "/events/lead-won" },
+              { type: "crm.lead.lost.v1", handler: "/events/lead-lost" },
+            ],
+          },
+        }),
+      ),
     );
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
     // served by an exact route, by a dynamic one, and by code that names the type; the last has nothing
@@ -1618,21 +1645,23 @@ describe("platform manifest review", () => {
   it("reports a subscription to a type its publisher in this repo doesn't publish", () => {
     writeRelayStart();
     writeApp(
-      manifest({
-        events: {
-          publishes: [{ type: "shop.order.placed.v1", schema: "./events/placed.json" }],
-          subscribes: [
-            { type: "billing.invoice.paid.v1", handler: "/events/a" },
-            { type: "billing.invoice.void.v1", handler: "/events/a" },
-            { type: "billing.invoice.void.v1", handler: "/events/b" },
-            { type: "billing.refund.issued.v1", handler: "/events/a" },
-            { type: "crm.lead.won.v1", handler: "/events/a" },
-            { type: "core.app.activated.v1", handler: "/events/a" },
-            { type: "shop.order.placed.v1", handler: "/events/a" },
-            { type: "shop.order.shipped.v1", handler: "/events/a" },
-          ],
-        },
-      }),
+      withDatabase(
+        manifest({
+          events: {
+            publishes: [{ type: "shop.order.placed.v1", schema: "./events/placed.json" }],
+            subscribes: [
+              { type: "billing.invoice.paid.v1", handler: "/events/a" },
+              { type: "billing.invoice.void.v1", handler: "/events/a" },
+              { type: "billing.invoice.void.v1", handler: "/events/b" },
+              { type: "billing.refund.issued.v1", handler: "/events/a" },
+              { type: "crm.lead.won.v1", handler: "/events/a" },
+              { type: "core.app.activated.v1", handler: "/events/a" },
+              { type: "shop.order.placed.v1", handler: "/events/a" },
+              { type: "shop.order.shipped.v1", handler: "/events/a" },
+            ],
+          },
+        }),
+      ),
     );
     put("apps/shop/events/placed.json", JSON.stringify({ type: "object" }));
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write"; "shop.order.placed.v1";`);
@@ -1679,7 +1708,9 @@ describe("platform manifest review", () => {
   });
 
   it("skips publishers whose manifest is broken or invalid", () => {
-    writeApp(manifest({ events: { subscribes: [{ type: "billing.invoice.paid.v1", handler: "/events/a" }] } }));
+    writeApp(
+      withDatabase(manifest({ events: { subscribes: [{ type: "billing.invoice.paid.v1", handler: "/events/a" }] } })),
+    );
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
     put("apps/shop/app/events/a/route.ts", `import "@/lib/x";\nexport function POST() {}`);
     put("apps/billing/platform.app.json", JSON.stringify({ id: "billing" }));
@@ -1771,6 +1802,71 @@ describe("platform manifest review", () => {
     expect(kinds()).toEqual([]);
     writeApp(manifest({ secrets: ["DATABASE_URL"] }));
     expect(kinds()).toEqual([]);
+  });
+
+  it("reports events declared without a database for the outbox and inbox", () => {
+    // no events: nothing to report
+    put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
+    writeApp(manifest());
+    expect(kinds()).toEqual([]);
+
+    put("apps/shop/lib/events.ts", `export const PLACED = "shop.order.placed.v1";`);
+    put("apps/shop/app/events/paid/route.ts", `import "@/lib/x";\nexport function POST() {}`);
+    writeRelayStart();
+    put("apps/shop/events/placed.json", JSON.stringify({ type: "object" }));
+    const publishes = [{ type: "shop.order.placed.v1", schema: "./events/placed.json" }];
+    const subscribes = [{ type: "core.app.installed.v1", handler: "/events/paid" }];
+
+    // publishing with engine "none": one finding, pointing at the manifest
+    writeApp(manifest({ events: { publishes } }));
+    expect(kinds()).toEqual(["events-without-database events"]);
+    const out = json();
+    expect(out.reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "events-without-database",
+      subject: "events",
+      file: "apps/shop/platform.app.json",
+      message:
+        'the manifest publishes 1 event type, but says database.engine: "none"; @asafarim/events writes the outbox and inbox rows in the app\'s own Postgres transaction, and the platform provisions no database, so none of the app\'s events flow (declare database.engine: "postgres" with its migrations, or list DATABASE_URL in secrets for a database the app brings itself)',
+    });
+    expect(review().lines.join("\n")).toMatch(/\[events-without-database\] the manifest publishes 1 event type/);
+    expect(review(["--markdown"]).lines[0]!).toContain("| events-without-database | events |");
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    const messagesOf = (kind: string) =>
+      (JSON.parse(review(["--json"]).lines[0]!) as { reviews: AppReview[] }).reviews[0]!.findings.filter(
+        (f) => f.kind === kind,
+      ).map((f) => f.message);
+    // subscribing alone needs it too, and publishing and subscribing are named in one finding (the other
+    // findings here are about the fixture's code, not the database)
+    writeApp(manifest({ events: { subscribes } }));
+    expect(messagesOf("events-without-database")).toEqual([
+      expect.stringMatching(/^the manifest subscribes to 1 event type, but says database\.engine: "none"/),
+    ]);
+    writeApp(
+      manifest({
+        events: { publishes, subscribes: [...subscribes, { ...subscribes[0]!, type: "core.app.removed.v1" }] },
+      }),
+    );
+    expect(messagesOf("events-without-database")).toEqual([
+      expect.stringMatching(/^the manifest publishes 1 event type and subscribes to 2 event types, but/),
+    ]);
+
+    // empty lists declare no events
+    writeApp(manifest({ events: { publishes: [], subscribes: [] } }));
+    expect(messagesOf("events-without-database")).toEqual([]);
+
+    // a postgres database, or DATABASE_URL as the app's own secret, holds the outbox and inbox
+    put("apps/shop/lib/db.ts", "export const url = process.env.DATABASE_URL;");
+    writeApp(manifest({ events: { publishes }, database: { engine: "postgres", migrations: "sql" } }));
+    expect(kinds()).toEqual([]);
+    writeApp(manifest({ events: { publishes }, secrets: ["DATABASE_URL"] }));
+    expect(kinds()).toEqual([]);
+
+    // code that reads DATABASE_URL with engine "none" is reported once, as database-not-declared
+    writeApp(manifest({ events: { publishes } }));
+    expect(kinds()).toEqual(["database-not-declared DATABASE_URL"]);
   });
 
   it("reports a postgres database that no code or Prisma schema reads", () => {
@@ -2087,16 +2183,18 @@ describe("platform manifest review", () => {
     put("apps/shop/lib/x.ts", code);
     const sub = (type: string, handler: string) => ({ type, handler });
     writeApp(
-      manifest({
-        events: {
-          subscribes: [
-            sub("billing.invoice.paid.v1", "/events/paid"),
-            sub("billing.invoice.void.v1", "/events/void"),
-            sub("billing.invoice.paid.v1", "/events/paid-v2"),
-            sub("billing.invoice.void.v1", "/events/void"),
-          ],
-        },
-      }),
+      withDatabase(
+        manifest({
+          events: {
+            subscribes: [
+              sub("billing.invoice.paid.v1", "/events/paid"),
+              sub("billing.invoice.void.v1", "/events/void"),
+              sub("billing.invoice.paid.v1", "/events/paid-v2"),
+              sub("billing.invoice.void.v1", "/events/void"),
+            ],
+          },
+        }),
+      ),
     );
     expect(kinds()).toEqual([
       "subscription-declared-twice subscription: billing.invoice.paid.v1",
@@ -2127,23 +2225,27 @@ describe("platform manifest review", () => {
     // the manifest schema accepts the repeat, which is why the review reports it
     expect(
       validateManifest(
-        manifest({
-          events: { subscribes: [sub("billing.invoice.paid.v1", "/a"), sub("billing.invoice.paid.v1", "/b")] },
-        }),
+        withDatabase(
+          manifest({
+            events: { subscribes: [sub("billing.invoice.paid.v1", "/a"), sub("billing.invoice.paid.v1", "/b")] },
+          }),
+        ),
       ).ok,
     ).toBe(true);
 
     // each type once, also other versions of the same type: nothing to report
     writeApp(
-      manifest({
-        events: {
-          subscribes: [
-            sub("billing.invoice.paid.v1", "/events/paid"),
-            sub("billing.invoice.paid.v2", "/events/paid"),
-            sub("billing.invoice.void.v1", "/events/void"),
-          ],
-        },
-      }),
+      withDatabase(
+        manifest({
+          events: {
+            subscribes: [
+              sub("billing.invoice.paid.v1", "/events/paid"),
+              sub("billing.invoice.paid.v2", "/events/paid"),
+              sub("billing.invoice.void.v1", "/events/void"),
+            ],
+          },
+        }),
+      ),
     );
     put("apps/shop/lib/x.ts", `${code} "billing.invoice.paid.v2";`);
     expect(kinds()).toEqual([]);
