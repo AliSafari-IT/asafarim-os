@@ -33,6 +33,8 @@ export interface SmtpConfig {
    * pins the connection to them with it; TLS still verifies the certificate against `host`.
    */
   lookup?: LookupFunction;
+  /** Extra CA certificates to trust for the server's certificate (default: the system's). */
+  ca?: string | Buffer;
 }
 
 export interface SmtpMessage {
@@ -224,11 +226,11 @@ class Conversation {
   }
 
   /** STARTTLS: hand the plain socket to TLS and keep talking on the encrypted one. */
-  async upgrade(host: string): Promise<void> {
+  async upgrade(host: string, ca?: string | Buffer): Promise<void> {
     if (this.lines.length || this.buffer) throw new SmtpError("starttls_pipelining");
     this.detach();
     const plain = this.socket;
-    const secure = tlsConnect({ socket: plain as Socket, servername: host });
+    const secure = tlsConnect({ socket: plain as Socket, servername: host, ...(ca ? { ca } : {}) });
     await new Promise<void>((resolve, reject) => {
       secure.once("secureConnect", () => resolve());
       secure.once("error", (err) => reject(err));
@@ -251,9 +253,10 @@ class Conversation {
 function open(config: SmtpConfig): Promise<Socket | TLSSocket> {
   return new Promise((resolve, reject) => {
     const lookup = config.lookup ? { lookup: config.lookup } : {};
+    const ca = config.ca ? { ca: config.ca } : {};
     const socket =
       config.security === "tls"
-        ? tlsConnect({ host: config.host, port: config.port, servername: config.host, ...lookup }, () =>
+        ? tlsConnect({ host: config.host, port: config.port, servername: config.host, ...lookup, ...ca }, () =>
             resolve(socket),
           )
         : netConnect({ host: config.host, port: config.port, ...lookup }, () => resolve(socket));
@@ -292,7 +295,7 @@ export class SmtpClient {
         if (!extensions(ehlo).some((e) => e === "STARTTLS")) throw new SmtpError("starttls_unavailable");
         await talk.command("STARTTLS", [220], "starttls");
         try {
-          await talk.upgrade(c.host);
+          await talk.upgrade(c.host, c.ca);
         } catch (err) {
           throw err instanceof SmtpError ? err : new SmtpError("tls");
         }

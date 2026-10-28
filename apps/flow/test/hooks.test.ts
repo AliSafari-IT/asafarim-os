@@ -16,7 +16,7 @@ import { createEngine } from "../lib/engine/engine";
 import { publisher } from "../lib/events";
 import { BODY_MAX_BYTES, readCapped } from "../lib/hooks/body";
 import { curlExample, sampleBody } from "../lib/hooks/example";
-import { githubAccepts, githubEventNames } from "../lib/hooks/github";
+import { githubAccepts, githubEventNames, githubTriggerData } from "../lib/hooks/github";
 import { createRateLimiter, GLOBAL_RATE_LIMIT } from "../lib/hooks/limiter";
 import { receiveHook, type ReceiveDeps } from "../lib/hooks/receive";
 import { signGeneric, signGithub, verifyGeneric } from "../lib/hooks/signature";
@@ -424,6 +424,25 @@ describe("GitHub", () => {
     const merged = await t.github("pull_request", { action: "closed", pull_request: { merged: true }, ...REPO });
     expect(merged.status).toBe(202);
     expect(t.mem.runs.get(merged.body.runId as string)).toMatchObject({ status: "succeeded" });
+  });
+
+  it("a run's trigger data: the payload, with its issue's or pull request's label names as labels", async () => {
+    expect(
+      githubTriggerData({ action: "opened", issue: { labels: [{ name: "bug" }, { name: "ui" }, { id: 3 }] } }),
+    ).toEqual({
+      action: "opened",
+      issue: { labels: [{ name: "bug" }, { name: "ui" }, { id: 3 }] },
+      labels: ["bug", "ui"],
+    });
+    expect(githubTriggerData({ pull_request: { labels: [{ name: "merged" }] } }).labels).toEqual(["merged"]);
+    expect(githubTriggerData({ labels: "not GitHub's" }).labels).toEqual([]);
+    const t = setup();
+    const merged = await t.github("pull_request", {
+      action: "closed",
+      pull_request: { merged: true, labels: [{ name: "release" }] },
+      ...REPO,
+    });
+    expect(t.mem.runs.get(merged.body.runId as string)!.trigger).toMatchObject({ labels: ["release"] });
   });
 
   it("without X-GitHub-Event: 400", async () => {

@@ -15,7 +15,8 @@
  *   restart Docs, then the `@after-restart` test: the notes are still in its database →
  *   Flow (build and start; ADR 0001), then Docs restarted against local GitHub and Claude mocks
  *   (apps/flow/e2e/mocks.mjs): flow.spec.ts, slice 1 end to end through the bus (a #issue note, its
- *   draft, the approval, the issue) →
+ *   draft, the approval, the issue), and the builder; slice2.spec.ts, slice 2's workflows against the
+ *   mocks of GitHub, an email server and a webhook receiver, reached through FLOW_E2E_EGRESS →
  *   stop everything. `--down` also removes the dev volumes (CI).
  *   `--screenshots` (`pnpm screenshots`): the same stack, then only core/site's screenshot spec, which
  *   writes the asafarim.site screenshots to core/site/public/screenshots/ (#70).
@@ -41,7 +42,8 @@ import {
   waitForGateway,
 } from "./infra.mjs";
 import { DEV, DEV_DIR, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
-import { AI_MOCK_URL, GITHUB_MOCK_URL } from "../../apps/flow/e2e/mocks.mjs";
+import { AI_MOCK_URL, GITHUB_MOCK_URL, GITHUB_TLS_PORT, RECEIVER_PORT, SMTP_PORT } from "../../apps/flow/e2e/mocks.mjs";
+import { makeE2eCert } from "./e2e-tls.mjs";
 
 const NOTES_DIR = path.join(ROOT, "apps/notes");
 const DOCS_DIR = path.join(ROOT, "apps/docs");
@@ -134,15 +136,24 @@ try {
   console.log(`${green("✔")} Docs is up at ${DOCS_URL}, reading the fixtures`);
 
   // Flow (ADR 0001): it consumes Docs' events from the bus, so it runs next to Docs.
+  const e2eTls = makeE2eCert(path.join(DEV_DIR, "e2e-tls"));
   if (!SCREENSHOTS) {
     console.log(bold("Building Flow…"));
     const flowNext = path.join(FLOW_DIR, "node_modules/next/dist/bin/next");
     const flowBuild = spawnSync(process.execPath, [flowNext, "build"], { cwd: FLOW_DIR, stdio: "inherit" });
     if (flowBuild.status !== 0) throw new Error("next build (flow) failed");
-    // A credentials key of its own (none in .dev/): the builder's spec adds a credential and a hook secret.
+    // A credentials key of its own (none in .dev/): the specs add credentials and hook secrets. And the
+    // e2e's routes (apps/flow/lib/egress/e2e.ts): GitHub, the email server and the webhook receiver are
+    // the local mocks (apps/flow/e2e/mocks.mjs), behind a certificate made for this run only.
     const flow = start("flow", [flowNext, "start", "--port", String(DEV.apps.flow)], FLOW_DIR, {
       ...process.env,
       FLOW_CREDENTIALS_KEY: process.env.FLOW_CREDENTIALS_KEY ?? randomBytes(32).toString("base64"),
+      FLOW_E2E_EGRESS: [
+        `api.github.com:443=${GITHUB_TLS_PORT}`,
+        `hooks.e2e.test:443=${RECEIVER_PORT}`,
+        `smtp.e2e.test:465=${SMTP_PORT}`,
+      ].join(","),
+      FLOW_E2E_EGRESS_CA: e2eTls.cert,
     });
     // Flow's own answer, not another process that holds the port.
     const live = await (await waitFor(`${FLOW_URL}/health/live`)).json();
@@ -209,7 +220,11 @@ try {
     );
     // Last: it writes notes in Docs, which the Docs suites don't expect. Docs drafts and creates
     // issues there, against local mocks of GitHub and Claude (never the real ones; fake credentials).
-    start("mocks", [path.join(FLOW_DIR, "e2e/mocks.mjs")]);
+    start("mocks", [path.join(FLOW_DIR, "e2e/mocks.mjs")], ROOT, {
+      ...process.env,
+      E2E_TLS_KEY: e2eTls.key,
+      E2E_TLS_CERT: e2eTls.cert,
+    });
     await waitFor(`${GITHUB_MOCK_URL}/user`);
     console.log(bold("Restarting Docs against the GitHub and Claude mocks…"));
     await stopDocs();

@@ -13,7 +13,8 @@
  *                                           timestamp more than 5 minutes off is wrong too
  *   then the body is parsed: not JSON  415
  *
- * A GitHub `ping` answers 200. Otherwise the run starts (lib/engine startRun) with the trigger event id
+ * A GitHub `ping` answers 200. Otherwise the run starts (lib/engine startRun), a GitHub one with the
+ * payload and its labels' names (lib/hooks/github.ts githubTriggerData), with the trigger event id
  * `hook:<id>:<delivery>`: X-GitHub-Delivery for GitHub, X-Flow-Delivery, or else the signature, so a
  * redelivery is `duplicate` and answers 200 {duplicate:true}. A run: 202 {runId}. A paused workflow or
  * Settings `paused_all`: 202 {started:false}; a GitHub event the trigger doesn't take: 202
@@ -27,7 +28,7 @@ import { CredentialError } from "../credentials/cipher";
 import type { StartResult, StartRunOptions } from "../engine/engine";
 import { HOOK_ID, type TriggerV2 } from "../workflow/definition-v2";
 import { BODY_MAX_BYTES, readCapped } from "./body";
-import { githubAccepts } from "./github";
+import { githubAccepts, githubTriggerData } from "./github";
 import type { RateLimiter } from "./limiter";
 import { verifyGeneric, verifyGithub, verifyNothing } from "./signature";
 import type { ReceivingHook } from "./store";
@@ -127,7 +128,7 @@ export async function receiveHook(request: Request, id: string, deps: ReceiveDep
     const r = await deps.start(hook, {
       workflowKey: hook.workflowKey,
       trigger: github ? "github" : "webhook",
-      data,
+      data: github && isRecord(data) ? githubTriggerData(data) : data,
       triggerEventId: `hook:${hook.id}:${delivery}`,
       accepts,
     });

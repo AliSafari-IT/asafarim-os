@@ -79,6 +79,15 @@ export default async function ApprovalPage({
           </a>{" "}
           <Status value={run.status} />
         </dd>
+        {step.reviews === "nothing" ? (
+          <>
+            <dt>Payload</dt>
+            <dd>
+              {/* What started the run: a plain decision is about it. Shown as data, never rendered. */}
+              <pre data-testid="payload">{JSON.stringify(run.trigger, null, 2)}</pre>
+            </dd>
+          </>
+        ) : null}
         <dt>For</dt>
         <dd>
           the role <span className="perm">{step.role}</span>

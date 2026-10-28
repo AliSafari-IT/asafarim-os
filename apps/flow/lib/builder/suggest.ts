@@ -70,7 +70,14 @@ export function triggerExample(draft: Draft): Record<string, unknown> {
     Object.assign(out, {
       action: "opened",
       repository: { full_name: repo },
-      issue: { number: 1, title: "An example issue", body: "", html_url: `https://github.com/${repo}/issues/1` },
+      issue: {
+        number: 1,
+        title: "An example issue",
+        body: "",
+        html_url: `https://github.com/${repo}/issues/1`,
+        labels: [{ name: "bug" }],
+      },
+      labels: ["bug"],
       sender: { login: "octocat" },
     });
   }
