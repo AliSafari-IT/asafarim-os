@@ -518,7 +518,7 @@ describe("platform manifest review", () => {
     // Small schemas: nothing to report.
     for (let i = 0; i < n; i++) put(`apps/shop/events/s${i}.json`, JSON.stringify(schemaOf(1024)));
     expect(kinds()).toEqual([]);
-  });
+  }, 30_000); // reviews twice with nine 64 KiB schemas; a busy CI runner can take over the default 5 s
 
   it("reports an app that publishes events but never starts the outbox relay", () => {
     writeApp(
