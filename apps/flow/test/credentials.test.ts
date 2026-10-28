@@ -192,6 +192,20 @@ describe("the kinds", () => {
     });
   });
 
+  it("smtp mode none (no TLS): a loopback host only; a TLS mode needs a DNS name", async () => {
+    const { db } = memoryCredentials();
+    const smtp = (name: string, host: string, mode: string) =>
+      createCredential(db, { ...SMTP, name, meta: { ...SMTP.meta, host, mode } }, "dev-owner", K1);
+    for (const [i, host] of ["localhost", "127.0.0.1", "::1"].entries())
+      expect(await smtp(`local-${i}`, host, "none")).toMatchObject({ ok: true });
+    expect(await smtp("remote-none", "smtp.example.com", "none")).toMatchObject({
+      ok: false,
+      error: "invalid_credential",
+    });
+    expect(await smtp("local-tls", "localhost", "tls")).toMatchObject({ ok: false, error: "invalid_credential" });
+    expect(await smtp("ip-tls", "93.184.216.34", "starttls")).toMatchObject({ ok: false, error: "invalid_credential" });
+  });
+
   it("github-token: the allowed repositories are meta", async () => {
     const { db } = memoryCredentials();
     const r = await createCredential(db, GITHUB, "dev-owner", K1);

@@ -1,7 +1,8 @@
 /**
  * Slice 2's tables on a REAL Postgres: migration 3, the credential store (bytea round trip, AAD,
  * last_used_at, the name unique), the key rotation script end to end, the settings and the kill
- * switch, and an egress call recorded in connector_calls without its query.
+ * switch, an egress call recorded in connector_calls without its query, and the email connector's rate
+ * limits on email_sends (migration 5) with the credential used through the pool.
  *
  * Needs FLOW_TEST_ADMIN_URL (or EVENTS_TEST_ADMIN_URL): a superuser URL on a DEV Postgres. Skipped
  * without it. It uses a throwaway database, dropped afterwards.
@@ -15,6 +16,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { keyringFromEnv, type Keyring } from "../lib/credentials/cipher";
 import { createCredential, listCredentials, useCredential } from "../lib/credentials/store";
 import { createEgress, EgressError } from "../lib/egress/egress";
+import { EMAIL_LIMIT_PER_WORKFLOW, EMAIL_SEND } from "../lib/connectors/email";
+import { poolDb, servicesFor, type ConnectorContext, type ConnectorError } from "../lib/engine/connectors";
 import { migrate } from "../lib/migrations";
 import { getSettings, isPausedAll, setList, setPausedAll } from "../lib/settings";
 
@@ -145,5 +148,55 @@ describe.skipIf(!ADMIN_URL)("slice 2 on Postgres (integration)", () => {
     expect(JSON.stringify(rows)).not.toContain("query-secret");
     await setPausedAll(pool, false, "dev-owner");
     expect(await isPausedAll(pool)).toBe(false);
+  });
+  it("email.send on Postgres: the credential opened with the pool, a place in email_sends, the limit per workflow", async () => {
+    const K1 = keyring({ FLOW_CREDENTIALS_KEY: KEY1 });
+    const cred = await createCredential(
+      pool,
+      {
+        kind: "smtp",
+        name: "Mail",
+        meta: { host: "smtp.example.com", port: 587, mode: "starttls", from: "flow@example.com" },
+        secret: { username: "u", password: "smtp-integration-pass" },
+      },
+      "dev-owner",
+      K1,
+    );
+    if (!cred.ok) throw new Error(cred.error);
+    await setList(pool, "email_recipients", ["@example.com"], "dev-owner");
+    await setPausedAll(pool, false, "dev-owner");
+    const sent: unknown[] = [];
+    const services = {
+      db: async () => poolDb(pool),
+      egress: { request: () => Promise.reject(new Error("unused")) },
+      smtp: { send: async (_q: unknown, req: unknown) => (sent.push(req), { messageId: "pg-1" }) },
+      keyring: () => K1,
+    };
+    const ctx = (stepId: string): ConnectorContext => ({
+      runId: "run-pg",
+      workflowId: "wf-pg",
+      runStartedAt: new Date(),
+      stepId,
+      stepKey: "mail",
+      attempt: 1,
+      test: false,
+      log: { info: () => undefined, warn: () => undefined },
+      signal: new AbortController().signal,
+      ...servicesFor(services, { connector: "email.send", runId: "run-pg", stepId }),
+    });
+    const input = EMAIL_SEND.input.parse({ credential: cred.id, to: ["ada@example.com"], subject: "s", body: "b" });
+    expect(await EMAIL_SEND.run(ctx("step-0"), input)).toEqual({ messageId: "pg-1" });
+    expect(await EMAIL_SEND.run(ctx("step-0"), input)).toEqual({ messageId: "pg-1" });
+    expect((await pool.query("SELECT count(*)::int AS n FROM email_sends")).rows[0].n).toBe(1);
+    await pool.query(
+      `INSERT INTO email_sends (step_id, run_id, workflow_id)
+       SELECT 'filler-' || g, 'run-pg', 'wf-pg' FROM generate_series(1, $1::int) g`,
+      [EMAIL_LIMIT_PER_WORKFLOW - 1],
+    );
+    const refused = await EMAIL_SEND.run(ctx("step-over"), input).catch((e: ConnectorError) => e);
+    expect(refused).toMatchObject({ code: "rate_limited", retryable: false });
+    await pool.query("UPDATE email_sends SET created_at = now() - interval '25 hours'");
+    expect(await EMAIL_SEND.run(ctx("step-later"), input)).toEqual({ messageId: "pg-1" });
+    expect(sent).toHaveLength(3);
   });
 });

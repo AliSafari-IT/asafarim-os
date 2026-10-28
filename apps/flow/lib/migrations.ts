@@ -172,6 +172,20 @@ CREATE INDEX workflow_run_steps_due ON workflow_run_steps (timeout_at) WHERE sta
   },
   {
     version: 5,
+    name: "email_sends (Flow slice 2: the email connector's rate limits)",
+    sql: `
+-- One row per email.send step that went out (or is going): 100 a day per workflow, 500 in all.
+CREATE TABLE email_sends (
+  step_id     text PRIMARY KEY,
+  run_id      text NOT NULL,
+  workflow_id text NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX email_sends_created ON email_sends (created_at);
+CREATE INDEX email_sends_workflow ON email_sends (workflow_id, created_at);`,
+  },
+  {
+    version: 6,
     name: "webhook_hooks: webhook in and the GitHub trigger",
     sql: `
 -- POST /hooks/<id> (lib/hooks/): one per workflow. The id is 128 random bits (base64url); the secret is

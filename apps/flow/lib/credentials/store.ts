@@ -7,7 +7,8 @@
  *
  * Kinds, and what is secret (encrypted) and what isn't (`meta`, shown on the page):
  *
- *   smtp            secret: username, password        meta: host, port, mode, from
+ *   smtp            secret: username, password        meta: host, port, mode (starttls, tls; none for
+ *                                                     loopback only), from
  *   github-token    secret: token                     meta: repos (the ones it may act on)
  *   webhook-secret  secret: 32 random bytes (base64url), generated here
  */
@@ -37,12 +38,18 @@ const SmtpSecret = z.object({ username: z.string().min(1).max(256), password: z.
 const GithubSecret = z.object({ token: z.string().regex(/^\S{1,255}$/) });
 const WebhookSecret = z.object({ secret: z.string().min(1) });
 
-const SmtpMeta = z.object({
-  host: Host,
-  port: z.coerce.number().int().min(1).max(65535),
-  mode: z.enum(["starttls", "tls"]),
-  from: Email,
-});
+/** `none` (no TLS): local development only, a loopback server (the connector also refuses it in production). */
+const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1"];
+const SmtpMeta = z
+  .object({
+    host: z.string().trim().toLowerCase().max(253),
+    port: z.coerce.number().int().min(1).max(65535),
+    mode: z.enum(["starttls", "tls", "none"]),
+    from: Email,
+  })
+  .refine((m) => (m.mode === "none" ? LOOPBACK_HOSTS.includes(m.host) : Host.safeParse(m.host).success), {
+    path: ["host"],
+  });
 const GithubMeta = z.object({ repos: z.array(Repo).min(1).max(50) });
 
 export const CredentialInput = z.discriminatedUnion("kind", [

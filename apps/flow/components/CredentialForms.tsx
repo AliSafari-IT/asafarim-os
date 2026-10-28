@@ -97,6 +97,7 @@ export function AddCredentialForm() {
           <select id="add-mode" name="mode" defaultValue="starttls">
             <option value="starttls">STARTTLS</option>
             <option value="tls">TLS</option>
+            <option value="none">None (local development, a loopback host only)</option>
           </select>
           <label htmlFor="add-from">From</label>
           <input id="add-from" name="from" type="email" required />
