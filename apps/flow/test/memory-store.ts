@@ -22,8 +22,13 @@ export function memoryDb() {
   /** Run ids locked by "another instance": claimOverdueRun skips them, as SKIP LOCKED does. */
   const lockedElsewhere = new Set<string>();
 
+  /** Settings `paused_all` (lib/settings.ts isPausedAll reads it through the transaction). */
+  const settings = { pausedAll: false };
+
   const tx = {
     async query(text: string, values: unknown[] = []) {
+      if (text.startsWith("SELECT value FROM settings WHERE key = 'paused_all'"))
+        return { rows: settings.pausedAll ? [{ value: true }] : [], rowCount: settings.pausedAll ? 1 : 0 };
       if (!text.startsWith("INSERT INTO asafarim_outbox")) throw new Error(`unexpected query: ${text}`);
       outbox.push({
         id: values[0] as string,
@@ -120,6 +125,7 @@ export function memoryDb() {
     approvals,
     outbox,
     lockedElsewhere,
+    settings,
     /** A workflow with one version (or a new version of an existing workflow). */
     publish(definition: WorkflowDefinition, status: WorkflowRow["status"] = "active") {
       let w = workflows.find((x) => x.key === definition.key);

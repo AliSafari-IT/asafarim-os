@@ -24,3 +24,6 @@ export function until(d: Date | null, now = new Date()): string {
 
 /** An approval id as the URL takes it: a ULID too. */
 export const APPROVAL_ID = RUN_ID;
+
+/** A credential id: a ULID too. */
+export const CREDENTIAL_ID = RUN_ID;

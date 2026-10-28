@@ -28,6 +28,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // Types only: lib/db is imported dynamically, after DATABASE_URL points at the throwaway database.
 import type * as FlowDb from "../lib/db";
 import type * as Workers from "../lib/engine/workers";
+import { MIGRATIONS } from "../lib/migrations";
 import type * as Queries from "../lib/queries";
 
 const ADMIN_URL = process.env.FLOW_TEST_ADMIN_URL ?? process.env.EVENTS_TEST_ADMIN_URL;
@@ -132,7 +133,9 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ key: "docs-note-to-issue", status: "active", version: 1 });
     expect(rows[0].definition.trigger).toEqual({ event: NOTE });
-    expect(await q("SELECT version FROM flow_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }]);
+    expect(await q("SELECT version FROM flow_migrations ORDER BY version")).toEqual(
+      MIGRATIONS.map((m) => ({ version: m.version })),
+    );
   });
 
   it("a version can't be changed once published", async () => {
