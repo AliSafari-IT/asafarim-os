@@ -29,6 +29,7 @@ const PUBLIC: Record<string, string> = {
   "api/asafarim/session/route.ts": "sends a signed-out browser to sign-in",
   "health/live/route.ts": "liveness for the OS, no data",
   "health/ready/route.ts": "readiness for the OS, no data",
+  "hooks/[id]/route.ts": "webhook in: the hook's signature authenticates a call (test/hooks.test.ts)",
 };
 /** Each server action and the permission it needs (none: signing in and out). */
 const ACTIONS: Record<string, string | null> = {
@@ -48,9 +49,17 @@ const ACTIONS: Record<string, string | null> = {
   setPausedAllAction: "flow.settings.write",
   createWorkflowAction: "flow.workflows.write",
   duplicateWorkflowAction: "flow.workflows.write",
+  createHookAction: "flow.workflows.write",
+  regenerateHookAction: "flow.workflows.write",
+  deleteHookAction: "flow.workflows.write",
 };
 /** Actions that answer their form (useActionState) instead of redirecting: (state, formData). */
-const STATE_ACTIONS = new Set(["createCredentialAction", "rotateCredentialAction"]);
+const STATE_ACTIONS = new Set([
+  "createCredentialAction",
+  "rotateCredentialAction",
+  "createHookAction",
+  "regenerateHookAction",
+]);
 /** The builder's server functions (components/builder): they answer with a result, not a redirect. */
 const DRAFT_FUNCTIONS: Record<
   string,
@@ -175,6 +184,18 @@ vi.mock("@/lib/credentials/store", () => {
     credentialsAvailable: () => true,
   };
 });
+vi.mock("@/lib/hooks/store", () => {
+  const record = (name: string) => async () => {
+    calls.engine.push(name);
+    return { ok: true, id: "AAAAAAAAAAAAAAAAAAAAAA", kind: "generic", workflowKey: "my-flow", audits: [] };
+  };
+  return {
+    createHook: record("createHook"),
+    regenerateHookSecret: record("regenerateHookSecret"),
+    deleteHook: record("deleteHook"),
+    listHooks: async () => [],
+  };
+});
 vi.mock("@/lib/settings", async (importActual) => {
   const actual = await importActual<typeof Settings>();
   const record = (name: string) => async () => {
@@ -244,6 +265,7 @@ const FORM = {
   runId: RUN,
   approvalId: RUN,
   credentialId: RUN,
+  hookId: "AAAAAAAAAAAAAAAAAAAAAA",
   workflow: "docs-note-to-issue",
   status: "paused",
   title: "T",
@@ -286,7 +308,7 @@ describe("the routes on disk", () => {
       "workflows/new/page.tsx",
       "workflows/page.tsx",
     ]);
-    // No API of its own yet: the route files are sign-in plumbing and health.
+    // The route files are sign-in plumbing, health and webhook in.
     expect(handlers).toEqual(Object.keys(PUBLIC).sort());
     expect(actionFiles).toEqual(["actions.ts"]);
   });

@@ -13,7 +13,10 @@
  *     flow.issue.approved.v1 in the same transaction; reject, expiry (the sweeper) and cancel;
  *  6. definition v2: a draft saved, published as version 2 and run by hand, `manual → condition →
  *     test.echo → end`, the connector called by the worker (`runDueConnectors`); a crashed call claimed
- *     again, skipping a run another connection holds; a wait resumed by the sweeper; a dry run.
+ *     again, skipping a run another connection holds; a wait resumed by the sweeper; a dry run;
+ *  7. webhook in: a hook created (its secret once, listed without it), a signed generic call to the
+ *     route handler starts `webhook → condition → end`, a redelivery is a duplicate, a new secret
+ *     retires the old one, and a deleted hook (or its deleted credential) answers 404.
  *
  * Needs FLOW_TEST_ADMIN_URL (or EVENTS_TEST_ADMIN_URL): a superuser URL on a DEV Postgres. Skipped
  * without it. It uses a throwaway database, dropped afterwards. No bus: the relay isn't started, so
@@ -35,6 +38,8 @@ import type { AuditEntry } from "../lib/audit";
 import { MIGRATIONS } from "../lib/migrations";
 import type * as Queries from "../lib/queries";
 import { echo, registerEcho } from "./echo-connector";
+import { signGeneric } from "../lib/hooks/signature";
+import type * as HookStore from "../lib/hooks/store";
 import { clone, ECHO_FLOW } from "./v2-fixtures";
 
 const ADMIN_URL = process.env.FLOW_TEST_ADMIN_URL ?? process.env.EVENTS_TEST_ADMIN_URL;
@@ -578,6 +583,125 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
       await q("UPDATE workflow_run_steps SET timeout_at = now() - interval '1 second' WHERE run_id = $1", [r.runId]);
       expect(await workers.sweepTimeouts(pool, flow.engine)).toBe(1);
       expect((await q("SELECT status FROM workflow_runs WHERE id = $1", [r.runId]))[0].status).toBe("succeeded");
+    });
+  });
+
+  describe("webhook in", () => {
+    const tx = <T extends { audits: AuditEntry[] }>(fn: (c: pg.PoolClient) => Promise<T>) =>
+      flow.inTransaction<T>(pool, fn);
+    let hooks: typeof HookStore;
+    let POST: (req: Request, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;
+    const call = (id: string, body: string, secret: string, delivery?: string) =>
+      POST(
+        new Request(`https://flow.asafarim.site/hooks/${id}`, {
+          method: "POST",
+          body,
+          headers: {
+            "content-type": "application/json",
+            "x-flow-signature": signGeneric(secret, body, Math.floor(Date.now() / 1000)),
+            ...(delivery ? { "x-flow-delivery": delivery } : {}),
+          },
+        }),
+        { params: Promise.resolve({ id }) },
+      );
+
+    beforeAll(async () => {
+      process.env.FLOW_CREDENTIALS_KEY = Buffer.alloc(32, 9).toString("base64");
+      hooks = await import("../lib/hooks/store");
+      ({ POST } = await import("../app/hooks/[id]/route"));
+    });
+    afterAll(() => {
+      delete process.env.FLOW_CREDENTIALS_KEY;
+    });
+
+    it("a signed generic hook starts webhook → condition → end; a redelivery is a duplicate; a new secret retires the old", async () => {
+      const definition = (hook: string) => ({
+        version: 2,
+        key: "order-hook",
+        trigger: { type: "webhook", hook, input: [{ name: "size", type: "string", required: true }] },
+        start: "check",
+        nodes: [
+          {
+            key: "check",
+            type: "condition",
+            all: [{ field: "trigger.size", op: "equals", value: "big" }],
+            then: "done",
+            else: "small",
+          },
+          { key: "done", type: "end" },
+          { key: "small", type: "end", status: "skipped" },
+        ],
+      });
+      // The workflow exists (a draft) before its hook; the hook's id then goes into the trigger.
+      await tx((c) =>
+        flow.engine.saveDraft(c, {
+          workflowKey: "order-hook",
+          definition: definition("AAAAAAAAAAAAAAAAAAAAAA"),
+          actor: "dev-owner",
+        }),
+      );
+      const created = await tx((c) => hooks.createHook(c, { workflowKey: "order-hook", kind: "generic" }, "dev-owner"));
+      if (!created.ok) throw new Error(created.error);
+      expect(created.id).toMatch(/^[A-Za-z0-9_-]{22}$/);
+      expect(created.shownOnce).toMatch(/^[\w-]{43}$/);
+      expect(created.audits.map((a) => a.action)).toEqual(["flow.credential.created", "flow.hook.created"]);
+      expect(
+        await tx((c) => hooks.createHook(c, { workflowKey: "order-hook", kind: "generic" }, "dev-owner")),
+      ).toMatchObject({
+        ok: false,
+        error: "hook_exists",
+      });
+      const listed = await hooks.listHooks(pool);
+      expect(listed).toEqual([
+        { id: created.id, workflowKey: "order-hook", kind: "generic", createdAt: expect.any(Date), lastCalledAt: null },
+      ]);
+      expect(JSON.stringify(listed)).not.toContain(created.shownOnce);
+      const secret = created.shownOnce!;
+
+      // Not published yet: there is no version to run.
+      expect((await call(created.id, JSON.stringify({ size: "big" }), secret)).status).toBe(409);
+      await tx((c) =>
+        flow.engine.saveDraft(c, { workflowKey: "order-hook", definition: definition(created.id), actor: "dev-owner" }),
+      );
+      await tx((c) => flow.engine.publishDraft(c, { workflowKey: "order-hook", actor: "dev-owner" }));
+
+      const big = await call(created.id, JSON.stringify({ size: "big" }), secret, "order-1");
+      expect(big.status).toBe(202);
+      const { runId } = (await big.json()) as { runId: string };
+      expect(await q("SELECT status, trigger_event_id, trigger FROM workflow_runs WHERE id = $1", [runId])).toEqual([
+        { status: "succeeded", trigger_event_id: `hook:${created.id}:order-1`, trigger: { size: "big" } },
+      ]);
+      expect((await stepsOf(runId)).map((s) => [s.step_key, s.status])).toEqual([
+        ["check", "succeeded"],
+        ["done", "succeeded"],
+      ]);
+      const again = await call(created.id, JSON.stringify({ size: "big" }), secret, "order-1");
+      expect([again.status, await again.json()]).toEqual([200, { duplicate: true }]);
+      const small = await call(created.id, JSON.stringify({ size: "small" }), secret, "order-2");
+      const smallRun = ((await small.json()) as { runId: string }).runId;
+      expect((await q("SELECT status FROM workflow_runs WHERE id = $1", [smallRun]))[0].status).toBe("skipped");
+      expect((await hooks.listHooks(pool))[0]!.lastCalledAt).toBeInstanceOf(Date);
+
+      const rotated = await tx((c) => hooks.regenerateHookSecret(c, created.id, "dev-owner"));
+      if (!rotated.ok) throw new Error(rotated.error);
+      expect(rotated.shownOnce).not.toBe(secret);
+      expect((await call(created.id, JSON.stringify({ size: "big" }), secret, "order-3")).status).toBe(401);
+      expect((await call(created.id, JSON.stringify({ size: "big" }), rotated.shownOnce!, "order-3")).status).toBe(202);
+
+      const deleted = await tx((c) => hooks.deleteHook(c, created.id, "dev-owner"));
+      expect(deleted.audits.map((a) => a.action)).toEqual(["flow.credential.deleted", "flow.hook.deleted"]);
+      expect((await call(created.id, JSON.stringify({ size: "big" }), rotated.shownOnce!, "order-4")).status).toBe(404);
+      expect(await q("SELECT count(*)::int AS n FROM credentials WHERE kind = 'webhook-secret'")).toEqual([{ n: 0 }]);
+    });
+
+    it("deleting the hook's credential on the Credentials page deletes the hook with it", async () => {
+      const { deleteCredential } = await import("../lib/credentials/store");
+      const created = await tx((c) => hooks.createHook(c, { workflowKey: "order-hook", kind: "generic" }, "dev-owner"));
+      if (!created.ok) throw new Error(created.error);
+      const [{ credential_id }] = await q("SELECT credential_id FROM webhook_hooks WHERE id = $1", [created.id]);
+      await tx((c) => deleteCredential(c, credential_id as string, "dev-owner"));
+      expect(await hooks.listHooks(pool)).toEqual([]);
+      expect((await call(created.id, "{}", created.shownOnce!)).status).toBe(404);
     });
   });
 });

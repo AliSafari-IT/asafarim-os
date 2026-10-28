@@ -84,8 +84,10 @@ export interface BuilderProps {
   canWrite: boolean;
   /** The latest published version's number, if any. */
   published: number | null;
-  /** Shown in the trigger's settings (the webhook's hook, when it has one). */
-  triggerExtra?: React.ReactNode;
+  /** This workflow's hook, which a webhook or GitHub trigger names; null without one. */
+  hookId: string | null;
+  /** Shown in the trigger's settings by trigger type: the hook's panel (components/HookPanel.tsx). */
+  triggerPanels?: Partial<Record<string, React.ReactNode>>;
 }
 
 export function Builder(props: BuilderProps) {
@@ -207,7 +209,12 @@ export function Builder(props: BuilderProps) {
 
   const changeTrigger = (type: string) => {
     const spec = catalog.triggers.find((t) => t.type === type);
-    if (spec && spec.type !== draft.trigger.type) edit((d) => setTrigger(d, newTrigger(spec)));
+    if (spec && spec.type !== draft.trigger.type) {
+      const trigger = newTrigger(spec);
+      // A webhook or GitHub trigger names the workflow's hook, if it has one.
+      if ("hook" in trigger && props.hookId) trigger.hook = props.hookId;
+      edit((d) => setTrigger(d, trigger));
+    }
     setSelected(TRIGGER_ID);
   };
 
@@ -391,6 +398,7 @@ export function Builder(props: BuilderProps) {
             <TriggerSettings
               draft={draft}
               catalog={catalog}
+              hookId={props.hookId}
               suggestions={suggestions}
               problems={byPlace.get(TRIGGER_ID) ?? []}
               editable={editable}
@@ -398,7 +406,7 @@ export function Builder(props: BuilderProps) {
               onType={changeTrigger}
               onStart={(k) => edit((d) => connect(d, TRIGGER_ID, "start", k))}
             >
-              {props.triggerExtra}
+              {props.triggerPanels?.[String(draft.trigger.type)]}
             </TriggerSettings>
           ) : node && current ? (
             <NodeSettings

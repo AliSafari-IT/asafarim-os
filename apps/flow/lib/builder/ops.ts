@@ -58,8 +58,8 @@ export function newNode(draft: Draft, spec: NodeSpec, credentials: readonly Cred
 
 /**
  * Add `node`. After `after` (a node or the trigger), it takes that one's place in the graph: the
- * edge that left `after` by `next` (or `start`) now goes to the new node, and the new node goes on to
- * where it went. Without `after`, it is added unconnected.
+ * edge that left `after` by `next` (a condition's `then`, the trigger's `start`) now goes to the new
+ * node, and the new node goes on to where it went. Without `after`, it is added unconnected.
  */
 export function addNode(draft: Draft, node: RawNode, spec: NodeSpec, after?: string, position?: Position): Draft {
   const key = node.key as string;
@@ -79,6 +79,10 @@ export function addNode(draft: Draft, node: RawNode, spec: NodeSpec, after?: str
     if (prev && "next" in prev && typeof prev.next === "string") {
       link(prev.next);
       nodes[i] = { ...prev, next: key };
+    } else if (prev && typeof prev.then === "string") {
+      // After a condition: on its `then` branch.
+      link(prev.then);
+      nodes[i] = { ...prev, then: key };
     } else if (prev && !(["then", "else"] as const).some((f) => typeof prev[f] === "string") && prev.type !== "end") {
       nodes[i] = { ...prev, next: key };
     }

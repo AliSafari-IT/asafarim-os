@@ -15,7 +15,10 @@ import { createCredential, deleteCredential, rotateCredential } from "@/lib/cred
 import { db, engine, inTransaction } from "@/lib/db";
 import { APPROVAL_ID, CREDENTIAL_ID, RUN_ID } from "@/lib/format";
 import { gate, type GateResult } from "@/lib/gate";
+import type { HookFormState } from "@/lib/hooks/example";
+import { createHook, deleteHook, regenerateHookSecret } from "@/lib/hooks/store";
 import { getBuilderWorkflow } from "@/lib/queries";
+import { HOOK_ID } from "@/lib/workflow/definition-v2";
 import { parseEgressHosts, parseEmailRecipients, setList, setPausedAll } from "@/lib/settings";
 import type { Problem } from "@/lib/workflow/definition";
 import { manualInputOf } from "@/lib/workflow/manual";
@@ -235,11 +238,13 @@ export async function duplicateWorkflowAction(formData: FormData) {
   const source = await getBuilderWorkflow(pool, workflow);
   if (!source) redirect("/workflows?error=not_found");
   const from = draftOf(source);
+  // A hook belongs to one workflow: the copy's trigger needs one of its own.
+  const trigger = "hook" in from.trigger ? { ...from.trigger, hook: "" } : from.trigger;
   const r = await inTransaction(pool, async (tx) => {
     const saved = await engine.saveDraft(tx, {
       workflowKey: key,
       name,
-      definition: { ...from, key },
+      definition: { ...from, key, trigger },
       actor: g.subject,
       expect: "new",
     });
@@ -377,4 +382,50 @@ export async function setPausedAllAction(formData: FormData) {
   if (!g.ok) redirect(refused("/settings", g));
   await inTransaction(await db(), (tx) => setPausedAll(tx, on, g.subject));
   redirect("/settings");
+}
+
+/**
+ * A workflow's hook (flow.workflows.write): create one, or a new secret for it. The answer goes back to
+ * the form, not through a redirect: the secret is in it, shown once, and must not land in a URL.
+ */
+async function onHook(formData: FormData, what: "create" | "regenerate"): Promise<HookFormState> {
+  const id = String(formData.get("hookId") ?? "");
+  if (what === "regenerate" && !HOOK_ID.test(id)) return { status: "error", error: "not_found" };
+  const g = await gate("flow.workflows.write");
+  if (!g.ok)
+    return { status: "error", error: g.body.error, ...(g.body.permission ? { permission: g.body.permission } : {}) };
+  const r = await inTransaction(await db(), (tx) =>
+    what === "create"
+      ? createHook(
+          tx,
+          { workflowKey: String(formData.get("workflow") ?? ""), kind: String(formData.get("kind") ?? "") },
+          g.subject,
+        )
+      : regenerateHookSecret(tx, id, g.subject),
+  );
+  if (!r.ok) return { status: "error", error: r.error };
+  // The Workflows page and the builder (whose trigger settings pick the hook) show it.
+  revalidatePath("/workflows", "layout");
+  return { status: "done", hookId: r.id, kind: r.kind, ...(r.shownOnce ? { secret: r.shownOnce } : {}) };
+}
+
+export async function createHookAction(_prev: HookFormState, formData: FormData) {
+  return onHook(formData, "create");
+}
+
+export async function regenerateHookAction(_prev: HookFormState, formData: FormData) {
+  return onHook(formData, "regenerate");
+}
+
+/** Delete a workflow's hook and its secret (flow.workflows.write): its URL answers 404 from then on. */
+export async function deleteHookAction(formData: FormData) {
+  const id = String(formData.get("hookId") ?? "");
+  // Back to the Workflows page, or to the builder it was deleted from.
+  const raw = String(formData.get("back") ?? "");
+  const back = /^\/workflows\/[a-z][a-z0-9-]{0,63}\/edit$/.test(raw) ? raw : "/workflows";
+  if (!HOOK_ID.test(id)) redirect(back);
+  const g = await gate("flow.workflows.write");
+  if (!g.ok) redirect(refused(back, g));
+  const r = await inTransaction(await db(), (tx) => deleteHook(tx, id, g.subject));
+  redirect(r.ok ? back : `${back}?error=${r.error}`);
 }

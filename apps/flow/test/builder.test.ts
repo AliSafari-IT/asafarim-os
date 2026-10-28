@@ -34,7 +34,7 @@ const spec = (type: string): NodeSpec => catalog.nodes.find((s) => s.type === ty
 const NOTIFY: Draft = {
   version: 2,
   key: "notify",
-  trigger: { type: "webhook", input: [{ name: "title", type: "string", required: true }] },
+  trigger: { type: "webhook", hook: "h".repeat(22), input: [{ name: "title", type: "string", required: true }] },
   start: "check",
   nodes: [
     {
@@ -177,6 +177,14 @@ describe("the edits", () => {
     const first = addNode(draft, newNode(draft, spec("wait")), spec("wait"), TRIGGER_ID);
     expect(first.start).toBe("wait");
     expect(first.nodes.at(-1)!.next).toBe("check");
+  });
+
+  it("a node added after a condition goes on its then branch", () => {
+    const draft = draftOf(NOTIFY);
+    const node = newNode(draft, spec("wait"));
+    const added = addNode(draft, node, spec("wait"), "check");
+    expect(added.nodes[0]).toMatchObject({ then: "wait", else: "skip" });
+    expect(added.nodes.at(-1)).toMatchObject({ key: "wait", next: "mail" });
   });
 
   it("a new connector node starts from its schema's defaults and the first credential of its kind", () => {

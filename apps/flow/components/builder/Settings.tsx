@@ -428,6 +428,7 @@ const edgesKept = (node: RawNode) => Object.fromEntries(EDGE_FIELDS.filter((f) =
 export function TriggerSettings({
   draft,
   catalog,
+  hookId,
   suggestions,
   problems,
   editable,
@@ -438,6 +439,8 @@ export function TriggerSettings({
 }: {
   draft: Draft;
   catalog: Catalog;
+  /** This workflow's hook (lib/hooks), which a webhook or GitHub trigger names; null without one. */
+  hookId: string | null;
   suggestions: readonly Suggestion[];
   problems: readonly Problem[];
   editable: boolean;
@@ -452,7 +455,36 @@ export function TriggerSettings({
   const keys = draft.nodes.map(keyOf).filter((k): k is string => k !== undefined);
   // The trigger's problems are at `trigger.<field>`; the start's at `start`.
   const relative = problems.map((p) => ({ ...p, path: p.path.replace(/^trigger\.?/, "") }));
-  const ctx: FormContext = { credentials: [], suggestions, editable, defs: spec?.settings.$defs, problems: relative };
+  const ctx: FormContext = {
+    credentials: [],
+    suggestions,
+    editable,
+    defs: spec?.settings.$defs,
+    problems: relative,
+    custom: {
+      hook: (value, change, id) => {
+        const v = typeof value === "string" ? value : "";
+        return (
+          <>
+            <select
+              id={id}
+              value={v}
+              disabled={!editable}
+              onChange={(e) => change(e.target.value)}
+              data-testid="trigger-hook"
+            >
+              <option value="">{hookId ? "Choose the hook…" : "No hook yet: create it below"}</option>
+              {hookId ? <option value={hookId}>This workflow&apos;s hook ({hookId})</option> : null}
+              {v && v !== hookId ? <option value={v}>Another hook ({v})</option> : null}
+            </select>
+            {v && v !== hookId ? (
+              <p className="field-problems">This isn&apos;t this workflow&apos;s hook: its calls would answer 409.</p>
+            ) : null}
+          </>
+        );
+      },
+    },
+  };
   const shownKeys = Object.keys(spec?.settings.properties ?? {});
   return (
     <section aria-labelledby={`${prefix}-h`} data-testid="node-settings" data-node={TRIGGER_ID}>

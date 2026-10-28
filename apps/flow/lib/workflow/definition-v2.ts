@@ -5,7 +5,7 @@
  *   { version: 2, key, trigger, start: <node key>, nodes: [{ key, type, …, next | then + else }], layout }
  *
  * Triggers: `event` (an OS app event type, as v1), `manual` (`input`: the fields a person fills in),
- * `webhook` and `github` (their entry points come with PR 2.4). Nodes:
+ * `webhook` and `github` (each names its hook: POST /hooks/<id>, lib/hooks/). Nodes:
  *
  * - **condition** `{ all, then, else }`: every clause holds → `then`, otherwise `else` (clauses as v1).
  * - **approval** `{ role, deadline, onExpire, draft?, editable, next }`: as v1. With `draft` (a
@@ -57,19 +57,26 @@ const inputFields = z
   .default([])
   .refine((fields) => new Set(fields.map((f) => f.name)).size === fields.length, "field names must be distinct");
 
+/** A webhook_hooks id (lib/hooks/store.ts): 128 random bits, base64url. */
+export const HOOK_ID = /^[A-Za-z0-9_-]{22}$/;
+const hook = z.string().regex(HOOK_ID, "must be a hook id");
+/**
+ * A GitHub event, `<event>` or `<event>.<action>`; `pull_request.closed+merged` is a closed pull request
+ * that was merged (lib/hooks/github.ts maps a delivery to these).
+ */
+export const GITHUB_EVENT = /^[a-z_]+(?:\.[a-z_]+)?$|^pull_request\.closed\+merged$/;
+
 export const TriggerV2 = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("event"), event: eventType }),
   z.strictObject({ type: z.literal("manual"), input: inputFields }),
-  /** The JSON body's fields the workflow reads (PR 2.4 receives and checks the request). */
-  z.strictObject({ type: z.literal("webhook"), input: inputFields }),
-  /** GitHub webhook deliveries for one repository (PR 2.4): `issues.opened`, `push`, … */
+  /** POST /hooks/<hook>, signed (lib/hooks/receive.ts): the JSON body's fields the workflow reads. */
+  z.strictObject({ type: z.literal("webhook"), hook, input: inputFields }),
+  /** GitHub webhook deliveries to /hooks/<hook>: those of `events`, from one of `repos`. */
   z.strictObject({
     type: z.literal("github"),
-    repo: z.string().regex(REPO, "must be owner/name"),
-    events: z
-      .array(z.string().regex(/^[a-z_]+(?:\.[a-z_]+)?$/, "must be a GitHub event, optionally .<action>"))
-      .min(1)
-      .max(10),
+    hook,
+    repos: z.array(z.string().regex(REPO, "must be owner/name")).min(1).max(20),
+    events: z.array(z.string().regex(GITHUB_EVENT, "must be a GitHub event, optionally .<action>")).min(1).max(10),
   }),
 ]);
 export type TriggerV2 = z.infer<typeof TriggerV2>;

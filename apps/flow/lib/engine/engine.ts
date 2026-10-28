@@ -55,7 +55,7 @@ import {
   type EventsManifest,
   type Problem,
 } from "../workflow/definition";
-import { inputProblems, type TriggerType } from "../workflow/definition-v2";
+import { inputProblems, type TriggerType, type TriggerV2 } from "../workflow/definition-v2";
 import { graphOf, type Graph, type GraphNode } from "../workflow/graph";
 import { buildRequest, isRequestType, RequestMappingError, simulatedOutcome } from "../workflow/requests";
 import { MissingValueError, renderInput } from "../workflow/templates";
@@ -112,6 +112,8 @@ export type Refusal =
   | "not_active"
   /** startRun: the workflow's trigger is of another type. */
   | "wrong_trigger"
+  /** startRun: the trigger doesn't take this delivery (`accepts`: a GitHub event or repository it doesn't list). */
+  | "filtered"
   /** startRun: the data doesn't fit the trigger's input. */
   | "invalid_input"
   /** startRun: this trigger event started a run already. */
@@ -146,6 +148,12 @@ export interface StartRunOptions {
   dryRun?: boolean;
   /** Who started it (absent for an event). */
   actor?: string;
+  /**
+   * Whether the trigger of the version that would run takes this delivery: nothing when it does, or
+   * the refusal (a webhook: `wrong_trigger` when the trigger names another hook; `filtered` when a
+   * GitHub trigger doesn't list the event or the repository).
+   */
+  accepts?: (trigger: TriggerV2) => "wrong_trigger" | "filtered" | undefined;
 }
 
 /** A connector step a worker claimed: what it calls, and what identifies this call. */
@@ -509,6 +517,8 @@ export function createEngine(deps: EngineDeps) {
     });
     const trigger = triggerOf(definition);
     if (trigger.type !== opts.trigger) return refuse("wrong_trigger");
+    const refusal = opts.accepts?.(trigger);
+    if (refusal) return refuse(refusal);
     if (opts.dryRun !== true && (await isPausedAll(c.tx))) return refuse("paused_all");
     if (!isRecord(opts.data)) return refuse("invalid_input", [{ path: "", message: "must be an object" }]);
     if (trigger.type === "manual" || trigger.type === "webhook") {

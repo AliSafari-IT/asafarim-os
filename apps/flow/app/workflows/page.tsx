@@ -1,9 +1,11 @@
 import { duplicateWorkflowAction, runNowAction, setWorkflowStatusAction } from "@/app/actions";
+import { HookSection } from "@/components/HookPanel";
 import { ErrorNotice, Unavailable } from "@/components/Notice";
 import { Status } from "@/components/Runs";
 import { Shell } from "@/components/Shell";
 import { db } from "@/lib/db";
 import { at } from "@/lib/format";
+import { listHooks, type HookSummary } from "@/lib/hooks/store";
 import { pageAccess } from "@/lib/page";
 import { listWorkflows } from "@/lib/queries";
 import { triggerOf } from "@/lib/workflow/definition";
@@ -28,7 +30,7 @@ function TriggerText({ trigger }: { trigger: TriggerV2 }) {
     case "github":
       return (
         <>
-          triggered by GitHub (<span className="mono">{trigger.repo}</span>)
+          triggered by GitHub (<span className="mono">{trigger.repos.join(", ")}</span>)
         </>
       );
   }
@@ -94,7 +96,8 @@ function DuplicateForm({ workflow, name }: { workflow: string; name: string }) {
           aria-describedby={`${workflow}-dup-hint`}
         />
         <p id={`${workflow}-dup-hint`} className="muted hint">
-          Lower case letters, digits and dashes; it can&apos;t be changed later.
+          Lower case letters, digits and dashes; it can&apos;t be changed later. A webhook or GitHub trigger needs a
+          hook of its own: the copy&apos;s is left empty.
         </p>
         <button type="submit">Duplicate</button>
       </form>
@@ -104,8 +107,8 @@ function DuplicateForm({ workflow, name }: { workflow: string; name: string }) {
 
 /**
  * The workflows and their current definition, read-only; Pause and Resume for flow.workflows.write;
- * "Run now" for a manual trigger, with flow.runs.start. New workflow, Edit (the builder) and Duplicate
- * with flow.workflows.write; View in the builder, read-only, otherwise.
+ * "Run now" for a manual trigger, with flow.runs.start; a webhook or GitHub trigger's hook, New workflow,
+ * Edit (the builder) and Duplicate with flow.workflows.write; View in the builder, read-only, otherwise.
  */
 export default async function Workflows({
   searchParams,
@@ -121,8 +124,12 @@ export default async function Workflows({
     );
   }
   const { error, permission } = await searchParams;
-  const workflows = await listWorkflows(await db());
+  const pool = await db();
+  const workflows = await listWorkflows(pool);
   const canWrite = access.permissions.includes("flow.workflows.write");
+  const hooks = canWrite
+    ? new Map((await listHooks(pool)).map((h) => [h.workflowKey, h]))
+    : new Map<string, HookSummary>();
   const canStart = access.permissions.includes("flow.runs.start");
   return (
     <Shell current="/workflows">
@@ -179,6 +186,9 @@ export default async function Workflows({
               ) : null}
             </div>
             {canWrite ? <DuplicateForm workflow={w.key} name={w.name} /> : null}
+            {canWrite && trigger && (trigger.type === "webhook" || trigger.type === "github" || hooks.has(w.key)) ? (
+              <HookSection workflow={w.key} trigger={trigger} hook={hooks.get(w.key)} />
+            ) : null}
             {canStart && trigger?.type === "manual" && w.status === "active" ? (
               <RunNow workflow={w.key} trigger={trigger} />
             ) : null}

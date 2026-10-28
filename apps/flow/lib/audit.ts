@@ -25,7 +25,10 @@ export type AuditAction =
   | "flow.settings.changed"
   | "flow.credential.created"
   | "flow.credential.rotated"
-  | "flow.credential.deleted";
+  | "flow.credential.deleted"
+  | "flow.hook.created"
+  | "flow.hook.rotated"
+  | "flow.hook.deleted";
 
 export interface AuditEntry {
   action: AuditAction;
@@ -52,6 +55,8 @@ export interface AuditEntry {
   /** A credential's id and kind; never its name, its meta or its secret. */
   credentialId?: string;
   kind?: string;
+  /** A hook's id (flow.hook.*): it is in the hook's URL, never its secret. */
+  hookId?: string;
   /** The setting that changed, and how many entries its list holds now (flow.settings.changed). */
   setting?: string;
   count?: number;
