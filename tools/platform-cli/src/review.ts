@@ -183,6 +183,13 @@
  *   `(app_id, event_type)`), so registering the app fails on the second one and the app can't be
  *   installed or upgraded. It is usually a second handler added for a type without removing the first.
  *   One finding per repeated type, naming its handlers.
+ * - `event-schema-too-large`: a published event's schema is larger than core-api accepts for the event
+ *   catalog: over `MAX_EVENT_SCHEMA_BYTES` (64 KiB) as `JSON.stringify` of the parsed schema, the way
+ *   core-api measures it, or all of the app's schemas together over `MAX_EVENT_SCHEMAS_REQUEST_BYTES`
+ *   (512 KiB) as the one `{ "schemas": … }` body the app SDK uploads (both limits from
+ *   `@asafarim/events`). core-api refuses the whole upload, and the SDK only logs a warning, so the
+ *   catalog shows none of the app's schemas. One finding per oversized type, and one per app (subject
+ *   `events.publishes`) for an oversized upload.
  *
  * Output: text lines by default; `--json` prints `{ reviews, errors }`; `--markdown` (P7.2 part 2b)
  * prints the report CI posts as one advisory pull request comment, updated in place (see
@@ -203,7 +210,7 @@ import {
   validateManifest,
   type AppManifest,
 } from "@asafarim/app-manifest";
-import { compileEventSchema } from "@asafarim/events";
+import { MAX_EVENT_SCHEMAS_REQUEST_BYTES, MAX_EVENT_SCHEMA_BYTES, compileEventSchema } from "@asafarim/events";
 import { RESERVED_SERVICE_NAMES, databaseVariableNames } from "./compose.ts";
 import { MANIFEST_FILE } from "./sync.ts";
 
@@ -247,6 +254,7 @@ export const FINDING_KINDS = [
   "config-variable-clash",
   "route-permissions-stacked",
   "subscription-declared-twice",
+  "event-schema-too-large",
 ] as const;
 
 export type FindingKind = (typeof FINDING_KINDS)[number];
@@ -794,7 +802,10 @@ export function reviewApp(
   const rel = (abs: string) => path.relative(rootDir, abs).split(path.sep).join("/");
   const findings: Finding[] = [];
 
-  // 1. Published event types have a schema file that is a JSON object and compiles as the publisher compiles it.
+  // 1. Published event types have a schema file that is a JSON object, fits core-api's upload limits and
+  // compiles as the publisher compiles it.
+  /** The schemas the app SDK would upload, by type (only those that parse as a JSON object). */
+  const upload: Record<string, object> = {};
   for (const ev of manifest.events?.publishes ?? []) {
     const file = path.resolve(appDir, ev.schema);
     const inside = !path.relative(appDir, file).startsWith("..");
@@ -840,6 +851,18 @@ export function reviewApp(
       });
       continue;
     }
+    upload[ev.type] = parsed;
+    // core-api measures the parsed schema re-serialised, not the file, so indentation doesn't count.
+    const bytes = Buffer.byteLength(JSON.stringify(parsed), "utf8");
+    if (bytes > MAX_EVENT_SCHEMA_BYTES) {
+      findings.push({
+        app,
+        kind: "event-schema-too-large",
+        subject: ev.type,
+        file: rel(file),
+        message: `the schema of ${ev.type} is ${bytes} bytes as JSON, over core-api's ${MAX_EVENT_SCHEMA_BYTES}; core-api refuses the app's whole schema upload, so the event catalog shows none of its schemas`,
+      });
+    }
     try {
       compileEventSchema(parsed);
     } catch (error) {
@@ -851,6 +874,16 @@ export function reviewApp(
         message: `the schema of ${ev.type} doesn't compile (${(error as Error).message}), so the app's publisher throws when it starts and core-api refuses its schema upload`,
       });
     }
+  }
+  // The SDK sends every schema in one body; core-api refuses a body over its request limit as a whole.
+  const uploadBytes = Buffer.byteLength(JSON.stringify({ schemas: upload }), "utf8");
+  if (uploadBytes > MAX_EVENT_SCHEMAS_REQUEST_BYTES) {
+    findings.push({
+      app,
+      kind: "event-schema-too-large",
+      subject: "events.publishes",
+      message: `the app's event schemas upload as one ${uploadBytes}-byte request, over core-api's ${MAX_EVENT_SCHEMAS_REQUEST_BYTES}; core-api refuses it, so the event catalog shows none of its schemas`,
+    });
   }
 
   // The app's code, read once.

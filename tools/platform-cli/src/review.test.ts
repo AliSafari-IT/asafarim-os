@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { validateManifest } from "@asafarim/app-manifest";
+import { MAX_EVENT_SCHEMAS_REQUEST_BYTES, MAX_EVENT_SCHEMA_BYTES } from "@asafarim/events";
 import {
   checkedKeysIn,
   exportedMethods,
@@ -434,6 +435,63 @@ describe("platform manifest review", () => {
     const paid = out.reviews[0]!.findings.find((f) => f.subject === "shop.order.paid.v1")!;
     expect(paid.file).toBe("apps/shop/events/paid.json");
     expect(paid.message).toMatch(/doesn't compile \(.*requird.*\), so the app's publisher throws when it starts/);
+  });
+
+  it("reports an event schema larger than core-api's upload limits, per type and for the whole upload", () => {
+    const at = (n: number) => `shop.order.s${n}.v1`;
+    const schemaOf = (size: number) => {
+      const base = { type: "object", description: "" };
+      const fill = size - Buffer.byteLength(JSON.stringify(base));
+      return { ...base, description: "x".repeat(fill) };
+    };
+    const publish = (n: number) =>
+      writeApp(
+        manifest({
+          events: {
+            publishes: Array.from({ length: n }, (_, i) => ({ type: at(i), schema: `./events/s${i}.json` })),
+          },
+        }),
+      );
+    const code = (n: number) =>
+      put(
+        "apps/shop/lib/x.ts",
+        `"shop.orders.read"; "shop.orders.write"; ${Array.from({ length: n }, (_, i) => `"${at(i)}";`).join(" ")}`,
+      );
+
+    // Exactly at the limit, written indented: core-api measures the parsed schema re-serialised, so it fits.
+    publish(2);
+    code(2);
+    put("apps/shop/events/s0.json", JSON.stringify(schemaOf(MAX_EVENT_SCHEMA_BYTES), null, 2));
+    put("apps/shop/events/s1.json", JSON.stringify(schemaOf(MAX_EVENT_SCHEMA_BYTES + 1)));
+    expect(kinds()).toEqual([`event-schema-too-large ${at(1)}`]);
+    expect(json().reviews[0]!.findings[0]).toEqual({
+      app: "shop",
+      kind: "event-schema-too-large",
+      subject: at(1),
+      file: "apps/shop/events/s1.json",
+      message: `the schema of ${at(1)} is ${MAX_EVENT_SCHEMA_BYTES + 1} bytes as JSON, over core-api's ${MAX_EVENT_SCHEMA_BYTES}; core-api refuses the app's whole schema upload, so the event catalog shows none of its schemas`,
+    });
+    expect(review(["--markdown"]).lines[0]!).toContain(`| event-schema-too-large | ${at(1)} |`);
+    expect(review().ok).toBe(true);
+    expect(review(["--strict"]).ok).toBe(false);
+
+    // Each schema fits, but together they are over the request limit: one finding for the app.
+    const n = Math.ceil(MAX_EVENT_SCHEMAS_REQUEST_BYTES / MAX_EVENT_SCHEMA_BYTES) + 1;
+    publish(n);
+    code(n);
+    for (let i = 0; i < n; i++) put(`apps/shop/events/s${i}.json`, JSON.stringify(schemaOf(MAX_EVENT_SCHEMA_BYTES)));
+    expect(kinds()).toEqual(["event-schema-too-large events.publishes"]);
+    const all = (JSON.parse(review(["--json"]).lines[0]!) as { reviews: AppReview[] }).reviews[0]!.findings[0]!;
+    expect(all.file).toBeUndefined();
+    expect(all.message).toMatch(
+      new RegExp(
+        `^the app's event schemas upload as one \\d+-byte request, over core-api's ${MAX_EVENT_SCHEMAS_REQUEST_BYTES}; core-api refuses it`,
+      ),
+    );
+
+    // Small schemas: nothing to report.
+    for (let i = 0; i < n; i++) put(`apps/shop/events/s${i}.json`, JSON.stringify(schemaOf(1024)));
+    expect(kinds()).toEqual([]);
   });
 
   it("reports a permission nothing asks for; a gateway route or a test doesn't count as code, but a route does count", () => {
