@@ -10,6 +10,9 @@ import { createCredential, deleteCredential, rotateCredential } from "@/lib/cred
 import { db, engine, inTransaction } from "@/lib/db";
 import { APPROVAL_ID, CREDENTIAL_ID, RUN_ID } from "@/lib/format";
 import { gate, type GateResult } from "@/lib/gate";
+import type { HookFormState } from "@/lib/hooks/example";
+import { createHook, deleteHook, regenerateHookSecret } from "@/lib/hooks/store";
+import { HOOK_ID } from "@/lib/workflow/definition-v2";
 import { parseEgressHosts, parseEmailRecipients, setList, setPausedAll } from "@/lib/settings";
 import type { Problem } from "@/lib/workflow/definition";
 import { manualInputOf } from "@/lib/workflow/manual";
@@ -241,4 +244,46 @@ export async function setPausedAllAction(formData: FormData) {
   if (!g.ok) redirect(refused("/settings", g));
   await inTransaction(await db(), (tx) => setPausedAll(tx, on, g.subject));
   redirect("/settings");
+}
+
+/**
+ * A workflow's hook (flow.workflows.write): create one, or a new secret for it. The answer goes back to
+ * the form, not through a redirect: the secret is in it, shown once, and must not land in a URL.
+ */
+async function onHook(formData: FormData, what: "create" | "regenerate"): Promise<HookFormState> {
+  const id = String(formData.get("hookId") ?? "");
+  if (what === "regenerate" && !HOOK_ID.test(id)) return { status: "error", error: "not_found" };
+  const g = await gate("flow.workflows.write");
+  if (!g.ok)
+    return { status: "error", error: g.body.error, ...(g.body.permission ? { permission: g.body.permission } : {}) };
+  const r = await inTransaction(await db(), (tx) =>
+    what === "create"
+      ? createHook(
+          tx,
+          { workflowKey: String(formData.get("workflow") ?? ""), kind: String(formData.get("kind") ?? "") },
+          g.subject,
+        )
+      : regenerateHookSecret(tx, id, g.subject),
+  );
+  if (!r.ok) return { status: "error", error: r.error };
+  revalidatePath("/workflows");
+  return { status: "done", hookId: r.id, kind: r.kind, ...(r.shownOnce ? { secret: r.shownOnce } : {}) };
+}
+
+export async function createHookAction(_prev: HookFormState, formData: FormData) {
+  return onHook(formData, "create");
+}
+
+export async function regenerateHookAction(_prev: HookFormState, formData: FormData) {
+  return onHook(formData, "regenerate");
+}
+
+/** Delete a workflow's hook and its secret (flow.workflows.write): its URL answers 404 from then on. */
+export async function deleteHookAction(formData: FormData) {
+  const id = String(formData.get("hookId") ?? "");
+  if (!HOOK_ID.test(id)) redirect("/workflows");
+  const g = await gate("flow.workflows.write");
+  if (!g.ok) redirect(refused("/workflows", g));
+  const r = await inTransaction(await db(), (tx) => deleteHook(tx, id, g.subject));
+  redirect(r.ok ? "/workflows" : `/workflows?error=${r.error}`);
 }

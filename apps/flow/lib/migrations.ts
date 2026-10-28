@@ -170,6 +170,21 @@ CREATE INDEX workflow_runs_workflow ON workflow_runs (workflow_id, started_at DE
 ALTER TABLE workflow_run_steps ADD COLUMN auto_retries integer NOT NULL DEFAULT 0;
 CREATE INDEX workflow_run_steps_due ON workflow_run_steps (timeout_at) WHERE status IN ('pending', 'running');`,
   },
+  {
+    version: 5,
+    name: "webhook_hooks: webhook in and the GitHub trigger",
+    sql: `
+-- POST /hooks/<id> (lib/hooks/): one per workflow. The id is 128 random bits (base64url); the secret is
+-- a webhook-secret credential, so deleting that credential deletes the hook with it.
+CREATE TABLE webhook_hooks (
+  id             text PRIMARY KEY,
+  workflow_id    text NOT NULL UNIQUE REFERENCES workflows (id),
+  kind           text NOT NULL CHECK (kind IN ('generic', 'github')),
+  credential_id  text NOT NULL UNIQUE REFERENCES credentials (id) ON DELETE CASCADE,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  last_called_at timestamptz
+);`,
+  },
 ];
 
 /** Run the migrations not applied yet, in one transaction under an advisory lock. */
