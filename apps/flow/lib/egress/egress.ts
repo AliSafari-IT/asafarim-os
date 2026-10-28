@@ -98,13 +98,22 @@ const systemResolve = async (host: string): Promise<ResolvedAddress[]> =>
     family: a.family === 6 ? 6 : 4,
   }));
 
-/** A `lookup` that answers `pinned` whatever it is asked: the connection goes where the check said. */
-export function pinnedLookup(pinned: ResolvedAddress): LookupFunction {
+/**
+ * A `lookup` that answers the checked addresses whatever it is asked: the connection goes where the
+ * check said. All of them when Node asks for all (it then tries the next one if a family has no route),
+ * the first otherwise.
+ */
+export function pinnedLookup(pinned: readonly ResolvedAddress[]): LookupFunction {
+  const first = pinned[0]!;
   return ((_host: string, options: { all?: boolean }, callback: (...args: unknown[]) => void) => {
     if (typeof options === "function")
-      return (options as (...args: unknown[]) => void)(null, pinned.address, pinned.family);
-    if (options?.all) return callback(null, [{ address: pinned.address, family: pinned.family }]);
-    return callback(null, pinned.address, pinned.family);
+      return (options as (...args: unknown[]) => void)(null, first.address, first.family);
+    if (options?.all)
+      return callback(
+        null,
+        pinned.map(({ address, family }) => ({ address, family })),
+      );
+    return callback(null, first.address, first.family);
   }) as LookupFunction;
 }
 
@@ -146,7 +155,7 @@ export function createEgress(deps: EgressDeps = {}) {
     if (!addresses.length) throw new EgressError("dns_failed", host);
     // One private answer among public ones is refused too: the name points somewhere it shouldn't.
     if (addresses.some((a) => isBlocked(a.address))) throw new EgressError("address_refused", host);
-    return { url, host, port, pinned: addresses[0]!, size };
+    return { url, host, port, pinned: addresses, size };
   }
 
   /** Steps 3 and 4. */

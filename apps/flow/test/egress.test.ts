@@ -312,18 +312,37 @@ describe("DNS rebinding", () => {
     expect(seen).toHaveLength(1);
   });
 
-  it("the pinned lookup answers the checked address whatever it is asked, in both callback forms", () => {
-    const lookup = pinnedLookup({ address: "8.8.8.8", family: 4 }) as unknown as (
-      h: string,
-      o: object,
-      cb: (...a: unknown[]) => void,
-    ) => void;
+  it("the pinned lookup answers the checked addresses whatever it is asked, in both callback forms", () => {
+    const lookup = pinnedLookup([
+      { address: "2606:4700::1111", family: 6 },
+      { address: "8.8.8.8", family: 4 },
+    ]) as unknown as (h: string, o: object, cb: (...a: unknown[]) => void) => void;
     const single: unknown[] = [];
     lookup("rebound.example", {}, (...a) => single.push(...a));
-    expect(single).toEqual([null, "8.8.8.8", 4]);
+    expect(single).toEqual([null, "2606:4700::1111", 6]);
     const all: unknown[] = [];
     lookup("rebound.example", { all: true }, (...a) => all.push(...a));
-    expect(all).toEqual([null, [{ address: "8.8.8.8", family: 4 }]]);
+    expect(all).toEqual([
+      null,
+      [
+        { address: "2606:4700::1111", family: 6 },
+        { address: "8.8.8.8", family: 4 },
+      ],
+    ]);
+  });
+
+  it("an IPv6 address without a route first: the next checked address is tried, no new DNS query", async () => {
+    let n = 0;
+    const { egress } = setup({
+      resolve: async () => {
+        n++;
+        // ::1 (nothing listens there) stands in for an IPv6 address this host can't reach.
+        return [{ address: "::1", family: 6 }, LOOPBACK];
+      },
+      isBlocked: () => false,
+    });
+    expect((await egress.request(fakeDb(), call())).status).toBe(200);
+    expect(n).toBe(1);
   });
 });
 
