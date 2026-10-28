@@ -10,14 +10,17 @@
  *  - each schema is a JSON object that compiles with the publisher's own ajv setup (@asafarim/events);
  *  - each schema is at most MAX_SCHEMA_BYTES; the whole request at most MAX_SCHEMAS_REQUEST_BYTES.
  */
-import { compileEventSchema } from "@asafarim/events";
+import { MAX_EVENT_SCHEMAS_REQUEST_BYTES, MAX_EVENT_SCHEMA_BYTES, compileEventSchema } from "@asafarim/events";
 import { ApiError } from "./errors.ts";
 import { publishedTypes, type EventsManifest } from "./event-plumbing.ts";
 
-/** One schema, serialised. */
-export const MAX_SCHEMA_BYTES = 64 * 1024;
+/**
+ * One schema, serialised. The limits live in `@asafarim/events`, so `platform manifest review` reports
+ * an oversized schema (`event-schema-too-large`) against the same numbers.
+ */
+export const MAX_SCHEMA_BYTES = MAX_EVENT_SCHEMA_BYTES;
 /** One upload request body. */
-export const MAX_SCHEMAS_REQUEST_BYTES = 512 * 1024;
+export const MAX_SCHEMAS_REQUEST_BYTES = MAX_EVENT_SCHEMAS_REQUEST_BYTES;
 
 export interface SchemaProblem {
   type: string;

@@ -103,6 +103,14 @@ export function createSchemaAjv(): Ajv2020 {
   return ajv;
 }
 
+/**
+ * The event catalog's upload limits (P4.2): core-api refuses one published type's schema larger
+ * than this (`JSON.stringify` of the parsed schema, in UTF-8 bytes) with `payload_too_large` ...
+ */
+export const MAX_EVENT_SCHEMA_BYTES = 64 * 1024;
+/** ... and a whole upload body (`{ "schemas": { "<type>": <schema> } }`, as the app SDK sends it) larger than this. */
+export const MAX_EVENT_SCHEMAS_REQUEST_BYTES = 512 * 1024;
+
 /** Compile one schema on a fresh ajv (so two schemas with the same `$id` never collide). Throws if it doesn't compile. */
 export function compileEventSchema(schema: object): ValidateFunction {
   return createSchemaAjv().compile(schema);
