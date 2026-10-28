@@ -586,6 +586,95 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
     });
   });
 
+  describe("the builder", () => {
+    const inTx = <T>(fn: (c: pg.PoolClient) => Promise<T>) =>
+      flow.inTransaction(pool, async (c) => ({ value: await fn(c), audits: [] })).then((r) => r.value);
+    const draft = (key: string) => ({
+      version: 2,
+      key,
+      trigger: { type: "manual", input: [] },
+      start: "end",
+      nodes: [{ key: "end", type: "end" }],
+    });
+
+    it("New makes a draft-only workflow: listed, opened by the builder; a second New of its key is refused", async () => {
+      const made = await inTx((c) =>
+        flow.engine.saveDraft(c, {
+          workflowKey: "built",
+          name: "Built",
+          definition: draft("built"),
+          actor: "dev-owner",
+          expect: "new",
+        }),
+      );
+      if (!made.ok) throw new Error(made.error);
+      expect(
+        await inTx((c) =>
+          flow.engine.saveDraft(c, { workflowKey: "built", definition: draft("built"), actor: "x", expect: "new" }),
+        ),
+      ).toMatchObject({ ok: false, error: "exists" });
+      expect((await queries.listWorkflows(pool)).find((w) => w.key === "built")).toMatchObject({
+        name: "Built",
+        current: null,
+        versions: 0,
+      });
+      const opened = await queries.getBuilderWorkflow(pool, "built");
+      expect(opened).toMatchObject({ key: "built", draft: draft("built"), draftUpdatedBy: "dev-owner", versions: [] });
+      // The time a save answers with is the one the database keeps: the next save names it.
+      expect(opened!.draftUpdatedAt!.getTime()).toBe(made.draftUpdatedAt.getTime());
+    });
+
+    it("a save naming a draft saved since is refused (stale_draft); publishing clears the draft; versions diff", async () => {
+      const seen = (await queries.getBuilderWorkflow(pool, "built"))!.draftUpdatedAt;
+      const mine = await inTx((c) =>
+        flow.engine.saveDraft(c, {
+          workflowKey: "built",
+          definition: draft("built"),
+          actor: "ada",
+          expect: { draftUpdatedAt: seen },
+        }),
+      );
+      if (!mine.ok) throw new Error(mine.error);
+      const theirs = await inTx((c) =>
+        flow.engine.saveDraft(c, {
+          workflowKey: "built",
+          definition: draft("built"),
+          actor: "bo",
+          expect: { draftUpdatedAt: seen },
+        }),
+      );
+      expect(theirs).toMatchObject({ ok: false, error: "stale_draft" });
+      expect((await queries.getBuilderWorkflow(pool, "built"))!.draftUpdatedBy).toBe("ada");
+
+      expect(await inTx((c) => flow.engine.publishDraft(c, { workflowKey: "built", actor: "ada" }))).toMatchObject({
+        ok: true,
+        version: 1,
+      });
+      const second = { ...draft("built"), nodes: [{ key: "end", type: "end", status: "skipped" }] };
+      await inTx((c) =>
+        flow.engine.saveDraft(c, {
+          workflowKey: "built",
+          definition: second,
+          actor: "ada",
+          expect: { draftUpdatedAt: null },
+        }),
+      );
+      await inTx((c) => flow.engine.publishDraft(c, { workflowKey: "built", actor: "ada" }));
+      const opened = await queries.getBuilderWorkflow(pool, "built");
+      expect(opened).toMatchObject({ draft: null, draftUpdatedAt: null, current: { version: 2 } });
+      expect(opened!.versions.map((v) => v.version)).toEqual([2, 1]);
+      expect((await queries.getVersions(pool, "built", [1, 2, 9])).map((v) => v.version)).toEqual([1, 2]);
+      expect(await queries.getVersions(pool, "nope", [1])).toEqual([]);
+    });
+
+    it("the checks' data: credentials by id, name and kind only, and the two allow-lists", async () => {
+      const { checkDataOf } = await import("../lib/builder/checks");
+      const data = await checkDataOf(pool);
+      for (const c of data.credentials) expect(Object.keys(c).sort()).toEqual(["id", "kind", "name"]);
+      expect(Array.isArray(data.egressHosts) && Array.isArray(data.emailRecipients)).toBe(true);
+    });
+  });
+
   describe("webhook in", () => {
     const tx = <T extends { audits: AuditEntry[] }>(fn: (c: pg.PoolClient) => Promise<T>) =>
       flow.inTransaction<T>(pool, fn);

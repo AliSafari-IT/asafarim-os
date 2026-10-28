@@ -345,3 +345,79 @@ textarea[readonly] {
   overflow-wrap: anywhere;
   user-select: all;
 }
+
+/* Workflows: New workflow, Edit, Versions and Duplicate; the builder takes the whole width. */
+main.wide {
+  max-width: none;
+  padding: 16px;
+}
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+a.button {
+  display: inline-block;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  text-decoration: none;
+}
+main a.button:hover {
+  background: var(--accent-hover);
+}
+a.button.secondary {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+button.small {
+  padding: 4px 10px;
+  font-size: 0.85rem;
+}
+button.danger {
+  background: var(--bad);
+  color: var(--bad-ink);
+}
+main button.danger:hover {
+  background: var(--bad);
+  opacity: 0.9;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+ul.plain,
+ol.plain {
+  margin: 0;
+  padding-left: 18px;
+}
+.duplicate {
+  margin: 8px 0 0;
+}
+.inline-form {
+  max-width: 420px;
+  margin-top: 8px;
+}
+
+/* Versions: the line diff of two definitions. */
+pre.diff {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-added {
+  color: var(--good);
+  background: var(--accent-soft);
+}
+.diff-removed {
+  color: var(--bad);
+  background: var(--warn-bg);
+}

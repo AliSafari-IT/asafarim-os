@@ -700,14 +700,28 @@ describe("pause and resume", () => {
   it("are audited when they change something, and not when they don't", async () => {
     expect(await t.engine.setWorkflowStatus(t.mem.tx, "docs-note-to-issue", "paused", "dev-admin")).toEqual({
       ok: true,
-      audits: [{ action: "flow.workflow.paused", workflow: "docs-note-to-issue", actor: "dev-admin" }],
+      audits: [
+        {
+          action: "flow.workflow.paused",
+          workflow: "docs-note-to-issue",
+          workflowId: t.mem.workflows[0]!.id,
+          actor: "dev-admin",
+        },
+      ],
     });
     expect((await t.engine.setWorkflowStatus(t.mem.tx, "docs-note-to-issue", "paused", "dev-admin")).audits).toEqual(
       [],
     );
     expect(await t.engine.setWorkflowStatus(t.mem.tx, "docs-note-to-issue", "active", "dev-admin")).toEqual({
       ok: true,
-      audits: [{ action: "flow.workflow.resumed", workflow: "docs-note-to-issue", actor: "dev-admin" }],
+      audits: [
+        {
+          action: "flow.workflow.resumed",
+          workflow: "docs-note-to-issue",
+          workflowId: t.mem.workflows[0]!.id,
+          actor: "dev-admin",
+        },
+      ],
     });
     expect(await t.engine.setWorkflowStatus(t.mem.tx, "nope", "paused", "dev-admin")).toMatchObject({
       ok: false,

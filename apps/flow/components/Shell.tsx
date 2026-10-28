@@ -17,9 +17,12 @@ const NAV = [
 /** The OS top bar (app switcher, theme, account menu) and Flow's own navigation, around a page. */
 export async function Shell({
   current,
+  wide = false,
   children,
 }: {
   current: (typeof NAV)[number]["href"];
+  /** The whole width of the window (the builder), not the page column. */
+  wide?: boolean;
   children: React.ReactNode;
 }) {
   const session = await auth();
@@ -63,7 +66,7 @@ export async function Shell({
           ))}
         </div>
       </nav>
-      <main>{children}</main>
+      <main className={wide ? "wide" : undefined}>{children}</main>
     </>
   );
 }

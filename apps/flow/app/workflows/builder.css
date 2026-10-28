@@ -1,0 +1,298 @@
+/* The builder (components/builder): three columns on a tablet or wider, stacked on a phone (view-only there).
+   Colours are the OS theme's tokens only (@asafarim/theme), light and dark; React Flow's base stylesheet
+   has no colours of its own beyond the defaults its variables replace here. */
+.builder {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.builder-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+.builder-bar p {
+  margin: 4px 0 0;
+}
+.builder-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.save-state {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.save-state.saved {
+  color: var(--good);
+}
+.save-state.conflict,
+.save-state.failed {
+  color: var(--bad);
+  font-weight: 600;
+}
+.builder-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+.builder-left,
+.builder-right {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  min-width: 0;
+}
+@media (min-width: 641px) {
+  .builder-grid {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .builder-right {
+    grid-column: 1 / -1;
+  }
+}
+@media (min-width: 1100px) {
+  .builder-grid {
+    grid-template-columns: 220px minmax(0, 1fr) 340px;
+    align-items: start;
+  }
+  .builder-right {
+    grid-column: auto;
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+    position: sticky;
+    top: 12px;
+  }
+  .builder-left {
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+  }
+}
+.builder h2 {
+  font-size: 1rem;
+}
+.builder h3 {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 10px 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Palette and node list. */
+.palette-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.palette-item,
+.node-list button {
+  text-align: left;
+  font-weight: 400;
+  background: var(--card-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+}
+main .palette-item:hover,
+main .node-list button:hover {
+  background: var(--accent-soft);
+}
+.palette-item[aria-pressed="true"],
+.node-list button[aria-current="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.palette-item:disabled {
+  cursor: default;
+  color: var(--muted);
+}
+.node-list ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.node-list button {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.badge {
+  margin-left: auto;
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.badge.bad {
+  background: var(--bad);
+  color: var(--bad-ink);
+}
+
+/* The canvas. */
+.flow-canvas {
+  height: 70vh;
+  min-height: 420px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card-2);
+}
+.flow-canvas .react-flow {
+  --xy-background-color: var(--card-2);
+  --xy-background-pattern-color: var(--line);
+  --xy-edge-stroke: var(--muted);
+  --xy-edge-stroke-selected: var(--accent);
+  --xy-connectionline-stroke: var(--accent);
+  --xy-handle-background-color: var(--accent);
+  --xy-node-color: var(--ink);
+  --xy-node-border: 1px solid var(--line);
+  --xy-node-border-selected: 1px solid var(--accent);
+  --xy-selection-background-color: var(--accent-soft);
+  --xy-selection-border: 1px dotted var(--accent);
+  --xy-attribution-background-color: var(--card);
+  --xy-minimap-background-color: var(--card);
+  color: var(--ink);
+}
+.flow-canvas .react-flow__attribution a {
+  color: var(--muted);
+}
+.flow-canvas .react-flow__edge-text {
+  fill: var(--ink);
+}
+.flow-canvas .react-flow__edge-textbg {
+  fill: var(--card);
+}
+.flow-canvas .react-flow__controls button {
+  background: var(--card);
+  color: var(--ink);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 4px;
+}
+.flow-canvas .react-flow__controls button svg {
+  fill: currentColor;
+}
+.flow-canvas .react-flow__node:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+.flow-node {
+  min-width: 170px;
+  max-width: 220px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  font-size: 0.85rem;
+}
+.flow-node.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.flow-node.has-problems {
+  border-color: var(--bad);
+}
+.flow-node-title {
+  font-weight: 600;
+}
+.flow-node-sub {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.flow-node-problems {
+  color: var(--bad);
+  font-weight: 600;
+  margin-top: 2px;
+}
+.flow-node-branches {
+  display: flex;
+  justify-content: space-around;
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-top: 4px;
+}
+
+/* Settings. */
+.builder .field {
+  margin: 0 0 6px;
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.builder fieldset.field,
+.builder fieldset.clause {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  margin: 0 0 10px;
+}
+.builder legend {
+  font-weight: 600;
+  padding: 0 4px;
+}
+.list-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.list-row > .field {
+  flex: 1;
+}
+.list-row > button {
+  margin-bottom: 16px;
+}
+.field-problems {
+  color: var(--bad);
+  font-size: 0.85rem;
+  margin: -6px 0 8px;
+  padding-left: 18px;
+}
+p.field-problems {
+  padding-left: 0;
+}
+.combo {
+  position: relative;
+}
+.combo-list {
+  position: absolute;
+  z-index: 10;
+  left: 0;
+  right: 0;
+  top: calc(100% - 10px);
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.combo-list li {
+  padding: 4px 10px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.combo-list li[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+.test-run {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}

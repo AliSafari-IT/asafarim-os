@@ -21,6 +21,8 @@ const MESSAGES: Record<string, string> = {
   invalid_entries:
     "An entry doesn't fit: hosts are names like hooks.example.com (or host:port), recipients an address or @domain.",
   too_many_entries: "That's more entries than a list can hold.",
+  exists: "A workflow with that key exists already: choose another key.",
+  invalid_workflow: "That doesn't fit: a name, and a key of lower case letters, digits and dashes.",
 };
 
 /** The refusal a server action redirected back with (`?error=…&permission=…`). */

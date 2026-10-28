@@ -16,6 +16,7 @@ import type { Connector } from "../engine/connectors";
 import { EgressError, type EgressResponse } from "../egress/egress";
 import { allowListOf } from "../egress/hosts";
 import { getSettings } from "../settings";
+import { credentialField, egressUrl } from "../workflow/fields";
 import { templatedText } from "../workflow/templates";
 import { egressFailure } from "./failures";
 import { DELIVERY_HEADER, SIGNATURE_HEADER, signatureHeader } from "./webhook-signature";
@@ -36,9 +37,9 @@ const JsonValue: z.ZodType<Json> = z.lazy(() =>
 );
 
 const Input = z.strictObject({
-  url: z.url({ protocol: /^https$/ }).max(2048),
+  url: egressUrl(z.url({ protocol: /^https$/ }).max(2048)),
   /** The webhook-secret credential's id. */
-  credential: z.string().min(1).max(64),
+  credential: credentialField("webhook-secret"),
   body: JsonValue,
 });
 const Output = z.strictObject({ status: z.number().int(), simulated: z.literal(true).optional() });

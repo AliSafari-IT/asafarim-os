@@ -23,6 +23,7 @@
  * First time on a machine: `pnpm --filter @asafarim/notes exec playwright install chromium`.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { bootstrap, readEnvFile } from "./bootstrap.mjs";
 import { installDevApps } from "./apps.mjs";
@@ -138,7 +139,11 @@ try {
     const flowNext = path.join(FLOW_DIR, "node_modules/next/dist/bin/next");
     const flowBuild = spawnSync(process.execPath, [flowNext, "build"], { cwd: FLOW_DIR, stdio: "inherit" });
     if (flowBuild.status !== 0) throw new Error("next build (flow) failed");
-    const flow = start("flow", [flowNext, "start", "--port", String(DEV.apps.flow)], FLOW_DIR);
+    // A credentials key of its own (none in .dev/): the builder's spec adds a credential and a hook secret.
+    const flow = start("flow", [flowNext, "start", "--port", String(DEV.apps.flow)], FLOW_DIR, {
+      ...process.env,
+      FLOW_CREDENTIALS_KEY: process.env.FLOW_CREDENTIALS_KEY ?? randomBytes(32).toString("base64"),
+    });
     // Flow's own answer, not another process that holds the port.
     const live = await (await waitFor(`${FLOW_URL}/health/live`)).json();
     if (flow.exitCode !== null || flow.signalCode !== null || live.app !== "flow")

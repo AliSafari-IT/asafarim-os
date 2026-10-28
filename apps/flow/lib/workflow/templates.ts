@@ -28,6 +28,9 @@ export function templatedText(max = 10_000): z.ZodString {
   return schema;
 }
 
+/** Whether `schema` is one `templatedText()` made. */
+export const isTemplated = (schema: z.ZodType): boolean => templated.has(schema);
+
 export class MissingValueError extends Error {
   override readonly name = "MissingValueError";
   constructor(readonly path: string) {
@@ -59,7 +62,8 @@ export function render(text: string, ctx: RunContext): string {
 }
 
 type Path = (string | number)[];
-type Visit = (path: Path, text: string, isTemplated: boolean) => string | void;
+/** `schema`: the field's own schema (under its wrappers), when the walk knows it. */
+type Visit = (path: Path, text: string, isTemplated: boolean, schema?: z.ZodType) => string | void;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -74,7 +78,7 @@ interface Def {
 }
 
 /** The schema under optional, nullable, default and lazy wrappers. */
-function unwrap(schema: z.ZodType): z.ZodType {
+export function unwrap(schema: z.ZodType): z.ZodType {
   let s = schema;
   for (;;) {
     if (templated.has(s)) return s;
@@ -112,7 +116,7 @@ function branch(schema: z.ZodType | undefined, value: unknown): z.ZodType | unde
 export function walkStrings(schema: z.ZodType | undefined, value: unknown, visit: Visit, path: Path = []): unknown {
   const s = branch(schema ? unwrap(schema) : undefined, value);
   if (typeof value === "string") {
-    const out = visit(path, value, s !== undefined && templated.has(s));
+    const out = visit(path, value, s !== undefined && templated.has(s), s);
     return out ?? value;
   }
   const def = s?.def as Def | undefined;

@@ -5,17 +5,25 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { signIn, signOut } from "@/lib/auth";
+import { z } from "zod";
+import { buildCatalog } from "@/lib/builder/catalog";
+import { builderProblems, checkDataOf, dataProblems } from "@/lib/builder/checks";
+import { draftOf } from "@/lib/builder/open";
+import { newTrigger, starterDraft } from "@/lib/builder/ops";
 import { creationFrom, rotationFrom, type CredentialFormState } from "@/lib/credentials/form";
 import { createCredential, deleteCredential, rotateCredential } from "@/lib/credentials/store";
 import { db, engine, inTransaction } from "@/lib/db";
+import { DRAFT_MAX_BYTES } from "@/lib/engine/engine";
 import { APPROVAL_ID, CREDENTIAL_ID, RUN_ID } from "@/lib/format";
 import { gate, type GateResult } from "@/lib/gate";
 import type { HookFormState } from "@/lib/hooks/example";
 import { createHook, deleteHook, regenerateHookSecret } from "@/lib/hooks/store";
+import { getBuilderWorkflow } from "@/lib/queries";
 import { HOOK_ID } from "@/lib/workflow/definition-v2";
 import { parseEgressHosts, parseEmailRecipients, setList, setPausedAll } from "@/lib/settings";
 import type { Problem } from "@/lib/workflow/definition";
 import { manualInputOf } from "@/lib/workflow/manual";
+import { workflowKey } from "@/lib/workflow/schema";
 
 export async function signInAction() {
   await signIn("asafarim", { redirectTo: "/" });
@@ -85,16 +93,20 @@ export async function runNowAction(formData: FormData) {
 }
 
 /**
- * The builder's server functions (its UI comes with PR 2.6), gated by flow.workflows.write and
- * audited (ids only). Each answers with the result rather than a redirect.
+ * The builder's server functions (components/builder), gated by flow.workflows.write, their input
+ * checked with Zod after the gate, and audited (ids only). Each answers with the result rather than a
+ * redirect. The problems they answer with are every check the builder shows (lib/builder/checks.ts):
+ * the definition's own and those of Flow's data (credentials, allow-lists).
  */
 export interface DraftResult {
   ok: boolean;
-  /** A refusal: the gate's (`forbidden`, …) or the engine's (`invalid_definition`, …). */
+  /** A refusal: the gate's (`forbidden`, …), the input's (`invalid_input`) or the engine's (`stale_draft`, …). */
   error?: string;
   permission?: string;
   /** What is wrong with the definition, by node. */
   problems?: Problem[];
+  /** saveDraft: when the draft saved now was saved (the next save names it), ISO 8601. */
+  draftUpdatedAt?: string;
   /** publishDraft: the version published. */
   version?: number;
   /** testDraft: the run started. */
@@ -108,25 +120,157 @@ async function asWriter(fn: (subject: string) => Promise<DraftResult>): Promise<
 }
 const strip = <T extends { audits: unknown }>({ audits: _audits, ...rest }: T) => rest;
 
-/** Save a workflow's draft (a new workflow when the key is new): the problems found in it, by node. */
-export async function saveDraft(workflowKey: string, definition: unknown, name?: string): Promise<DraftResult> {
-  return asWriter(async (actor) =>
-    strip(await inTransaction(await db(), (tx) => engine.saveDraft(tx, { workflowKey, name, definition, actor }))),
-  );
+/** A draft as the builder sends it: any JSON object (it may not validate yet), at most DRAFT_MAX_BYTES. */
+const Definition = z
+  .record(z.string(), z.unknown())
+  .refine((d) => JSON.stringify(d).length <= DRAFT_MAX_BYTES, "too large");
+const SaveInput = z.object({ workflowKey, definition: Definition, lastSeen: z.iso.datetime().nullable() });
+const KeyInput = z.object({ workflowKey });
+const ValidateInput = z.object({ workflowKey, definition: Definition });
+const TestInput = z.object({ workflowKey, data: z.record(z.string(), z.unknown()), dryRun: z.boolean() });
+
+/**
+ * Save a workflow's draft (it must exist: New and Duplicate make one). `lastSeen`: when the draft the
+ * editor started from was saved (null: none); someone else's save since then refuses it (`stale_draft`).
+ */
+export async function saveDraft(workflowKey: unknown, definition: unknown, lastSeen: unknown): Promise<DraftResult> {
+  return asWriter(async (actor) => {
+    const input = SaveInput.safeParse({ workflowKey, definition, lastSeen });
+    if (!input.success) return { ok: false, error: "invalid_input" };
+    const { workflowKey: key, lastSeen: seen } = input.data;
+    return inTransaction(await db(), async (tx) => {
+      const r = await engine.saveDraft(tx, {
+        workflowKey: key,
+        definition,
+        actor,
+        expect: { draftUpdatedAt: seen === null ? null : new Date(seen) },
+      });
+      if (!r.ok) return r;
+      const problems = builderProblems(definition, r.problems, await checkDataOf(tx));
+      return { ok: true, problems, draftUpdatedAt: r.draftUpdatedAt.toISOString(), audits: r.audits };
+    }).then(strip);
+  });
 }
 
-/** Publish a workflow's draft as its next version. */
-export async function publishDraft(workflowKey: string): Promise<DraftResult> {
-  return asWriter(async (actor) =>
-    strip(await inTransaction(await db(), (tx) => engine.publishDraft(tx, { workflowKey, actor }))),
-  );
+/** Every problem of `definition` (the draft as the editor has it), without saving it. */
+export async function validateDraft(workflowKey: unknown, definition: unknown): Promise<DraftResult> {
+  return asWriter(async () => {
+    const input = ValidateInput.safeParse({ workflowKey, definition });
+    if (!input.success) return { ok: false, error: "invalid_input" };
+    const data = await checkDataOf(await db());
+    return { ok: true, problems: builderProblems(definition, engine.checkDefinition(definition), data) };
+  });
+}
+
+/** Publish a workflow's draft as its next version: refused (`invalid_definition`) while it has any problem. */
+export async function publishDraft(workflowKey: unknown): Promise<DraftResult> {
+  return asWriter(async (actor) => {
+    const input = KeyInput.safeParse({ workflowKey });
+    if (!input.success) return { ok: false, error: "invalid_input" };
+    return strip(
+      await inTransaction(await db(), async (tx) => {
+        const data = await checkDataOf(tx);
+        return engine.publishDraft(tx, {
+          workflowKey: input.data.workflowKey,
+          actor,
+          check: async (draft) => dataProblems(draft, data),
+        });
+      }),
+    );
+  });
 }
 
 /** A test run of a workflow's draft (a dry run with `dryRun`), `data` as its trigger's data. */
-export async function testDraft(workflowKey: string, data: unknown, dryRun: boolean): Promise<DraftResult> {
-  return asWriter(async (actor) =>
-    strip(await inTransaction(await db(), (tx) => engine.startDraftRun(tx, { workflowKey, data, dryRun, actor }))),
+export async function testDraft(workflowKey: unknown, data: unknown, dryRun: unknown): Promise<DraftResult> {
+  return asWriter(async (actor) => {
+    const input = TestInput.safeParse({ workflowKey, data, dryRun });
+    if (!input.success) return { ok: false, error: "invalid_input" };
+    const { workflowKey: key, data: trigger, dryRun: dry } = input.data;
+    return strip(
+      await inTransaction(await db(), (tx) =>
+        engine.startDraftRun(tx, { workflowKey: key, data: trigger, dryRun: dry, actor }),
+      ),
+    );
+  });
+}
+
+const NewWorkflow = z.object({
+  name: z.string().trim().min(1).max(200),
+  key: workflowKey,
+  trigger: z.string().max(40),
+});
+
+/** New workflow (flow.workflows.write): its first draft (the trigger, then an end), then the builder. */
+export async function createWorkflowAction(formData: FormData) {
+  const g = await gate("flow.workflows.write");
+  if (!g.ok) redirect(refused("/workflows/new", g));
+  const input = NewWorkflow.safeParse({
+    name: formData.get("name"),
+    key: formData.get("key"),
+    trigger: formData.get("trigger"),
+  });
+  const spec = input.success ? buildCatalog().triggers.find((t) => t.type === input.data.trigger) : undefined;
+  if (!input.success || !spec) redirect("/workflows/new?error=invalid_workflow");
+  const { key, name } = input.data;
+  const r = await inTransaction(await db(), (tx) =>
+    engine.saveDraft(tx, {
+      workflowKey: key,
+      name,
+      definition: starterDraft(key, newTrigger(spec)),
+      actor: g.subject,
+      expect: "new",
+    }),
   );
+  redirect(r.ok ? `/workflows/${key}/edit` : `/workflows/new?error=${r.error}`);
+}
+
+const Duplicate = z.object({ workflow: workflowKey, key: workflowKey, name: z.string().trim().min(1).max(200) });
+
+/**
+ * Duplicate (flow.workflows.write): a new workflow whose draft is the source's (its draft, else its
+ * published version), under the new key; audited with both workflows' ids. Then the builder.
+ */
+export async function duplicateWorkflowAction(formData: FormData) {
+  const g = await gate("flow.workflows.write");
+  if (!g.ok) redirect(refused("/workflows", g));
+  const input = Duplicate.safeParse({
+    workflow: formData.get("workflow"),
+    key: formData.get("key"),
+    name: formData.get("name"),
+  });
+  if (!input.success) redirect("/workflows?error=invalid_workflow");
+  const { workflow, key, name } = input.data;
+  const pool = await db();
+  const source = await getBuilderWorkflow(pool, workflow);
+  if (!source) redirect("/workflows?error=not_found");
+  const from = draftOf(source);
+  // A hook belongs to one workflow: the copy's trigger needs one of its own.
+  const trigger = "hook" in from.trigger ? { ...from.trigger, hook: "" } : from.trigger;
+  const r = await inTransaction(pool, async (tx) => {
+    const saved = await engine.saveDraft(tx, {
+      workflowKey: key,
+      name,
+      definition: { ...from, key, trigger },
+      actor: g.subject,
+      expect: "new",
+    });
+    if (!saved.ok) return saved;
+    return {
+      ...saved,
+      audits: [
+        ...saved.audits,
+        {
+          action: "flow.workflow.duplicated" as const,
+          workflow: key,
+          workflowId: saved.workflowId,
+          source: source.key,
+          sourceId: source.id,
+          actor: g.subject,
+        },
+      ],
+    };
+  });
+  redirect(r.ok ? `/workflows/${key}/edit` : `/workflows?error=${r.error}`);
 }
 
 /** The labels as typed: comma- or line-separated, trimmed, empty ones dropped, each once. */
@@ -266,7 +410,8 @@ async function onHook(formData: FormData, what: "create" | "regenerate"): Promis
       : regenerateHookSecret(tx, id, g.subject),
   );
   if (!r.ok) return { status: "error", error: r.error };
-  revalidatePath("/workflows");
+  // The Workflows page and the builder (whose trigger settings pick the hook) show it.
+  revalidatePath("/workflows", "layout");
   return { status: "done", hookId: r.id, kind: r.kind, ...(r.shownOnce ? { secret: r.shownOnce } : {}) };
 }
 
@@ -281,9 +426,12 @@ export async function regenerateHookAction(_prev: HookFormState, formData: FormD
 /** Delete a workflow's hook and its secret (flow.workflows.write): its URL answers 404 from then on. */
 export async function deleteHookAction(formData: FormData) {
   const id = String(formData.get("hookId") ?? "");
-  if (!HOOK_ID.test(id)) redirect("/workflows");
+  // Back to the Workflows page, or to the builder it was deleted from.
+  const raw = String(formData.get("back") ?? "");
+  const back = /^\/workflows\/[a-z][a-z0-9-]{0,63}\/edit$/.test(raw) ? raw : "/workflows";
+  if (!HOOK_ID.test(id)) redirect(back);
   const g = await gate("flow.workflows.write");
-  if (!g.ok) redirect(refused("/workflows", g));
+  if (!g.ok) redirect(refused(back, g));
   const r = await inTransaction(await db(), (tx) => deleteHook(tx, id, g.subject));
-  redirect(r.ok ? "/workflows" : `/workflows?error=${r.error}`);
+  redirect(r.ok ? back : `${back}?error=${r.error}`);
 }

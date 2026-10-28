@@ -20,6 +20,7 @@ import { z } from "zod";
 import { ConnectorError } from "../engine/connector-error";
 import type { Connector, ConnectorContext } from "../engine/connectors";
 import type { EgressResponse } from "../egress/egress";
+import { credentialField } from "../workflow/fields";
 import { templatedText } from "../workflow/templates";
 import { egressFailure } from "./failures";
 
@@ -32,7 +33,7 @@ const MAX_PAGES = 10;
 const TIMEOUT_MS = 60_000;
 
 const Repo = z.string().regex(/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/);
-const Credential = z.string().min(1).max(64);
+const Credential = credentialField("github-token");
 /** An issue number, or a placeholder for one (`{{steps.create.output.number}}`). */
 const IssueNumber = z.union([z.number().int().positive(), templatedText(200)]);
 const Labels = z.array(templatedText(50)).max(20);

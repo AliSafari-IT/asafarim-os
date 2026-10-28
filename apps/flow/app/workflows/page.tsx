@@ -1,18 +1,16 @@
-import { deleteHookAction, runNowAction, setWorkflowStatusAction } from "@/app/actions";
-import { CreateHookForm, RegenerateHookForm, type HookTarget } from "@/components/HookForms";
+import { duplicateWorkflowAction, runNowAction, setWorkflowStatusAction } from "@/app/actions";
+import { HookSection } from "@/components/HookPanel";
 import { ErrorNotice, Unavailable } from "@/components/Notice";
 import { Status } from "@/components/Runs";
 import { Shell } from "@/components/Shell";
 import { db } from "@/lib/db";
 import { at } from "@/lib/format";
-import { curlExample, hookUrl, sampleBody } from "@/lib/hooks/example";
 import { listHooks, type HookSummary } from "@/lib/hooks/store";
 import { pageAccess } from "@/lib/page";
 import { listWorkflows } from "@/lib/queries";
 import { triggerOf } from "@/lib/workflow/definition";
 import type { TriggerV2 } from "@/lib/workflow/definition-v2";
 import { fieldName, typeFieldName } from "@/lib/workflow/manual";
-import manifest from "@/platform.app";
 
 export const dynamic = "force-dynamic";
 
@@ -78,115 +76,39 @@ function RunNow({ workflow, trigger }: { workflow: string; trigger: Extract<Trig
   );
 }
 
-/** GitHub's names for an event in "Let me select individual events". */
-const GITHUB_EVENT_LABELS: Record<string, string> = {
-  issues: "Issues",
-  issue_comment: "Issue comments",
-  pull_request: "Pull requests",
-  pull_request_review: "Pull request reviews",
-  push: "Pushes",
-  release: "Releases",
-  workflow_run: "Workflow runs",
-};
-
-/** What to set in GitHub's settings for a GitHub hook. */
-function GithubSteps({ url, trigger }: { url: string; trigger: Extract<TriggerV2, { type: "github" }> }) {
-  const events = [...new Set(trigger.events.map((e) => e.split(".")[0]!))];
+/** Duplicate: the new workflow's name and key; the builder opens on its draft. */
+function DuplicateForm({ workflow, name }: { workflow: string; name: string }) {
   return (
-    <ol data-testid="github-steps">
-      <li>
-        On GitHub, in {trigger.repos.length > 1 ? "each repository" : <span className="mono">{trigger.repos[0]}</span>}:{" "}
-        <b>Settings → Webhooks → Add webhook</b>.
-      </li>
-      <li>
-        <b>Payload URL</b>: <span className="mono">{url}</span>
-      </li>
-      <li>
-        <b>Content type</b>: <span className="mono">application/json</span>
-      </li>
-      <li>
-        <b>Secret</b>: the secret shown once when it was generated (generate a new one here if it&apos;s lost).
-      </li>
-      <li>
-        <b>Which events</b>: &quot;Let me select individual events&quot;, then{" "}
-        {events.map((e, i) => (
-          <span key={e}>
-            {i ? ", " : ""}
-            <b>{GITHUB_EVENT_LABELS[e] ?? e}</b>
-          </span>
-        ))}
-        .
-      </li>
-      <li>
-        Keep <b>Active</b> ticked and add it: GitHub sends a ping, which this hook answers 200.
-      </li>
-    </ol>
-  );
-}
-
-/** A webhook or GitHub workflow's hook, for flow.workflows.write: its URL, a new secret, delete; or create one. */
-function HookSection({
-  workflow,
-  trigger,
-  hook,
-}: {
-  workflow: string;
-  trigger: TriggerV2;
-  hook: HookSummary | undefined;
-}) {
-  const kind = trigger.type === "github" ? "github" : "generic";
-  const target: HookTarget = {
-    domain: manifest.domains?.primary ?? "localhost",
-    body: trigger.type === "webhook" ? sampleBody(trigger.input) : "{}",
-  };
-  if (!hook)
-    return (
-      <div className="card" data-testid="hook">
-        <p className="muted">No hook yet: create one for its URL and secret.</p>
-        <CreateHookForm workflow={workflow} kind={kind} target={target} />
-      </div>
-    );
-  const url = hookUrl(target.domain, hook.id);
-  const named = (trigger.type === "webhook" || trigger.type === "github") && trigger.hook === hook.id;
-  return (
-    <div className="card" data-testid="hook" data-hook={hook.id}>
-      <p>
-        {hook.kind === "github" ? "GitHub hook" : "Hook"}:{" "}
-        <span className="mono" data-testid="hook-url">
-          {url}
-        </span>
-      </p>
-      <p className="muted">
-        created {at(hook.createdAt)} · last called {at(hook.lastCalledAt)}
-      </p>
-      {named ? null : (
-        <p className="notice warn" role="status" data-testid="hook-not-named">
-          The published trigger doesn&apos;t name this hook: publish a version whose trigger has{" "}
-          <span className="mono">&quot;hook&quot;: &quot;{hook.id}&quot;</span>. Until then calls answer 409.
+    <details className="duplicate">
+      <summary>Duplicate</summary>
+      <form action={duplicateWorkflowAction} className="inline-form" data-testid="duplicate">
+        <input type="hidden" name="workflow" value={workflow} />
+        <label htmlFor={`${workflow}-dup-name`}>Name</label>
+        <input id={`${workflow}-dup-name`} name="name" defaultValue={`${name} (copy)`} required maxLength={200} />
+        <label htmlFor={`${workflow}-dup-key`}>Key</label>
+        <input
+          id={`${workflow}-dup-key`}
+          name="key"
+          defaultValue={`${workflow}-copy`.slice(0, 64)}
+          required
+          maxLength={64}
+          pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*"
+          aria-describedby={`${workflow}-dup-hint`}
+        />
+        <p id={`${workflow}-dup-hint`} className="muted hint">
+          Lower case letters, digits and dashes; it can&apos;t be changed later. A webhook or GitHub trigger needs a
+          hook of its own: the copy&apos;s is left empty.
         </p>
-      )}
-      {trigger.type === "github" ? <GithubSteps url={url} trigger={trigger} /> : null}
-      <details>
-        <summary>A signed test call (curl)</summary>
-        <pre className="mono" data-testid="hook-curl">
-          {curlExample({ url, kind: hook.kind, body: target.body })}
-        </pre>
-      </details>
-      <RegenerateHookForm hookId={hook.id} target={target} />
-      <form action={deleteHookAction}>
-        <input type="hidden" name="hookId" value={hook.id} />
-        <button type="submit" className="secondary" data-testid="delete-hook">
-          Delete the hook
-        </button>
+        <button type="submit">Duplicate</button>
       </form>
-    </div>
+    </details>
   );
 }
 
 /**
  * The workflows and their current definition, read-only; Pause and Resume for flow.workflows.write;
- * "Run now" for a manual trigger, with flow.runs.start; a webhook or GitHub trigger's hook, with
- * flow.workflows.write.
+ * "Run now" for a manual trigger, with flow.runs.start; a webhook or GitHub trigger's hook, New workflow,
+ * Edit (the builder) and Duplicate with flow.workflows.write; View in the builder, read-only, otherwise.
  */
 export default async function Workflows({
   searchParams,
@@ -211,39 +133,71 @@ export default async function Workflows({
   const canStart = access.permissions.includes("flow.runs.start");
   return (
     <Shell current="/workflows">
-      <h1>Workflows</h1>
+      <div className="page-head">
+        <h1>Workflows</h1>
+        {canWrite ? (
+          <a className="button" href="/workflows/new" data-testid="new-workflow">
+            New workflow
+          </a>
+        ) : null}
+      </div>
       <ErrorNotice error={error} permission={permission} />
       {workflows.map((w) => {
-        const trigger = triggerOf(w.current.definition);
+        const trigger = w.current ? triggerOf(w.current.definition) : undefined;
         return (
           <section key={w.key} className="card" data-testid="workflow" data-workflow={w.key}>
             <h2>
               {w.name} <Status value={w.status} />
             </h2>
             <p className="muted">
-              <span className="mono">{w.key}</span> · version {w.current.version} of {w.versions} · published{" "}
-              {at(w.current.publishedAt)} · <TriggerText trigger={trigger} />
+              <span className="mono">{w.key}</span> ·{" "}
+              {w.current ? (
+                <>
+                  version {w.current.version} of {w.versions} · published {at(w.current.publishedAt)}
+                </>
+              ) : (
+                <>not published yet</>
+              )}
+              {trigger ? (
+                <>
+                  {" "}
+                  · <TriggerText trigger={trigger} />
+                </>
+              ) : null}
               {w.draftUpdatedAt ? <> · a draft saved {at(w.draftUpdatedAt)}</> : null}
             </p>
-            {canWrite ? (
-              <form action={setWorkflowStatusAction}>
-                <input type="hidden" name="workflow" value={w.key} />
-                <input type="hidden" name="status" value={w.status === "active" ? "paused" : "active"} />
-                <button type="submit" className="secondary" data-testid="toggle">
-                  {w.status === "active" ? "Pause" : "Resume"}
-                </button>
-              </form>
-            ) : null}
-            {canWrite && (trigger.type === "webhook" || trigger.type === "github" || hooks.has(w.key)) ? (
+            <div className="actions">
+              <a className="button" href={`/workflows/${w.key}/edit`} data-testid="edit">
+                {canWrite ? "Edit" : "View"}
+              </a>
+              {w.versions ? (
+                <a className="button secondary" href={`/workflows/${w.key}/versions`}>
+                  Versions
+                </a>
+              ) : null}
+              {canWrite && w.current ? (
+                <form action={setWorkflowStatusAction}>
+                  <input type="hidden" name="workflow" value={w.key} />
+                  <input type="hidden" name="status" value={w.status === "active" ? "paused" : "active"} />
+                  <button type="submit" className="secondary" data-testid="toggle">
+                    {w.status === "active" ? "Pause" : "Resume"}
+                  </button>
+                </form>
+              ) : null}
+            </div>
+            {canWrite ? <DuplicateForm workflow={w.key} name={w.name} /> : null}
+            {canWrite && trigger && (trigger.type === "webhook" || trigger.type === "github" || hooks.has(w.key)) ? (
               <HookSection workflow={w.key} trigger={trigger} hook={hooks.get(w.key)} />
             ) : null}
-            {canStart && trigger.type === "manual" && w.status === "active" ? (
+            {canStart && trigger?.type === "manual" && w.status === "active" ? (
               <RunNow workflow={w.key} trigger={trigger} />
             ) : null}
-            <details open>
-              <summary>Definition (read-only)</summary>
-              <pre data-testid="definition">{JSON.stringify(w.current.definition, null, 2)}</pre>
-            </details>
+            {w.current ? (
+              <details open>
+                <summary>Definition (read-only)</summary>
+                <pre data-testid="definition">{JSON.stringify(w.current.definition, null, 2)}</pre>
+              </details>
+            ) : null}
           </section>
         );
       })}
