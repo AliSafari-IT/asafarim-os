@@ -348,7 +348,7 @@ export function validateV2(value: unknown, opts: ValidateOptions = {}): V2Result
   const checkRef = (node: string, at: string, ref: string, type: string, what: string) => {
     const target = byKey.get(ref);
     if (!rawByKey.has(ref)) return add(node, at, `"${ref}" isn't a node`);
-    if (target && target.type !== type) return add(node, at, `"${ref}" must be a ${type} node`);
+    if (target && target.type !== type) return add(node, at, `"${ref}" must be a node of type ${type}`);
     const up = upstream.get(node);
     if (up && !up.has(ref)) add(node, at, `${what} "${ref}" isn't upstream of this node on every path`);
   };

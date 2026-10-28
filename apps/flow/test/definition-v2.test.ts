@@ -203,7 +203,7 @@ describe("node types", () => {
     expect(problems(wrong)).toContainEqual({
       node: "review",
       path: "draft",
-      message: '"only-tagged" must be a docs.issue-draft node',
+      message: '"only-tagged" must be a node of type docs.issue-draft',
     });
   });
 
@@ -213,7 +213,7 @@ describe("node types", () => {
     expect(problems(d)).toContainEqual({
       node: "create",
       path: "approval",
-      message: '"draft" must be a approval node',
+      message: '"draft" must be a node of type approval',
     });
   });
 

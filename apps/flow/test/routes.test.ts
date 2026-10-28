@@ -372,3 +372,26 @@ describe("the decisions", () => {
     expect(calls.engine).toEqual([]);
   });
 });
+
+describe("Run now under the kill switch", () => {
+  it("startRun's paused_all comes back to the Workflows page with its own message", async () => {
+    who.subject = "dev-owner";
+    who.permissions = ["flow.read", "flow.runs.start"];
+    const { engine } = (await import("@/lib/db")) as unknown as {
+      engine: { startRun: (...a: unknown[]) => Promise<unknown> };
+    };
+    const startRun = engine.startRun;
+    engine.startRun = async () => ({ ok: false, error: "paused_all", audits: [] });
+    try {
+      const mod = await load<Record<string, (f: FormData) => Promise<void>>>("actions.ts");
+      const stop = await interruptOf(() => mod.runNowAction!(form({ workflow: "echo-flow" })));
+      expect(stop).toMatchObject({ kind: "redirect", to: "/workflows?error=paused_all" });
+    } finally {
+      engine.startRun = startRun;
+    }
+    const { ErrorNotice } = await import("@/components/Notice");
+    expect(JSON.stringify(ErrorNotice({ error: "paused_all" }))).toContain(
+      "All workflows are paused. Resume them in Settings to run this one.",
+    );
+  });
+});
