@@ -84,7 +84,7 @@ export function HookSection({
     return (
       <div className="card" data-testid="hook">
         <p className="muted">No hook yet: create one for its URL and secret.</p>
-        <CreateHookForm workflow={workflow} kind={kind} target={target} />
+        <CreateHookForm key="create" workflow={workflow} kind={kind} target={target} />
       </div>
     );
   const url = hookUrl(target.domain, hook.id);
@@ -113,6 +113,7 @@ export function HookSection({
           {curlExample({ url, kind: hook.kind, body: target.body })}
         </pre>
       </details>
+      <CreateHookForm key="create" workflow={workflow} kind={hook.kind} target={target} exists />
       <RegenerateHookForm hookId={hook.id} target={target} />
       <form action={deleteHookAction}>
         <input type="hidden" name="hookId" value={hook.id} />

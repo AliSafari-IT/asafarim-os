@@ -400,13 +400,13 @@ test("the builder: webhook → condition → email.send → end, validated, publ
   await expect(page.getByTestId("email-recipients").locator("textarea")).toHaveValue(/ops@example\.com/);
   await page.goto("/credentials");
   const add = page.getByTestId("add-credential");
-  await add.getByLabel("Kind").selectOption("smtp");
-  await add.getByLabel("Name").fill(credential);
-  await add.getByLabel("Host").fill("smtp.example.com");
-  await add.getByLabel("From").fill("flow@example.com");
-  await add.getByLabel("Username").fill("flow");
-  await add.getByLabel("Password").fill("e2e-only");
-  await add.getByRole("button", { name: "Add" }).click();
+  await add.getByLabel("Kind", { exact: true }).selectOption("smtp");
+  await add.getByLabel("Name", { exact: true }).fill(credential);
+  await add.getByLabel("Host", { exact: true }).fill("smtp.example.com");
+  await add.getByLabel("From", { exact: true }).fill("flow@example.com");
+  await add.getByLabel("Username", { exact: true }).fill("flow");
+  await add.getByLabel("Password", { exact: true }).fill("e2e-only");
+  await add.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.getByTestId("credential-saved")).toBeVisible();
 
   // New workflow, started by a webhook: the builder opens on its first draft.
@@ -421,11 +421,13 @@ test("the builder: webhook → condition → email.send → end, validated, publ
 
   // The trigger's settings: its hook (the Workflows page's hook panel), then an input field.
   await page.getByTestId("create-hook").getByRole("button").click();
+  // Its secret, shown once (and kept on screen if the page refreshes to show the hook).
   await expect(page.getByTestId("hook-shown-once")).toBeVisible();
   await page.reload();
+  await expect(page.getByTestId("hook-url")).toBeVisible();
   const trigger = page.locator(`[data-testid="node-settings"][data-node="@trigger"]`);
   await trigger.getByTestId("trigger-hook").selectOption({ index: 1 });
-  await trigger.getByRole("button", { name: "Add input" }).click();
+  await trigger.getByRole("button", { name: "Add input", exact: true }).click();
   await trigger.getByLabel(/^Name/).fill("title");
 
   // The nodes, from the palette and the settings panel only: no dragging.

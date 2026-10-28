@@ -53,8 +53,24 @@ function Answer({ state, target }: { state: HookFormState; target: HookTarget })
   return null;
 }
 
-export function CreateHookForm({ workflow, kind, target }: { workflow: string; kind: HookKind; target: HookTarget }) {
+/**
+ * Create the hook. `exists`: it does now, so only the answer is left (the secret, shown once). The panel
+ * renders this under the same key before and after, so the page refreshing once the hook exists keeps
+ * the secret on screen instead of dropping it with the form.
+ */
+export function CreateHookForm({
+  workflow,
+  kind,
+  target,
+  exists = false,
+}: {
+  workflow: string;
+  kind: HookKind;
+  target: HookTarget;
+  exists?: boolean;
+}) {
   const [state, action, pending] = useActionState(createHookAction, { status: "idle" });
+  if (exists) return <Answer state={state} target={target} />;
   return (
     <form action={action} data-testid="create-hook">
       <input type="hidden" name="workflow" value={workflow} />
