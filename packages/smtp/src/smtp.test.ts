@@ -178,6 +178,29 @@ describe("SmtpClient", () => {
     }
   });
 
+  it("connects where `lookup` says, whatever the host name resolves to", async () => {
+    const f = await fakeServer({ ehlo: ["fake"] });
+    const asked: string[] = [];
+    try {
+      const client = new SmtpClient({
+        host: "mail.pinned.test",
+        port: f.port,
+        security: "none",
+        heloName: "id.test",
+        lookup: ((host: string, options: { all?: boolean }, callback: (...args: unknown[]) => void) => {
+          asked.push(host);
+          if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]);
+          else callback(null, "127.0.0.1", 4);
+        }) as never,
+      });
+      expect(await client.send(message)).toEqual({});
+      expect(asked).toEqual(["mail.pinned.test"]);
+      expect(f.connections()).toBe(1);
+    } finally {
+      f.server.close();
+    }
+  });
+
   it("refuses header injection before connecting", async () => {
     const f = await fakeServer({ ehlo: ["fake"] });
     try {

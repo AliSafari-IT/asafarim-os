@@ -13,7 +13,7 @@
  * is refused before connecting. Nothing it throws contains an address, the
  * message or the password.
  */
-import { type Socket, connect as netConnect } from "node:net";
+import { type LookupFunction, type Socket, connect as netConnect } from "node:net";
 import { type TLSSocket, connect as tlsConnect } from "node:tls";
 
 export type SmtpSecurity = "tls" | "starttls" | "none";
@@ -28,6 +28,11 @@ export interface SmtpConfig {
   /** The name this client announces in EHLO (the sending service's host). */
   heloName: string;
   timeoutMs?: number;
+  /**
+   * How `host` is resolved (default: the system resolver). A caller that checked the addresses first
+   * pins the connection to them with it; TLS still verifies the certificate against `host`.
+   */
+  lookup?: LookupFunction;
 }
 
 export interface SmtpMessage {
@@ -245,10 +250,13 @@ class Conversation {
 
 function open(config: SmtpConfig): Promise<Socket | TLSSocket> {
   return new Promise((resolve, reject) => {
+    const lookup = config.lookup ? { lookup: config.lookup } : {};
     const socket =
       config.security === "tls"
-        ? tlsConnect({ host: config.host, port: config.port, servername: config.host }, () => resolve(socket))
-        : netConnect({ host: config.host, port: config.port }, () => resolve(socket));
+        ? tlsConnect({ host: config.host, port: config.port, servername: config.host, ...lookup }, () =>
+            resolve(socket),
+          )
+        : netConnect({ host: config.host, port: config.port, ...lookup }, () => resolve(socket));
     socket.once("error", reject);
   });
 }

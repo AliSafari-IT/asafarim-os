@@ -316,6 +316,9 @@ importers:
       '@asafarim/app-sdk':
         specifier: workspace:*
         version: link:../../packages/app-sdk
+      '@asafarim/smtp':
+        specifier: workspace:*
+        version: link:../../packages/smtp
       '@asafarim/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry

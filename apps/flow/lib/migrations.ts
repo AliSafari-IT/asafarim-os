@@ -170,6 +170,20 @@ CREATE INDEX workflow_runs_workflow ON workflow_runs (workflow_id, started_at DE
 ALTER TABLE workflow_run_steps ADD COLUMN auto_retries integer NOT NULL DEFAULT 0;
 CREATE INDEX workflow_run_steps_due ON workflow_run_steps (timeout_at) WHERE status IN ('pending', 'running');`,
   },
+  {
+    version: 5,
+    name: "email_sends (Flow slice 2: the email connector's rate limits)",
+    sql: `
+-- One row per email.send step that went out (or is going): 100 a day per workflow, 500 in all.
+CREATE TABLE email_sends (
+  step_id     text PRIMARY KEY,
+  run_id      text NOT NULL,
+  workflow_id text NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX email_sends_created ON email_sends (created_at);
+CREATE INDEX email_sends_workflow ON email_sends (workflow_id, created_at);`,
+  },
 ];
 
 /** Run the migrations not applied yet, in one transaction under an advisory lock. */

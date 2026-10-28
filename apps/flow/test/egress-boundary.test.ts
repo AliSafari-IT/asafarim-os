@@ -19,7 +19,7 @@ const files = readdirSync(ROOT, { recursive: true })
   .filter((f) => /\.(ts|tsx|js|mjs|cjs)$/.test(f) && !f.endsWith(".d.ts"))
   .filter((f) => !EXEMPT.some((e) => f.startsWith(e)));
 
-const MODULES = "(?:node:)?(?:https?|http2|net|tls|dgram)|undici(?:/[\\w/-]+)?";
+const MODULES = "(?:node:)?(?:https?|http2|net|tls|dgram)|undici(?:/[\\w/-]+)?|@asafarim/smtp";
 const PATTERNS: [string, RegExp][] = [
   ["fetch(", /(?<![\w.])fetch\s*\(|\.fetch\s*\(|\bfetch\s*\)/],
   ["XMLHttpRequest / WebSocket / EventSource", /\b(?:XMLHttpRequest|WebSocket|EventSource)\b/],
@@ -55,6 +55,7 @@ describe("the egress boundary", () => {
       'import { request } from "http"',
       'import net from "net"',
       'import { connect } from "node:tls"',
+      'import { SmtpClient } from "@asafarim/smtp"',
       'import { request } from "undici"',
       'const m = await import("node:http")',
       'const u = require("undici/lib/x")',
@@ -75,6 +76,7 @@ describe("the egress boundary", () => {
       'import net from "net";\nexport const a = net;\n',
       'import { request } from "undici";\nexport const a = request;\n',
       'export const a = () => import("node:tls");\n',
+      'import { SmtpClient } from "@asafarim/smtp";\nexport const a = SmtpClient;\n',
     ];
     for (const s of samples) {
       expect(await lint(s, "lib/connector.ts")).not.toEqual([]);

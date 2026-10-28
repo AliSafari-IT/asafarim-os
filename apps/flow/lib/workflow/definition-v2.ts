@@ -14,7 +14,7 @@
  * - **docs.issue-draft** `{ timeout, next }` and **docs.issue-create** `{ approval, timeout, next }`: the
  *   slice-1 Docs actions (flow.issue-draft.requested.v1 / flow.issue.approved.v1 and their outcomes).
  * - **end** `{ status? }`: the run ends `succeeded` (or `skipped`).
- * - **a connector** `{ type: "<app>.<action>", input, next }`: a registered connector
+ * - **a connector** `{ type: "<app>.<action>[.<part>]", input, next }`: a registered connector
  *   (lib/engine/connectors.ts); `input` fits its schema, and its templated fields may hold placeholders
  *   (lib/workflow/templates.ts).
  *
@@ -37,8 +37,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** owner/name, as GitHub allows it. */
 const REPO = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/;
-/** A connector's node type, `<app>.<action>`. */
-export const CONNECTOR_TYPE = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
+/** A connector's node type, `<app>.<action>`; the action may have parts (`github.issue.create`). */
+export const CONNECTOR_TYPE = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){1,3}$/;
 
 export const InputField = z.strictObject({
   name: z

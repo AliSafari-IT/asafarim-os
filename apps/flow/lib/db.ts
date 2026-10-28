@@ -8,6 +8,9 @@ import { databaseNameOf, traceDatabasePool } from "@asafarim/telemetry";
 import pg from "pg";
 import manifest from "../platform.app";
 import { writeAudit, type AuditEntry } from "./audit";
+import { credentialKeys } from "./credentials/store";
+import { egress, smtpEgress } from "./egress";
+import { poolDb } from "./engine/connectors";
 import { createEngine, type Engine } from "./engine/engine";
 import { pgStore } from "./engine/pg-store";
 import type { Tx } from "./engine/store";
@@ -118,10 +121,20 @@ export function afterCommit(fn: () => void): void {
   globalForDb.flowAfterCommit = fn;
 }
 
-/** The engine on this database: Postgres store, the manifest-checked publisher; drafts checked against the manifest. */
+/**
+ * The engine on this database: Postgres store, the manifest-checked publisher; drafts checked against the
+ * manifest; connectors reach out through lib/egress and use credentials with the pool, outside the run's
+ * transaction.
+ */
 export const engine: Engine = createEngine({
   store: pgStore,
   manifest,
+  services: {
+    db: async () => poolDb(await db()),
+    egress,
+    smtp: smtpEgress,
+    keyring: () => credentialKeys(),
+  },
   publish: (tx, type, data, subject) => publisher.publish(tx, type, data, { subject }),
   newId: () => ulid(),
   log,

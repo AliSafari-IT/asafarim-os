@@ -28,7 +28,8 @@ export default [
       "no-restricted-imports": [
         "error",
         {
-          paths: NETWORK_MODULES.map((name) => ({ name, message: EGRESS })),
+          // @asafarim/smtp opens sockets too: email goes out through lib/egress/smtp.ts.
+          paths: [...NETWORK_MODULES, "@asafarim/smtp"].map((name) => ({ name, message: EGRESS })),
           patterns: [{ group: ["undici/*"], message: EGRESS }],
         },
       ],
