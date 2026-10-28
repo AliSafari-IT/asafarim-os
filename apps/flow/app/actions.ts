@@ -1,12 +1,16 @@
 "use server";
 
 import { ACCESS_COOKIE_NAME } from "@asafarim/app-sdk";
+import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { signIn, signOut } from "@/lib/auth";
+import { creationFrom, rotationFrom, type CredentialFormState } from "@/lib/credentials/form";
+import { createCredential, deleteCredential, rotateCredential } from "@/lib/credentials/store";
 import { db, engine, inTransaction } from "@/lib/db";
-import { APPROVAL_ID, RUN_ID } from "@/lib/format";
-import { gate } from "@/lib/gate";
+import { APPROVAL_ID, CREDENTIAL_ID, RUN_ID } from "@/lib/format";
+import { gate, type GateResult } from "@/lib/gate";
+import { parseEgressHosts, parseEmailRecipients, setList, setPausedAll } from "@/lib/settings";
 
 export async function signInAction() {
   await signIn("asafarim", { redirectTo: "/" });
@@ -101,4 +105,74 @@ export async function approveAction(formData: FormData) {
 
 export async function rejectAction(formData: FormData) {
   await onDecision(formData, "reject");
+}
+
+/** Where a refused action goes back to: `path` with the refusal (and the permission it lacked). */
+const refused = (path: string, g: Extract<GateResult, { ok: false }>) =>
+  `${path}?error=${g.body.error}${g.body.permission ? `&permission=${g.body.permission}` : ""}`;
+
+/**
+ * Add or rotate a credential (flow.credentials.write). The answer goes back to the form, not through a
+ * redirect: a generated webhook secret is in it, shown once, and must not land in a URL.
+ */
+async function onCredential(formData: FormData, what: "create" | "rotate"): Promise<CredentialFormState> {
+  const id = String(formData.get("credentialId") ?? "");
+  if (what === "rotate" && !CREDENTIAL_ID.test(id)) return { status: "error", error: "not_found" };
+  const g = await gate("flow.credentials.write");
+  if (!g.ok)
+    return { status: "error", error: g.body.error, ...(g.body.permission ? { permission: g.body.permission } : {}) };
+  const r = await inTransaction(await db(), (tx) =>
+    what === "create"
+      ? createCredential(tx, creationFrom(formData), g.subject)
+      : rotateCredential(tx, id, rotationFrom(formData), g.subject),
+  );
+  if (!r.ok) return { status: "error", error: r.error };
+  revalidatePath("/credentials");
+  return { status: "done", kind: r.kind, ...(r.shownOnce ? { secret: r.shownOnce } : {}) };
+}
+
+export async function createCredentialAction(_prev: CredentialFormState, formData: FormData) {
+  return onCredential(formData, "create");
+}
+
+export async function rotateCredentialAction(_prev: CredentialFormState, formData: FormData) {
+  return onCredential(formData, "rotate");
+}
+
+/** Delete a credential (flow.credentials.write). */
+export async function deleteCredentialAction(formData: FormData) {
+  const id = String(formData.get("credentialId") ?? "");
+  if (!CREDENTIAL_ID.test(id)) redirect("/credentials");
+  const g = await gate("flow.credentials.write");
+  if (!g.ok) redirect(refused("/credentials", g));
+  const r = await inTransaction(await db(), (tx) => deleteCredential(tx, id, g.subject));
+  redirect(r.ok ? "/credentials" : `/credentials?error=${r.error}`);
+}
+
+/** Replace one allow-list (flow.settings.write). */
+async function onList(formData: FormData, key: "egress_hosts" | "email_recipients") {
+  const g = await gate("flow.settings.write");
+  if (!g.ok) redirect(refused("/settings", g));
+  const raw = String(formData.get("entries") ?? "");
+  const parsed = key === "egress_hosts" ? parseEgressHosts(raw) : parseEmailRecipients(raw);
+  if (!parsed.ok) redirect(`/settings?error=${parsed.error}&list=${key}`);
+  await inTransaction(await db(), (tx) => setList(tx, key, parsed.entries, g.subject));
+  redirect("/settings");
+}
+
+export async function saveEgressHostsAction(formData: FormData) {
+  await onList(formData, "egress_hosts");
+}
+
+export async function saveEmailRecipientsAction(formData: FormData) {
+  await onList(formData, "email_recipients");
+}
+
+/** Pause all or Resume all (flow.settings.write): the kill switch. */
+export async function setPausedAllAction(formData: FormData) {
+  const on = formData.get("pausedAll") === "on";
+  const g = await gate("flow.settings.write");
+  if (!g.ok) redirect(refused("/settings", g));
+  await inTransaction(await db(), (tx) => setPausedAll(tx, on, g.subject));
+  redirect("/settings");
 }

@@ -10,6 +10,8 @@ const NAV = [
   { href: "/runs", label: "Runs" },
   { href: "/approvals", label: "Approvals" },
   { href: "/workflows", label: "Workflows" },
+  { href: "/credentials", label: "Credentials" },
+  { href: "/settings", label: "Settings" },
 ] as const;
 
 /** The OS top bar (app switcher, theme, account menu) and Flow's own navigation, around a page. */

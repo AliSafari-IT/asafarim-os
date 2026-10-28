@@ -16,12 +16,19 @@ describe("flow manifest", () => {
     expect(result.ok && result.manifest).toEqual(compiled);
   });
 
-  it("grants what ADR 0001 decided: read for every role, workflows and runs for the owner, approvals for approvers", () => {
+  it("grants what ADR 0001 decided: read for every role, workflows, runs, credentials and settings for the owner (ADR 0002), approvals for approvers", () => {
     const grants = Object.fromEntries(manifest.roles.map((r) => [r.key, [...r.grants].sort()]));
     expect(grants).toEqual({
       "flow.viewer": ["flow.read"],
       "flow.approver": ["flow.approvals.decide", "flow.read"],
-      "flow.owner": ["flow.approvals.decide", "flow.read", "flow.runs.start", "flow.workflows.write"],
+      "flow.owner": [
+        "flow.approvals.decide",
+        "flow.credentials.write",
+        "flow.read",
+        "flow.runs.start",
+        "flow.settings.write",
+        "flow.workflows.write",
+      ],
     });
   });
 

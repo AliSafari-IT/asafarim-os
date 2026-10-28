@@ -26,6 +26,7 @@
  */
 import { z } from "zod";
 import type { AuditEntry } from "../audit";
+import { isPausedAll, pausedAllRefusal } from "../settings";
 import { evaluate } from "../workflow/conditions";
 import type { RunContext } from "../workflow/context";
 import { applyEdits, COMMENT_MAX, Draft, type Decision } from "../workflow/approval";
@@ -263,6 +264,7 @@ export function createEngine(deps: EngineDeps) {
       deps.log.warn("flow.trigger.ignored", { eventId: event.id, type: event.type, reason: "data_not_an_object" });
       return [];
     }
+    if (await isPausedAll(tx)) return pausedAllRefusal(deps.log, event);
     for (const { workflow, version } of await c.store.triggeredBy(event.type)) {
       const run = await c.store.createRun({
         id: deps.newId(),

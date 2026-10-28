@@ -20,6 +20,9 @@ ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 COPY --from=build --chown=root:root /repo/apps/flow/.next/standalone ./
 COPY --from=build --chown=root:root /repo/apps/flow/.next/static ./apps/flow/.next/static
+# The credentials key rotation, run by hand: `docker exec … node apps/flow/scripts/rotate-credentials-key.mjs`.
+COPY --from=build --chown=root:root /repo/apps/flow/scripts/rotate-credentials-key.mjs ./apps/flow/scripts/
+COPY --from=build --chown=root:root /repo/apps/flow/lib/credentials/cipher.ts ./apps/flow/lib/credentials/
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s \

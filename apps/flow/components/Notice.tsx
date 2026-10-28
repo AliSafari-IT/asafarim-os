@@ -13,6 +13,10 @@ const MESSAGES: Record<string, string> = {
   app_inactive: "The app isn't active.",
   unauthenticated: "Sign in first.",
   permissions_unavailable: "Permissions can't be checked right now.",
+  credential_not_found: "That credential doesn't exist any more.",
+  invalid_entries:
+    "An entry doesn't fit: hosts are names like hooks.example.com (or host:port), recipients an address or @domain.",
+  too_many_entries: "That's more entries than a list can hold.",
 };
 
 /** The refusal a server action redirected back with (`?error=…&permission=…`). */

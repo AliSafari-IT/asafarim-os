@@ -42,6 +42,8 @@ export default defineApp({
     { key: "flow.workflows.write", description: "Pause and resume workflows" },
     { key: "flow.runs.start", description: "Retry or cancel a run" },
     { key: "flow.approvals.decide", description: "Approve or reject a step that waits for a person" },
+    { key: "flow.credentials.write", description: "Add, rotate and delete the credentials connectors use" },
+    { key: "flow.settings.write", description: "Edit the egress and email allow-lists, pause and resume all of Flow" },
   ],
   roles: [
     { key: "flow.viewer", grants: ["flow.read"], description: "Can see workflows and runs" },
@@ -52,8 +54,15 @@ export default defineApp({
     },
     {
       key: "flow.owner",
-      grants: ["flow.read", "flow.workflows.write", "flow.runs.start", "flow.approvals.decide"],
-      description: "Runs Flow: workflows, runs and approvals",
+      grants: [
+        "flow.read",
+        "flow.workflows.write",
+        "flow.runs.start",
+        "flow.approvals.decide",
+        "flow.credentials.write",
+        "flow.settings.write",
+      ],
+      description: "Runs Flow: workflows, runs, approvals, credentials and settings",
     },
   ],
   routes: [
@@ -93,6 +102,8 @@ export default defineApp({
       { label: "Runs", href: "/runs" },
       { label: "Approvals", href: "/approvals" },
       { label: "Workflows", href: "/workflows" },
+      { label: "Credentials", href: "/credentials" },
+      { label: "Settings", href: "/settings" },
     ],
     status: "active",
     launcher: {
