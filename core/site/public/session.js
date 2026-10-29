@@ -12,6 +12,7 @@
   if (!slot) return;
 
   const DOCS = "https://docs.asafarim.site/";
+  const FLOW = "https://flow.asafarim.site/";
   const ACCOUNT = identity + "/account";
   // The Admin console, offered only when identity says this person is an admin (it checks core.admin itself).
   const ADMIN = "https://admin.asafarim.site/";
@@ -39,6 +40,7 @@
   };
   const ICONS = {
     docs: "M5 2.5h6.5L15 6v11.5H5zM11 2.5V6.5h4M7.5 10h5M7.5 13h5",
+    flow: "M4 4h4v4H4zM12 12h4v4h-4zM12 4h4v4h-4zM8 6h3a1 1 0 0 1 1 1v4",
     account: "M10 10.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5zM3.5 17c.9-3.2 3.4-5 6.5-5s5.6 1.8 6.5 5",
     request: "M10 3.5v13M3.5 10h13",
     admin: "M10 2.5l6 2.25v4.5c0 3.9-2.55 6.9-6 8.25-3.45-1.35-6-4.35-6-8.25v-4.5zM7.25 10l2 2 3.5-3.75",
@@ -80,9 +82,9 @@
       "div",
       { id: "user-menu", class: "user-menu", role: "group", "aria-label": "Your account menu", hidden: "" },
       el("div", { class: "user-card" }, avatar("avatar avatar-lg"), who),
-      me.connected
-        ? item(DOCS, "Open Docs", "docs", "user-docs")
-        : item(identity + "/connect", "Request access", "request", "user-request"),
+      ...(me.connected
+        ? [item(DOCS, "Open Docs", "docs", "user-docs"), item(FLOW, "Open Flow", "flow", "user-flow")]
+        : [item(identity + "/connect", "Request access", "request", "user-request")]),
       ...(me.admin === true ? [item(ADMIN, "Admin console", "admin", "user-admin")] : []),
       item(ACCOUNT, "Account and sign out", "account", "user-account"),
     );
@@ -134,7 +136,15 @@
     const access = document.getElementById("access");
     if (access) {
       const hint = me.connected
-        ? ["You're signed in as ", el("strong", {}, label), ". ", el("a", { href: DOCS }, "Open the docs"), "."]
+        ? [
+            "You're signed in as ",
+            el("strong", {}, label),
+            ". ",
+            el("a", { href: DOCS }, "Open Docs"),
+            " or ",
+            el("a", { href: FLOW }, "Flow"),
+            " if your account has access.",
+          ]
         : [
             "You're signed in as ",
             el("strong", {}, label),

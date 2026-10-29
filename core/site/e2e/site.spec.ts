@@ -81,7 +81,7 @@ test("every link goes to this site or an allowed host, over https", async ({ pag
   }
 });
 
-test("the top bar links to sign-in, the docs, Breinhap and IGS-Pharma", async ({ page }) => {
+test("the top bar links to sign-in, Docs, Flow, Breinhap and IGS-Pharma", async ({ page }) => {
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Main" });
   await expect(nav.getByRole("link", { name: "Breinhap" })).toHaveAttribute(
@@ -90,6 +90,7 @@ test("the top bar links to sign-in, the docs, Breinhap and IGS-Pharma", async ({
   );
   await expect(nav.getByRole("link", { name: "IGS-Pharma" })).toHaveAttribute("href", "https://igs.asafarim.site/en/");
   await expect(nav.getByRole("link", { name: "Docs" })).toHaveAttribute("href", "https://docs.asafarim.site/");
+  await expect(nav.getByRole("link", { name: "Flow" })).toHaveAttribute("href", "https://flow.asafarim.site/");
   await expect(nav.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "https://id.asafarim.site/login");
 });
 
@@ -103,10 +104,15 @@ test("signed in, the top bar shows the person's avatar and menu instead of Sign 
   await expect(avatar).toBeVisible();
   await expect(nav.getByRole("link", { name: "Sign in" })).toHaveCount(0);
   await expect(page.locator("#access")).toContainText("signed in as ali@example.test");
+  await expect(page.locator("#access").getByRole("link", { name: "Open Flow" })).toHaveAttribute(
+    "href",
+    "https://flow.asafarim.site/",
+  );
 
   await avatar.click();
   await expect(page.getByTestId("user-name")).toHaveText("ali@example.test");
   await expect(page.getByTestId("user-docs")).toHaveAttribute("href", "https://docs.asafarim.site/");
+  await expect(page.getByTestId("user-flow")).toHaveAttribute("href", "https://flow.asafarim.site/");
   await expect(page.getByTestId("user-account")).toHaveAttribute("href", "https://id.asafarim.site/account");
   // Not an admin: no Admin console.
   await expect(page.getByTestId("user-admin")).toHaveCount(0);
@@ -117,6 +123,8 @@ test("signed in, the top bar shows the person's avatar and menu instead of Sign 
   await avatar.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("user-docs")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByTestId("user-flow")).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByTestId("user-account")).toBeFocused();
   // A click outside closes it.

@@ -73,6 +73,7 @@ describe("isAllowedLink", () => {
     expect(isAllowedLink("https://github.com/AliSafari-IT/asafarim-os/pull/1")).toBe(true);
     expect(isAllowedLink("https://asafarim.com/")).toBe(true);
     expect(isAllowedLink("https://docs.asafarim.site/")).toBe(true);
+    expect(isAllowedLink("https://flow.asafarim.site/")).toBe(true);
     expect(isAllowedLink("https://id.asafarim.site/login")).toBe(true);
     expect(isAllowedLink("https://evil.asafarim.site/")).toBe(false);
     expect(isAllowedLink("https://evil.github.com.example/")).toBe(false);

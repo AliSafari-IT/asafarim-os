@@ -55,7 +55,7 @@ describe("renderPage", () => {
       /<script[^>]*>[^<]|\sstyle=|<style|\son[a-z]+=/i,
     );
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
-      expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|((docs|id|breinhap|igs)\.)?asafarim\.site)\//);
+      expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|((docs|flow|id|breinhap|igs)\.)?asafarim\.site)\//);
     }
     // Stylesheet and icon are this origin's own; only the canonical link names a full URL.
     expect(html).not.toMatch(/<link rel="(?!canonical")[^"]+" [^>]*href="https?:/);
@@ -70,14 +70,17 @@ describe("renderPage", () => {
     expect(graph.map((n) => n["@type"])).toEqual(["Organization", "WebSite"]);
   });
 
-  it("has a top bar with the way to sign in and to the docs, on allowed hosts", () => {
+  it("has a top bar with the OS apps, other products and sign-in on allowed hosts", () => {
     const nav = /<nav class="topbar" aria-label="Main">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
     expect(nav).toContain('<a href="https://docs.asafarim.site/">Docs</a>');
+    expect(nav).toContain('<a href="https://flow.asafarim.site/">Flow</a>');
     expect(nav).toContain('<a href="https://breinhap.asafarim.site/en/">Breinhap</a>');
     expect(nav).toContain('<a href="https://igs.asafarim.site/en/">IGS-Pharma</a>');
     expect(nav).toContain('<a href="https://id.asafarim.site/login" class="btn btn-small">Sign in</a>');
     // session.js swaps the "Sign in" slot for the avatar, asking identity at this origin.
     expect(nav).toContain('<li id="account">');
+    expect(html.slice(html.indexOf("<footer>"))).toContain('<a href="https://flow.asafarim.site/">Flow</a>');
+    expect(html).toContain('href="https://flow.asafarim.site/">Flow</a>, if your account has access.');
     const script = readFileSync(new URL("../public/session.js", import.meta.url), "utf8");
     expect(script).toContain(`const identity = "${IDENTITY_ORIGIN}";`);
     for (const link of Object.values(APP_LINKS)) expect(isAllowedLink(link.href)).toBe(true);
