@@ -78,7 +78,21 @@ export interface ResolvedAddress {
   family: 4 | 6;
 }
 
+/** Where a call for one host goes instead (lib/egress/e2e.ts, the end-to-end tests only). */
+export interface EgressRoute {
+  port: number;
+  addresses: ResolvedAddress[];
+  /** The CA that the server there proves the host's name with (instead of the system's). */
+  ca?: string | Buffer;
+}
+
 export interface EgressDeps {
+  /**
+   * A host the e2e serves locally: its call connects to `addresses` and `port` instead of what DNS
+   * says (lib/egress/e2e.ts). Every other check still applies: the URL, the allow-list, the port, the
+   * certificate for the host's name, paused_all, the record.
+   */
+  route?: (host: string, port: number) => EgressRoute | undefined;
   /** Every address of `host` (default: the system resolver). */
   resolve?: (host: string) => Promise<ResolvedAddress[]>;
   /** Refuse an address (default: isBlockedAddress). Tests reach a local server through it. */
@@ -146,6 +160,8 @@ export function createEgress(deps: EgressDeps = {}) {
     const size = req.body === undefined ? 0 : Buffer.byteLength(req.body);
     if (size > MAX_REQUEST_BYTES) throw new EgressError("request_too_large", host);
     if (await isPausedAll(q)) throw new EgressError("paused_all", host);
+    const routed = deps.route?.(host, port);
+    if (routed) return { url, host, port: routed.port, pinned: routed.addresses, size, ca: routed.ca };
     let addresses: ResolvedAddress[];
     try {
       addresses = await resolve(host);
@@ -155,7 +171,7 @@ export function createEgress(deps: EgressDeps = {}) {
     if (!addresses.length) throw new EgressError("dns_failed", host);
     // One private answer among public ones is refused too: the name points somewhere it shouldn't.
     if (addresses.some((a) => isBlocked(a.address))) throw new EgressError("address_refused", host);
-    return { url, host, port, pinned: addresses, size };
+    return { url, host, port, pinned: addresses, size, ca: deps.ca };
   }
 
   /** Steps 3 and 4. */
@@ -178,7 +194,7 @@ export function createEgress(deps: EgressDeps = {}) {
         lookup: pinnedLookup(c.pinned),
         // A fresh agent: no pooled socket from another call, the lookup above is used every time.
         agent: false,
-        ...(deps.ca ? { ca: deps.ca } : {}),
+        ...(c.ca ? { ca: c.ca } : {}),
         signal,
       });
       const fail = (err: EgressError) => {

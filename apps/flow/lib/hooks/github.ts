@@ -36,3 +36,17 @@ export function githubAccepts(trigger: GithubTrigger, event: string, payload: Re
   const names = githubEventNames(event, payload);
   return trigger.events.some((e) => names.includes(e));
 }
+
+/**
+ * A delivery's payload as the run's trigger data, with `labels` added: the names of the issue's (or
+ * the pull request's) labels, which GitHub sends as objects. So a condition can read
+ * `trigger.labels contains "bug"`. A `labels` the payload has itself is replaced.
+ */
+export function githubTriggerData(payload: Record<string, unknown>): Record<string, unknown> {
+  const item = isRecord(payload.issue) ? payload.issue : isRecord(payload.pull_request) ? payload.pull_request : {};
+  const raw = Array.isArray(item.labels) ? item.labels : [];
+  const labels = raw.flatMap((l) =>
+    isRecord(l) && typeof l.name === "string" ? [l.name] : typeof l === "string" ? [l] : [],
+  );
+  return { ...payload, labels };
+}

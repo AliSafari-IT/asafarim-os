@@ -5,10 +5,17 @@ export { allowListOf, isAllowed, parseHostEntry, type AllowedHost } from "./host
 export { isBlockedAddress } from "./address";
 export { createSmtpEgress, SmtpEgressError, type MailRequest, type SmtpEgress, type SmtpEgressErrorCode } from "./smtp";
 
+import { log } from "../log";
+import { e2eEgress } from "./e2e";
 import { createEgress } from "./egress";
 import { createSmtpEgress } from "./smtp";
 
+/** The end-to-end tests' local routes (e2e.ts), only when FLOW_E2E_EGRESS is set. */
+const e2e = e2eEgress();
+if (e2e) log.warn("flow.egress.e2e_routes", { hosts: e2e.hosts });
+const routed = e2e ? { route: e2e.route } : {};
+
 /** Flow's egress: the system resolver, the system's trust store. */
-export const egress = createEgress();
+export const egress = createEgress(routed);
 /** Email out, with the same checks (smtp.ts). */
-export const smtpEgress = createSmtpEgress();
+export const smtpEgress = createSmtpEgress(routed);

@@ -19,7 +19,7 @@ import { addressOf, SmtpClient, SmtpError, type SmtpConfig, type SmtpMessage, ty
 import { log as appLog } from "../log";
 import { isPausedAll, type Queryable } from "../settings";
 import { isBlockedAddress } from "./address";
-import { pinnedLookup, type ResolvedAddress } from "./egress";
+import { pinnedLookup, type EgressRoute, type ResolvedAddress } from "./egress";
 
 /** The whole call, DNS and every SMTP step included. */
 export const SMTP_TIMEOUT_MS = 20_000;
@@ -62,6 +62,8 @@ export interface MailRequest {
 
 export interface SmtpEgressDeps {
   resolve?: (host: string) => Promise<ResolvedAddress[]>;
+  /** A host the e2e serves locally (lib/egress/e2e.ts): where its connection goes, and the CA it proves its name with. */
+  route?: (host: string, port: number) => EgressRoute | undefined;
   isBlocked?: (address: string) => boolean;
   env?: Record<string, string | undefined>;
   /** The SMTP conversation (default: @asafarim/smtp). Tests talk to a local server through it. */
@@ -107,13 +109,19 @@ export function createSmtpEgress(deps: SmtpEgressDeps = {}) {
   const timeoutMs = deps.timeoutMs ?? SMTP_TIMEOUT_MS;
   const log = deps.log ?? appLog;
 
-  /** Steps 1 to 3: the addresses to connect to. */
-  async function check(q: Queryable, req: MailRequest): Promise<ResolvedAddress[]> {
+  /** Steps 1 to 3: the addresses (and port) to connect to. */
+  async function check(
+    q: Queryable,
+    req: MailRequest,
+  ): Promise<{ addresses: ResolvedAddress[]; port: number; ca?: string | Buffer }> {
     const host = req.server.host.toLowerCase();
     const insecure = req.server.mode === "none";
     if (insecure && (env.NODE_ENV === "production" || !LOOPBACK_NAMES.has(host)))
       throw new SmtpEgressError("insecure_refused", host);
     if (await isPausedAll(q)) throw new SmtpEgressError("paused_all", host);
+    // Only with TLS: the e2e's server proves the name with its certificate.
+    const routed = insecure ? undefined : deps.route?.(host, req.server.port);
+    if (routed) return { addresses: routed.addresses, port: routed.port, ca: routed.ca };
     let addresses: ResolvedAddress[];
     if (isIP(host)) addresses = [{ address: host, family: isIP(host) === 6 ? 6 : 4 }];
     else {
@@ -129,7 +137,7 @@ export function createSmtpEgress(deps: SmtpEgressDeps = {}) {
     } else if (addresses.some((a) => isBlocked(a.address))) {
       throw new SmtpEgressError("private_address", host);
     }
-    return addresses;
+    return { addresses, port: req.server.port };
   }
 
   async function record(q: Queryable, req: MailRequest, host: string, durationMs: number, errorCode: string | null) {
@@ -164,17 +172,18 @@ export function createSmtpEgress(deps: SmtpEgressDeps = {}) {
     });
     timedOut.catch(() => undefined);
     try {
-      const pinned = await Promise.race([check(q, req), timedOut]);
+      const { addresses: pinned, port, ca } = await Promise.race([check(q, req), timedOut]);
       const insecure = req.server.mode === "none";
       const config: SmtpConfig = {
         host,
-        port: req.server.port,
+        port,
         security: req.server.mode,
         // No AUTH without TLS: the client would refuse it anyway.
         ...(insecure ? {} : { user: req.server.username, password: req.server.password }),
         heloName: addressOf(req.message.from).split("@")[1] || "localhost",
         timeoutMs,
         lookup: pinnedLookup(pinned),
+        ...(ca ? { ca } : {}),
       };
       let result: SmtpResult;
       try {
