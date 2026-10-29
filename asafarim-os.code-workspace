@@ -6,7 +6,7 @@
   ],
   "settings": {
     "chat.tools.terminal.autoApprove": {
-      "env": true
-    }
+      "env": true,
+    },
   },
 }
