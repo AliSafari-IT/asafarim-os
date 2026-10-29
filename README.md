@@ -19,6 +19,14 @@ A small core platform for business applications, and apps that plug into it.
 
 Requirements: **Node 24** (see `.nvmrc`), **pnpm** (the version pinned in `package.json`; `corepack enable` picks it up) and **Docker** (Desktop or the daemon).
 
+With nvm, select the repository's Node version and enable Corepack before installing:
+
+```bash
+nvm use
+corepack enable
+pnpm install
+```
+
 ### Run the OS locally
 
 ```bash
@@ -61,6 +69,7 @@ pnpm dev:reset   # delete the local dev databases and Redis data (asks first; --
 **Troubleshooting**
 
 - **"Docker isn't running":** start Docker Desktop and run `pnpm dev` again.
+- **pnpm reports a missing `pnpm.cjs` or a Corepack error:** make sure the active Node version matches `.nvmrc` (`nvm use`), then run `corepack enable` and retry. An older system Node/Corepack may not work with the pinned pnpm version.
 - **A port is in use (4000, 4010, 4030, 8080, 55440, 56380):** stop whatever holds it. These ports were picked to avoid asafarim-platform's.
 - **Sign-in says `browser_mismatch`:** finish the sign-in in the same browser tab you started it in.
 - **Anything odd with the data:** `pnpm dev:reset`, then `pnpm dev`.
