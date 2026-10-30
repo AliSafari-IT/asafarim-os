@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { DEV, addMissingLines, coreApiUpstreamLines, upsertLines } from "./keys.mjs";
+import { DEV, addMissingLines, coreApiUpstreamLines, natsPassword, upsertLines } from "./keys.mjs";
 
 function withFile(text, fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "keys-"));
@@ -44,4 +44,16 @@ test("core-api reaches each dev app's health at localhost, under the gateway's u
   const lines = coreApiUpstreamLines();
   assert.equal(lines.length, Object.keys(DEV.apps).length);
   assert.ok(lines.includes(`OS_APP_NOTES_UPSTREAM=localhost:${DEV.apps.notes}`));
+});
+
+test("the dev bus password is a letter then hex: NATS reads it as a string, never a number or a date", () => {
+  // nats.conf takes it unquoted ($NATS_CORE_PASSWORD), and NATS parses the substituted value as config: a
+  // base64url value starting with a digit or "-" made the bus exit at start in about one CI run in six.
+  const seen = new Set();
+  for (let i = 0; i < 500; i++) {
+    const pw = natsPassword();
+    assert.match(pw, /^p[0-9a-f]{48}$/);
+    seen.add(pw);
+  }
+  assert.equal(seen.size, 500, "every one is new");
 });

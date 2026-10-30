@@ -32,6 +32,15 @@ export function compose(...args) {
   if (r.status !== 0) throw new Error(`docker compose ${args.join(" ")} failed`);
 }
 
+/**
+ * After a failed `compose up`: each container's state and its last lines, so the failure says why (a
+ * container that exited prints its own error). Best effort; it never throws. Dev values only.
+ */
+export function composeDiagnostics(tail = 40) {
+  spawnSync("docker", [...COMPOSE, "ps", "--all"], { stdio: "inherit" });
+  spawnSync("docker", [...COMPOSE, "logs", "--no-color", "--tail", String(tail)], { stdio: "inherit" });
+}
+
 /** The core services `pnpm dev` starts; each imports workspace packages, so each needs them built. */
 export const DEV_SERVICES = ["@asafarim/identity", "@asafarim/core-api", "@asafarim/dev-hub"];
 

@@ -25,13 +25,18 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 /** The login core-api uses on the bus (`core` in deploy/nats/nats.conf). */
 export const CORE_USER = "core";
 
-/** URL-safe random text: no character that needs escaping in a dotenv file, a shell or the NATS config. */
-const secret = (bytes = 32) => randomBytes(bytes).toString("base64url");
+/**
+ * The bus password: "p" and 64 hex digits (256 bits).
+ * NATS substitutes `$NATS_CORE_PASSWORD` in nats.conf by parsing the value as config, so an unquoted value that
+ * starts with a digit or "-" (one base64url password in six) is read as a number, a size or a date, and the bus
+ * won't start. A letter, then hex, is always a plain string.
+ */
+export const natsPassword = () => `p${randomBytes(32).toString("hex")}`;
 
 /** The bus's env and core-api's lines, sharing one issuer key and one password. */
 export function newEnv() {
   const issuer = createAccount();
-  const password = secret();
+  const password = natsPassword();
   return {
     nats: [`NATS_AUTH_ISSUER=${issuer.getPublicKey()}`, `NATS_CORE_PASSWORD=${password}`, ""].join("\n"),
     coreApi: [

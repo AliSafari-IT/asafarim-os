@@ -10,7 +10,16 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { bootstrap } from "./bootstrap.mjs";
-import { bold, buildWorkspaceDependencies, compose, dbEnv, green, red, requireDocker } from "./infra.mjs";
+import {
+  bold,
+  buildWorkspaceDependencies,
+  compose,
+  composeDiagnostics,
+  dbEnv,
+  green,
+  red,
+  requireDocker,
+} from "./infra.mjs";
 import { DEV, DEV_DIR, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
 
 const HUB = `http://localhost:${DEV.devHubPort}`;
@@ -149,7 +158,12 @@ try {
   ensureDevKeys();
   buildWorkspaceDependencies();
   step("workspace dependencies built");
-  compose("up", "-d", "--wait");
+  try {
+    compose("up", "-d", "--wait");
+  } catch (err) {
+    composeDiagnostics();
+    throw err;
+  }
   step("Postgres and Redis up (127.0.0.1 only)");
   await bootstrap(dbEnv());
   await bootstrap(dbEnv());

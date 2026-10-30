@@ -46,6 +46,13 @@ export const DEV = {
 export const ISSUER = `http://localhost:${DEV.identityPort}`;
 
 const secret = () => randomBytes(24).toString("base64url");
+/**
+ * The dev bus password: "p" and 48 hex digits.
+ * NATS substitutes `$NATS_CORE_PASSWORD` in nats.conf by parsing the value as config, so an unquoted value that
+ * starts with a digit or "-" (one base64url password in six) is read as a number, a size or a date, and the bus
+ * won't start. A letter, then hex, is always a plain string.
+ */
+export const natsPassword = () => `p${randomBytes(24).toString("hex")}`;
 const jwk = (key) => key.export({ format: "jwk" });
 
 function edPair() {
@@ -131,7 +138,7 @@ function ensureNatsKeys(force) {
   const apiHasSeed = existsSync(apiFile) && /^CORE_API_NATS_ISSUER_SEED=/m.test(readFileSync(apiFile, "utf8"));
   if (!force && existsSync(natsFile) && apiHasSeed) return false;
   const issuer = createAccount();
-  const password = secret();
+  const password = natsPassword();
   writeFileSync(
     natsFile,
     [
