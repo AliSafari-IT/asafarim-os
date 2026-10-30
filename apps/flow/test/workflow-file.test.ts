@@ -136,11 +136,13 @@ describe("workflow files", () => {
   });
 
   it("converts valid version 1 definitions to version 2 on import", () => {
-    const result = parseWorkflowFile(envelope({
-      key: "legacy-flow",
-      trigger: { event: "docs.note.created.v1" },
-      steps: [{ key: "done", type: "end" }],
-    }));
+    const result = parseWorkflowFile(
+      envelope({
+        key: "legacy-flow",
+        trigger: { event: "docs.note.created.v1" },
+        steps: [{ key: "done", type: "end" }],
+      }),
+    );
     expect(result).toMatchObject({
       ok: true,
       definition: {

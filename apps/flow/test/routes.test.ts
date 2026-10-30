@@ -88,22 +88,23 @@ const DRAFT_FUNCTIONS: Record<
   },
   importWorkflowFileAction: {
     engine: "saveDraft",
-    call: (fn) => fn(
-      "Imported workflow",
-      "my-flow",
-      JSON.stringify({
-        format: "asafarim.flow.workflow",
-        version: 1,
-        exportedAt: "2026-10-30T00:00:00.000Z",
-        definition: {
-          version: 2,
-          key: "source-flow",
-          trigger: { type: "manual", input: [] },
-          start: "done",
-          nodes: [{ key: "done", type: "end" }],
-        },
-      }),
-    ),
+    call: (fn) =>
+      fn(
+        "Imported workflow",
+        "my-flow",
+        JSON.stringify({
+          format: "asafarim.flow.workflow",
+          version: 1,
+          exportedAt: "2026-10-30T00:00:00.000Z",
+          definition: {
+            version: 2,
+            key: "source-flow",
+            trigger: { type: "manual", input: [] },
+            start: "done",
+            nodes: [{ key: "done", type: "end" }],
+          },
+        }),
+      ),
     bad: (fn) => fn("Imported workflow", "invalid key", "{}"),
   },
 };

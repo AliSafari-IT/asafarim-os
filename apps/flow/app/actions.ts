@@ -137,8 +137,7 @@ const ImportWorkflowInput = z.object({
 });
 
 export type WorkflowImportResult =
-  | { ok: true; workflowKey: string }
-  | { ok: false; error: string; problems?: string[] };
+  { ok: true; workflowKey: string } | { ok: false; error: string; problems?: string[] };
 
 /** Import an untrusted workflow export as a new draft; it is never published. */
 export async function importWorkflowFileAction(
@@ -179,7 +178,13 @@ export async function importWorkflowFileAction(
     return { ...saved, problems: builderProblems(definition, saved.problems, await checkDataOf(tx)) };
   });
   if (!result.ok)
-    return { ok: false, error: result.error === "exists" ? "A workflow already uses that key." : `The workflow could not be imported (${result.error}).` };
+    return {
+      ok: false,
+      error:
+        result.error === "exists"
+          ? "A workflow already uses that key."
+          : `The workflow could not be imported (${result.error}).`,
+    };
   return { ok: true, workflowKey: input.data.key };
 }
 

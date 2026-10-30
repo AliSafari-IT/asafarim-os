@@ -262,8 +262,14 @@ export function Builder(props: BuilderProps) {
       setImportFeedback({ error: "The selected file isn't valid JSON." });
       return;
     }
-    const baseName = file.name.replace(/(?:\.flow)?\.json$/i, "").replace(/[-_]+/g, " ").trim();
-    const safeStem = baseName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    const baseName = file.name
+      .replace(/(?:\.flow)?\.json$/i, "")
+      .replace(/[-_]+/g, " ")
+      .trim();
+    const safeStem = baseName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
     const importedKey = `${(safeStem || "imported-workflow").slice(0, 57).replace(/-+$/, "")}-import`;
     setImportRaw(raw);
     setImportName(baseName.slice(0, 200) || "Imported workflow");
@@ -449,11 +455,7 @@ export function Builder(props: BuilderProps) {
       </header>
 
       {editable ? (
-        <details
-          ref={importPanelRef}
-          className="workflow-import"
-          data-testid="workflow-import-panel"
-        >
+        <details ref={importPanelRef} className="workflow-import" data-testid="workflow-import-panel">
           <summary>Import a workflow as a new draft</summary>
           <form onSubmit={onImportSubmit}>
             <label htmlFor="workflow-import-name">New workflow name</label>
@@ -476,8 +478,8 @@ export function Builder(props: BuilderProps) {
               data-testid="workflow-import-key"
             />
             <p className="muted">
-              Imports create a separate draft only. Credentials and webhook hooks are not copied; choose or create
-              them after import.
+              Imports create a separate draft only. Credentials and webhook hooks are not copied; choose or create them
+              after import.
             </p>
             {importRaw ? <p role="status">Workflow file ready to import.</p> : null}
             {importFeedback ? (
@@ -485,7 +487,9 @@ export function Builder(props: BuilderProps) {
                 <p>{importFeedback.error}</p>
                 {importFeedback.problems?.length ? (
                   <ul>
-                    {importFeedback.problems.map((problem, index) => <li key={index}>{problem}</li>)}
+                    {importFeedback.problems.map((problem, index) => (
+                      <li key={index}>{problem}</li>
+                    ))}
                   </ul>
                 ) : null}
               </div>
@@ -741,7 +745,9 @@ export function Builder(props: BuilderProps) {
           </div>
           <section className="workflow-outline-section" aria-labelledby="workflow-outline-heading">
             <h2 id="workflow-outline-heading">Workflow outline</h2>
-            <pre className="workflow-outline" aria-label="Numbered workflow outline">{outline.join("\n")}</pre>
+            <pre className="workflow-outline" aria-label="Numbered workflow outline">
+              {outline.join("\n")}
+            </pre>
           </section>
         </div>
       </details>

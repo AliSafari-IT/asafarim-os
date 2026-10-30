@@ -38,8 +38,9 @@ export function workflowDiagram(draft: Draft): WorkflowDiagram {
   const maxY = Math.max(0, ...ys);
   const byId = new Map(canvas.nodes.map((node) => [node.id, node]));
   const nodes = canvas.nodes.map((node): DiagramNode => {
-    const type = node.type === "trigger" ? String(draft.trigger.type ?? "trigger") : String(node.data.node?.type ?? "step");
-    const title = node.type === "trigger" ? "Trigger" : keyOf(node.data.node ?? {}) ?? "Unnamed step";
+    const type =
+      node.type === "trigger" ? String(draft.trigger.type ?? "trigger") : String(node.data.node?.type ?? "step");
+    const title = node.type === "trigger" ? "Trigger" : (keyOf(node.data.node ?? {}) ?? "Unnamed step");
     return {
       id: node.id,
       title,
@@ -50,11 +51,13 @@ export function workflowDiagram(draft: Draft): WorkflowDiagram {
   });
   const edges = canvas.edges.flatMap((edge) => {
     if (!byId.has(edge.source) || !byId.has(edge.target)) return [];
-    return [{
-      source: edge.source,
-      target: edge.target,
-      label: edge.sourceHandle === "start" ? "" : edge.sourceHandle,
-    }];
+    return [
+      {
+        source: edge.source,
+        target: edge.target,
+        label: edge.sourceHandle === "start" ? "" : edge.sourceHandle,
+      },
+    ];
   });
   return {
     width: maxX - minX + WORKFLOW_DIAGRAM_NODE_WIDTH + MARGIN * 2,
@@ -88,8 +91,7 @@ export function workflowOutline(draft: Draft): string[] {
     const node = nodes.get(id)!;
     const edges = edgesOf(node);
     for (const field of ["then", "else", "next"])
-      for (const edge of edges)
-        if (edge.field === field) visit(idForKey.get(edge.to) ?? edge.to);
+      for (const edge of edges) if (edge.field === field) visit(idForKey.get(edge.to) ?? edge.to);
   };
   visit(draft.start);
   for (const id of keys) visit(id);
@@ -102,7 +104,9 @@ export function workflowOutline(draft: Draft): string[] {
     for (const edge of edgesOf(node)) {
       const targetId = idForKey.get(edge.to);
       const target = targetId ? numberOf.get(targetId) : undefined;
-      lines.push(`   ${edge.field === "then" ? "Then" : edge.field === "else" ? "Else" : "Next"} → ${target ? `${target}. ${edge.to}` : "unconnected"}`);
+      lines.push(
+        `   ${edge.field === "then" ? "Then" : edge.field === "else" ? "Else" : "Next"} → ${target ? `${target}. ${edge.to}` : "unconnected"}`,
+      );
     }
   }
   return lines;

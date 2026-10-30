@@ -12,9 +12,7 @@ import {
 } from "./file";
 import type { Draft } from "./types";
 
-export type WorkflowFileResult =
-  | { ok: true; definition: Draft }
-  | { ok: false; error: string; problems?: string[] };
+export type WorkflowFileResult = { ok: true; definition: Draft } | { ok: false; error: string; problems?: string[] };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -25,8 +23,7 @@ function secretPaths(value: unknown, path: string[] = []): string[] {
   return Object.entries(value).flatMap(([key, child]) => {
     const childPath = [...path, key];
     if (key === "credential" && child === IMPORT_PLACEHOLDER_CREDENTIAL) return [];
-    if (key === "hook" && path.join(".") === "definition.trigger" && child === IMPORT_PLACEHOLDER_HOOK)
-      return [];
+    if (key === "hook" && path.join(".") === "definition.trigger" && child === IMPORT_PLACEHOLDER_HOOK) return [];
     if (WORKFLOW_SENSITIVE_KEY.test(key) || (key === "hook" && path.join(".") === "definition.trigger"))
       return [childPath.join(".")];
     return secretPaths(child, childPath);
@@ -47,8 +44,7 @@ export function parseWorkflowFile(value: unknown): WorkflowFileResult {
     return { ok: false, error: `Unsupported workflow file format. Expected "${WORKFLOW_FILE_FORMAT}".` };
   if (value.version !== WORKFLOW_FILE_VERSION)
     return { ok: false, error: `Unsupported workflow file version. Expected ${WORKFLOW_FILE_VERSION}.` };
-  if (!isRecord(value.definition))
-    return { ok: false, error: "The workflow file has no definition object." };
+  if (!isRecord(value.definition)) return { ok: false, error: "The workflow file has no definition object." };
 
   const secrets = secretPaths(value);
   if (secrets.length)

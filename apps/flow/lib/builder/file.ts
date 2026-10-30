@@ -42,7 +42,11 @@ function scrubValue(value: unknown, schema: JsonSchema | undefined, path: readon
 }
 
 /** A portable copy of a draft: all instance credentials and allow-list values are placeholders. */
-export function exportWorkflowFile(draft: Draft, catalog: Catalog, exportedAt = new Date().toISOString()): WorkflowFile {
+export function exportWorkflowFile(
+  draft: Draft,
+  catalog: Catalog,
+  exportedAt = new Date().toISOString(),
+): WorkflowFile {
   const triggerSpec = catalog.triggers.find((item) => item.type === draft.trigger.type);
   const trigger = scrubValue(draft.trigger, triggerSpec?.settings, ["trigger"]) as Record<string, unknown>;
   const nodes = draft.nodes.map((node) => {
