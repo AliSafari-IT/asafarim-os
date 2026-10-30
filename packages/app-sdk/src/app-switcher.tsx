@@ -1,23 +1,23 @@
 "use client";
 /**
- * The app switcher: a button for the top bar that opens the list of OS apps the signed-in person
- * can open, and goes to one when it is chosen. Same data as <Launcher> (fetch the tiles on the
- * server with `platform.access.launcher(subject)` and pass them in); it only needs the browser for
+ * The app switcher (#302): a button for the top bar that opens the OS's app launcher, a panel with the
+ * apps the signed-in person can open as a grid of brand-coloured tiles, then ASafariM's products outside
+ * the OS (`more`: Breinhap, IGS-Pharma) and the way home (`home`). Same data as <Launcher> (fetch the tiles
+ * on the server with `platform.access.launcher(subject)` and pass them in); it only needs the browser for
  * opening and closing.
  *
- *   <AppSwitcher apps={tiles} current="docs" />
+ *   <AppSwitcher apps={tiles} current="docs" fallback={{ name: "Docs", glyph: "DC" }} variant="icon" />
  *
- * `variant="icon"` is a round grid-icon button with no glyph or name, for a top bar whose brand is shown
- * elsewhere (Admin, next to its account menu); its list opens to the left, under the button.
+ * Each tile is the app's glyph on its brand colour (the manifest's `ui.color`, carried by the launcher; a
+ * colour that isn't "#rrggbb" is never used: a stable one derived from the key takes its place), its name
+ * below. The current app has a ring and an "Open" dot. The tile hovered or focused shows its description
+ * on the panel's caption line (and as its `title`).
  *
- * After the apps come ASafariM's products outside the OS (`more`: Breinhap, IGS-Pharma), then a link back to the
- * OS homepage (`home`). Opening animates, and the grid icon's
- * dots ripple on hover; with "reduce motion" nothing moves.
- *
- * Keyboard: Enter/Space/ArrowDown open it on the first app, ArrowUp on the last; ArrowUp/Down,
- * Home/End move; Escape closes and returns focus to the button; Tab leaves. A click outside closes
- * it. Every item is a plain link, so middle-click and "open in new tab" work. It uses the host's
- * design tokens like <Launcher>.
+ * Keyboard: Enter/Space/ArrowDown open it on the first app, ArrowUp on the last; in the grid ←/→ move
+ * along, ↑/↓ by row, then on into the products and the home link; Home/End; Escape closes and returns
+ * focus to the button; Tab leaves. A click outside closes it. Every item is a plain link (middle-click and
+ * "open in new tab" work). The panel is not a <nav> element (it has the navigation role), so a host's
+ * `nav a { … }` rules can't reach its items, and its selectors outrank a host's link styles.
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { LauncherTile } from "./launcher.ts";
@@ -33,6 +33,10 @@ interface Focusable {
 interface Box {
   getBoundingClientRect(): { left: number; right: number };
 }
+interface Laid {
+  offsetLeft: number;
+  offsetWidth: number;
+}
 interface Doc {
   addEventListener(type: "pointerdown", listener: (e: { target: unknown }) => void): void;
   removeEventListener(type: "pointerdown", listener: (e: { target: unknown }) => void): void;
@@ -42,15 +46,15 @@ const browserDocument = () => (globalThis as unknown as { document?: Doc }).docu
 
 export interface AppSwitcherProps {
   apps: readonly LauncherTile[];
-  /** The app this is rendered in: its tile is the button's face and is marked current in the list. */
+  /** The app this is rendered in: its tile is the button's face and is marked current in the panel. */
   current: string;
   /** The button's face when the current app has no tile (it isn't in the list). */
   fallback: { name: string; glyph: string };
-  /** The menu's accessible name. */
+  /** The panel's accessible name. */
   label?: string;
-  /** The link back to the OS homepage at the foot of the list (default: asafarim.site); null for none. */
+  /** The link back to the OS homepage at the foot of the panel (default: asafarim.site); null for none. */
   home?: { href: string; label: string } | null;
-  /** ASafariM's products outside the OS, listed after the apps (default: MORE_FROM_ASAFARIM); [] for none. */
+  /** ASafariM's products outside the OS, after the apps (default: MORE_FROM_ASAFARIM); [] for none. */
   more?: readonly MoreLink[];
   /** "full" (default): the current app's glyph and name, then the grid. "icon": the grid alone, round. */
   variant?: "full" | "icon";
@@ -63,6 +67,8 @@ export interface MoreLink {
   glyph: string;
   description: string;
   href: string;
+  /** Its brand colour, "#rrggbb". */
+  color?: string;
 }
 
 /**
@@ -76,6 +82,7 @@ export const MORE_FROM_ASAFARIM: readonly MoreLink[] = [
     glyph: "BH",
     description: "Study app for Flemish students (Android)",
     href: "https://breinhap.asafarim.site/en/",
+    color: "#db2777",
   },
   {
     key: "igs-pharma",
@@ -83,10 +90,14 @@ export const MORE_FROM_ASAFARIM: readonly MoreLink[] = [
     glyph: "IG",
     description: "Online pharmacy for Belgium, and its Android app",
     href: "https://igs.asafarim.site/en/",
+    color: "#059669",
   },
 ];
 
-/** The next focused index for a key, or undefined when the key isn't a move. Wraps at both ends. */
+/** Tiles per row in the panel's app grid. */
+export const GRID_COLUMNS = 3;
+
+/** The next focused index for a key in a plain list, or undefined when the key isn't a move. Wraps. */
 export function moveIndex(key: string, index: number, count: number): number | undefined {
   if (count <= 0) return undefined;
   switch (key) {
@@ -103,18 +114,42 @@ export function moveIndex(key: string, index: number, count: number): number | u
   }
 }
 
-/** Room kept between an open list and the edges of the viewport, in pixels. */
-export const VIEWPORT_MARGIN = 8;
-
 /**
- * How far to move an open list sideways so it stays inside the viewport: right when it starts past the
- * left edge, left when it ends past the right edge, else 0. A list wider than the room left starts at the
- * left margin.
+ * The next focused index in the panel: the first `grid` items are the app grid (`columns` per row), the
+ * rest a plain list after it (the products, the home link). In the grid ←/→ move one, ↑/↓ one row; ↓
+ * from the last row goes on to the list, ↑ from the list's first item back to the grid's last. Wraps at
+ * both ends. Undefined when the key isn't a move.
  */
-export function clampShift(left: number, right: number, viewport: number, margin = VIEWPORT_MARGIN): number {
-  if (left < margin) return margin - left;
-  if (right > viewport - margin) return Math.max(viewport - margin - right, margin - left);
-  return 0;
+export function switcherMove(
+  key: string,
+  index: number,
+  count: number,
+  grid: number,
+  columns = GRID_COLUMNS,
+): number | undefined {
+  if (count <= 0) return undefined;
+  const wrap = (i: number) => (i + count) % count;
+  const inGrid = index >= 0 && index < grid;
+  switch (key) {
+    case "ArrowRight":
+      return index < 0 ? 0 : wrap(index + 1);
+    case "ArrowLeft":
+      return index < 0 ? count - 1 : wrap(index - 1);
+    case "ArrowDown":
+      if (index < 0) return 0;
+      if (inGrid) return index + columns < grid ? index + columns : grid < count ? grid : wrap(index + 1);
+      return wrap(index + 1);
+    case "ArrowUp":
+      if (index < 0) return count - 1;
+      if (inGrid) return index - columns >= 0 ? index - columns : count - 1;
+      return index === grid && grid > 0 ? grid - 1 : wrap(index - 1);
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    default:
+      return undefined;
+  }
 }
 
 /** The tiles that can be linked to (http/https only), in core-api's order. */
@@ -125,45 +160,98 @@ export function switcherTiles(apps: readonly LauncherTile[]): LauncherTile[] {
   });
 }
 
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * A tile's colour: its brand colour when it is a "#rrggbb" hex, else a stable one derived from its key
+ * (so every tile has one, and nothing but a hex or our own hsl() ever reaches the style).
+ */
+export function tileColor(key: string, color?: string): string {
+  if (color && HEX.test(color)) return color;
+  let h = 0;
+  for (const ch of key) h = (h * 31 + ch.codePointAt(0)!) % 360;
+  return `hsl(${h} 62% 46%)`;
+}
+
+/** Room kept between an open panel and the edges of the viewport, in pixels. */
+export const VIEWPORT_MARGIN = 8;
+
+/**
+ * How far to move an open panel sideways so it stays inside the viewport: right when it starts past the
+ * left edge, left when it ends past the right edge, else 0. A panel wider than the room left starts at the
+ * left margin.
+ */
+export function clampShift(left: number, right: number, viewport: number, margin = VIEWPORT_MARGIN): number {
+  if (left < margin) return margin - left;
+  if (right > viewport - margin) return Math.max(viewport - margin - right, margin - left);
+  return 0;
+}
+
+/*
+ * Every rule starts with `.asafarim-switcher .asafarim-switcher__…` (two classes, plus an element or a
+ * state for the links), which outranks the usual host link rules (`.top nav a`, `header a:hover`); the
+ * panel isn't a <nav>, so `nav a` rules don't match at all. Colours come from the host's tokens (--card,
+ * --ink, --muted, --line, --accent) with light and dark fallbacks; a tile's colour is its own (--t).
+ */
 export const APP_SWITCHER_CSS = `
-.asafarim-switcher{--s-bg:var(--card,#fff);--s-ink:var(--ink,#1d1b16);--s-muted:var(--muted,#6b6559);--s-line:var(--line,#e4dfd3);--s-accent:var(--accent,#7c3aed);--s-accent-ink:var(--accent-ink,#fff);position:relative;display:inline-block}
+.asafarim-switcher{--s-bg:var(--card,#fff);--s-ink:var(--ink,#1d1b16);--s-muted:var(--muted,#6b6559);--s-line:var(--line,#e4dfd3);--s-accent:var(--accent,#7c3aed);--s-accent-ink:var(--accent-ink,#fff);--s-hover:color-mix(in srgb,var(--s-ink) 7%,transparent);position:relative;display:inline-block;font:inherit;line-height:1.3}
 @media (prefers-color-scheme:dark){.asafarim-switcher{--s-bg:var(--card,#1f1c17);--s-ink:var(--ink,#f1ece2);--s-muted:var(--muted,#a39c8e);--s-line:var(--line,#37322a);--s-accent:var(--accent,#a78bfa);--s-accent-ink:var(--accent-ink,#15130f)}}
-.asafarim-switcher__button{display:inline-flex;align-items:center;gap:.5rem;padding:.25rem .5rem .25rem .25rem;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--s-ink);font:inherit;font-weight:700;cursor:pointer;transition:border-color .15s,background-color .15s,box-shadow .2s}
-.asafarim-switcher__button:hover,.asafarim-switcher__button[aria-expanded="true"]{border-color:var(--s-line);background:var(--s-bg);box-shadow:0 2px 10px rgb(0 0 0 / .08)}
-.asafarim-switcher__button:focus-visible,.asafarim-switcher__item:focus-visible{outline:2px solid var(--s-accent);outline-offset:2px}
-.asafarim-switcher__grid{width:1rem;height:1rem;color:var(--s-muted);transition:transform .25s cubic-bezier(.2,.8,.2,1),color .15s}
-.asafarim-switcher__grid circle{transform-box:fill-box;transform-origin:center}
-.asafarim-switcher__button:hover .asafarim-switcher__grid{color:var(--s-accent)}
-.asafarim-switcher__button:hover .asafarim-switcher__grid circle{animation:asafarim-dot 1.1s ease-in-out infinite;animation-delay:calc(var(--d) * 70ms)}
-.asafarim-switcher__button[aria-expanded="true"] .asafarim-switcher__grid{color:var(--s-accent);transform:rotate(45deg)}
-.asafarim-switcher__glyph{display:inline-grid;place-items:center;flex:none;width:2rem;height:2rem;border-radius:8px;background:linear-gradient(135deg,var(--s-accent),color-mix(in srgb,var(--s-accent) 65%,#000));color:var(--s-accent-ink);font-size:.75rem;font-weight:700;box-shadow:inset 0 1px 0 rgb(255 255 255 / .25)}
+.asafarim-switcher *,.asafarim-switcher *::before,.asafarim-switcher *::after{box-sizing:border-box}
+.asafarim-switcher .asafarim-switcher__button{display:inline-flex;align-items:center;gap:.5rem;margin:0;padding:.25rem .5rem .25rem .25rem;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--s-ink);font:inherit;font-weight:700;cursor:pointer;transition:border-color .15s,background-color .15s,box-shadow .2s}
+.asafarim-switcher .asafarim-switcher__button:hover,.asafarim-switcher .asafarim-switcher__button[aria-expanded="true"]{border-color:var(--s-line);background:var(--s-bg);box-shadow:0 2px 10px rgb(0 0 0 / .08)}
+.asafarim-switcher .asafarim-switcher__button:focus-visible{outline:2px solid var(--s-accent);outline-offset:2px}
 .asafarim-switcher--icon .asafarim-switcher__button{justify-content:center;width:2.5rem;height:2.5rem;padding:0;border-color:var(--s-line);border-radius:50%}
-.asafarim-switcher--icon .asafarim-switcher__grid{width:1.125rem;height:1.125rem}
-.asafarim-switcher__menu{position:absolute;z-index:50;top:calc(100% + 6px);left:0;width:max-content;min-width:16rem;max-width:min(22rem,calc(100vw - 2rem));max-height:min(70vh,28rem);overflow:auto;margin:0;padding:.375rem;border:1px solid var(--s-line);border-radius:12px;background:var(--s-bg);box-shadow:0 12px 32px rgb(0 0 0 / .25);transform-origin:top left;animation:asafarim-pop .18s cubic-bezier(.2,.8,.2,1)}
-.asafarim-switcher__list{margin:0;padding:0;list-style:none}
-.asafarim-switcher__list>li,.asafarim-switcher__foot{animation:asafarim-rise .22s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i,0) * 35ms)}
-.asafarim-switcher__empty{margin:0;padding:.5rem;color:var(--s-muted);font-size:.85rem}
-.asafarim-switcher__note{margin:.25rem .5rem .375rem;color:var(--s-muted);font-size:.8rem;line-height:1.4}
-.asafarim-switcher__heading{padding:.375rem .5rem .25rem;color:var(--s-muted);font-size:.75rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
-.asafarim-switcher__item{display:flex;align-items:flex-start;gap:.625rem;padding:.5rem;border-radius:8px;color:var(--s-ink);text-decoration:none;transition:background-color .12s,transform .12s}
-.asafarim-switcher__item:hover{background:color-mix(in srgb,var(--s-accent) 12%,transparent);transform:translateX(2px)}
-.asafarim-switcher__item[aria-current="page"]{background:color-mix(in srgb,var(--s-accent) 18%,transparent)}
-.asafarim-switcher__foot{margin-top:.25rem;padding-top:.25rem;border-top:1px solid var(--s-line)}
-.asafarim-switcher__home{align-items:center}
-.asafarim-switcher__home .asafarim-switcher__glyph{background:transparent;color:var(--s-accent);border:1px solid var(--s-line);box-shadow:none}
-.asafarim-switcher__home svg{width:1.1rem;height:1.1rem}
-.asafarim-switcher__text{display:grid;min-width:0}
-.asafarim-switcher__name{font-weight:600}
-.asafarim-switcher__desc{display:-webkit-box;overflow:hidden;color:var(--s-muted);font-size:.8rem;line-height:1.35;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
-.asafarim-switcher__check{align-self:center;margin-left:auto;color:var(--s-accent);font-size:.8rem;font-weight:700}
-.asafarim-switcher--icon .asafarim-switcher__menu{left:auto;right:0;transform-origin:top right}
-@keyframes asafarim-pop{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:none}}
-@keyframes asafarim-rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.asafarim-switcher--icon .asafarim-switcher__button[aria-expanded="true"]{border-color:var(--s-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--s-accent) 25%,transparent)}
+.asafarim-switcher .asafarim-switcher__grid-icon{width:1.125rem;height:1.125rem;color:var(--s-muted);transition:transform .3s cubic-bezier(.2,.8,.2,1),color .15s}
+.asafarim-switcher .asafarim-switcher__grid-icon circle{transform-box:fill-box;transform-origin:center;transition:transform .25s cubic-bezier(.2,.8,.2,1)}
+.asafarim-switcher .asafarim-switcher__button:hover .asafarim-switcher__grid-icon,.asafarim-switcher .asafarim-switcher__button[aria-expanded="true"] .asafarim-switcher__grid-icon{color:var(--s-accent)}
+.asafarim-switcher .asafarim-switcher__button:hover .asafarim-switcher__grid-icon circle{animation:asafarim-dot 1.1s ease-in-out infinite;animation-delay:calc(var(--d) * 70ms)}
+.asafarim-switcher .asafarim-switcher__button[aria-expanded="true"] .asafarim-switcher__grid-icon{transform:rotate(45deg)}
+.asafarim-switcher .asafarim-switcher__button[aria-expanded="true"] .asafarim-switcher__grid-icon circle{transform:scale(1.15)}
+.asafarim-switcher .asafarim-switcher__face{display:inline-grid;place-items:center;flex:none;width:2rem;height:2rem;border-radius:9px;background:linear-gradient(140deg,color-mix(in srgb,var(--t) 82%,#fff),var(--t) 55%,color-mix(in srgb,var(--t) 75%,#000));color:#fff;font-size:.75rem;font-weight:800;letter-spacing:.02em;box-shadow:inset 0 1px 0 rgb(255 255 255 / .3),0 2px 6px color-mix(in srgb,var(--t) 35%,transparent)}
+.asafarim-switcher .asafarim-switcher__panel{position:absolute;z-index:60;top:calc(100% + 10px);left:0;display:flex;flex-direction:column;width:min(21.5rem,calc(100vw - 1rem));max-height:min(80vh,34rem);margin:0;padding:.75rem;border:1px solid color-mix(in srgb,var(--s-line) 80%,transparent);border-radius:18px;background:color-mix(in srgb,var(--s-bg) 94%,transparent);color:var(--s-ink);box-shadow:0 1px 0 rgb(255 255 255 / .06) inset,0 24px 60px -12px rgb(0 0 0 / .45),0 8px 20px -8px rgb(0 0 0 / .3);-webkit-backdrop-filter:blur(18px) saturate(1.4);backdrop-filter:blur(18px) saturate(1.4);text-align:left;transform-origin:top left;animation:asafarim-panel .22s cubic-bezier(.2,.9,.25,1)}
+.asafarim-switcher--icon .asafarim-switcher__panel{left:auto;right:0;transform-origin:top right}
+.asafarim-switcher .asafarim-switcher__head{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.125rem .25rem .625rem}
+.asafarim-switcher .asafarim-switcher__title{margin:0;color:var(--s-ink);font-size:.95rem;font-weight:700;letter-spacing:-.01em}
+.asafarim-switcher .asafarim-switcher__body{overflow:auto;margin:0 -.25rem;padding:0 .25rem;scrollbar-width:thin}
+.asafarim-switcher .asafarim-switcher__apps,.asafarim-switcher .asafarim-switcher__more{display:grid;margin:0;padding:0;list-style:none}
+.asafarim-switcher .asafarim-switcher__apps{grid-template-columns:repeat(${GRID_COLUMNS},minmax(0,1fr));gap:.25rem}
+.asafarim-switcher .asafarim-switcher__apps>li,.asafarim-switcher .asafarim-switcher__more>li{margin:0;padding:0;animation:asafarim-rise .32s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i,0) * 28ms + 40ms)}
+.asafarim-switcher a.asafarim-switcher__tile{position:relative;display:flex;flex-direction:column;align-items:center;gap:.4rem;width:100%;margin:0;padding:.75rem .25rem .625rem;border:0;border-radius:14px;background:transparent;color:var(--s-ink);font-weight:500;text-align:center;text-decoration:none;transition:background-color .15s,transform .15s}
+.asafarim-switcher a.asafarim-switcher__tile:hover{background:var(--s-hover);color:var(--s-ink)}
+.asafarim-switcher a.asafarim-switcher__tile:focus-visible{outline:2px solid var(--s-accent);outline-offset:-2px;background:var(--s-hover)}
+.asafarim-switcher a.asafarim-switcher__tile:active{transform:scale(.96)}
+.asafarim-switcher .asafarim-switcher__icon{position:relative;display:grid;place-items:center;width:3rem;height:3rem;border-radius:14px;background:linear-gradient(140deg,color-mix(in srgb,var(--t) 78%,#fff),var(--t) 52%,color-mix(in srgb,var(--t) 72%,#000));color:#fff;font-size:.95rem;font-weight:800;letter-spacing:.02em;box-shadow:inset 0 1px 0 rgb(255 255 255 / .35),inset 0 -2px 6px rgb(0 0 0 / .18),0 6px 14px -4px color-mix(in srgb,var(--t) 60%,transparent);transition:transform .2s cubic-bezier(.2,.8,.2,1),box-shadow .2s}
+.asafarim-switcher .asafarim-switcher__icon::after{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(120% 70% at 30% 0%,rgb(255 255 255 / .35),transparent 60%);pointer-events:none}
+.asafarim-switcher a.asafarim-switcher__tile:hover .asafarim-switcher__icon,.asafarim-switcher a.asafarim-switcher__tile:focus-visible .asafarim-switcher__icon{transform:translateY(-2px);box-shadow:inset 0 1px 0 rgb(255 255 255 / .35),inset 0 -2px 6px rgb(0 0 0 / .18),0 10px 20px -6px color-mix(in srgb,var(--t) 70%,transparent)}
+.asafarim-switcher a.asafarim-switcher__tile[aria-current="page"] .asafarim-switcher__icon{box-shadow:0 0 0 2px var(--s-bg),0 0 0 4px var(--t),0 6px 14px -4px color-mix(in srgb,var(--t) 60%,transparent)}
+.asafarim-switcher .asafarim-switcher__name{display:block;max-width:100%;overflow:hidden;color:var(--s-ink);font-size:.8rem;font-weight:600;white-space:nowrap;text-overflow:ellipsis}
+.asafarim-switcher .asafarim-switcher__open{display:inline-flex;align-items:center;gap:.3rem;color:var(--s-muted);font-size:.68rem;font-weight:600;letter-spacing:.02em}
+.asafarim-switcher .asafarim-switcher__open::before{content:"";width:.4rem;height:.4rem;border-radius:50%;background:#22c55e;box-shadow:0 0 0 2px color-mix(in srgb,#22c55e 25%,transparent)}
+.asafarim-switcher .asafarim-switcher__empty,.asafarim-switcher .asafarim-switcher__note{margin:.25rem .25rem .5rem;color:var(--s-muted);font-size:.8rem;line-height:1.45}
+.asafarim-switcher .asafarim-switcher__section{display:flex;align-items:center;gap:.5rem;margin:.75rem .25rem .375rem;color:var(--s-muted);font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.asafarim-switcher .asafarim-switcher__section::after{content:"";flex:1;height:1px;background:var(--s-line)}
+.asafarim-switcher .asafarim-switcher__more{grid-template-columns:repeat(2,minmax(0,1fr));gap:.25rem}
+.asafarim-switcher a.asafarim-switcher__product{display:flex;align-items:center;gap:.45rem;width:100%;margin:0;padding:.375rem .375rem .375rem .3rem;border:0;border-radius:12px;background:transparent;color:var(--s-ink);font-weight:500;text-align:left;text-decoration:none;transition:background-color .15s}
+.asafarim-switcher a.asafarim-switcher__product:hover{background:var(--s-hover);color:var(--s-ink)}
+.asafarim-switcher a.asafarim-switcher__product:focus-visible{outline:2px solid var(--s-accent);outline-offset:-2px;background:var(--s-hover)}
+.asafarim-switcher a.asafarim-switcher__product .asafarim-switcher__icon{flex:none;width:1.875rem;height:1.875rem;border-radius:9px;font-size:.66rem}
+.asafarim-switcher a.asafarim-switcher__product .asafarim-switcher__name{flex:1;min-width:0;text-align:left}
+.asafarim-switcher .asafarim-switcher__out{flex:none;width:.75rem;height:.75rem;color:var(--s-muted);transition:transform .15s,color .15s}
+.asafarim-switcher a.asafarim-switcher__product:hover .asafarim-switcher__out{color:var(--s-ink);transform:translate(1px,-1px)}
+.asafarim-switcher .asafarim-switcher__foot{display:flex;align-items:center;gap:.5rem;margin:.625rem -.75rem -.75rem;padding:.5rem .75rem;border-top:1px solid var(--s-line);border-radius:0 0 18px 18px;background:color-mix(in srgb,var(--s-ink) 3%,transparent)}
+.asafarim-switcher .asafarim-switcher__hint{display:-webkit-box;flex:1;min-width:0;min-height:2.6em;overflow:hidden;margin:0;color:var(--s-muted);font-size:.75rem;line-height:1.3;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
+.asafarim-switcher a.asafarim-switcher__home{display:inline-grid;flex:none;place-items:center;width:2rem;height:2rem;margin:0;padding:0;border:1px solid var(--s-line);border-radius:50%;background:transparent;color:var(--s-ink);text-decoration:none;transition:background-color .15s,border-color .15s,color .15s}
+.asafarim-switcher a.asafarim-switcher__home:hover{border-color:var(--s-accent);background:var(--s-hover);color:var(--s-accent)}
+.asafarim-switcher a.asafarim-switcher__home:focus-visible{outline:2px solid var(--s-accent);outline-offset:2px}
+.asafarim-switcher a.asafarim-switcher__home svg{width:.9rem;height:.9rem}
+@keyframes asafarim-panel{from{opacity:0;transform:translateY(-8px) scale(.96)}to{opacity:1;transform:none}}
+@keyframes asafarim-rise{from{opacity:0;transform:translateY(6px) scale(.97)}to{opacity:1;transform:none}}
 @keyframes asafarim-dot{0%,100%{transform:scale(1)}50%{transform:scale(.55)}}
-@media (prefers-reduced-motion:reduce){.asafarim-switcher *,.asafarim-switcher *::before{animation:none!important;transition:none!important}}
+@media (prefers-reduced-motion:reduce){.asafarim-switcher *,.asafarim-switcher *::before,.asafarim-switcher *::after{animation:none!important;transition:none!important}}
 `;
 
-/** The way back to the OS homepage, at the foot of the list. */
+/** The way back to the OS homepage, at the foot of the panel. */
 export const OS_HOME = { href: "https://asafarim.site/", label: "ASafariM OS home" } as const;
 
 /** The 3×3 apps-grid icon (its dots ripple on hover). */
@@ -182,7 +270,7 @@ function GridIcon() {
         />,
       );
   return (
-    <svg className="asafarim-switcher__grid" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+    <svg className="asafarim-switcher__grid-icon" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
       {dots}
     </svg>
   );
@@ -203,6 +291,24 @@ export function HomeIcon() {
   );
 }
 
+/** "Opens its own site": an arrow out of a corner. */
+function OutIcon() {
+  return (
+    <svg className="asafarim-switcher__out" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        d="M6 3.5h6.5V10M12.5 3.5 4 12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+const tint = (key: string, color?: string) => ({ "--t": tileColor(key, color) }) as object;
+
 export function AppSwitcher({
   apps,
   current,
@@ -218,27 +324,20 @@ export function AppSwitcher({
     return href ? [{ ...m, href }] : [];
   });
   const homeHref = home ? safeHref(home.href) : undefined;
-  // Keyboard order: the apps, then the other products, then the home link.
+  // Keyboard order: the app grid, then the other products, then the home link.
   const count = tiles.length + extras.length + (homeHref ? 1 : 0);
-  const face = tiles.find((t) => t.key === current) ?? { ...fallback, key: current };
+  const face = tiles.find((t) => t.key === current) ?? { ...fallback, key: current, color: undefined };
   const [open, setOpen] = useState(false);
   const [focus, setFocus] = useState(-1);
+  // The caption line: the description of the tile hovered or focused (the current app's by default).
+  const [hint, setHint] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const itemRefs = useRef<(HTMLAnchorElement | null)[]>([]);
-  const menuRef = useRef<HTMLElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [shift, setShift] = useState(0);
-  const menuId = useId();
-
-  // Keep the open list inside the viewport. The icon variant opens leftwards from its button, which on
-  // a narrow screen, with the top bar wrapped, can sit near the left edge.
-  useLayoutEffect(() => {
-    const box = menuRef.current as unknown as Box | null;
-    const viewport = (globalThis as { innerWidth?: number }).innerWidth;
-    if (!open || !box || !viewport) return setShift(0);
-    const { left, right } = box.getBoundingClientRect();
-    setShift(clampShift(left, right, viewport));
-  }, [open]);
+  const panelId = useId();
+  const titleId = useId();
 
   // Move focus to the chosen item whenever it changes while open.
   useEffect(() => {
@@ -257,8 +356,22 @@ export function AppSwitcher({
     return () => doc.removeEventListener("pointerdown", onDown);
   }, [open]);
 
+  // Keep the open panel inside the viewport (the icon variant opens leftwards from its button, which on
+  // a narrow screen, with the top bar wrapped, can sit near the left edge).
+  useLayoutEffect(() => {
+    // Measured from the layout (the root's box and the panel's offsets), not the panel's own box: that is
+    // scaled by the opening animation, which would make the shift come out short.
+    const root = rootRef.current as unknown as Box | null;
+    const panel = panelRef.current as unknown as Laid | null;
+    const viewport = (globalThis as { innerWidth?: number }).innerWidth;
+    if (!open || !root || !panel || !viewport) return setShift(0);
+    const left = root.getBoundingClientRect().left + panel.offsetLeft;
+    setShift(clampShift(left, left + panel.offsetWidth, viewport));
+  }, [open]);
+
   const openAt = (index: number) => {
     setOpen(true);
+    setHint(null);
     setFocus(count ? index : -1);
   };
   const close = (refocus: boolean) => {
@@ -269,7 +382,7 @@ export function AppSwitcher({
 
   const onButtonKey = (e: KeyboardEvent<HTMLButtonElement>) => {
     if (e.key === "Enter" || e.key === " ") {
-      // Keyboard activation opens on the first app (or closes an open list); the native click is not wanted.
+      // Keyboard activation opens on the first app (or closes an open panel); the native click is not wanted.
       e.preventDefault();
       if (open) close(false);
       else openAt(0);
@@ -284,7 +397,7 @@ export function AppSwitcher({
       close(true);
     }
   };
-  const onMenuKey = (e: KeyboardEvent<HTMLElement>) => {
+  const onPanelKey = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
       close(true);
@@ -294,11 +407,18 @@ export function AppSwitcher({
       close(false);
       return;
     }
-    const next = moveIndex(e.key, focus, count);
+    const next = switcherMove(e.key, focus, count, tiles.length);
     if (next !== undefined) {
       e.preventDefault();
       setFocus(next);
     }
+  };
+
+  const currentTile = tiles.find((t) => t.key === current);
+  const caption = hint ?? currentTile?.description ?? "Choose an app to open.";
+  const show = (text: string | undefined) => () => setHint(text ?? null);
+  const ref = (i: number) => (el: HTMLAnchorElement | null) => {
+    itemRefs.current[i] = el;
   };
 
   return (
@@ -313,7 +433,7 @@ export function AppSwitcher({
         type="button"
         className="asafarim-switcher__button"
         aria-expanded={open}
-        aria-controls={menuId}
+        aria-controls={panelId}
         aria-label={`${face.name}: switch app`}
         title={variant === "icon" ? "Switch app" : undefined}
         onClick={() => (open ? close(false) : openAt(-1))}
@@ -321,7 +441,7 @@ export function AppSwitcher({
       >
         {variant === "icon" ? null : (
           <>
-            <span className="asafarim-switcher__glyph" aria-hidden="true">
+            <span className="asafarim-switcher__face" aria-hidden="true" style={tint(face.key, face.color)}>
               {face.glyph}
             </span>
             <span>{face.name}</span>
@@ -330,102 +450,106 @@ export function AppSwitcher({
         <GridIcon />
       </button>
       {open ? (
-        <nav
-          id={menuId}
-          ref={menuRef}
-          className="asafarim-switcher__menu"
+        // Not a <nav> element (a host's `nav a` rules would reach the items); the role keeps it a landmark.
+        <div
+          id={panelId}
+          ref={panelRef}
+          role="navigation"
           aria-label={label}
-          onKeyDown={onMenuKey}
+          className="asafarim-switcher__panel"
+          onKeyDown={onPanelKey}
+          onMouseLeave={show(undefined)}
           style={shift ? { translate: `${shift}px 0` } : undefined}
         >
-          <div className="asafarim-switcher__heading">{label}</div>
-          {tiles.length === 0 ? (
-            <p className="asafarim-switcher__empty">No apps to show right now.</p>
-          ) : (
-            <ul className="asafarim-switcher__list">
-              {tiles.map((t, i) => (
-                <li key={t.key} style={{ "--i": i } as object}>
-                  <a
-                    ref={(el) => {
-                      itemRefs.current[i] = el;
-                    }}
-                    className="asafarim-switcher__item"
-                    href={t.href}
-                    aria-current={t.key === current ? "page" : undefined}
-                    data-testid={`app-switcher-${t.key}`}
-                  >
-                    <span className="asafarim-switcher__glyph" aria-hidden="true">
-                      {t.glyph}
-                    </span>
-                    <span className="asafarim-switcher__text">
-                      <span className="asafarim-switcher__name">{t.name}</span>
-                      {t.description ? <span className="asafarim-switcher__desc">{t.description}</span> : null}
-                    </span>
-                    {t.key === current ? (
-                      <span className="asafarim-switcher__check" aria-hidden="true">
-                        ✓
-                      </span>
-                    ) : null}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-          {tiles.length === 1 ? (
-            <p className="asafarim-switcher__note" data-testid="app-switcher-note">
-              More apps appear here as you get access to them.
+          <div className="asafarim-switcher__head">
+            <p className="asafarim-switcher__title" id={titleId}>
+              Apps
             </p>
-          ) : null}
-          {extras.length ? (
-            <>
-              <div className="asafarim-switcher__heading" data-testid="app-switcher-more">
-                More from ASafariM
-              </div>
-              <ul className="asafarim-switcher__list">
-                {extras.map((m, j) => {
-                  const i = tiles.length + j;
-                  return (
-                    <li key={m.key} style={{ "--i": i } as object}>
-                      <a
-                        ref={(el) => {
-                          itemRefs.current[i] = el;
-                        }}
-                        className="asafarim-switcher__item"
-                        href={m.href}
-                        data-testid={`app-switcher-more-${m.key}`}
-                      >
-                        <span className="asafarim-switcher__glyph" aria-hidden="true">
-                          {m.glyph}
-                        </span>
-                        <span className="asafarim-switcher__text">
-                          <span className="asafarim-switcher__name">{m.name}</span>
-                          <span className="asafarim-switcher__desc">{m.description}</span>
-                        </span>
-                      </a>
-                    </li>
-                  );
-                })}
+          </div>
+          <div className="asafarim-switcher__body">
+            {tiles.length === 0 ? (
+              <p className="asafarim-switcher__empty">No apps to show right now.</p>
+            ) : (
+              <ul className="asafarim-switcher__apps" aria-labelledby={titleId}>
+                {tiles.map((t, i) => (
+                  <li key={t.key} style={{ "--i": i } as object}>
+                    <a
+                      ref={ref(i)}
+                      className="asafarim-switcher__tile"
+                      href={t.href}
+                      title={t.description || undefined}
+                      aria-current={t.key === current ? "page" : undefined}
+                      data-testid={`app-switcher-${t.key}`}
+                      onMouseEnter={show(t.description)}
+                      onFocus={show(t.description)}
+                    >
+                      <span className="asafarim-switcher__icon" aria-hidden="true" style={tint(t.key, t.color)}>
+                        {t.glyph}
+                      </span>
+                      <span className="asafarim-switcher__name">{t.name}</span>
+                      {t.key === current ? <span className="asafarim-switcher__open">Open</span> : null}
+                    </a>
+                  </li>
+                ))}
               </ul>
-            </>
-          ) : null}
-          {homeHref && home ? (
-            <div className="asafarim-switcher__foot" style={{ "--i": tiles.length + extras.length } as object}>
+            )}
+            {tiles.length === 1 ? (
+              <p className="asafarim-switcher__note" data-testid="app-switcher-note">
+                More apps appear here as you get access to them.
+              </p>
+            ) : null}
+            {extras.length ? (
+              <>
+                <div className="asafarim-switcher__section" data-testid="app-switcher-more">
+                  More from ASafariM
+                </div>
+                <ul className="asafarim-switcher__more">
+                  {extras.map((m, j) => {
+                    const i = tiles.length + j;
+                    return (
+                      <li key={m.key} style={{ "--i": i } as object}>
+                        <a
+                          ref={ref(i)}
+                          className="asafarim-switcher__product"
+                          href={m.href}
+                          title={m.description}
+                          data-testid={`app-switcher-more-${m.key}`}
+                          onMouseEnter={show(m.description)}
+                          onFocus={show(m.description)}
+                        >
+                          <span className="asafarim-switcher__icon" aria-hidden="true" style={tint(m.key, m.color)}>
+                            {m.glyph}
+                          </span>
+                          <span className="asafarim-switcher__name">{m.name}</span>
+                          <OutIcon />
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            ) : null}
+          </div>
+          <div className="asafarim-switcher__foot">
+            <p className="asafarim-switcher__hint" aria-hidden="true" data-testid="app-switcher-hint">
+              {caption}
+            </p>
+            {homeHref && home ? (
               <a
-                ref={(el) => {
-                  itemRefs.current[tiles.length + extras.length] = el;
-                }}
-                className="asafarim-switcher__item asafarim-switcher__home"
+                ref={ref(tiles.length + extras.length)}
+                className="asafarim-switcher__home"
                 href={homeHref}
+                aria-label={home.label}
+                title={home.label}
                 data-testid="app-switcher-home"
+                onMouseEnter={show(home.label)}
+                onFocus={show(home.label)}
               >
-                <span className="asafarim-switcher__glyph" aria-hidden="true">
-                  <HomeIcon />
-                </span>
-                <span className="asafarim-switcher__name">{home.label}</span>
+                <HomeIcon />
               </a>
-            </div>
-          ) : null}
-        </nav>
+            ) : null}
+          </div>
+        </div>
       ) : null}
     </div>
   );

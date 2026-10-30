@@ -347,6 +347,7 @@ describe("launcherEntries (shared by `platform sync` and core-api)", () => {
       name: "AA",
       description: "d",
       glyph: "XX",
+      color: "#000000",
       meta: "m",
       status: "active",
       access: "authenticated",

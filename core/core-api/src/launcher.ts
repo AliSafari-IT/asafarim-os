@@ -66,6 +66,8 @@ export function adminTile(href: string): LauncherTile {
     name: "Admin",
     description: "Manage apps, roles and access across ASafariM OS.",
     glyph: "AD",
+    // The console's own mark is the OS's orange (core/admin's AdminLogo).
+    color: "#c2410c",
     meta: new URL(href).host,
     status: "active",
     access: "authenticated",

@@ -20,6 +20,7 @@ describe("flow manifest", () => {
       name: "Flow",
       description: expect.stringContaining("Workflows"),
       glyph: "FL",
+      color: "#2563eb",
       meta: "flow.asafarim.site",
       status: "active",
       // Not public: core-api lists it only for someone who holds a flow.* role.

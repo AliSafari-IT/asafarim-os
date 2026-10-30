@@ -47,6 +47,8 @@ export interface LauncherEntry {
   name: string;
   description: string;
   glyph: string;
+  /** The app's brand colour (`ui.color`, a "#rrggbb" hex): its tile in app switchers is drawn in it. */
+  color?: string;
   meta: string;
   status: "active" | "coming-soon";
   access: "public" | "authenticated";
@@ -71,6 +73,7 @@ export function launcherEntries(manifests: readonly Pick<AppManifest, "id" | "na
           name: m.name,
           description: l.description,
           glyph: m.ui.glyph,
+          color: m.ui.color,
           meta: l.meta,
           status: m.ui.status,
           access: l.access,

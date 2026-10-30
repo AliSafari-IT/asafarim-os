@@ -1,7 +1,16 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LauncherTile } from "../src/index.ts";
-import { AppSwitcher, clampShift, MORE_FROM_ASAFARIM, moveIndex, OS_HOME, switcherTiles } from "../src/react.tsx";
+import {
+  AppSwitcher,
+  clampShift,
+  MORE_FROM_ASAFARIM,
+  moveIndex,
+  OS_HOME,
+  switcherMove,
+  switcherTiles,
+  tileColor,
+} from "../src/react.tsx";
 
 const tile = (key: string, over: Partial<LauncherTile> = {}): LauncherTile => ({
   key,
@@ -120,5 +129,63 @@ describe("clampShift: an open list stays inside the viewport", () => {
   });
   it("a list wider than the viewport starts at the left margin", () => {
     expect(clampShift(10, 500, 375)).toBe(-2);
+  });
+});
+
+describe("switcherMove: the panel's keyboard, a 3-column app grid then a plain list (#302)", () => {
+  // 5 apps (two rows: 0 1 2 / 3 4), then 2 products and the home link: 8 items, grid of 5.
+  const move = (key: string, at: number) => switcherMove(key, at, 8, 5);
+  it("←/→ step along the grid, wrapping at both ends", () => {
+    expect(move("ArrowRight", 0)).toBe(1);
+    expect(move("ArrowRight", 7)).toBe(0);
+    expect(move("ArrowLeft", 0)).toBe(7);
+  });
+  it("↓/↑ move by a row in the grid", () => {
+    expect(move("ArrowDown", 1)).toBe(4);
+    expect(move("ArrowUp", 4)).toBe(1);
+  });
+  it("↓ from the last row goes on to the list; ↑ from the list's first item comes back to the grid", () => {
+    expect(move("ArrowDown", 2)).toBe(5); // no tile below 2: on to the first product
+    expect(move("ArrowDown", 4)).toBe(5);
+    expect(move("ArrowUp", 5)).toBe(4);
+    expect(move("ArrowDown", 6)).toBe(7);
+  });
+  it("↑ from the top row wraps to the last item; Home/End jump; nothing focused yet starts at an end", () => {
+    expect(move("ArrowUp", 0)).toBe(7);
+    expect(move("Home", 6)).toBe(0);
+    expect(move("End", 1)).toBe(7);
+    expect(move("ArrowDown", -1)).toBe(0);
+    expect(move("ArrowUp", -1)).toBe(7);
+    expect(move("a", 0)).toBeUndefined();
+    expect(switcherMove("ArrowDown", 0, 0, 0)).toBeUndefined();
+  });
+});
+
+describe("tileColor: a tile is drawn in its brand colour, never in anything else (#302)", () => {
+  it("uses a #rrggbb hex as given", () => {
+    expect(tileColor("docs", "#0f766e")).toBe("#0f766e");
+  });
+  it("derives a stable colour from the key for a missing or invalid one: no CSS gets in", () => {
+    const derived = tileColor("docs");
+    expect(derived).toMatch(/^hsl\(\d{1,3} 62% 46%\)$/);
+    expect(tileColor("docs")).toBe(derived);
+    for (const bad of ["red", "#fff", "#0f766e;background:url(x)", "var(--x)", "#0f766e)"])
+      expect(tileColor("docs", bad)).toBe(derived);
+  });
+  it("every product outside the OS has its own colour", () => {
+    for (const m of MORE_FROM_ASAFARIM) expect(m.color).toMatch(/^#[0-9a-f]{6}$/);
+  });
+});
+
+describe("AppSwitcher: the face is drawn in the current app's colour", () => {
+  it("full variant: the current tile's brand colour on its glyph", () => {
+    const html = renderToStaticMarkup(
+      <AppSwitcher
+        apps={[tile("docs", { color: "#0f766e" })]}
+        current="docs"
+        fallback={{ name: "Docs", glyph: "DC" }}
+      />,
+    );
+    expect(html).toContain("--t:#0f766e");
   });
 });
