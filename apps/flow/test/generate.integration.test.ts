@@ -2,7 +2,8 @@
  * Generating a draft from an issue (#283) on a REAL Postgres: migration 7 (the gitlab-token kind, the
  * ai_generation setting, generated_drafts, ai_generations), and lib/generate/service.ts: the admin
  * switch (off by default), Pause all, the provider cool-down, the per-person limits and the daily token
- * cap, the token a private issue is read with, and what the builder shows afterwards.
+ * cap, the token a private issue is read with, what the builder shows afterwards, and the attempts'
+ * retention (90 days).
  *
  * Needs FLOW_TEST_ADMIN_URL (or EVENTS_TEST_ADMIN_URL): a superuser URL on a DEV Postgres. Skipped
  * without it. It uses a throwaway database, dropped afterwards.
@@ -24,6 +25,7 @@ import {
   PER_HOUR,
   recordGeneration,
 } from "../lib/generate/service";
+import { AI_GENERATIONS_DAYS, clearOldPayloads } from "../lib/engine/retention";
 import { migrate } from "../lib/migrations";
 import { setAiGeneration, setPausedAll } from "../lib/settings";
 import { KEY } from "../lib/workflow/schema";
@@ -132,6 +134,23 @@ describe.skipIf(!ADMIN_URL)("generating a draft from an issue on Postgres (integ
     expect(Object.keys(row).sort()).toEqual(
       ["created_at", "id", "input_tokens", "model", "outcome", "output_tokens", "subject"].sort(),
     );
+  });
+
+  it("the daily retention job deletes attempts older than 90 days, and only those", async () => {
+    const now = new Date("2026-10-30T12:00:00Z");
+    const daysAgo = (d: number) => new Date(now.getTime() - d * 24 * 60 * 60 * 1000);
+    for (const [id, at] of [
+      ["old", daysAgo(AI_GENERATIONS_DAYS + 1)],
+      ["edge", daysAgo(AI_GENERATIONS_DAYS - 1)],
+      ["today", now],
+    ] as const)
+      await pool.query("INSERT INTO ai_generations (id, subject, outcome, created_at) VALUES ($1, 'u', 'ok', $2)", [
+        id,
+        at,
+      ]);
+    await clearOldPayloads(pool, now);
+    const left = (await pool.query("SELECT id FROM ai_generations ORDER BY id")).rows.map((r) => r.id);
+    expect(left).toEqual(["edge", "today"]);
   });
 
   it("reads a private issue only with a token of the host's kind that lists the repository", async () => {
