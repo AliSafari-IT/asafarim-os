@@ -392,6 +392,12 @@ p.field-problems {
   .workflow-visual > *:not(summary) {
     display: block !important;
   }
+  /* A closed <details> hides its content through ::details-content (Chromium 131+), which the rule above
+     doesn't reach: show it for print. On screen the outline stays collapsed. */
+  .workflow-visual::details-content {
+    content-visibility: visible;
+    display: contents;
+  }
   .workflow-diagram-wrap {
     overflow: visible;
     border: 0;

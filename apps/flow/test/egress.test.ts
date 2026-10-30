@@ -26,6 +26,7 @@ import {
   EgressError,
   MAX_REQUEST_BYTES,
   MAX_RESPONSE_BYTES,
+  MAX_TIMEOUT_MS,
   pinnedLookup,
   TIMEOUT_MS,
   type EgressDeps,
@@ -444,6 +445,18 @@ describe("limits", () => {
   it("DNS counts against the time limit", async () => {
     const { egress } = setup({ timeoutMs: 200, resolve: () => new Promise(() => undefined) });
     expect((await refusal(egress.request(fakeDb(), call()))).code).toBe("timeout");
+  });
+
+  it("a caller may set its own time limit for one call", async () => {
+    handler = () => undefined;
+    const { egress } = setup({ timeoutMs: 60_000 });
+    const started = Date.now();
+    expect((await refusal(egress.request(fakeDb(), { ...call(), timeoutMs: 200 }))).code).toBe("timeout");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("a caller's time limit is capped at 2 minutes", () => {
+    expect(MAX_TIMEOUT_MS).toBe(120_000);
   });
 });
 
