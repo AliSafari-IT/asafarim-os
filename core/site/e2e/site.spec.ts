@@ -104,7 +104,7 @@ test("signed in, the top bar shows the person's avatar and menu instead of Sign 
   await expect(avatar).toBeVisible();
   await expect(nav.getByRole("link", { name: "Sign in" })).toHaveCount(0);
   await expect(page.locator("#access")).toContainText("signed in as ali@example.test");
-  await expect(page.locator("#access").getByRole("link", { name: "Open Flow" })).toHaveAttribute(
+  await expect(page.locator("#access").getByRole("link", { name: "Flow" })).toHaveAttribute(
     "href",
     "https://flow.asafarim.site/",
   );
