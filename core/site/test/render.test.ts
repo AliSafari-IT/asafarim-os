@@ -72,10 +72,18 @@ describe("renderPage", () => {
 
   it("has a top bar with the OS apps, other products and sign-in on allowed hosts", () => {
     const nav = /<nav class="topbar" aria-label="Main">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
-    expect(nav).toContain('<a href="https://docs.asafarim.site/">Docs</a>');
-    expect(nav).toContain('<a href="https://flow.asafarim.site/">Flow</a>');
-    expect(nav).toContain('<a href="https://breinhap.asafarim.site/en/">Breinhap</a>');
-    expect(nav).toContain('<a href="https://igs.asafarim.site/en/">IGS-Pharma</a>');
+    expect(nav).toContain('id="primary-nav"');
+    expect(nav).toContain('class="nav-toggle"');
+    expect(nav).toMatch(/<svg class="mark"[^>]*width="38" height="38"/);
+    expect(nav).toContain("<summary>Apps");
+    expect(nav).toContain("<summary>Products");
+    expect(nav).toContain('<a class="nav-card" href="https://docs.asafarim.site/" aria-label="Docs">');
+    expect(nav).toContain('<a class="nav-card" href="https://flow.asafarim.site/" aria-label="Flow">');
+    expect(nav).toContain(
+      '<a class="nav-product-link" href="https://breinhap.asafarim.site/en/" aria-label="Breinhap">',
+    );
+    expect(nav).toContain('<a class="nav-product-link" href="https://igs.asafarim.site/en/" aria-label="IGS-Pharma">');
+    expect(nav).toContain('<a class="nav-link" href="#shipped">Platform</a>');
     expect(nav).toContain('<a href="https://id.asafarim.site/login" class="btn btn-small">Sign in</a>');
     // session.js swaps the "Sign in" slot for the avatar, asking identity at this origin.
     expect(nav).toContain('<li id="account">');
@@ -91,7 +99,7 @@ describe("renderPage", () => {
     const toggle = '<button type="button" class="os-theme-toggle" data-theme-toggle>T</button>';
     const themed = renderPage(progress, { imageSizes, themeToggle: toggle });
     const nav = /<nav class="topbar" aria-label="Main">([\s\S]*?)<\/nav>/.exec(themed)?.[1] ?? "";
-    expect(nav).toContain(`<li>${toggle}</li>`);
+    expect(nav).toContain(`<li class="nav-theme">${toggle}</li>`);
     expect(themed).toMatch(/<div class="os-topbar">\s*<nav class="topbar"/);
     expect(themed.indexOf('href="theme.css"')).toBeLessThan(themed.indexOf('href="styles.css"'));
     expect(html).not.toContain("os-theme-toggle"); // none given, none drawn

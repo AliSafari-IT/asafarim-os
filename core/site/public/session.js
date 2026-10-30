@@ -1,14 +1,62 @@
-/* global document */
-// asafarim.site: who is signed in. Asks identity's /whoami (a credentialed GET that identity answers
-// with CORS for this origin only) and, when someone is signed in, swaps the top bar's "Sign in" for
-// their avatar and a small menu, and the hero's sign-in hint for a "signed in as" line. Signed out,
-// offline or blocked, the page stays exactly as served. It only ever sets textContent (never HTML)
+/* global document, window */
+// asafarim.site: enhance the responsive app navigation and ask identity's /whoami (a credentialed GET
+// that identity answers with CORS for this origin only). When someone is signed in, swap "Sign in"
+// for their avatar and menu, and the hero's sign-in hint for a "signed in as" line. Signed out,
+// offline or blocked, the page stays usable as served. It only ever sets textContent (never HTML)
 // and colours through the CSSOM, so the CSP needs no inline scripts or styles.
 (() => {
   "use strict";
   // Fixed here, not read from the page: every link this script builds is a constant.
   const identity = "https://id.asafarim.site";
   const slot = document.getElementById("account");
+  const shell = document.querySelector(".os-topbar");
+  const navToggle = document.querySelector(".nav-toggle");
+  const primaryNav = document.getElementById("primary-nav");
+
+  if (shell && navToggle && primaryNav) {
+    const mobile = window.matchMedia("(max-width: 56rem)");
+    const setNavOpen = (open, focusToggle = false) => {
+      primaryNav.classList.toggle("is-open", open);
+      navToggle.setAttribute("aria-expanded", String(open));
+      navToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+      if (focusToggle) navToggle.focus();
+    };
+    const syncNav = () => {
+      if (mobile.matches) {
+        navToggle.hidden = false;
+      } else {
+        navToggle.hidden = true;
+        setNavOpen(false);
+      }
+    };
+
+    shell.classList.add("nav-ready");
+    syncNav();
+    mobile.addEventListener("change", syncNav);
+    navToggle.addEventListener("click", () => {
+      setNavOpen(navToggle.getAttribute("aria-expanded") !== "true");
+    });
+    primaryNav.addEventListener("click", (event) => {
+      if (mobile.matches && event.target.closest("a")) setNavOpen(false, true);
+    });
+    shell.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      const openDropdowns = Array.from(primaryNav.querySelectorAll("details[open]"));
+      const lastOpen = openDropdowns.at(-1);
+      if (lastOpen) {
+        lastOpen.open = false;
+        lastOpen.querySelector("summary").focus();
+      } else if (mobile.matches && navToggle.getAttribute("aria-expanded") === "true") {
+        setNavOpen(false, true);
+      }
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (mobile.matches && navToggle.getAttribute("aria-expanded") === "true" && !shell.contains(event.target)) {
+        setNavOpen(false);
+      }
+    });
+  }
+
   if (!slot) return;
 
   const DOCS = "https://docs.asafarim.site/";

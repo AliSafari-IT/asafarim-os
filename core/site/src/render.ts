@@ -98,9 +98,8 @@ const anchor = (href: string, label: string, extra = "") =>
   `<a href="${escapeHtml(href)}"${extra}>${escapeHtml(label)}</a>`;
 
 /**
- * The top bar's links to the OS's live apps. Docs asks a signed-out visitor to sign in first; "Sign in" opens
- * id.asafarim.site's own sign-in page (email code or passkey), which also offers "Request connection" to someone
- * who has no access yet.
+ * The top bar's app and product launchers. "Sign in" opens id.asafarim.site's own sign-in page
+ * (email code or passkey), which also offers "Request connection" to someone who has no access yet.
  */
 /**
  * Identity's origin: session.js asks its /whoami who is signed in (credentialed, CORS for this site only).
@@ -117,7 +116,7 @@ export const APP_LINKS = {
 } as const;
 
 /** The brand mark: the OS core with an app orbiting it (it turns slowly; still with "reduce motion"). */
-const BRAND_MARK = `<svg class="mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false">
+const BRAND_MARK = `<svg class="mark" viewBox="0 0 32 32" width="38" height="38" aria-hidden="true" focusable="false">
         <rect class="mark-core" x="8" y="8" width="16" height="16" rx="5" />
         <g class="mark-spin">
           <g class="mark-orbit"><circle cx="16" cy="2.5" r="2.5" /></g>
@@ -151,12 +150,41 @@ function renderTopbar(themeToggle: string, home = "./"): string {
     <div class="os-topbar">
     <nav class="topbar" aria-label="Main">
       <a class="brand" href="${home}">${BRAND_MARK}<span class="brand-name">ASafariM <span>OS</span></span></a>
-      <ul>
-        <li>${anchor(APP_LINKS.docs.href, APP_LINKS.docs.label)}</li>
-        <li>${anchor(APP_LINKS.flow.href, APP_LINKS.flow.label)}</li>
-        <li>${anchor(APP_LINKS.breinhap.href, APP_LINKS.breinhap.label)}</li>
-        <li>${anchor(APP_LINKS.igs.href, APP_LINKS.igs.label)}</li>
-${themeToggle ? `        <li>${themeToggle.trim()}</li>\n` : ""}        <li id="account">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Open navigation" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+      </button>
+      <ul class="primary-nav" id="primary-nav">
+        <li>
+          <details class="nav-dropdown">
+            <summary>Apps <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3.5 6 4.5 4 4.5-4" /></svg></summary>
+            <div class="nav-panel">
+              <div class="nav-panel-heading"><strong>Your workspace</strong><span>Tools connected to ASafariM OS</span></div>
+              <div class="nav-card-grid">
+                <a class="nav-card" href="${APP_LINKS.docs.href}" aria-label="Docs">
+                  <span class="nav-card-icon nav-card-docs" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4.5h4M9 12h6M9 15.5h6" /></svg></span>
+                  <span class="nav-card-copy"><strong>Docs</strong><small>Guides and your workspace</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
+                </a>
+                <a class="nav-card" href="${APP_LINKS.flow.href}" aria-label="Flow">
+                  <span class="nav-card-icon nav-card-flow" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="5" height="5" rx="1" /><rect x="15" y="15" width="5" height="5" rx="1" /><path d="M9 6.5h4a2 2 0 0 1 2 2v4.5M15 13v2" /></svg></span>
+                  <span class="nav-card-copy"><strong>Flow</strong><small>Automate work with workflows</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
+                </a>
+              </div>
+              <p class="nav-panel-foot">One sign-in. A connected workspace.</p>
+            </div>
+          </details>
+        </li>
+        <li>
+          <details class="nav-dropdown">
+            <summary>Products <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3.5 6 4.5 4 4.5-4" /></svg></summary>
+            <div class="nav-panel nav-panel-compact">
+              <div class="nav-panel-heading"><strong>More from ASafariM</strong><span>Explore our products</span></div>
+              <a class="nav-product-link" href="${APP_LINKS.breinhap.href}" aria-label="Breinhap"><strong>Breinhap</strong><span>Short study missions for secondary school</span><span aria-hidden="true">↗</span></a>
+              <a class="nav-product-link" href="${APP_LINKS.igs.href}" aria-label="IGS-Pharma"><strong>IGS-Pharma</strong><span>Belgian online pharmacy with a pharmacist</span><span aria-hidden="true">↗</span></a>
+            </div>
+          </details>
+        </li>
+        <li><a class="nav-link" href="#shipped">Platform</a></li>
+${themeToggle ? `        <li class="nav-theme">${themeToggle.trim()}</li>\n` : ""}        <li id="account">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
       </ul>
     </nav>
     </div>`;
