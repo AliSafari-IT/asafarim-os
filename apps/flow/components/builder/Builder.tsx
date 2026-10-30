@@ -102,6 +102,16 @@ export interface BuilderProps {
   hookId: string | null;
   /** Shown in the trigger's settings by trigger type: the hook's panel (components/HookPanel.tsx). */
   triggerPanels?: Partial<Record<string, React.ReactNode>>;
+  /**
+   * A draft generated from an issue with AI (#283), until its first publish: where it came from, what
+   * the AI says it does and should start it, and its note on each node.
+   */
+  generated?: {
+    issue: { label: string; url: string };
+    summary: string;
+    triggerNote: string;
+    notes: Record<string, string>;
+  } | null;
 }
 
 export function Builder(props: BuilderProps) {
@@ -511,6 +521,22 @@ export function Builder(props: BuilderProps) {
           View only: editing needs the permission <span className="perm">flow.workflows.write</span>.
         </p>
       ) : null}
+      {props.generated && !published ? (
+        <div className="notice warn" role="note" data-testid="generated-banner">
+          <strong>AI-generated draft, review before saving.</strong> Drafted from{" "}
+          <a href={props.generated.issue.url} rel="noreferrer noopener" target="_blank">
+            {props.generated.issue.label}
+          </a>
+          . {props.generated.summary}
+          {props.generated.triggerNote ? (
+            <>
+              {" "}
+              It starts by hand for now; the issue suggests: <em>{props.generated.triggerNote}</em>
+            </>
+          ) : null}{" "}
+          Outgoing steps (email, webhooks, GitHub) are left for you to configure.
+        </div>
+      ) : null}
       {props.from === "v1" && editable ? (
         <p className="notice" role="status">
           This workflow&apos;s published version uses definition version 1. The builder edits it as version 2, which
@@ -595,24 +621,31 @@ export function Builder(props: BuilderProps) {
               {props.triggerPanels?.[String(draft.trigger.type)]}
             </TriggerSettings>
           ) : node && current ? (
-            <NodeSettings
-              key={current}
-              draft={draft}
-              id={current}
-              node={node}
-              spec={catalog.nodes.find((s) => s.type === node.type)}
-              credentials={credentials}
-              suggestions={suggestions}
-              problems={byPlace.get(current) ?? []}
-              editable={editable}
-              onChange={(n) => edit((d) => updateNode(d, current, n))}
-              onRename={(k) => {
-                edit((d) => renameNode(d, current, k));
-                setSelected(k);
-              }}
-              onConnect={(field, target) => edit((d) => connect(d, current, field, target))}
-              onDelete={() => remove(current)}
-            />
+            <>
+              {props.generated && !published && props.generated.notes[current] ? (
+                <p className="notice" role="note" data-testid="generated-note">
+                  <strong>Why (AI):</strong> {props.generated.notes[current]}
+                </p>
+              ) : null}
+              <NodeSettings
+                key={current}
+                draft={draft}
+                id={current}
+                node={node}
+                spec={catalog.nodes.find((s) => s.type === node.type)}
+                credentials={credentials}
+                suggestions={suggestions}
+                problems={byPlace.get(current) ?? []}
+                editable={editable}
+                onChange={(n) => edit((d) => updateNode(d, current, n))}
+                onRename={(k) => {
+                  edit((d) => renameNode(d, current, k));
+                  setSelected(k);
+                }}
+                onConnect={(field, target) => edit((d) => connect(d, current, field, target))}
+                onDelete={() => remove(current)}
+              />
+            </>
           ) : (
             <p className="muted">Choose a node in the list or on the canvas to see its settings.</p>
           )}

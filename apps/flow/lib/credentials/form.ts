@@ -28,7 +28,7 @@ const reposOf = (raw: string) => [
 /** The secret fields of a kind (what an add and a rotate send). */
 function secretOf(kind: string, f: FormData) {
   if (kind === "smtp") return { username: str(f, "username"), password: str(f, "password") };
-  if (kind === "github-token") return { token: str(f, "token").trim() };
+  if (kind === "github-token" || kind === "gitlab-token") return { token: str(f, "token").trim() };
   return undefined;
 }
 
@@ -44,6 +44,8 @@ export function creationFrom(f: FormData): unknown {
     };
   if (kind === "github-token")
     return { kind, name, meta: { repos: reposOf(str(f, "repos")) }, secret: secretOf(kind, f) };
+  if (kind === "gitlab-token")
+    return { kind, name, meta: { projects: reposOf(str(f, "projects")) }, secret: secretOf(kind, f) };
   return { kind, name };
 }
 

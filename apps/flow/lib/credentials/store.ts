@@ -10,6 +10,8 @@
  *   smtp            secret: username, password        meta: host, port, mode (starttls, tls; none for
  *                                                     loopback only), from
  *   github-token    secret: token                     meta: repos (the ones it may act on)
+ *   gitlab-token    secret: token                     meta: projects (gitlab.com paths it may read; issue
+ *                                                     drafting, lib/generate)
  *   webhook-secret  secret: 32 random bytes (base64url), generated here
  */
 import { randomBytes } from "node:crypto";
@@ -22,7 +24,7 @@ import { CredentialError, keyringFromEnv, open, seal, type Keyring } from "./cip
 
 export { CredentialError };
 
-export const KINDS = ["smtp", "github-token", "webhook-secret"] as const;
+export const KINDS = ["smtp", "github-token", "gitlab-token", "webhook-secret"] as const;
 export type CredentialKind = (typeof KINDS)[number];
 
 const Name = z.string().trim().min(1).max(100);
@@ -33,6 +35,11 @@ const Host = z
   .refine((h) => isHostName(h));
 const Email = z.string().trim().toLowerCase().max(254).pipe(z.email());
 const Repo = z.string().regex(/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/);
+/** A gitlab.com project path: group[/subgroup…]/project. */
+const Project = z
+  .string()
+  .max(255)
+  .regex(/^(?:[A-Za-z0-9_][A-Za-z0-9_.-]*\/){1,20}[A-Za-z0-9_][A-Za-z0-9_.-]*$/);
 
 const SmtpSecret = z.object({ username: z.string().min(1).max(256), password: z.string().min(1).max(1024) });
 const GithubSecret = z.object({ token: z.string().regex(/^\S{1,255}$/) });
@@ -51,18 +58,21 @@ const SmtpMeta = z
     path: ["host"],
   });
 const GithubMeta = z.object({ repos: z.array(Repo).min(1).max(50) });
+const GitlabMeta = z.object({ projects: z.array(Project).min(1).max(50) });
 
 export const CredentialInput = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("smtp"), name: Name, meta: SmtpMeta, secret: SmtpSecret }),
   z.object({ kind: z.literal("github-token"), name: Name, meta: GithubMeta, secret: GithubSecret }),
+  z.object({ kind: z.literal("gitlab-token"), name: Name, meta: GitlabMeta, secret: GithubSecret }),
   z.object({ kind: z.literal("webhook-secret"), name: Name }),
 ]);
 export type CredentialInput = z.input<typeof CredentialInput>;
 
-/** What a rotation takes: the new secret (smtp, github-token); a webhook secret is generated. */
+/** What a rotation takes: the new secret (smtp, github-token, gitlab-token); a webhook secret is generated. */
 export const RotationInput = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("smtp"), secret: SmtpSecret }),
   z.object({ kind: z.literal("github-token"), secret: GithubSecret }),
+  z.object({ kind: z.literal("gitlab-token"), secret: GithubSecret }),
   z.object({ kind: z.literal("webhook-secret") }),
 ]);
 export type RotationInput = z.input<typeof RotationInput>;
@@ -71,10 +81,16 @@ export type RotationInput = z.input<typeof RotationInput>;
 export interface CredentialOf {
   smtp: z.infer<typeof SmtpMeta> & z.infer<typeof SmtpSecret>;
   "github-token": z.infer<typeof GithubMeta> & z.infer<typeof GithubSecret>;
+  "gitlab-token": z.infer<typeof GitlabMeta> & z.infer<typeof GithubSecret>;
   "webhook-secret": z.infer<typeof WebhookSecret>;
 }
 
-const SECRET_SCHEMA = { smtp: SmtpSecret, "github-token": GithubSecret, "webhook-secret": WebhookSecret } as const;
+const SECRET_SCHEMA = {
+  smtp: SmtpSecret,
+  "github-token": GithubSecret,
+  "gitlab-token": GithubSecret,
+  "webhook-secret": WebhookSecret,
+} as const;
 
 export interface CredentialSummary {
   id: string;

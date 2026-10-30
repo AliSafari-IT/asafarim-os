@@ -7,12 +7,18 @@ import { RotateCredentialForm } from "@/components/CredentialForms";
 import type { CredentialSummary } from "@/lib/credentials/store";
 import { at } from "@/lib/format";
 
-const KIND_LABEL = { smtp: "SMTP", "github-token": "GitHub token", "webhook-secret": "Webhook secret" } as const;
+const KIND_LABEL = {
+  smtp: "SMTP",
+  "github-token": "GitHub token",
+  "gitlab-token": "GitLab token",
+  "webhook-secret": "Webhook secret",
+} as const;
 
 function details(c: CredentialSummary): string {
   const m = c.meta;
   if (c.kind === "smtp") return `${String(m.host)}:${String(m.port)} (${String(m.mode)}), from ${String(m.from)}`;
   if (c.kind === "github-token") return Array.isArray(m.repos) ? m.repos.join(", ") : "";
+  if (c.kind === "gitlab-token") return Array.isArray(m.projects) ? m.projects.join(", ") : "";
   return "";
 }
 

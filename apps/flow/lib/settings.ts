@@ -4,9 +4,11 @@
  * - `egress_hosts`: the hosts webhook out may call ("host" or "host:port"; lib/egress/hosts.ts);
  * - `email_recipients`: who email may go to, an address or a whole "@domain";
  * - `paused_all`: the kill switch. While it is on no new run starts (the engine asks isPausedAll) and
- *   no outbound call is made (lib/egress).
+ *   no outbound call is made (lib/egress);
+ * - `ai_generation`: whether a draft may be generated from an issue with AI (#283; lib/generate). It
+ *   sends the issue's text to an outside AI provider, so an admin turns it on knowingly.
  *
- * A key that has no row yet has its default: empty lists, not paused.
+ * A key that has no row yet has its default: empty lists, not paused, AI drafting off.
  */
 import type { Queryable } from "@asafarim/app-sdk/events";
 import type { AuditEntry } from "./audit";
@@ -23,11 +25,12 @@ export interface Settings {
   egressHosts: string[];
   emailRecipients: string[];
   pausedAll: boolean;
+  aiGeneration: boolean;
 }
 
 export const LIST_MAX = 100;
 
-const DEFAULTS: Settings = { egressHosts: [], emailRecipients: [], pausedAll: false };
+const DEFAULTS: Settings = { egressHosts: [], emailRecipients: [], pausedAll: false, aiGeneration: false };
 
 const strings = (v: unknown) => (Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : []);
 
@@ -38,6 +41,7 @@ export async function getSettings(q: Queryable): Promise<Settings> {
     if (r.key === "egress_hosts") s.egressHosts = strings(r.value);
     if (r.key === "email_recipients") s.emailRecipients = strings(r.value);
     if (r.key === "paused_all") s.pausedAll = r.value === true;
+    if (r.key === "ai_generation") s.aiGeneration = r.value === true;
   }
   return s;
 }
@@ -85,7 +89,7 @@ export function isRecipientAllowed(recipients: readonly string[], address: strin
   return recipients.includes(a) || recipients.includes(`@${a.slice(a.lastIndexOf("@") + 1)}`);
 }
 
-type Key = "egress_hosts" | "email_recipients" | "paused_all";
+type Key = "egress_hosts" | "email_recipients" | "paused_all" | "ai_generation";
 
 async function put(q: Queryable, key: Key, value: unknown, actor: string) {
   await q.query(
@@ -110,6 +114,12 @@ export async function setList(
 export async function setPausedAll(q: Queryable, on: boolean, actor: string): Promise<{ audits: AuditEntry[] }> {
   await put(q, "paused_all", on, actor);
   return { audits: [{ action: on ? "flow.all.paused" : "flow.all.resumed", actor }] };
+}
+
+/** Turn AI drafting from an issue on or off (#283). */
+export async function setAiGeneration(q: Queryable, on: boolean, actor: string): Promise<{ audits: AuditEntry[] }> {
+  await put(q, "ai_generation", on, actor);
+  return { audits: [{ action: "flow.settings.changed", setting: "ai_generation", enabled: on, actor }] };
 }
 
 /** What the engine does with a trigger while the kill switch is on: log it, audit it, start nothing. */

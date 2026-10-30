@@ -42,7 +42,14 @@ import {
   waitForGateway,
 } from "./infra.mjs";
 import { DEV, DEV_DIR, ISSUER, ROOT, ensureDevKeys } from "./keys.mjs";
-import { AI_MOCK_URL, GITHUB_MOCK_URL, GITHUB_TLS_PORT, RECEIVER_PORT, SMTP_PORT } from "../../apps/flow/e2e/mocks.mjs";
+import {
+  AI_MOCK_URL,
+  ANTHROPIC_TLS_PORT,
+  GITHUB_MOCK_URL,
+  GITHUB_TLS_PORT,
+  RECEIVER_PORT,
+  SMTP_PORT,
+} from "../../apps/flow/e2e/mocks.mjs";
 import { makeE2eCert } from "./e2e-tls.mjs";
 
 const NOTES_DIR = path.join(ROOT, "apps/notes");
@@ -152,7 +159,10 @@ try {
         `api.github.com:443=${GITHUB_TLS_PORT}`,
         `hooks.e2e.test:443=${RECEIVER_PORT}`,
         `smtp.e2e.test:465=${SMTP_PORT}`,
+        `api.anthropic.com:443=${ANTHROPIC_TLS_PORT}`,
       ].join(","),
+      // "Generate from issue" (#283) against the Claude mock: a placeholder, never a real key.
+      FLOW_AI_API_KEY: "e2e-placeholder-not-a-key",
       FLOW_E2E_EGRESS_CA: e2eTls.cert,
     });
     // Flow's own answer, not another process that holds the port.

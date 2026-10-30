@@ -62,7 +62,7 @@ function SecretFields({ kind, prefix }: { kind: CredentialKind; prefix: string }
         />
       </>
     );
-  if (kind === "github-token")
+  if (kind === "github-token" || kind === "gitlab-token")
     return (
       <>
         <label htmlFor={`${prefix}-token`}>Token</label>
@@ -83,6 +83,7 @@ export function AddCredentialForm() {
       <select id="add-kind" name="kind" value={kind} onChange={(e) => setKind(e.target.value as CredentialKind)}>
         <option value="smtp">SMTP</option>
         <option value="github-token">GitHub token</option>
+        <option value="gitlab-token">GitLab token (read issues)</option>
         <option value="webhook-secret">Webhook secret</option>
       </select>
       <label htmlFor="add-name">Name</label>
@@ -107,6 +108,15 @@ export function AddCredentialForm() {
         <>
           <label htmlFor="add-repos">Allowed repositories</label>
           <textarea id="add-repos" name="repos" rows={3} required placeholder="owner/repo" />
+        </>
+      ) : null}
+      {kind === "gitlab-token" ? (
+        <>
+          <label htmlFor="add-projects">Allowed gitlab.com projects</label>
+          <textarea id="add-projects" name="projects" rows={3} required placeholder="group/project" />
+          <p className="muted hint">
+            A read-only token (read_api). Flow uses it only to read an issue to draft a workflow from.
+          </p>
         </>
       ) : null}
       <SecretFields kind={kind} prefix="add" />

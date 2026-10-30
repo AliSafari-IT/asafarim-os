@@ -23,6 +23,30 @@ const MESSAGES: Record<string, string> = {
   too_many_entries: "That's more entries than a list can hold.",
   exists: "A workflow with that key exists already: choose another key.",
   invalid_workflow: "That doesn't fit: a name, and a key of lower case letters, digits and dashes.",
+  generate_invalid_url:
+    "That isn't an issue URL Flow can read: https://github.com/owner/repo/issues/123 or https://gitlab.com/group/project/-/issues/123.",
+  generate_switch_off: "Generating drafts from issues is turned off. An admin can turn it on in Settings.",
+  generate_not_configured: "Generating drafts from issues isn't set up on this server.",
+  generate_paused: "Flow is paused, so nothing is sent out. Build the workflow by hand, or resume Flow in Settings.",
+  generate_paused_all:
+    "Flow is paused, so nothing is sent out. Build the workflow by hand, or resume Flow in Settings.",
+  generate_cooling_down: "The AI hasn't been answering. Try again in a few minutes, or build the workflow by hand.",
+  generate_rate_limited: "You've generated the most drafts allowed for now (5 an hour, 20 a day). Try again later.",
+  generate_daily_cap: "Today's AI budget is used up. Try again tomorrow, or build the workflow by hand.",
+  generate_credential_not_found: "That credential doesn't exist any more.",
+  generate_credential_wrong_kind:
+    "That credential is for the other host: use a GitHub token for GitHub, a GitLab token for GitLab.",
+  generate_credential_not_for_repo: "That credential doesn't list this repository or project.",
+  generate_credentials_unavailable: "Credentials can't be used on this server right now.",
+  generate_issue_no_access:
+    "Flow couldn't read that issue: it doesn't exist, or it's private. For a private one, choose a token that can read it.",
+  generate_not_an_issue: "That's a pull request, not an issue.",
+  generate_issue_unavailable: "The issue's host didn't answer properly. Try again in a moment.",
+  generate_ai_timeout: "The AI took too long to answer. Try again, or build the workflow by hand.",
+  generate_ai_unavailable: "The AI isn't available right now. Try again later, or build the workflow by hand.",
+  generate_ai_refused: "The AI declined to draft a workflow from this issue. Build it by hand.",
+  generate_invalid_ai_answer:
+    "The AI's answer wasn't a workflow Flow can use, so no draft was made. Try again, or build it by hand.",
 };
 
 /** The refusal a server action redirected back with (`?error=…&permission=…`). */
@@ -46,6 +70,8 @@ const SAVED_MESSAGES: Record<string, string> = {
   email_recipients: "Email recipients saved.",
   paused: "Flow paused.",
   resumed: "Flow resumed.",
+  ai_on: "Generating drafts from issues is on: issue text is sent to Anthropic when someone uses it.",
+  ai_off: "Generating drafts from issues is off.",
 };
 
 export function SavedNotice({ saved }: { saved?: string }) {

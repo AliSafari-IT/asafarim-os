@@ -16,7 +16,7 @@ describe("flow manifest", () => {
     expect(result.ok && result.manifest).toEqual(compiled);
   });
 
-  it("grants what ADR 0001 decided: read for every role, workflows, runs, credentials and settings for the owner (ADR 0002), approvals for approvers", () => {
+  it("grants what ADR 0001 decided: read for every role, workflows, runs, credentials, settings and AI drafting (#283) for the owner (ADR 0002), approvals for approvers", () => {
     const grants = Object.fromEntries(manifest.roles.map((r) => [r.key, [...r.grants].sort()]));
     expect(grants).toEqual({
       "flow.viewer": ["flow.read"],
@@ -27,6 +27,7 @@ describe("flow manifest", () => {
         "flow.read",
         "flow.runs.start",
         "flow.settings.write",
+        "flow.workflows.generate",
         "flow.workflows.write",
       ],
     });

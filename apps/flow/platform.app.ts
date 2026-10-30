@@ -45,6 +45,11 @@ export default defineApp({
     { key: "flow.approvals.decide", description: "Approve or reject a step that waits for a person" },
     { key: "flow.credentials.write", description: "Add, rotate and delete the credentials connectors use" },
     { key: "flow.settings.write", description: "Edit the egress and email allow-lists, pause and resume all of Flow" },
+    {
+      key: "flow.workflows.generate",
+      description:
+        "Generate a workflow draft from a GitHub or GitLab issue with AI (sends the issue to an outside AI provider)",
+    },
   ],
   roles: [
     { key: "flow.viewer", grants: ["flow.read"], description: "Can see workflows and runs" },
@@ -62,6 +67,7 @@ export default defineApp({
         "flow.approvals.decide",
         "flow.credentials.write",
         "flow.settings.write",
+        "flow.workflows.generate",
       ],
       description: "Runs Flow: workflows, runs, approvals, credentials and settings",
     },

@@ -7,6 +7,7 @@ import { buildCatalog } from "@/lib/builder/catalog";
 import { builderProblems, checkDataOf } from "@/lib/builder/checks";
 import { openWorkflow } from "@/lib/builder/open";
 import { db, engine } from "@/lib/db";
+import { generatedInfo, issuePageUrl } from "@/lib/generate/service";
 import { listHooks } from "@/lib/hooks/store";
 import { pageAccess } from "@/lib/page";
 import { getBuilderWorkflow } from "@/lib/queries";
@@ -42,6 +43,7 @@ export default async function EditWorkflow({ params }: { params: Promise<{ key: 
   const data = await checkDataOf(pool);
   const problems = builderProblems(opened.draft, engine.checkDefinition(opened.draft), data);
   const hook = canWrite ? (await listHooks(pool)).find((h) => h.workflowKey === workflow.key) : undefined;
+  const generated = workflow.versions.length ? null : await generatedInfo(pool, workflow.key);
   const t = opened.draft.trigger;
   const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
   // The panel for each trigger type the draft may be switched to; the hook's own kind is fixed.
@@ -93,6 +95,19 @@ export default async function EditWorkflow({ params }: { params: Promise<{ key: 
         published={workflow.versions[0]?.version ?? null}
         hookId={hook?.id ?? null}
         triggerPanels={triggerPanels}
+        generated={
+          generated
+            ? {
+                issue: {
+                  label: `${generated.source.repo}#${generated.source.number}`,
+                  url: issuePageUrl(generated.source),
+                },
+                summary: generated.summary,
+                triggerNote: generated.triggerNote,
+                notes: generated.notes,
+              }
+            : null
+        }
       />
     </Shell>
   );
