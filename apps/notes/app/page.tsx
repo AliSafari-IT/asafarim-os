@@ -1,4 +1,4 @@
-import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import { AppBrand, AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
 import { ThemeToggle } from "@asafarim/theme/react";
 import { createNoteAction, signInAction, signOutAction } from "./actions";
 import { SignOutIcon } from "@/components/SignOutIcon";
@@ -59,12 +59,12 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
       <header className="topbar os-topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <h1 className="visually-hidden">Notes</h1>
-            {/* The OS's app switcher: Notes and every other app this person can open (core-api's launcher). */}
-            <AppSwitcher apps={apps} current="notes" fallback={{ name: "Notes", glyph: "NT" }} />
+            <AppBrand name="Notes" glyph="NT" as="h1" />
           </div>
           <span className="tools" data-testid="who">
             <ThemeToggle />
+            {/* The OS's app switcher, as an icon next to the account menu: the brand is on the left (#288). */}
+            <AppSwitcher apps={apps} current="notes" fallback={{ name: "Notes", glyph: "NT" }} variant="icon" />
             <UserMenu
               name={session?.user?.name}
               email={session?.user?.email}

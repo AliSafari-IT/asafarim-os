@@ -1,4 +1,4 @@
-import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import { AppBrand, AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
 import { ThemeToggle } from "@asafarim/theme/react";
 import { signOutAction } from "@/app/actions";
 import { SignOutIcon } from "@/components/SignOutIcon";
@@ -37,11 +37,12 @@ export async function Shell({
       <header className="topbar os-topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <span className="visually-hidden">Flow</span>
-            <AppSwitcher apps={apps} current="flow" fallback={{ name: "Flow", glyph: "FL" }} />
+            <AppBrand name="Flow" glyph="FL" />
           </div>
           <span className="tools" data-testid="who">
             <ThemeToggle />
+            {/* The OS's app switcher, as an icon next to the account menu: the brand is on the left (#288). */}
+            <AppSwitcher apps={apps} current="flow" fallback={{ name: "Flow", glyph: "FL" }} variant="icon" />
             <UserMenu
               name={session?.user?.name}
               email={session?.user?.email}

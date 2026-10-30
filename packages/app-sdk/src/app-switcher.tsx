@@ -137,7 +137,7 @@ export const APP_SWITCHER_CSS = `
 .asafarim-switcher__button:hover .asafarim-switcher__grid circle{animation:asafarim-dot 1.1s ease-in-out infinite;animation-delay:calc(var(--d) * 70ms)}
 .asafarim-switcher__button[aria-expanded="true"] .asafarim-switcher__grid{color:var(--s-accent);transform:rotate(45deg)}
 .asafarim-switcher__glyph{display:inline-grid;place-items:center;flex:none;width:2rem;height:2rem;border-radius:8px;background:linear-gradient(135deg,var(--s-accent),color-mix(in srgb,var(--s-accent) 65%,#000));color:var(--s-accent-ink);font-size:.75rem;font-weight:700;box-shadow:inset 0 1px 0 rgb(255 255 255 / .25)}
-.asafarim-switcher--icon .asafarim-switcher__button{justify-content:center;width:2.5rem;height:2.5rem;padding:0;border-radius:50%}
+.asafarim-switcher--icon .asafarim-switcher__button{justify-content:center;width:2.5rem;height:2.5rem;padding:0;border-color:var(--s-line);border-radius:50%}
 .asafarim-switcher--icon .asafarim-switcher__grid{width:1.125rem;height:1.125rem}
 .asafarim-switcher__menu{position:absolute;z-index:50;top:calc(100% + 6px);left:0;width:max-content;min-width:16rem;max-width:min(22rem,calc(100vw - 2rem));max-height:min(70vh,28rem);overflow:auto;margin:0;padding:.375rem;border:1px solid var(--s-line);border-radius:12px;background:var(--s-bg);box-shadow:0 12px 32px rgb(0 0 0 / .25);transform-origin:top left;animation:asafarim-pop .18s cubic-bezier(.2,.8,.2,1)}
 .asafarim-switcher__list{margin:0;padding:0;list-style:none}
