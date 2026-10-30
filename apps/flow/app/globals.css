@@ -226,7 +226,8 @@ th {
   gap: 8px;
   margin: 12px 0;
 }
-/* "Generate a draft" while the AI works (components/GenerateSubmit.tsx): an indeterminate bar. */
+/* "Generate a draft" while the AI works (components/GenerateSubmit.tsx): @asafarim/progress-bars'
+   LinearProgress, its tokens mapped to Flow's accent so the bar follows light and dark. */
 .gen-status {
   display: grid;
   flex: 1 1 14rem;
@@ -234,42 +235,9 @@ th {
   min-width: 0;
 }
 .gen-progress {
-  position: relative;
-  display: block;
-  height: 6px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-.gen-progress__bar {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 40%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, transparent, var(--accent) 30%, var(--accent) 70%, transparent);
-  animation: gen-slide 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
-}
-@keyframes gen-slide {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(250%);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .gen-progress__bar {
-    width: 100%;
-    animation: gen-pulse 2s ease-in-out infinite alternate;
-  }
-  @keyframes gen-pulse {
-    from {
-      opacity: 0.35;
-    }
-    to {
-      opacity: 0.8;
-    }
-  }
+  --asm-color-brand-primary-700: var(--accent);
+  --asm-color-surface-muted: color-mix(in srgb, var(--accent) 16%, transparent);
+  --asm-color-border: transparent;
 }
 .check {
   display: inline-flex;
