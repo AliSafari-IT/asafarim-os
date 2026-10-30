@@ -119,6 +119,8 @@ describe("platform sync", () => {
       name: "VIONTO",
       description: "Video",
       glyph: "XX",
+      // The manifest's brand colour: app switchers draw the tile in it (#302).
+      color: "#000000",
       meta: "vionto",
       status: "active",
       access: "public",

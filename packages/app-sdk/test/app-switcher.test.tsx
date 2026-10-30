@@ -1,7 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LauncherTile } from "../src/index.ts";
-import { AppSwitcher, clampShift, MORE_FROM_ASAFARIM, moveIndex, OS_HOME, switcherTiles } from "../src/react.tsx";
+import {
+  AppSwitcher,
+  clampShift,
+  hasAppIcon,
+  MORE_FROM_ASAFARIM,
+  moveIndex,
+  OS_HOME,
+  switcherMove,
+  switcherTiles,
+  tileColor,
+} from "../src/react.tsx";
 
 const tile = (key: string, over: Partial<LauncherTile> = {}): LauncherTile => ({
   key,
@@ -25,7 +35,9 @@ describe("AppSwitcher", () => {
     expect(html).toContain('aria-expanded="false"');
     // A disclosure of plain links, not an ARIA menu: no aria-haspopup.
     expect(html).not.toContain("aria-haspopup");
-    expect(html).toContain(">DO</span>");
+    // Docs has a drawn icon on its face (#302), not its letters.
+    expect(html).toContain('class="asafarim-switcher__mark"');
+    expect(html).not.toContain(">DO</span>");
     expect(html).not.toContain("app-switcher-notes");
   });
 
@@ -34,7 +46,7 @@ describe("AppSwitcher", () => {
       <AppSwitcher apps={[]} current="docs" fallback={{ name: "Docs", glyph: "DC" }} />,
     );
     expect(html).toContain('aria-label="Docs: switch app"');
-    expect(html).toContain(">DC</span>");
+    expect(html).toContain('class="asafarim-switcher__mark"');
   });
 
   it("variant icon: the grid alone in a round button, no glyph or name, the same accessible name", () => {
@@ -54,7 +66,7 @@ describe("AppSwitcher", () => {
       <AppSwitcher apps={[]} current="admin" fallback={{ name: "Admin", glyph: "AD" }} />,
     );
     expect(html).toContain('class="asafarim-switcher"');
-    expect(html).toContain(">AD</span>");
+    expect(html).toContain('class="asafarim-switcher__mark"'); // Admin's icon (#302)
     expect(html).toContain("<span>Admin</span>");
     expect(html).not.toContain("title=");
   });
@@ -120,5 +132,83 @@ describe("clampShift: an open list stays inside the viewport", () => {
   });
   it("a list wider than the viewport starts at the left margin", () => {
     expect(clampShift(10, 500, 375)).toBe(-2);
+  });
+});
+
+describe("switcherMove: the panel's keyboard, a 3-column app grid then a plain list (#302)", () => {
+  // 5 apps (two rows: 0 1 2 / 3 4), then 2 products and the home link: 8 items, grid of 5.
+  const move = (key: string, at: number) => switcherMove(key, at, 8, 5);
+  it("←/→ step along the grid, wrapping at both ends", () => {
+    expect(move("ArrowRight", 0)).toBe(1);
+    expect(move("ArrowRight", 7)).toBe(0);
+    expect(move("ArrowLeft", 0)).toBe(7);
+  });
+  it("↓/↑ move by a row in the grid", () => {
+    expect(move("ArrowDown", 1)).toBe(4);
+    expect(move("ArrowUp", 4)).toBe(1);
+  });
+  it("↓ from the last row goes on to the list; ↑ from the list's first item comes back to the grid", () => {
+    expect(move("ArrowDown", 2)).toBe(5); // no tile below 2: on to the first product
+    expect(move("ArrowDown", 4)).toBe(5);
+    expect(move("ArrowUp", 5)).toBe(4);
+    expect(move("ArrowDown", 6)).toBe(7);
+  });
+  it("↑ from the top row wraps to the last item; Home/End jump; nothing focused yet starts at an end", () => {
+    expect(move("ArrowUp", 0)).toBe(7);
+    expect(move("Home", 6)).toBe(0);
+    expect(move("End", 1)).toBe(7);
+    expect(move("ArrowDown", -1)).toBe(0);
+    expect(move("ArrowUp", -1)).toBe(7);
+    expect(move("a", 0)).toBeUndefined();
+    expect(switcherMove("ArrowDown", 0, 0, 0)).toBeUndefined();
+  });
+});
+
+describe("tileColor: a tile is drawn in its brand colour, never in anything else (#302)", () => {
+  it("uses a #rrggbb hex as given", () => {
+    expect(tileColor("docs", "#0f766e")).toBe("#0f766e");
+  });
+  it("derives a stable colour from the key for a missing or invalid one: no CSS gets in", () => {
+    const derived = tileColor("docs");
+    expect(derived).toMatch(/^hsl\(\d{1,3} 62% 46%\)$/);
+    expect(tileColor("docs")).toBe(derived);
+    for (const bad of ["red", "#fff", "#0f766e;background:url(x)", "var(--x)", "#0f766e)"])
+      expect(tileColor("docs", bad)).toBe(derived);
+  });
+  it("every product outside the OS has its own colour", () => {
+    for (const m of MORE_FROM_ASAFARIM) expect(m.color).toMatch(/^#[0-9a-f]{6}$/);
+  });
+});
+
+describe("AppSwitcher: the face is drawn in the current app's colour", () => {
+  it("full variant: the current tile's brand colour on its glyph", () => {
+    const html = renderToStaticMarkup(
+      <AppSwitcher
+        apps={[tile("docs", { color: "#0f766e" })]}
+        current="docs"
+        fallback={{ name: "Docs", glyph: "DC" }}
+      />,
+    );
+    expect(html).toContain("--t:#0f766e");
+  });
+});
+
+describe("app icons: an OS app's or product's tile shows a drawn icon, others their glyph (#302)", () => {
+  it("draws an icon for every OS app and product the OS has today", () => {
+    for (const key of ["admin", "docs", "flow", "notes", ...MORE_FROM_ASAFARIM.map((m) => m.key)])
+      expect(hasAppIcon(key), key).toBe(true);
+    expect(hasAppIcon("constructor")).toBe(false); // own keys only, not Object's
+  });
+  it("the face shows the icon (no letters) for a known app, the glyph for another", () => {
+    const admin = renderToStaticMarkup(
+      <AppSwitcher apps={[]} current="admin" fallback={{ name: "Admin", glyph: "AD" }} />,
+    );
+    expect(admin).toContain('class="asafarim-switcher__mark"');
+    expect(admin).not.toContain(">AD<");
+    const other = renderToStaticMarkup(
+      <AppSwitcher apps={[]} current="tasks" fallback={{ name: "Tasks", glyph: "TK" }} />,
+    );
+    expect(other).toContain(">TK</span>");
+    expect(other).not.toContain('class="asafarim-switcher__mark"');
   });
 });
