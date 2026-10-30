@@ -1,6 +1,7 @@
-import { validateManifest } from "@asafarim/app-manifest";
+import { launcherEntries, validateManifest } from "@asafarim/app-manifest";
 import { describe, expect, it } from "vitest";
 import compiled from "../platform.app.json";
+import registry from "../../../generated/platform/launcher-registry.json";
 import manifest from "../platform.app";
 
 describe("flow manifest", () => {
@@ -9,6 +10,28 @@ describe("flow manifest", () => {
     for (const p of manifest.permissions) expect(p.key.startsWith("flow.")).toBe(true);
     for (const r of manifest.roles) expect(r.key.startsWith("flow.")).toBe(true);
     for (const e of manifest.events?.publishes ?? []) expect(e.type.startsWith("flow.")).toBe(true);
+  });
+
+  it("is in the OS app switcher (#278): its tile, for people who hold a flow role, at its canonical domain, after Docs", () => {
+    // core-api's launcher and `platform sync` both build the switcher from launcherEntries.
+    const [tile] = launcherEntries([manifest]);
+    expect(tile).toEqual({
+      key: "flow",
+      name: "Flow",
+      description: expect.stringContaining("Workflows"),
+      glyph: "FL",
+      meta: "flow.asafarim.site",
+      status: "active",
+      // Not public: core-api lists it only for someone who holds a flow.* role.
+      access: "authenticated",
+      order: 30,
+    });
+    expect(manifest.domains?.primary).toBe("flow.asafarim.site");
+    // The generated registry (kept in step by `platform sync --check` in CI) lists it once, after Docs.
+    const keys = registry.apps.map((a) => a.key);
+    expect(keys.filter((k) => k === "flow")).toHaveLength(1);
+    expect(keys.indexOf("flow")).toBeGreaterThan(keys.indexOf("docs"));
+    expect(registry.apps.find((a) => a.key === "flow")).toEqual(tile);
   });
 
   it("has platform.app.json compiled from platform.app.ts (run `pnpm platform manifest compile` after editing it)", () => {
