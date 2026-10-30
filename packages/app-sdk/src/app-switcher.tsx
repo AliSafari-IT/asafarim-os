@@ -7,6 +7,9 @@
  *
  *   <AppSwitcher apps={tiles} current="docs" />
  *
+ * `variant="icon"` is a round grid-icon button with no glyph or name, for a top bar whose brand is shown
+ * elsewhere (Admin, next to its account menu); its list opens to the left, under the button.
+ *
  * After the apps come ASafariM's products outside the OS (`more`: Breinhap, IGS-Pharma), then a link back to the
  * OS homepage (`home`). Opening animates, and the grid icon's
  * dots ripple on hover; with "reduce motion" nothing moves.
@@ -46,6 +49,8 @@ export interface AppSwitcherProps {
   home?: { href: string; label: string } | null;
   /** ASafariM's products outside the OS, listed after the apps (default: MORE_FROM_ASAFARIM); [] for none. */
   more?: readonly MoreLink[];
+  /** "full" (default): the current app's glyph and name, then the grid. "icon": the grid alone, round. */
+  variant?: "full" | "icon";
 }
 
 /** A product with its own site, not an OS app: no access check, it opens for everyone. */
@@ -115,6 +120,8 @@ export const APP_SWITCHER_CSS = `
 .asafarim-switcher__button:hover .asafarim-switcher__grid circle{animation:asafarim-dot 1.1s ease-in-out infinite;animation-delay:calc(var(--d) * 70ms)}
 .asafarim-switcher__button[aria-expanded="true"] .asafarim-switcher__grid{color:var(--s-accent);transform:rotate(45deg)}
 .asafarim-switcher__glyph{display:inline-grid;place-items:center;flex:none;width:2rem;height:2rem;border-radius:8px;background:linear-gradient(135deg,var(--s-accent),color-mix(in srgb,var(--s-accent) 65%,#000));color:var(--s-accent-ink);font-size:.75rem;font-weight:700;box-shadow:inset 0 1px 0 rgb(255 255 255 / .25)}
+.asafarim-switcher--icon .asafarim-switcher__button{justify-content:center;width:2.5rem;height:2.5rem;padding:0;border-radius:50%}
+.asafarim-switcher--icon .asafarim-switcher__grid{width:1.125rem;height:1.125rem}
 .asafarim-switcher__menu{position:absolute;z-index:50;top:calc(100% + 6px);left:0;width:max-content;min-width:16rem;max-width:min(22rem,calc(100vw - 2rem));max-height:min(70vh,28rem);overflow:auto;margin:0;padding:.375rem;border:1px solid var(--s-line);border-radius:12px;background:var(--s-bg);box-shadow:0 12px 32px rgb(0 0 0 / .25);transform-origin:top left;animation:asafarim-pop .18s cubic-bezier(.2,.8,.2,1)}
 .asafarim-switcher__list{margin:0;padding:0;list-style:none}
 .asafarim-switcher__list>li,.asafarim-switcher__foot{animation:asafarim-rise .22s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i,0) * 35ms)}
@@ -132,6 +139,7 @@ export const APP_SWITCHER_CSS = `
 .asafarim-switcher__name{font-weight:600}
 .asafarim-switcher__desc{display:-webkit-box;overflow:hidden;color:var(--s-muted);font-size:.8rem;line-height:1.35;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
 .asafarim-switcher__check{align-self:center;margin-left:auto;color:var(--s-accent);font-size:.8rem;font-weight:700}
+.asafarim-switcher--icon .asafarim-switcher__menu{left:auto;right:0;transform-origin:top right}
 @keyframes asafarim-pop{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:none}}
 @keyframes asafarim-rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 @keyframes asafarim-dot{0%,100%{transform:scale(1)}50%{transform:scale(.55)}}
@@ -185,6 +193,7 @@ export function AppSwitcher({
   label = "Your apps",
   home = OS_HOME,
   more = MORE_FROM_ASAFARIM,
+  variant = "full",
 }: AppSwitcherProps) {
   const tiles = switcherTiles(apps);
   const extras = more.flatMap((m) => {
@@ -264,7 +273,11 @@ export function AppSwitcher({
   };
 
   return (
-    <div className="asafarim-switcher" ref={rootRef} data-testid="app-switcher">
+    <div
+      className={variant === "icon" ? "asafarim-switcher asafarim-switcher--icon" : "asafarim-switcher"}
+      ref={rootRef}
+      data-testid="app-switcher"
+    >
       <style>{APP_SWITCHER_CSS}</style>
       <button
         ref={buttonRef}
@@ -273,13 +286,18 @@ export function AppSwitcher({
         aria-expanded={open}
         aria-controls={menuId}
         aria-label={`${face.name}: switch app`}
+        title={variant === "icon" ? "Switch app" : undefined}
         onClick={() => (open ? close(false) : openAt(-1))}
         onKeyDown={onButtonKey}
       >
-        <span className="asafarim-switcher__glyph" aria-hidden="true">
-          {face.glyph}
-        </span>
-        <span>{face.name}</span>
+        {variant === "icon" ? null : (
+          <>
+            <span className="asafarim-switcher__glyph" aria-hidden="true">
+              {face.glyph}
+            </span>
+            <span>{face.name}</span>
+          </>
+        )}
         <GridIcon />
       </button>
       {open ? (

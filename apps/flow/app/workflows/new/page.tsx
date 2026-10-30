@@ -1,4 +1,5 @@
 import { createWorkflowAction, generateWorkflowAction } from "@/app/actions";
+import { GenerateSubmit } from "@/components/GenerateSubmit";
 import { ErrorNotice, Unavailable } from "@/components/Notice";
 import { Shell } from "@/components/Shell";
 import { buildCatalog } from "@/lib/builder/catalog";
@@ -135,12 +136,7 @@ function GenerateFromIssue({
           </option>
         ))}
       </select>
-      <div className="actions">
-        <button type="submit" disabled={disabled} data-testid="generate-submit">
-          Generate a draft
-        </button>
-        <span className="muted hint">This can take up to a minute.</span>
-      </div>
+      <GenerateSubmit disabled={disabled} />
     </form>
   );
 }

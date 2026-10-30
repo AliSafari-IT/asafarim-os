@@ -25,8 +25,6 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       <header className="top os-topbar">
         <div className="top-inner">
           <div className="brand">
-            {/* The OS's app switcher: Admin isn't an app in the launcher, so its face is the fallback. */}
-            <AppSwitcher apps={apps} current="admin" fallback={{ name: "Admin", glyph: "AD" }} />
             <h1>
               <Link className="wordmark" href="/admin">
                 <AdminLogo />
@@ -39,6 +37,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <Nav />
           <div className="who" data-testid="who">
             <ThemeToggle />
+            {/* The OS's app switcher, as an icon next to the account menu: the wordmark is the brand (#288).
+                Admin isn't an app in the launcher, so its accessible name comes from the fallback. */}
+            <AppSwitcher apps={apps} current="admin" fallback={{ name: "Admin", glyph: "AD" }} variant="icon" />
             <UserMenu
               name={admin.name}
               email={admin.email}

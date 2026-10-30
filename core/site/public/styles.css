@@ -222,6 +222,14 @@ footer {
   background: rgba(99, 102, 241, 0.14);
   color: #818cf8;
 }
+.nav-card-admin {
+  background: rgba(16, 185, 129, 0.14);
+  color: #34d399;
+}
+/* A card alone on its row (the Admin console, for admins) spans the panel instead of leaving a gap. */
+.nav-card-wide {
+  grid-column: 1 / -1;
+}
 .nav-card-copy {
   display: grid;
   min-width: 0;

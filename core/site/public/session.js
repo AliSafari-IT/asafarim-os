@@ -12,6 +12,23 @@
   const shell = document.querySelector(".os-topbar");
   const navToggle = document.querySelector(".nav-toggle");
   const primaryNav = document.getElementById("primary-nav");
+  // One menu open at a time (asafarim-os#288): opening Apps, Products or the account menu closes the
+  // others, and a click outside closes them. The account menu sets this when it is built.
+  let closeUserMenu = () => {};
+  const dropdowns = primaryNav ? Array.from(primaryNav.querySelectorAll("details.nav-dropdown")) : [];
+  const closeDropdowns = (except) => {
+    for (const d of dropdowns) if (d !== except && d.open) d.open = false;
+  };
+  for (const d of dropdowns) {
+    d.addEventListener("toggle", () => {
+      if (!d.open) return;
+      closeDropdowns(d);
+      closeUserMenu();
+    });
+  }
+  document.addEventListener("pointerdown", (event) => {
+    for (const d of dropdowns) if (d.open && !d.contains(event.target)) d.open = false;
+  });
 
   if (shell && navToggle && primaryNav) {
     const mobile = window.matchMedia("(max-width: 56rem)");
@@ -94,6 +111,26 @@
     admin: "M10 2.5l6 2.25v4.5c0 3.9-2.55 6.9-6 8.25-3.45-1.35-6-4.35-6-8.25v-4.5zM7.25 10l2 2 3.5-3.75",
   };
 
+  // For an admin, the Apps panel also offers the Admin console (asafarim-os#288), after Docs and Flow.
+  function addAdminCard() {
+    const grid = primaryNav && primaryNav.querySelector(".nav-card-grid");
+    if (!grid || grid.querySelector('[data-testid="nav-admin"]')) return;
+    grid.append(
+      el(
+        "a",
+        { class: "nav-card nav-card-wide", href: ADMIN, "aria-label": "Admin console", "data-testid": "nav-admin" },
+        el("span", { class: "nav-card-icon nav-card-admin", "aria-hidden": "true" }, icon(ICONS.admin)),
+        el(
+          "span",
+          { class: "nav-card-copy" },
+          el("strong", {}, "Admin console"),
+          el("small", {}, "Apps, access and audit"),
+        ),
+        el("span", { class: "nav-card-arrow", "aria-hidden": "true" }, "↗"),
+      ),
+    );
+  }
+
   function render(me) {
     const label = typeof me.label === "string" && me.label ? me.label : "Signed in";
     const initials = typeof me.initials === "string" && me.initials ? me.initials.slice(0, 2) : "?";
@@ -138,13 +175,16 @@
     );
     const root = el("div", { class: "user", "data-testid": "user" }, button, menu);
     slot.replaceChildren(root);
+    if (me.admin === true) addAdminCard();
 
     const items = () => Array.from(menu.querySelectorAll("a"));
     const setOpen = (open, focusFirst) => {
+      if (open) closeDropdowns();
       button.setAttribute("aria-expanded", String(open));
       menu.hidden = !open;
       if (open && focusFirst) items()[0].focus();
     };
+    closeUserMenu = () => setOpen(false);
     const isOpen = () => !menu.hidden;
     button.addEventListener("click", () => setOpen(!isOpen(), false));
     button.addEventListener("keydown", (e) => {

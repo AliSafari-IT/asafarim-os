@@ -36,6 +36,28 @@ describe("AppSwitcher", () => {
     expect(html).toContain('aria-label="Docs: switch app"');
     expect(html).toContain(">DC</span>");
   });
+
+  it("variant icon: the grid alone in a round button, no glyph or name, the same accessible name", () => {
+    const html = renderToStaticMarkup(
+      <AppSwitcher apps={[tile("docs")]} current="admin" fallback={{ name: "Admin", glyph: "AD" }} variant="icon" />,
+    );
+    expect(html).toContain('class="asafarim-switcher asafarim-switcher--icon"');
+    expect(html).toContain('aria-label="Admin: switch app"');
+    expect(html).toContain('title="Switch app"');
+    expect(html).not.toContain(">AD</span>");
+    expect(html).not.toContain("<span>Admin</span>");
+    expect(html).toContain("asafarim-switcher__grid");
+  });
+
+  it("the default (full) variant keeps the glyph and the name", () => {
+    const html = renderToStaticMarkup(
+      <AppSwitcher apps={[]} current="admin" fallback={{ name: "Admin", glyph: "AD" }} />,
+    );
+    expect(html).toContain('class="asafarim-switcher"');
+    expect(html).toContain(">AD</span>");
+    expect(html).toContain("<span>Admin</span>");
+    expect(html).not.toContain("title=");
+  });
 });
 
 describe("switcherTiles", () => {

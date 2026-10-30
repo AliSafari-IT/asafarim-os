@@ -120,8 +120,9 @@ test("signed in, the top bar shows the person's avatar and menu instead of Sign 
   await expect(page.getByTestId("user-docs")).toHaveAttribute("href", "https://docs.asafarim.site/");
   await expect(page.getByTestId("user-flow")).toHaveAttribute("href", "https://flow.asafarim.site/");
   await expect(page.getByTestId("user-account")).toHaveAttribute("href", "https://id.asafarim.site/account");
-  // Not an admin: no Admin console.
+  // Not an admin: no Admin console, in this menu or in Apps.
   await expect(page.getByTestId("user-admin")).toHaveCount(0);
+  await expect(page.getByTestId("nav-admin")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("user-name")).toBeHidden();
 
@@ -147,6 +148,43 @@ test("signed in as an admin, the menu also offers the Admin console", async ({ p
   await page.getByRole("button", { name: "Your account menu: ali@example.test" }).click();
   await expect(page.getByTestId("user-admin")).toHaveAttribute("href", "https://admin.asafarim.site/");
   await expect(page.getByTestId("user-admin")).toHaveText("Admin console");
+  // And in Apps, after Docs and Flow (#288).
+  const nav = page.getByRole("navigation", { name: "Main" });
+  await nav.getByText("Apps", { exact: true }).click();
+  const card = nav.getByTestId("nav-admin");
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute("href", "https://admin.asafarim.site/");
+  await expect(card).toContainText("Admin console");
+  expect(errors).toEqual([]);
+});
+
+test("one menu open at a time: Apps, Products and the account menu close each other (#288)", async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.unroute("https://id.asafarim.site/whoami");
+  await whoami(page, { signedIn: true, label: "ali@example.test", initials: "AL", connected: true });
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Main" });
+  const [apps, products] = [nav.locator("details.nav-dropdown").nth(0), nav.locator("details.nav-dropdown").nth(1)];
+  const avatar = nav.getByRole("button", { name: "Your account menu: ali@example.test" });
+
+  await nav.getByText("Apps", { exact: true }).click();
+  await expect(apps).toHaveAttribute("open", "");
+  await nav.getByText("Products", { exact: true }).click();
+  await expect(products).toHaveAttribute("open", "");
+  await expect(apps).not.toHaveAttribute("open", "");
+
+  await avatar.click();
+  await expect(page.getByTestId("user-name")).toBeVisible();
+  await expect(products).not.toHaveAttribute("open", "");
+
+  await nav.getByText("Apps", { exact: true }).click();
+  await expect(apps).toHaveAttribute("open", "");
+  await expect(page.getByTestId("user-name")).toBeHidden();
+  await expect(avatar).toHaveAttribute("aria-expanded", "false");
+
+  // A click outside (the page's left margin, below the panel) closes it.
+  await page.mouse.click(5, 600);
+  await expect(apps).not.toHaveAttribute("open", "");
   expect(errors).toEqual([]);
 });
 
