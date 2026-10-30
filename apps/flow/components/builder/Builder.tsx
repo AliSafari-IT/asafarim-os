@@ -132,7 +132,9 @@ export function Builder(props: BuilderProps) {
   const [importing, setImporting] = useState(false);
   const uploadRef = useRef<HTMLInputElement>(null);
   const importPanelRef = useRef<HTMLDetailsElement>(null);
+  const visualRef = useRef<HTMLDetailsElement>(null);
   const diagramRef = useRef<SVGSVGElement>(null);
+  const visualOpenBeforePrint = useRef<boolean | null>(null);
 
   const latest = useRef(draft);
   const savedJson = useRef(JSON.stringify(props.initial));
@@ -204,6 +206,27 @@ export function Builder(props: BuilderProps) {
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [save]);
+
+  useEffect(() => {
+    const openForPrint = () => {
+      const visual = visualRef.current;
+      if (!visual) return;
+      if (visualOpenBeforePrint.current === null) visualOpenBeforePrint.current = visual.open;
+      visual.open = true;
+    };
+    const restoreAfterPrint = () => {
+      const wasOpen = visualOpenBeforePrint.current;
+      if (wasOpen === null) return;
+      if (visualRef.current) visualRef.current.open = wasOpen;
+      visualOpenBeforePrint.current = null;
+    };
+    window.addEventListener("beforeprint", openForPrint);
+    window.addEventListener("afterprint", restoreAfterPrint);
+    return () => {
+      window.removeEventListener("beforeprint", openForPrint);
+      window.removeEventListener("afterprint", restoreAfterPrint);
+    };
+  }, []);
 
   const edit = (fn: (d: Draft) => Draft) => {
     if (editable) setDraft((d) => fn(d));
@@ -697,7 +720,7 @@ export function Builder(props: BuilderProps) {
           ) : null}
         </aside>
       </div>
-      <details className="workflow-visual" data-testid="workflow-visual">
+      <details ref={visualRef} className="workflow-visual" data-testid="workflow-visual">
         <summary>Print and accessible workflow outline</summary>
         <div className="workflow-print-layout">
           <div className="workflow-diagram-wrap">
