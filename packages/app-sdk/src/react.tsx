@@ -17,6 +17,7 @@ export { safeHref };
 export {
   AppSwitcher,
   APP_SWITCHER_CSS,
+  clampShift,
   HomeIcon,
   MORE_FROM_ASAFARIM,
   moveIndex,

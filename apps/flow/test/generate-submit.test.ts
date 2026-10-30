@@ -14,14 +14,18 @@ describe("the generate button", () => {
     expect(html).not.toMatch(/<button[^>]*disabled/);
     expect(html).toContain("This can take up to a minute.");
     expect(html).not.toContain('role="progressbar"');
-    expect(html).toContain('aria-busy="false"');
+    // The status region is there before anything happens, so a change to it is announced.
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain("aria-busy");
   });
 
-  it("pending: disabled, Generating…, and a busy status with a labelled progress bar", () => {
+  it("pending: disabled, Generating…, and the status shows a labelled progress bar", () => {
     const html = render(true);
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Generating…<\/button>/);
-    expect(html).toContain('aria-busy="true"');
     expect(html).toContain('role="status"');
+    expect(html).toContain("Reading the issue and drafting the workflow;");
+    // Nothing around the status is busy: that would let screen readers hold the announcement back.
+    expect(html).not.toContain("aria-busy");
     expect(html).toContain('role="progressbar"');
     expect(html).toContain('aria-label="Generating the draft"');
     // Indeterminate: no value, only a text.

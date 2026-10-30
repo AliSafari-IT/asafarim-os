@@ -26,7 +26,9 @@
       closeUserMenu();
     });
   }
-  document.addEventListener("pointerdown", (event) => {
+  // On click, not pointerdown: at phone width the panels are in the page flow, and closing one on
+  // pointerdown would move what was pressed before its click lands.
+  document.addEventListener("click", (event) => {
     for (const d of dropdowns) if (d.open && !d.contains(event.target)) d.open = false;
   });
 
