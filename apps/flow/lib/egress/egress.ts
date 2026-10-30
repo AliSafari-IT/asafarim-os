@@ -9,7 +9,8 @@
  *      answer differently between the check and the connection (rebinding); SNI, the certificate check
  *      and the Host header use the name;
  *   4. read: a redirect is never followed (refused), the response at most 1 MiB (then aborted), all of
- *      it within 10 s from the start, DNS included;
+ *      it within 10 s from the start, DNS included (a caller may ask for longer, at most 2 minutes:
+ *      an AI answer can take that long);
  *   5. recorded: one `connector_calls` row (run, step, connector, host, status, duration, error code)
  *      and one log line (method, host, path without its query, status, duration). Never a header or a
  *      body, in either; an error names its code and the host, never the URL.
@@ -25,6 +26,8 @@ import { isBlockedAddress } from "./address";
 import { isAllowed, type AllowedHost } from "./hosts";
 
 export const TIMEOUT_MS = 10_000;
+/** The longest a caller may ask for (EgressRequest.timeoutMs). */
+export const MAX_TIMEOUT_MS = 120_000;
 export const MAX_REQUEST_BYTES = 256 * 1024;
 export const MAX_RESPONSE_BYTES = 1024 * 1024;
 
@@ -65,6 +68,8 @@ export interface EgressRequest {
   allow: readonly AllowedHost[];
   /** What the connector_calls row is about. */
   call: { connector: string; runId?: string | null; stepId?: string | null };
+  /** This call's time limit instead of the egress's own, at most MAX_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 export interface EgressResponse {
@@ -267,7 +272,8 @@ export function createEgress(deps: EgressDeps = {}) {
       // check() refuses it: invalid_url
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const limit = req.timeoutMs === undefined ? timeoutMs : Math.min(Math.max(req.timeoutMs, 1), MAX_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), limit);
     const timedOut = new Promise<never>((_, reject) =>
       controller.signal.addEventListener("abort", () => reject(new EgressError("timeout", host ?? undefined)), {
         once: true,
