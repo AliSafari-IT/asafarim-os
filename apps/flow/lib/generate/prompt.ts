@@ -44,7 +44,7 @@ Answer with the JSON object the response format describes, nothing else.`;
 }
 
 /** `<issue>` text can't close its own block early. */
-const escapeBlock = (s: string) => s.replace(/<\/?issue\b/gi, (m) => m.replace("<", "&lt;"));
+const escapeBlock = (s: string) => s.replace(/<(\/?issue\b)/gi, "&lt;$1");
 
 export function userMessage(source: "github" | "gitlab", issue: FetchedIssue): string {
   const parts = [`Title: ${issue.title}`, "", issue.body || "(no description)"];

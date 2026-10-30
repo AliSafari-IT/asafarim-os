@@ -26,8 +26,9 @@ const PATTERNS: readonly RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
   // Credentials in a URL: scheme://user:password@host.
   /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi,
-  // `password = …`, `token: …`, `api_key=…`, `secret …` and the like: the value goes, the name stays.
-  /\b((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth(?:orization)?)\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/gi,
+  // `password = …`, `token: …`, `api_key=…`, `Authorization: Bearer …` and the like: the value (with its
+  // auth scheme) goes, the name stays.
+  /\b((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth(?:orization)?)\s*[:=]\s*)(?:(?:Bearer|Basic|Token|Digest)\s+)?(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/gi,
   // `Bearer <token>`.
   /\b(Bearer\s+)[A-Za-z0-9._~+/-]{12,}=*/g,
 ];

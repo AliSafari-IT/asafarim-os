@@ -149,8 +149,12 @@ export function createAnthropicGenerator(opts: AnthropicOptions): DraftGenerator
       } catch {
         data = undefined;
       }
-      if (res.status < 200 || res.status >= 300)
-        throw new GeneratorError("unavailable", undefined, `http_${res.status}`);
+      if (res.status < 200 || res.status >= 300) {
+        // The API's error type (invalid_request_error, overloaded_error, …) for the log; never its message.
+        const type = (data as { error?: { type?: unknown } } | undefined)?.error?.type;
+        const kind = typeof type === "string" && /^[a-z_]{1,64}$/.test(type) ? `_${type}` : "";
+        throw new GeneratorError("unavailable", undefined, `http_${res.status}${kind}`);
+      }
       const usage = usageOf(data);
       if (!data) throw new GeneratorError("invalid_answer", usage, "not_json");
       if (data.stop_reason === "refusal") throw new GeneratorError("refused", usage);

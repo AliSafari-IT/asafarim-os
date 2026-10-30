@@ -103,23 +103,19 @@ export async function generateDraft(url: string, key: string, deps: GenerateDeps
   const { issue, redactions } = redactIssue(fetched);
 
   const model = deps.generator.model;
-  let answer: unknown;
-  let usage: Usage;
-  let answeredBy = model;
+  let out: Awaited<ReturnType<DraftGenerator["generate"]>>;
   try {
-    const out = await deps.generator.generate({
+    out = await deps.generator.generate({
       system: systemPrompt(deps.connectorTypes),
       user: userMessage(ref.host, issue),
       schema: answerJsonSchema(deps.connectorTypes),
     });
-    answer = out.answer;
-    usage = out.usage;
-    answeredBy = out.model;
   } catch (err) {
     if (err instanceof GeneratorError)
       return { ok: false, error: AI_ERRORS[err.code], source, model, usage: err.usage, detail: err.detail };
     return { ok: false, error: "ai_unavailable", source, model, detail: "generate_failed" };
   }
+  const { answer, usage, model: answeredBy } = out;
 
   let drafted: ReturnType<typeof toDraft>;
   try {

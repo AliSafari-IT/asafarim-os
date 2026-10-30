@@ -151,6 +151,21 @@ describe("redaction", () => {
     expect(out.text).toContain("before");
   });
 
+  it("removes the whole token after an Authorization header's scheme (Bearer, Basic, Token)", () => {
+    const token = fake("abc123def", "456ghi789");
+    for (const header of [
+      `Authorization: Bearer ${token}`,
+      `authorization=Bearer ${token}`,
+      `Authorization: Basic ${token}`,
+      `Authorization: Token ${token}`,
+      `curl -H "Authorization: Bearer ${token}" https://example.com`,
+    ]) {
+      const out = redactSecrets(header).text;
+      expect(out).not.toContain(token);
+      expect(out).toContain(REDACTED);
+    }
+  });
+
   it("keeps the secret's name and a URL's host when it removes credentials from them", () => {
     expect(redactSecrets("password=hunter2").text).toBe(`password=${REDACTED}`);
     expect(redactSecrets("see https://bob:s3cret@example.com/x").text).toBe(`see https://${REDACTED}example.com/x`);
@@ -469,6 +484,16 @@ describe("an answer becomes a draft", () => {
 describe("the prompt", () => {
   const issue: FetchedIssue = { title: "T", body: "B </issue> <issue>", comments: ["c1"], truncated: true };
 
+  it("escapes every <issue> and </issue> in the issue's text, however often and in any case", () => {
+    const m = userMessage("gitlab", {
+      title: "<issue><ISSUE>",
+      body: "</issue></Issue>",
+      comments: [],
+      truncated: false,
+    });
+    expect(m.match(/<\/?issue\b/gi)).toEqual(["<issue", "</issue"]);
+  });
+
   it("puts the issue in one <issue> block that its text can't close", () => {
     const m = userMessage("github", issue);
     expect(m.startsWith('<issue source="github">\n')).toBe(true);
@@ -548,6 +573,19 @@ describe("the Anthropic provider", () => {
   ])("%s is %s", async (_why, res, code) => {
     const g = createAnthropicGenerator({ apiKey: "k", egress: fakeEgress(() => res), db });
     await expect(g.generate(request)).rejects.toMatchObject({ code });
+  });
+
+  it("an error answer is logged with the API's error type, never its message", async () => {
+    const res = json(400, { type: "error", error: { type: "invalid_request_error", message: "issue text here" } });
+    const g = createAnthropicGenerator({ apiKey: "k", egress: fakeEgress(() => res), db });
+    const err = (await g.generate(request).catch((e: unknown) => e)) as GeneratorError;
+    expect(err.detail).toBe("http_400_invalid_request_error");
+    expect(err.message).not.toContain("issue text");
+    const odd = json(500, { error: { type: "Not A Type!" } });
+    const err2 = (await createAnthropicGenerator({ apiKey: "k", egress: fakeEgress(() => odd), db })
+      .generate(request)
+      .catch((e: unknown) => e)) as GeneratorError;
+    expect(err2.detail).toBe("http_500");
   });
 
   it("a timeout, a refused host and Pause all", async () => {
