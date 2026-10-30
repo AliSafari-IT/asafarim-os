@@ -9,7 +9,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 
 /** The names the mocks answer as. */
-export const E2E_TLS_NAMES = ["api.github.com", "hooks.e2e.test", "smtp.e2e.test", "localhost"];
+export const E2E_TLS_NAMES = ["api.github.com", "api.anthropic.com", "hooks.e2e.test", "smtp.e2e.test", "localhost"];
 
 /** Make the key and certificate in `dir` (openssl); their paths. */
 export function makeE2eCert(dir) {
