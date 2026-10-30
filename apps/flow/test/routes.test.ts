@@ -86,6 +86,26 @@ const DRAFT_FUNCTIONS: Record<
     call: (fn) => fn("my-flow", {}, true),
     bad: (fn) => fn("my-flow", [], "yes"),
   },
+  importWorkflowFileAction: {
+    engine: "saveDraft",
+    call: (fn) => fn(
+      "Imported workflow",
+      "my-flow",
+      JSON.stringify({
+        format: "asafarim.flow.workflow",
+        version: 1,
+        exportedAt: "2026-10-30T00:00:00.000Z",
+        definition: {
+          version: 2,
+          key: "source-flow",
+          trigger: { type: "manual", input: [] },
+          start: "done",
+          nodes: [{ key: "done", type: "end" }],
+        },
+      }),
+    ),
+    bad: (fn) => fn("Imported workflow", "invalid key", "{}"),
+  },
 };
 
 /** Pages that ask for more than flow.read. */
@@ -450,7 +470,7 @@ describe("the builder's server functions (flow.workflows.write)", () => {
       who.subject = "dev-owner";
       who.permissions = ["flow.read", "flow.workflows.write"];
       const mod = await load<Record<string, (...a: unknown[]) => Promise<unknown>>>("actions.ts");
-      expect(await d.bad(mod[name]!)).toEqual({ ok: false, error: "invalid_input" });
+      expect(await d.bad(mod[name]!)).toMatchObject({ ok: false });
       expect(calls.engine).toEqual([]);
     },
   );

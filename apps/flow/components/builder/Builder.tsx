@@ -10,8 +10,16 @@
  * Read-only without flow.workflows.write, and on a phone (narrower than 640 px), where it says so.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { publishDraft, saveDraft, testDraft, validateDraft, type DraftResult } from "@/app/actions";
+import {
+  importWorkflowFileAction,
+  publishDraft,
+  saveDraft,
+  testDraft,
+  validateDraft,
+  type DraftResult,
+} from "@/app/actions";
 import { moveNode, nodeIds, toCanvas, TRIGGER_ID } from "@/lib/builder/canvas";
+import { exportWorkflowFile, WORKFLOW_FILE_MAX_BYTES } from "@/lib/builder/file";
 import { keyOf, orderOf } from "@/lib/builder/graph";
 import {
   addNode,
@@ -26,6 +34,12 @@ import {
 import { fieldProblemText, problemsByPlace, WORKFLOW } from "@/lib/builder/problems";
 import { suggestionsFor, triggerExample } from "@/lib/builder/suggest";
 import type { Catalog, CredentialRef, Draft, NodeSpec, Problem } from "@/lib/builder/types";
+import {
+  workflowDiagram,
+  workflowOutline,
+  WORKFLOW_DIAGRAM_NODE_HEIGHT,
+  WORKFLOW_DIAGRAM_NODE_WIDTH,
+} from "@/lib/builder/visual";
 import { Canvas } from "./Canvas";
 import { NodeList, Palette } from "./Palette";
 import { NodeSettings, TriggerSettings } from "./Settings";
@@ -101,6 +115,14 @@ export function Builder(props: BuilderProps) {
   const [notice, setNotice] = useState<{ kind: "good" | "bad"; text: string } | null>(null);
   const [published, setPublished] = useState(props.published);
   const [busy, setBusy] = useState(false);
+  const [importRaw, setImportRaw] = useState<string | null>(null);
+  const [importName, setImportName] = useState("");
+  const [importKey, setImportKey] = useState("");
+  const [importFeedback, setImportFeedback] = useState<{ error: string; problems?: string[] } | null>(null);
+  const [importing, setImporting] = useState(false);
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const importPanelRef = useRef<HTMLDetailsElement>(null);
+  const diagramRef = useRef<SVGSVGElement>(null);
 
   const latest = useRef(draft);
   const savedJson = useRef(JSON.stringify(props.initial));
@@ -192,6 +214,83 @@ export function Builder(props: BuilderProps) {
     () => suggestionsFor(draft, node ? keyOf(node) : undefined, catalog),
     [draft, node, catalog],
   );
+  const diagram = useMemo(() => workflowDiagram(draft), [draft]);
+  const outline = useMemo(() => workflowOutline(draft), [draft]);
+
+  function downloadFile(name: string, contents: BlobPart, type: string) {
+    const url = URL.createObjectURL(new Blob([contents], { type }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function onExport() {
+    const file = exportWorkflowFile(draft, catalog);
+    downloadFile(`${workflowKey}.flow.json`, `${JSON.stringify(file, null, 2)}\n`, "application/json");
+  }
+
+  function onDownloadImage() {
+    const svg = diagramRef.current;
+    if (!svg) return;
+    const source = new XMLSerializer().serializeToString(svg);
+    downloadFile(`${workflowKey}.svg`, source, "image/svg+xml;charset=utf-8");
+  }
+
+  async function onImportFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    setImportRaw(null);
+    setImportFeedback(null);
+    if (!file) return;
+    if (importPanelRef.current) importPanelRef.current.open = true;
+    if (file.size > WORKFLOW_FILE_MAX_BYTES) {
+      setImportFeedback({ error: "The workflow file is too large (256 KiB maximum)." });
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await file.text();
+    } catch {
+      setImportFeedback({ error: "The selected file couldn't be read." });
+      return;
+    }
+    try {
+      JSON.parse(raw);
+    } catch {
+      setImportFeedback({ error: "The selected file isn't valid JSON." });
+      return;
+    }
+    const baseName = file.name.replace(/(?:\.flow)?\.json$/i, "").replace(/[-_]+/g, " ").trim();
+    const safeStem = baseName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    const importedKey = `${(safeStem || "imported-workflow").slice(0, 57).replace(/-+$/, "")}-import`;
+    setImportRaw(raw);
+    setImportName(baseName.slice(0, 200) || "Imported workflow");
+    setImportKey(importedKey);
+    if (importPanelRef.current) importPanelRef.current.open = true;
+  }
+
+  async function onImportSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!importRaw) {
+      setImportFeedback({ error: "Choose a valid workflow file first." });
+      return;
+    }
+    setImporting(true);
+    try {
+      const result = await importWorkflowFileAction(importName, importKey, importRaw);
+      if (!result.ok) {
+        setImportFeedback({ error: result.error, ...(result.problems ? { problems: result.problems } : {}) });
+        return;
+      }
+      window.location.assign(`/workflows/${result.workflowKey}/edit`);
+    } catch {
+      setImportFeedback({ error: "The workflow couldn't be imported. Check your connection and try again." });
+    } finally {
+      setImporting(false);
+    }
+  }
 
   const add = (spec: NodeSpec) => {
     if (!editable) return;
@@ -298,6 +397,34 @@ export function Builder(props: BuilderProps) {
           </p>
         </div>
         <div className="builder-tools">
+          <button type="button" className="secondary" onClick={onExport} data-testid="export-workflow">
+            Export JSON
+          </button>
+          <button type="button" className="secondary" onClick={() => window.print()} data-testid="print-workflow">
+            Print
+          </button>
+          <button type="button" className="secondary" onClick={onDownloadImage} data-testid="download-workflow-image">
+            Download image
+          </button>
+          {editable ? (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => uploadRef.current?.click()}
+              data-testid="import-workflow"
+            >
+              Import workflow
+            </button>
+          ) : null}
+          <input
+            ref={uploadRef}
+            className="visually-hidden"
+            type="file"
+            accept=".json,application/json"
+            aria-label="Choose a workflow JSON file"
+            onChange={onImportFileChange}
+            data-testid="workflow-file-input"
+          />
           {props.canWrite ? (
             <span className={`save-state ${save}`} role="status" aria-live="polite" data-testid="save-state">
               {STATUS[save]}
@@ -320,6 +447,55 @@ export function Builder(props: BuilderProps) {
           ) : null}
         </div>
       </header>
+
+      {editable ? (
+        <details
+          ref={importPanelRef}
+          className="workflow-import"
+          data-testid="workflow-import-panel"
+        >
+          <summary>Import a workflow as a new draft</summary>
+          <form onSubmit={onImportSubmit}>
+            <label htmlFor="workflow-import-name">New workflow name</label>
+            <input
+              id="workflow-import-name"
+              value={importName}
+              onChange={(event) => setImportName(event.target.value)}
+              maxLength={200}
+              required
+              data-testid="workflow-import-name"
+            />
+            <label htmlFor="workflow-import-key">New workflow key</label>
+            <input
+              id="workflow-import-key"
+              value={importKey}
+              onChange={(event) => setImportKey(event.target.value)}
+              maxLength={64}
+              pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+              required
+              data-testid="workflow-import-key"
+            />
+            <p className="muted">
+              Imports create a separate draft only. Credentials and webhook hooks are not copied; choose or create
+              them after import.
+            </p>
+            {importRaw ? <p role="status">Workflow file ready to import.</p> : null}
+            {importFeedback ? (
+              <div className="notice bad" role="alert" data-testid="workflow-import-error">
+                <p>{importFeedback.error}</p>
+                {importFeedback.problems?.length ? (
+                  <ul>
+                    {importFeedback.problems.map((problem, index) => <li key={index}>{problem}</li>)}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+            <button type="submit" disabled={!importRaw || importing} data-testid="confirm-workflow-import">
+              {importing ? "Importing…" : "Create draft"}
+            </button>
+          </form>
+        </details>
+      ) : null}
 
       {phone && props.canWrite ? (
         <p className="notice warn" role="status" data-testid="phone-view-only">
@@ -484,6 +660,91 @@ export function Builder(props: BuilderProps) {
           ) : null}
         </aside>
       </div>
+      <details className="workflow-visual" data-testid="workflow-visual">
+        <summary>Print and accessible workflow outline</summary>
+        <div className="workflow-print-layout">
+          <div className="workflow-diagram-wrap">
+            <svg
+              ref={diagramRef}
+              className="workflow-diagram"
+              viewBox={`0 0 ${diagram.width} ${diagram.height}`}
+              width={diagram.width}
+              height={diagram.height}
+              role="img"
+              aria-labelledby="workflow-diagram-title workflow-diagram-description"
+              xmlns="http://www.w3.org/2000/svg"
+              data-testid="workflow-diagram"
+            >
+              <title id="workflow-diagram-title">{props.name} workflow</title>
+              <desc id="workflow-diagram-description">
+                Workflow chart with {diagram.nodes.length} nodes and {diagram.edges.length} connections.
+              </desc>
+              <defs>
+                <marker
+                  id="workflow-arrow"
+                  viewBox="0 0 10 10"
+                  refX="9"
+                  refY="5"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#4b5563" />
+                </marker>
+              </defs>
+              {diagram.edges.map((edge, index) => {
+                const from = diagram.nodes.find((item) => item.id === edge.source);
+                const to = diagram.nodes.find((item) => item.id === edge.target);
+                if (!from || !to) return null;
+                const x1 = from.x + WORKFLOW_DIAGRAM_NODE_WIDTH / 2;
+                const y1 = from.y + WORKFLOW_DIAGRAM_NODE_HEIGHT / 2;
+                const x2 = to.x + WORKFLOW_DIAGRAM_NODE_WIDTH / 2;
+                const y2 = to.y + WORKFLOW_DIAGRAM_NODE_HEIGHT / 2;
+                return (
+                  <g key={`${edge.source}-${edge.target}-${index}`} className="workflow-diagram-edge">
+                    <path
+                      d={`M ${x1} ${y1} C ${x1 + 36} ${y1}, ${x2 - 36} ${y2}, ${x2} ${y2}`}
+                      markerEnd="url(#workflow-arrow)"
+                      fill="none"
+                      stroke="#4b5563"
+                      strokeWidth={2}
+                    />
+                    {edge.label ? (
+                      <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 7} fill="#374151">
+                        {edge.label}
+                      </text>
+                    ) : null}
+                  </g>
+                );
+              })}
+              {diagram.nodes.map((item) => (
+                <g key={item.id} className="workflow-diagram-node">
+                  <rect
+                    x={item.x}
+                    y={item.y}
+                    width={WORKFLOW_DIAGRAM_NODE_WIDTH}
+                    height={WORKFLOW_DIAGRAM_NODE_HEIGHT}
+                    rx={10}
+                    fill="white"
+                    stroke="#4b5563"
+                    strokeWidth={2}
+                  />
+                  <text x={item.x + 12} y={item.y + 29} className="workflow-diagram-title" fill="#111827">
+                    {item.title}
+                  </text>
+                  <text x={item.x + 12} y={item.y + 50} className="workflow-diagram-type" fill="#4b5563">
+                    {item.type}
+                  </text>
+                </g>
+              ))}
+            </svg>
+          </div>
+          <section className="workflow-outline-section" aria-labelledby="workflow-outline-heading">
+            <h2 id="workflow-outline-heading">Workflow outline</h2>
+            <pre className="workflow-outline" aria-label="Numbered workflow outline">{outline.join("\n")}</pre>
+          </section>
+        </div>
+      </details>
     </div>
   );
 }
