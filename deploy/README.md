@@ -91,8 +91,8 @@ image" workflow (`apps/flow/Dockerfile`), which smoke-tests it before publishing
 1. **DNS.** `flow.asafarim.site` already resolves to the VPS; confirm it: `dig +short flow.asafarim.site` answers the
    same address as `dig +short asafarim.site`.
 2. **The env file.** On your PC, in the repository: `pnpm env:decrypt:production` (identity's env must be there),
-   then `node deploy/flow/new-env.mjs`. It writes `apps/flow/.env.production` (`AUTH_SECRET` and `OIDC_CLIENT_SECRET`,
-   generated; mode 600), adds the same client secret to `core/identity/.env.production` as
+   then `node deploy/flow/new-env.mjs`. It writes `apps/flow/.env.production` (`AUTH_SECRET`, `OIDC_CLIENT_SECRET` and
+   `FLOW_CREDENTIALS_KEY`, generated; mode 600), adds the same client secret to `core/identity/.env.production` as
    `IDENTITY_CLIENT_SECRET_FLOW`, prints only file names, and refuses to overwrite either. Then
    `pnpm env:encrypt:production` and commit **only** `apps/flow/.env.production.age` and
    `core/identity/.env.production.age`, on a branch, and merge them with a pull request. Never commit a decrypted env.

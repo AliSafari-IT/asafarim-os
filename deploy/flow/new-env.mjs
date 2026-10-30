@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Write apps/flow/.env.production with the secrets Flow needs in production, generated at random
+// Write apps/flow/.env.production with the secrets Flow needs in production (AUTH_SECRET, OIDC_CLIENT_SECRET and
+// FLOW_CREDENTIALS_KEY), generated at random
 // (apps/flow/.env.production.example lists them), and give identity the same `flow` client secret. Run it once, on a
 // machine with this repository, after `pnpm env:decrypt:production` (so core/identity/.env.production exists), then
 // `pnpm env:encrypt:production` and commit only the .age files.
@@ -26,7 +27,13 @@ const secret = (bytes = 32) => randomBytes(bytes).toString("base64url");
 export function newEnv() {
   const clientSecret = secret();
   return {
-    flow: [`AUTH_SECRET=${secret(33)}`, `OIDC_CLIENT_SECRET=${clientSecret}`, ""].join("\n"),
+    flow: [
+      `AUTH_SECRET=${secret(33)}`,
+      `OIDC_CLIENT_SECRET=${clientSecret}`,
+      // Standard base64 of 32 bytes, as apps/flow/lib/credentials/cipher.ts reads it (not base64url).
+      `FLOW_CREDENTIALS_KEY=${randomBytes(32).toString("base64")}`,
+      "",
+    ].join("\n"),
     identity: `${IDENTITY_SECRET_NAME}=${clientSecret}\n`,
   };
 }
