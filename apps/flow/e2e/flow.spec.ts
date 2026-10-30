@@ -503,10 +503,13 @@ test("the builder downloads a workflow export and imports it as a new draft", as
   expect(image.suggestedFilename()).toBe(`${sourceKey}.svg`);
   expect(await readFile((await image.path())!, "utf8")).toContain("<svg");
 
+  await page.evaluate(() => window.dispatchEvent(new Event("beforeprint")));
   await page.emulateMedia({ media: "print" });
   await expect(page.getByTestId("workflow-diagram")).toBeVisible();
   await expect(page.getByLabel("Numbered workflow outline")).toBeVisible();
   await page.emulateMedia({ media: "screen" });
+  await page.evaluate(() => window.dispatchEvent(new Event("afterprint")));
+  await expect(page.getByTestId("workflow-diagram")).not.toBeVisible();
 
   await page.getByTestId("import-workflow").click();
   await page.getByTestId("workflow-file-input").setInputFiles({
