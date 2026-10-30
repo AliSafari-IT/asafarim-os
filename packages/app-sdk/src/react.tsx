@@ -19,6 +19,7 @@ export {
   APP_SWITCHER_CSS,
   clampShift,
   GRID_COLUMNS,
+  hasAppIcon,
   HomeIcon,
   MORE_FROM_ASAFARIM,
   moveIndex,

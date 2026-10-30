@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { validateManifest } from "@asafarim/app-manifest";
 import { EventValidationError, loadSchemas } from "@asafarim/app-sdk/events";
@@ -47,5 +48,15 @@ describe("notes manifest", () => {
   it("hands the SDK the schema files the manifest names, for the event catalog upload (P4.2)", () => {
     const onDisk = loadSchemas(manifest, path.resolve(import.meta.dirname, ".."));
     expect(EVENT_SCHEMAS).toEqual(onDisk);
+  });
+});
+
+describe("Notes's favicon (#302)", () => {
+  it("is its own: app/icon.svg, a tile in the manifest's brand colour, like its tile in the app switcher", () => {
+    const svg = readFileSync(path.join(import.meta.dirname, "..", "app", "icon.svg"), "utf8");
+    expect(svg).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 32 32">/);
+    expect(svg).toContain(`stop-color="${manifest.ui.color}"`);
+    // Only drawing: no script, no external reference.
+    expect(svg).not.toMatch(/<script|href=|url\((?!#g\))/i);
   });
 });

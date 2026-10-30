@@ -4,6 +4,7 @@ import type { LauncherTile } from "../src/index.ts";
 import {
   AppSwitcher,
   clampShift,
+  hasAppIcon,
   MORE_FROM_ASAFARIM,
   moveIndex,
   OS_HOME,
@@ -34,7 +35,9 @@ describe("AppSwitcher", () => {
     expect(html).toContain('aria-expanded="false"');
     // A disclosure of plain links, not an ARIA menu: no aria-haspopup.
     expect(html).not.toContain("aria-haspopup");
-    expect(html).toContain(">DO</span>");
+    // Docs has a drawn icon on its face (#302), not its letters.
+    expect(html).toContain('class="asafarim-switcher__mark"');
+    expect(html).not.toContain(">DO</span>");
     expect(html).not.toContain("app-switcher-notes");
   });
 
@@ -43,7 +46,7 @@ describe("AppSwitcher", () => {
       <AppSwitcher apps={[]} current="docs" fallback={{ name: "Docs", glyph: "DC" }} />,
     );
     expect(html).toContain('aria-label="Docs: switch app"');
-    expect(html).toContain(">DC</span>");
+    expect(html).toContain('class="asafarim-switcher__mark"');
   });
 
   it("variant icon: the grid alone in a round button, no glyph or name, the same accessible name", () => {
@@ -63,7 +66,7 @@ describe("AppSwitcher", () => {
       <AppSwitcher apps={[]} current="admin" fallback={{ name: "Admin", glyph: "AD" }} />,
     );
     expect(html).toContain('class="asafarim-switcher"');
-    expect(html).toContain(">AD</span>");
+    expect(html).toContain('class="asafarim-switcher__mark"'); // Admin's icon (#302)
     expect(html).toContain("<span>Admin</span>");
     expect(html).not.toContain("title=");
   });
@@ -187,5 +190,25 @@ describe("AppSwitcher: the face is drawn in the current app's colour", () => {
       />,
     );
     expect(html).toContain("--t:#0f766e");
+  });
+});
+
+describe("app icons: an OS app's or product's tile shows a drawn icon, others their glyph (#302)", () => {
+  it("draws an icon for every OS app and product the OS has today", () => {
+    for (const key of ["admin", "docs", "flow", "notes", ...MORE_FROM_ASAFARIM.map((m) => m.key)])
+      expect(hasAppIcon(key), key).toBe(true);
+    expect(hasAppIcon("constructor")).toBe(false); // own keys only, not Object's
+  });
+  it("the face shows the icon (no letters) for a known app, the glyph for another", () => {
+    const admin = renderToStaticMarkup(
+      <AppSwitcher apps={[]} current="admin" fallback={{ name: "Admin", glyph: "AD" }} />,
+    );
+    expect(admin).toContain('class="asafarim-switcher__mark"');
+    expect(admin).not.toContain(">AD<");
+    const other = renderToStaticMarkup(
+      <AppSwitcher apps={[]} current="tasks" fallback={{ name: "Tasks", glyph: "TK" }} />,
+    );
+    expect(other).toContain(">TK</span>");
+    expect(other).not.toContain('class="asafarim-switcher__mark"');
   });
 });

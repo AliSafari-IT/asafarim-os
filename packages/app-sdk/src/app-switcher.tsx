@@ -222,6 +222,8 @@ export const APP_SWITCHER_CSS = `
 .asafarim-switcher a.asafarim-switcher__tile:focus-visible{outline:2px solid var(--s-accent);outline-offset:-2px;background:var(--s-hover)}
 .asafarim-switcher a.asafarim-switcher__tile:active{transform:scale(.96)}
 .asafarim-switcher .asafarim-switcher__icon{position:relative;display:grid;place-items:center;width:3rem;height:3rem;border-radius:14px;background:linear-gradient(140deg,color-mix(in srgb,var(--t) 78%,#fff),var(--t) 52%,color-mix(in srgb,var(--t) 72%,#000));color:#fff;font-size:.95rem;font-weight:800;letter-spacing:.02em;box-shadow:inset 0 1px 0 rgb(255 255 255 / .35),inset 0 -2px 6px rgb(0 0 0 / .18),0 6px 14px -4px color-mix(in srgb,var(--t) 60%,transparent);transition:transform .2s cubic-bezier(.2,.8,.2,1),box-shadow .2s}
+.asafarim-switcher .asafarim-switcher__mark{position:relative;z-index:1;width:58%;height:58%;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 1px 1px rgb(0 0 0 / .25))}
+.asafarim-switcher .asafarim-switcher__face .asafarim-switcher__mark{width:62%;height:62%}
 .asafarim-switcher .asafarim-switcher__icon::after{content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(120% 70% at 30% 0%,rgb(255 255 255 / .35),transparent 60%);pointer-events:none}
 .asafarim-switcher a.asafarim-switcher__tile:hover .asafarim-switcher__icon,.asafarim-switcher a.asafarim-switcher__tile:focus-visible .asafarim-switcher__icon{transform:translateY(-2px);box-shadow:inset 0 1px 0 rgb(255 255 255 / .35),inset 0 -2px 6px rgb(0 0 0 / .18),0 10px 20px -6px color-mix(in srgb,var(--t) 70%,transparent)}
 .asafarim-switcher a.asafarim-switcher__tile[aria-current="page"] .asafarim-switcher__icon{box-shadow:0 0 0 2px var(--s-bg),0 0 0 4px var(--t),0 6px 14px -4px color-mix(in srgb,var(--t) 60%,transparent)}
@@ -303,6 +305,59 @@ function OutIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+/*
+ * The OS apps' and products' icons (#302): white line drawings on the tile's brand colour, 24×24, drawn
+ * for this switcher. An app without one shows its glyph (the manifest's letters) instead.
+ */
+const ICON_PATHS: Record<string, readonly string[]> = {
+  // Three sliders, the console that tunes the OS: the same mark as Admin's logo and favicon. A path that
+  // starts with "F" is filled (the knobs), the rest are drawn as lines.
+  admin: [
+    "M5 7h14M5 12h14M5 17h14",
+    "FM7 7a2.3 2.3 0 1 0 4.6 0 2.3 2.3 0 1 0-4.6 0",
+    "FM12.7 12a2.3 2.3 0 1 0 4.6 0 2.3 2.3 0 1 0-4.6 0",
+    "FM8.6 17a2.3 2.3 0 1 0 4.6 0 2.3 2.3 0 1 0-4.6 0",
+  ],
+  // A page with a folded corner and lines of text.
+  docs: ["M7 3.5h6.5L18 8v12.5H7z", "M13.5 3.5V8H18", "M9.5 12h6M9.5 15h6M9.5 18h4"],
+  // Three steps joined by a path: a trigger, a decision, an outcome.
+  flow: [
+    "M4 5.5a2 2 0 1 0 4 0 2 2 0 1 0-4 0",
+    "M16 5.5a2 2 0 1 0 4 0 2 2 0 1 0-4 0",
+    "M10 18.5a2 2 0 1 0 4 0 2 2 0 1 0-4 0",
+    "M8 5.5h8M18 7.5v2.5a3 3 0 0 1-3 3h-3v3.5",
+  ],
+  // A note with a pencil writing on it.
+  notes: ["M5 4.5h10v15H5z", "M7.5 8.5h5M7.5 11.5h3", "M19.5 9 13 15.5l-1 3 3-1L21.5 11z"],
+  // A lightbulb: studying, an idea at a time.
+  breinhap: [
+    "M12 3.5a5.5 5.5 0 0 0-3.3 9.9c.7.5 1.1 1.3 1.1 2.1v.5h4.4v-.5c0-.8.4-1.6 1.1-2.1A5.5 5.5 0 0 0 12 3.5z",
+    "M9.8 18.5h4.4M10.6 21h2.8",
+  ],
+  // A capsule and a pharmacy cross.
+  "igs-pharma": [
+    "M4.6 13.4a3.6 3.6 0 0 1 0-5.1l3.7-3.7a3.6 3.6 0 0 1 5.1 5.1l-3.7 3.7a3.6 3.6 0 0 1-5.1 0z",
+    "M6.5 6.5l5 5",
+    "M17 13v7M13.5 16.5h7",
+  ],
+};
+
+/** Whether the switcher draws an icon for this key (else the glyph's letters). */
+export const hasAppIcon = (key: string): boolean => Object.hasOwn(ICON_PATHS, key);
+
+/** The tile's mark: the app's icon when there is one, else its glyph. */
+function Mark({ appKey, glyph }: { appKey: string; glyph: string }) {
+  const paths = Object.hasOwn(ICON_PATHS, appKey) ? ICON_PATHS[appKey] : undefined;
+  if (!paths) return <>{glyph}</>;
+  return (
+    <svg className="asafarim-switcher__mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      {paths.map((d) =>
+        d.startsWith("F") ? <path key={d} d={d.slice(1)} fill="currentColor" stroke="none" /> : <path key={d} d={d} />,
+      )}
     </svg>
   );
 }
@@ -442,7 +497,7 @@ export function AppSwitcher({
         {variant === "icon" ? null : (
           <>
             <span className="asafarim-switcher__face" aria-hidden="true" style={tint(face.key, face.color)}>
-              {face.glyph}
+              <Mark appKey={face.key} glyph={face.glyph} />
             </span>
             <span>{face.name}</span>
           </>
@@ -484,7 +539,7 @@ export function AppSwitcher({
                       onFocus={show(t.description)}
                     >
                       <span className="asafarim-switcher__icon" aria-hidden="true" style={tint(t.key, t.color)}>
-                        {t.glyph}
+                        <Mark appKey={t.key} glyph={t.glyph} />
                       </span>
                       <span className="asafarim-switcher__name">{t.name}</span>
                       {t.key === current ? <span className="asafarim-switcher__open">Open</span> : null}
@@ -518,7 +573,7 @@ export function AppSwitcher({
                           onFocus={show(m.description)}
                         >
                           <span className="asafarim-switcher__icon" aria-hidden="true" style={tint(m.key, m.color)}>
-                            {m.glyph}
+                            <Mark appKey={m.key} glyph={m.glyph} />
                           </span>
                           <span className="asafarim-switcher__name">{m.name}</span>
                           <OutIcon />
