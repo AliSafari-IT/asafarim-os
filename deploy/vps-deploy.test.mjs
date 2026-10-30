@@ -1244,6 +1244,8 @@ test("deploy/nats/new-env.mjs makes ONE key and ONE password for both sides, and
   assert.equal(CORE_USER, "core", "deploy/nats/nats.conf's one login");
   assert.equal(coreApi.CORE_API_NATS_PASSWORD, nats.NATS_CORE_PASSWORD, "one password for both sides");
   assert.ok(nats.NATS_CORE_PASSWORD.length >= 32);
+  // NATS parses the substituted value as config: a letter, then hex, is always a string (never a number or a date).
+  assert.match(nats.NATS_CORE_PASSWORD, /^p[0-9a-f]{64}$/);
   // The seed is an account nkey seed (what core-api's parseBusConfig accepts) and its public key is what the bus trusts.
   assert.match(coreApi.CORE_API_NATS_ISSUER_SEED, /^SA[A-Z2-7]{50,}$/);
   assert.match(nats.NATS_AUTH_ISSUER, /^A[A-Z2-7]{55}$/);
