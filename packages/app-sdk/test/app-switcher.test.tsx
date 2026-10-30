@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LauncherTile } from "../src/index.ts";
-import { AppSwitcher, MORE_FROM_ASAFARIM, moveIndex, OS_HOME, switcherTiles } from "../src/react.tsx";
+import { AppSwitcher, clampShift, MORE_FROM_ASAFARIM, moveIndex, OS_HOME, switcherTiles } from "../src/react.tsx";
 
 const tile = (key: string, over: Partial<LauncherTile> = {}): LauncherTile => ({
   key,
@@ -105,5 +105,20 @@ describe("AppSwitcher: the way home and the single-app note", () => {
       "https://igs.asafarim.site/en/",
     ]);
     for (const m of MORE_FROM_ASAFARIM) expect(m.glyph).toMatch(/^[A-Z]{2}$/);
+  });
+});
+
+describe("clampShift: an open list stays inside the viewport", () => {
+  it("doesn't move a list that fits", () => {
+    expect(clampShift(100, 400, 1280)).toBe(0);
+  });
+  it("moves a list that starts past the left edge to the right (the icon variant on a wrapped phone top bar)", () => {
+    expect(clampShift(-120, 216, 375)).toBe(128);
+  });
+  it("moves a list that ends past the right edge to the left", () => {
+    expect(clampShift(200, 400, 380)).toBe(-28);
+  });
+  it("a list wider than the viewport starts at the left margin", () => {
+    expect(clampShift(10, 500, 375)).toBe(-2);
   });
 });

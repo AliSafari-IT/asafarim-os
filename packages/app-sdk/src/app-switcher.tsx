@@ -19,7 +19,7 @@
  * it. Every item is a plain link, so middle-click and "open in new tab" work. It uses the host's
  * design tokens like <Launcher>.
  */
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { LauncherTile } from "./launcher.ts";
 import { safeHref } from "./safe-href.ts";
 
@@ -29,6 +29,9 @@ import { safeHref } from "./safe-href.ts";
  */
 interface Focusable {
   focus(): void;
+}
+interface Box {
+  getBoundingClientRect(): { left: number; right: number };
 }
 interface Doc {
   addEventListener(type: "pointerdown", listener: (e: { target: unknown }) => void): void;
@@ -98,6 +101,20 @@ export function moveIndex(key: string, index: number, count: number): number | u
     default:
       return undefined;
   }
+}
+
+/** Room kept between an open list and the edges of the viewport, in pixels. */
+export const VIEWPORT_MARGIN = 8;
+
+/**
+ * How far to move an open list sideways so it stays inside the viewport: right when it starts past the
+ * left edge, left when it ends past the right edge, else 0. A list wider than the room left starts at the
+ * left margin.
+ */
+export function clampShift(left: number, right: number, viewport: number, margin = VIEWPORT_MARGIN): number {
+  if (left < margin) return margin - left;
+  if (right > viewport - margin) return Math.max(viewport - margin - right, margin - left);
+  return 0;
 }
 
 /** The tiles that can be linked to (http/https only), in core-api's order. */
@@ -209,7 +226,19 @@ export function AppSwitcher({
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const itemRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+  const menuRef = useRef<HTMLElement>(null);
+  const [shift, setShift] = useState(0);
   const menuId = useId();
+
+  // Keep the open list inside the viewport. The icon variant opens leftwards from its button, which on
+  // a narrow screen, with the top bar wrapped, can sit near the left edge.
+  useLayoutEffect(() => {
+    const box = menuRef.current as unknown as Box | null;
+    const viewport = (globalThis as { innerWidth?: number }).innerWidth;
+    if (!open || !box || !viewport) return setShift(0);
+    const { left, right } = box.getBoundingClientRect();
+    setShift(clampShift(left, right, viewport));
+  }, [open]);
 
   // Move focus to the chosen item whenever it changes while open.
   useEffect(() => {
@@ -301,7 +330,14 @@ export function AppSwitcher({
         <GridIcon />
       </button>
       {open ? (
-        <nav id={menuId} className="asafarim-switcher__menu" aria-label={label} onKeyDown={onMenuKey}>
+        <nav
+          id={menuId}
+          ref={menuRef}
+          className="asafarim-switcher__menu"
+          aria-label={label}
+          onKeyDown={onMenuKey}
+          style={shift ? { translate: `${shift}px 0` } : undefined}
+        >
           <div className="asafarim-switcher__heading">{label}</div>
           {tiles.length === 0 ? (
             <p className="asafarim-switcher__empty">No apps to show right now.</p>
