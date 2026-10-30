@@ -50,6 +50,7 @@ export const ALLOWED_LINK_HOSTS: readonly string[] = [
   "asafarim.com",
   // The OS's own apps, linked from the top bar (render.ts, APP_LINKS).
   "docs.asafarim.site",
+  "flow.asafarim.site",
   "id.asafarim.site",
   // Breinhap's landing page (served by this stack, its source in AliSafari-IT/breinhap).
   "breinhap.asafarim.site",

@@ -111,6 +111,7 @@ export const IDENTITY_ORIGIN = "https://id.asafarim.site";
 export const APP_LINKS = {
   breinhap: { label: "Breinhap", href: "https://breinhap.asafarim.site/en/" },
   docs: { label: "Docs", href: "https://docs.asafarim.site/" },
+  flow: { label: "Flow", href: "https://flow.asafarim.site/" },
   igs: { label: "IGS-Pharma", href: "https://igs.asafarim.site/en/" },
   signIn: { label: "Sign in", href: "https://id.asafarim.site/login" },
 } as const;
@@ -151,9 +152,10 @@ function renderTopbar(themeToggle: string, home = "./"): string {
     <nav class="topbar" aria-label="Main">
       <a class="brand" href="${home}">${BRAND_MARK}<span class="brand-name">ASafariM <span>OS</span></span></a>
       <ul>
+        <li>${anchor(APP_LINKS.docs.href, APP_LINKS.docs.label)}</li>
+        <li>${anchor(APP_LINKS.flow.href, APP_LINKS.flow.label)}</li>
         <li>${anchor(APP_LINKS.breinhap.href, APP_LINKS.breinhap.label)}</li>
         <li>${anchor(APP_LINKS.igs.href, APP_LINKS.igs.label)}</li>
-        <li>${anchor(APP_LINKS.docs.href, APP_LINKS.docs.label)}</li>
 ${themeToggle ? `        <li>${themeToggle.trim()}</li>\n` : ""}        <li id="account">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
       </ul>
     </nav>
@@ -163,7 +165,8 @@ ${themeToggle ? `        <li>${themeToggle.trim()}</li>\n` : ""}        <li id="
 function renderAccess(): string {
   return `
       <p class="access" id="access">
-        Have access? ${anchor(APP_LINKS.signIn.href, "Sign in")}, then open ${anchor(APP_LINKS.docs.href, "the docs")}.
+        Have access? ${anchor(APP_LINKS.signIn.href, "Sign in")}, then open ${anchor(APP_LINKS.docs.href, "Docs")} or
+        ${anchor(APP_LINKS.flow.href, "Flow")}, if your account has access.
         No access yet? Sign in with your email and choose <em>Request connection</em>: an admin approves it.
       </p>`;
 }
@@ -303,7 +306,7 @@ ${renderFooter(progress.repo)}
 function renderFooter(repo: string): string {
   const legal = LEGAL_DOCS.map((d) => anchor(`/${d.slug}`, d.label)).join(" · ");
   return `    <footer>
-      <p>ASafariM OS · ${anchor(repo, "Source on GitHub")} · ${anchor(APP_LINKS.breinhap.href, "Breinhap")} · ${anchor(APP_LINKS.igs.href, "IGS-Pharma")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
+      <p>ASafariM OS · ${anchor(repo, "Source on GitHub")} · ${anchor(APP_LINKS.docs.href, "Docs")} · ${anchor(APP_LINKS.flow.href, "Flow")} · ${anchor(APP_LINKS.breinhap.href, "Breinhap")} · ${anchor(APP_LINKS.igs.href, "IGS-Pharma")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
       <p class="legal-links">${legal} · ${anchor("mailto:privacy@asafarim.site", "privacy@asafarim.site")}</p>
     </footer>`;
 }
