@@ -1,4 +1,4 @@
-import { AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import { AppBrand, AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
 import { ThemeToggle } from "@asafarim/theme/react";
 import Link from "next/link";
 import { forbidden, unauthorized } from "next/navigation";
@@ -139,8 +139,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
       </a>
       <header className="topbar os-topbar">
         <div className="brand">
-          {/* The OS's app switcher: Docs and every other app this person can open (core-api's launcher). */}
-          <AppSwitcher apps={apps} current="docs" fallback={{ name: "Docs", glyph: "DC" }} />
+          <AppBrand name="Docs" glyph="DC" />
           <span className="muted mono" data-testid="source">
             {repo}
           </span>
@@ -162,6 +161,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
             All notes
           </a>
           <ThemeToggle />
+          {/* The OS's app switcher, as an icon next to the account menu: the brand is on the left (#288). */}
+          <AppSwitcher apps={apps} current="docs" fallback={{ name: "Docs", glyph: "DC" }} variant="icon" />
           <span data-testid="who">
             <UserMenu
               name={session?.user?.name}
