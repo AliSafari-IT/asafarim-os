@@ -981,7 +981,7 @@ test("a Flow env with a variable missing stops the deploy before pulling, naming
     flowEnvEmpty: true,
   });
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /missing or empty in \.env\.flow: AUTH_SECRET OIDC_CLIENT_SECRET/);
+  assert.match(r.stderr, /missing or empty in \.env\.flow: AUTH_SECRET OIDC_CLIENT_SECRET FLOW_CREDENTIALS_KEY$/m);
   assert.match(r.stderr, /node deploy\/flow\/new-env\.mjs/);
   assert.ok(!r.calls.some((c) => / (pull|up) /.test(c) || c.startsWith("edge-deploy-site.sh")), r.calls.join("\n"));
 });
