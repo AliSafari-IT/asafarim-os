@@ -1013,9 +1013,13 @@ test("<flow-image-commit> is a seventh, optional sha, checked like the others; a
   assert.ok(code.indexOf("export FLOW_IMAGE_TAG") < code.indexOf('"${compose[@]}" config -q'));
 });
 
-test("the Flow example requires AUTH_SECRET and OIDC_CLIENT_SECRET; the install's two are listed commented out", () => {
+test("the Flow example requires AUTH_SECRET, OIDC_CLIENT_SECRET and FLOW_CREDENTIALS_KEY; the install's two are listed commented out", () => {
   const text = readFileSync(flowExample, "utf8");
-  assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), ["AUTH_SECRET", "OIDC_CLIENT_SECRET"]);
+  assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), [
+    "AUTH_SECRET",
+    "OIDC_CLIENT_SECRET",
+    "FLOW_CREDENTIALS_KEY",
+  ]);
   assert.match(text, /^# DATABASE_URL=$/m);
   assert.match(text, /^# ASAFARIM_REGISTRY_CREDENTIAL=$/m);
   assert.doesNotMatch(text, /^(# )?ASAFARIM_NATS_URL=/m, "production has no bus: Flow's env names none");
@@ -1034,6 +1038,8 @@ test("deploy/flow/new-env.mjs fills the Flow example, gives identity the same cl
   assert.equal(check(generated.flow, readFileSync(flowExample, "utf8")).status, 0);
   assert.equal(parse(generated.identity)[IDENTITY_SECRET_NAME], parse(generated.flow).OIDC_CLIENT_SECRET);
   assert.ok(parse(generated.flow).AUTH_SECRET.length >= 32);
+  // Standard base64 of 32 bytes: what apps/flow/lib/credentials/cipher.ts accepts (decodeKey).
+  assert.match(parse(generated.flow).FLOW_CREDENTIALS_KEY, /^[A-Za-z0-9+/]{43}=$/);
   assert.notEqual(newEnv().flow, generated.flow, "every run is new");
 
   const dir = mkdtempSync(path.join(tmpdir(), "flow-new-env-"));
