@@ -10,6 +10,11 @@ packages:
 allowBuilds:
   # tsx/vitest native binary (same as asafarim-platform)
   esbuild: true
+minimumReleaseAgeExclude:
+  # Our own package (AliSafari-IT/progress-bars), taken the day it was published: 0.7.3 is the
+  # release that drops the Google Fonts @imports Flow's generate bar waited for (#288). Its dist
+  # was checked: no external URLs, imports only react. Drop this entry once 0.7.3 is a day old.
+  - "@asafarim/progress-bars@0.7.3"
 overrides:
   # Security (pnpm audit, asafarim-platform#817): patched versions of transitive
   # dependencies whose parents haven't released a fix yet. Drop an entry once

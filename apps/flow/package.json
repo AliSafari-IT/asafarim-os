@@ -16,6 +16,7 @@
   "dependencies": {
     "@asafarim/app-manifest": "workspace:*",
     "@asafarim/app-sdk": "workspace:*",
+    "@asafarim/progress-bars": "^0.7.3",
     "@asafarim/smtp": "workspace:*",
     "@asafarim/telemetry": "workspace:*",
     "@asafarim/theme": "workspace:*",
