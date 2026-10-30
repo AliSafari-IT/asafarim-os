@@ -5,7 +5,7 @@
   "description": "Flow: ASafariM OS workflows across apps, through events only (ADR 0001). Its first workflow turns a #issue study note in Docs into a GitHub issue.",
   "scripts": {
     "dev": "next dev --port 4130",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start --port 4130",
     "typecheck": "tsc --noEmit && tsc --noEmit -p e2e",
     "lint": "eslint .",
