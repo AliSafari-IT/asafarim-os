@@ -81,17 +81,23 @@ test("every link goes to this site or an allowed host, over https", async ({ pag
   }
 });
 
-test("the top bar links to sign-in, Docs, Flow, Breinhap and IGS-Pharma", async ({ page }) => {
+test("the top bar groups OS apps and products in accessible launchers", async ({ page }) => {
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Main" });
+  await expect(nav.locator(".brand .mark")).toHaveAttribute("width", "38");
+  await expect(nav.getByRole("link", { name: "Platform" })).toHaveAttribute("href", "#shipped");
+  await expect(nav.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "https://id.asafarim.site/login");
+
+  await nav.getByText("Apps", { exact: true }).click();
+  await expect(nav.getByRole("link", { name: "Docs" })).toHaveAttribute("href", "https://docs.asafarim.site/");
+  await expect(nav.getByRole("link", { name: "Flow" })).toHaveAttribute("href", "https://flow.asafarim.site/");
+
+  await nav.getByText("Products", { exact: true }).click();
   await expect(nav.getByRole("link", { name: "Breinhap" })).toHaveAttribute(
     "href",
     "https://breinhap.asafarim.site/en/",
   );
   await expect(nav.getByRole("link", { name: "IGS-Pharma" })).toHaveAttribute("href", "https://igs.asafarim.site/en/");
-  await expect(nav.getByRole("link", { name: "Docs" })).toHaveAttribute("href", "https://docs.asafarim.site/");
-  await expect(nav.getByRole("link", { name: "Flow" })).toHaveAttribute("href", "https://flow.asafarim.site/");
-  await expect(nav.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "https://id.asafarim.site/login");
 });
 
 test("signed in, the top bar shows the person's avatar and menu instead of Sign in", async ({ page }) => {
@@ -156,11 +162,33 @@ test("signed out (or identity unreachable), the page keeps its Sign in link", as
 test("works at phone width: no horizontal scroll, images fit", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 740 });
   await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Main" });
+  const toggle = nav.getByRole("button", { name: "Open navigation" });
+  await expect(toggle).toBeVisible();
+  await expect(nav.getByText("Apps", { exact: true })).toBeHidden();
+  await toggle.click();
+  await expect(nav.getByRole("button", { name: "Close navigation" })).toHaveAttribute("aria-expanded", "true");
+  await nav.getByText("Apps", { exact: true }).click();
+  await expect(nav.getByRole("link", { name: "Flow" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(nav.locator("details").first()).not.toHaveAttribute("open", "");
+  await nav.getByRole("button", { name: "Close navigation" }).click();
+  await expect(nav.getByRole("button", { name: "Open navigation" })).toHaveAttribute("aria-expanded", "false");
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
   for (const img of await page.locator("img").all()) {
     expect((await img.boundingBox())!.width).toBeLessThanOrEqual(375);
   }
+});
+
+test("the app launchers remain available on mobile without JavaScript", async ({ page }) => {
+  await page.route("**/session.js", (route) => route.abort());
+  await page.setViewportSize({ width: 375, height: 740 });
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Main" });
+  await expect(nav.getByRole("button", { name: "Open navigation" })).toBeHidden();
+  await nav.getByText("Apps", { exact: true }).click();
+  await expect(nav.getByRole("link", { name: "Docs" })).toHaveAttribute("href", "https://docs.asafarim.site/");
 });
 
 test("the app manifest JSON Schema is served at its $id and at the versioned path (#87)", async ({ request }) => {
