@@ -296,3 +296,123 @@ p.field-problems {
   border-top: 1px solid var(--line);
   padding-top: 8px;
 }
+.workflow-import,
+.workflow-visual {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 12px;
+}
+.workflow-import summary,
+.workflow-visual summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.workflow-import form {
+  display: grid;
+  gap: 8px;
+  max-width: 520px;
+  margin-top: 12px;
+}
+.workflow-import input:not([type="file"]) {
+  width: 100%;
+}
+.workflow-print-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(240px, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  align-items: start;
+}
+.workflow-diagram-wrap {
+  margin-top: 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+.workflow-diagram {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  color: #4b5563;
+  font: 14px sans-serif;
+}
+.workflow-diagram-title {
+  font-weight: 700;
+}
+.workflow-diagram-type {
+  font-size: 12px;
+}
+.workflow-diagram-edge path {
+  stroke: #4b5563;
+}
+.workflow-diagram-edge text {
+  font-size: 12px;
+}
+.workflow-outline {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+@media (max-width: 900px) {
+  .workflow-print-layout {
+    grid-template-columns: 1fr;
+  }
+}
+@media print {
+  @page {
+    size: landscape;
+    margin: 12mm;
+  }
+  body * {
+    visibility: hidden !important;
+  }
+  .workflow-visual,
+  .workflow-visual * {
+    visibility: visible !important;
+  }
+  .workflow-visual {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    border: 0;
+    padding: 0;
+    background: white;
+    color: black;
+  }
+  .workflow-visual > summary {
+    display: none;
+  }
+  .workflow-visual > *:not(summary) {
+    display: block !important;
+  }
+  .workflow-diagram-wrap {
+    overflow: visible;
+    border: 0;
+    margin-top: 0;
+  }
+  .workflow-print-layout {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
+    gap: 10px;
+  }
+  .workflow-diagram {
+    min-width: 0;
+    max-height: 80vh;
+  }
+  .workflow-outline-section h2 {
+    margin-top: 0;
+  }
+  .workflow-outline {
+    border: 0;
+    padding: 0;
+    color: black;
+    background: white;
+    font-size: 9pt;
+  }
+}

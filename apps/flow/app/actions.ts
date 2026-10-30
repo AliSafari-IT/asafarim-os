@@ -8,6 +8,8 @@ import { signIn, signOut } from "@/lib/auth";
 import { z } from "zod";
 import { buildCatalog } from "@/lib/builder/catalog";
 import { builderProblems, checkDataOf, dataProblems } from "@/lib/builder/checks";
+import { WORKFLOW_FILE_MAX_BYTES } from "@/lib/builder/file";
+import { parseWorkflowFile } from "@/lib/builder/file-import";
 import { draftOf } from "@/lib/builder/open";
 import { newTrigger, starterDraft } from "@/lib/builder/ops";
 import { creationFrom, rotationFrom, type CredentialFormState } from "@/lib/credentials/form";
@@ -128,6 +130,63 @@ const SaveInput = z.object({ workflowKey, definition: Definition, lastSeen: z.is
 const KeyInput = z.object({ workflowKey });
 const ValidateInput = z.object({ workflowKey, definition: Definition });
 const TestInput = z.object({ workflowKey, data: z.record(z.string(), z.unknown()), dryRun: z.boolean() });
+const ImportWorkflowInput = z.object({
+  name: z.string().trim().min(1).max(200),
+  key: workflowKey,
+  file: z.string().max(WORKFLOW_FILE_MAX_BYTES),
+});
+
+export type WorkflowImportResult =
+  { ok: true; workflowKey: string } | { ok: false; error: string; problems?: string[] };
+
+/** Import an untrusted workflow export as a new draft; it is never published. */
+export async function importWorkflowFileAction(
+  name: unknown,
+  key: unknown,
+  file: unknown,
+): Promise<WorkflowImportResult> {
+  const g = await gate("flow.workflows.write");
+  if (!g.ok)
+    return {
+      ok: false,
+      error: g.body.error,
+      ...(g.body.permission ? { permission: g.body.permission } : {}),
+    };
+  const input = ImportWorkflowInput.safeParse({ name, key, file });
+  if (!input.success || new TextEncoder().encode(input.data?.file ?? "").byteLength > WORKFLOW_FILE_MAX_BYTES)
+    return { ok: false, error: "The workflow name, key, or file is invalid. The file limit is 256 KiB." };
+
+  let value: unknown;
+  try {
+    value = JSON.parse(input.data.file);
+  } catch {
+    return { ok: false, error: "The selected file isn't valid JSON." };
+  }
+  const parsed = parseWorkflowFile(value);
+  if (!parsed.ok) return { ok: false, error: parsed.error, ...(parsed.problems ? { problems: parsed.problems } : {}) };
+
+  const definition = { ...parsed.definition, key: input.data.key };
+  const result = await inTransaction(await db(), async (tx) => {
+    const saved = await engine.saveDraft(tx, {
+      workflowKey: input.data.key,
+      name: input.data.name,
+      definition,
+      actor: g.subject,
+      expect: "new",
+    });
+    if (!saved.ok) return saved;
+    return { ...saved, problems: builderProblems(definition, saved.problems, await checkDataOf(tx)) };
+  });
+  if (!result.ok)
+    return {
+      ok: false,
+      error:
+        result.error === "exists"
+          ? "A workflow already uses that key."
+          : `The workflow could not be imported (${result.error}).`,
+    };
+  return { ok: true, workflowKey: input.data.key };
+}
 
 /**
  * Save a workflow's draft (it must exist: New and Duplicate make one). `lastSeen`: when the draft the

@@ -15,6 +15,7 @@
  * controls only (palette, node list, settings panel), validates, publishes and dry-runs it.
  */
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 const CORE_API = process.env.E2E_CORE_API_URL ?? "http://localhost:4020";
 const ADMIN_TOKEN = process.env.E2E_ADMIN_TOKEN ?? "";
@@ -468,4 +469,55 @@ test("the builder: webhook → condition → email.send → end, validated, publ
   // Version 1 is on the Versions page.
   await page.goto(`/workflows/${key}/versions`);
   await expect(page.getByTestId("versions")).toContainText("Version 1");
+});
+
+test("the builder downloads a workflow export and imports it as a new draft", async ({ page }) => {
+  await signIn(page, "");
+  const suffix = Date.now().toString(36);
+  const sourceKey = `portable-${suffix}`;
+  const importedKey = `imported-${suffix}`;
+
+  await page.goto("/workflows");
+  await page.getByTestId("new-workflow").click();
+  await page.getByTestId("new-name").fill("Portability source");
+  await page.getByTestId("new-key").fill(sourceKey);
+  await page.getByTestId("new-trigger").selectOption("manual");
+  await page.getByTestId("new-submit").click();
+  await expect(page).toHaveURL(new RegExp(`/workflows/${sourceKey}/edit$`));
+  await expect(page.getByTestId("save-state")).toHaveText("Saved");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByTestId("export-workflow").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe(`${sourceKey}.flow.json`);
+  const exported = await readFile((await download.path())!, "utf8");
+  expect(JSON.parse(exported)).toMatchObject({
+    format: "asafarim.flow.workflow",
+    version: 1,
+    definition: { version: 2, key: sourceKey },
+  });
+
+  const imagePromise = page.waitForEvent("download");
+  await page.getByTestId("download-workflow-image").click();
+  const image = await imagePromise;
+  expect(image.suggestedFilename()).toBe(`${sourceKey}.svg`);
+  expect(await readFile((await image.path())!, "utf8")).toContain("<svg");
+
+  await page.emulateMedia({ media: "print" });
+  await expect(page.getByTestId("workflow-diagram")).toBeVisible();
+  await expect(page.getByLabel("Numbered workflow outline")).toBeVisible();
+  await page.emulateMedia({ media: "screen" });
+
+  await page.getByTestId("import-workflow").click();
+  await page.getByTestId("workflow-file-input").setInputFiles({
+    name: download.suggestedFilename(),
+    mimeType: "application/json",
+    buffer: Buffer.from(exported),
+  });
+  await expect(page.getByTestId("workflow-import-name")).toHaveValue("portable " + suffix);
+  await page.getByTestId("workflow-import-key").fill(importedKey);
+  await page.getByTestId("confirm-workflow-import").click();
+  await expect(page).toHaveURL(new RegExp(`/workflows/${importedKey}/edit$`));
+  await expect(page.getByRole("heading", { name: "portable " + suffix })).toBeVisible();
+  await expect(page.getByText("not published yet")).toBeVisible();
 });
