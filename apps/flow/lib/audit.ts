@@ -28,7 +28,9 @@ export type AuditAction =
   | "flow.credential.deleted"
   | "flow.hook.created"
   | "flow.hook.rotated"
-  | "flow.hook.deleted";
+  | "flow.hook.deleted"
+  /** A draft generated from an issue with AI was asked for (#283): ids and counts, never text. */
+  | "flow.workflow.generated";
 
 export interface AuditEntry {
   action: AuditAction;
@@ -60,6 +62,17 @@ export interface AuditEntry {
   /** The setting that changed, and how many entries its list holds now (flow.settings.changed). */
   setting?: string;
   count?: number;
+  /** ai_generation (flow.settings.changed): on or off. */
+  enabled?: boolean;
+  /** flow.workflow.generated: the issue (host, repository path, number), never its URL or text. */
+  sourceHost?: string;
+  sourceRepo?: string;
+  sourceNumber?: number;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  /** How the generation ended: ok, or the error code. */
+  outcome?: string;
   /** The subject who did it; absent when the engine did it on its own. */
   actor?: string;
 }

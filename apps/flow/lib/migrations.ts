@@ -199,6 +199,47 @@ CREATE TABLE webhook_hooks (
   last_called_at timestamptz
 );`,
   },
+  {
+    version: 7,
+    name: "drafts generated from an issue with AI (#283): the switch, GitLab tokens, notes, usage",
+    sql: `
+-- A read-only gitlab.com token (reading an issue to draft from), and the admin switch for AI drafting.
+ALTER TABLE credentials DROP CONSTRAINT credentials_kind_check;
+ALTER TABLE credentials ADD CONSTRAINT credentials_kind_check
+  CHECK (kind IN ('smtp', 'github-token', 'gitlab-token', 'webhook-secret'));
+ALTER TABLE settings DROP CONSTRAINT settings_key_check;
+ALTER TABLE settings ADD CONSTRAINT settings_key_check
+  CHECK (key IN ('egress_hosts', 'email_recipients', 'paused_all', 'ai_generation'));
+
+-- Where a generated draft came from (ids) and the AI's notes on it, shown in the builder until the workflow
+-- is published. Never the issue's text or the prompt.
+CREATE TABLE generated_drafts (
+  workflow_id   text PRIMARY KEY REFERENCES workflows (id) ON DELETE CASCADE,
+  source_host   text NOT NULL CHECK (source_host IN ('github', 'gitlab')),
+  source_repo   text NOT NULL,
+  source_number integer NOT NULL,
+  summary       text NOT NULL,
+  trigger_note  text NOT NULL,
+  notes         jsonb NOT NULL DEFAULT '{}'::jsonb,
+  model         text NOT NULL,
+  created_by    text NOT NULL,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+-- One row per generation attempt that got past the checks: the rate limits, the daily token cap and the
+-- provider cool-down read it. Counts and an outcome only.
+CREATE TABLE ai_generations (
+  id            text PRIMARY KEY,
+  subject       text NOT NULL,
+  outcome       text NOT NULL,
+  model         text,
+  input_tokens  integer NOT NULL DEFAULT 0,
+  output_tokens integer NOT NULL DEFAULT 0,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ai_generations_subject ON ai_generations (subject, created_at);
+CREATE INDEX ai_generations_created ON ai_generations (created_at);`,
+  },
 ];
 
 /** Run the migrations not applied yet, in one transaction under an advisory lock. */

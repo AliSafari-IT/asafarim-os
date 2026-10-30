@@ -1,8 +1,14 @@
-import { saveEgressHostsAction, saveEmailRecipientsAction, setPausedAllAction } from "@/app/actions";
+import {
+  saveEgressHostsAction,
+  saveEmailRecipientsAction,
+  setAiGenerationAction,
+  setPausedAllAction,
+} from "@/app/actions";
 import { ErrorNotice, SavedNotice, Unavailable } from "@/components/Notice";
 import { Shell } from "@/components/Shell";
 import { db } from "@/lib/db";
 import { pageAccess } from "@/lib/page";
+import { aiConfigFromEnv } from "@/lib/generate/provider";
 import { getSettings, LIST_MAX } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -50,6 +56,39 @@ export default async function SettingsPage({
               data-testid="toggle-paused-all"
             >
               {settings.pausedAll ? "Resume all" : "Pause all"}
+            </button>
+          </form>
+        ) : null}
+      </section>
+      <section className="card" data-testid="ai-generation" data-enabled={settings.aiGeneration ? "on" : "off"}>
+        <h2>Generate drafts from issues (AI)</h2>
+        <p>
+          Lets people with <span className="perm">flow.workflows.generate</span> paste a GitHub or GitLab issue URL and
+          get a suggested workflow draft.{" "}
+          <strong>
+            The issue&apos;s title, description and first comments are sent to an external AI provider, Anthropic
+            (Claude),
+          </strong>{" "}
+          after anything that looks like a secret is removed. The draft is never published or run by itself, and its
+          outgoing steps are left unconfigured.
+        </p>
+        {settings.aiGeneration ? (
+          <p className="notice warn" role="status">
+            On: issue text is sent to Anthropic when someone generates a draft.
+          </p>
+        ) : (
+          <p className="muted">Off: nothing is sent, and the action is not offered.</p>
+        )}
+        {!aiConfigFromEnv() ? (
+          <p className="muted">
+            Not configured on this server (no FLOW_AI_API_KEY): it stays unavailable even when on.
+          </p>
+        ) : null}
+        {canWrite ? (
+          <form action={setAiGenerationAction}>
+            <input type="hidden" name="aiGeneration" value={settings.aiGeneration ? "off" : "on"} />
+            <button type="submit" className="secondary" data-testid="toggle-ai-generation">
+              {settings.aiGeneration ? "Turn off" : "Turn on and allow sending issues to Anthropic"}
             </button>
           </form>
         ) : null}

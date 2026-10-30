@@ -15,6 +15,12 @@ import { newTrigger, starterDraft } from "@/lib/builder/ops";
 import { creationFrom, rotationFrom, type CredentialFormState } from "@/lib/credentials/form";
 import { createCredential, deleteCredential, rotateCredential } from "@/lib/credentials/store";
 import { db, engine, inTransaction } from "@/lib/db";
+import { writeAudit, type AuditEntry } from "@/lib/audit";
+import { egress } from "@/lib/egress";
+import { connectors } from "@/lib/engine/connectors";
+import { aiConfigFromEnv, createAnthropicGenerator, generateDraft, parseIssueUrl, sourceOf } from "@/lib/generate";
+import { availability, checkLimits, generatedKey, issueToken, recordGeneration } from "@/lib/generate/service";
+import { log } from "@/lib/log";
 import { DRAFT_MAX_BYTES } from "@/lib/engine/engine";
 import { APPROVAL_ID, CREDENTIAL_ID, RUN_ID } from "@/lib/format";
 import { gate, type GateResult } from "@/lib/gate";
@@ -22,7 +28,7 @@ import type { HookFormState } from "@/lib/hooks/example";
 import { createHook, deleteHook, regenerateHookSecret } from "@/lib/hooks/store";
 import { getBuilderWorkflow } from "@/lib/queries";
 import { HOOK_ID } from "@/lib/workflow/definition-v2";
-import { parseEgressHosts, parseEmailRecipients, setList, setPausedAll } from "@/lib/settings";
+import { parseEgressHosts, parseEmailRecipients, setAiGeneration, setList, setPausedAll } from "@/lib/settings";
 import type { Problem } from "@/lib/workflow/definition";
 import { manualInputOf } from "@/lib/workflow/manual";
 import { workflowKey } from "@/lib/workflow/schema";
@@ -493,4 +499,105 @@ export async function deleteHookAction(formData: FormData) {
   if (!g.ok) redirect(refused(back, g));
   const r = await inTransaction(await db(), (tx) => deleteHook(tx, id, g.subject));
   redirect(r.ok ? back : `${back}?error=${r.error}`);
+}
+
+/** Turn AI drafting from an issue on or off (flow.settings.write; #283). Off by default. */
+export async function setAiGenerationAction(formData: FormData) {
+  const on = formData.get("aiGeneration") === "on";
+  const g = await gate("flow.settings.write");
+  if (!g.ok) redirect(refused("/settings", g));
+  await inTransaction(await db(), (tx) => setAiGeneration(tx, on, g.subject));
+  redirect(`/settings?saved=${on ? "ai_on" : "ai_off"}`);
+}
+
+const GenerateInput = z.object({
+  url: z.string().trim().min(1).max(2048),
+  credential: z.union([z.literal(""), z.string().regex(CREDENTIAL_ID)]),
+});
+
+/**
+ * Generate a workflow draft from a GitHub or GitLab issue with AI (flow.workflows.generate; #283).
+ * lib/generate/service.ts says what is checked, in which order. The draft is saved as a new workflow's
+ * draft (the import path of #282: never published, never run), then the builder opens it with the AI's
+ * notes. Every attempt that reaches the issue host or the AI leaves a usage row and one audit entry with
+ * ids and counts; neither ever holds the URL, the issue's text, the prompt or the answer.
+ */
+export async function generateWorkflowAction(formData: FormData) {
+  const back = "/workflows/new";
+  const g = await gate("flow.workflows.generate");
+  if (!g.ok) redirect(refused(back, g));
+  const input = GenerateInput.safeParse({
+    url: formData.get("issueUrl"),
+    credential: formData.get("credential") ?? "",
+  });
+  if (!input.success) redirect(`${back}?error=generate_invalid_url`);
+  const pool = await db();
+  const open = await availability(pool);
+  if (!open.ok) redirect(`${back}?error=generate_${open.reason}`);
+  const limits = await checkLimits(pool, g.subject);
+  if (!limits.ok) redirect(`${back}?error=generate_${limits.reason}`);
+  const ref = parseIssueUrl(input.data.url);
+  if (!ref) redirect(`${back}?error=generate_invalid_url`);
+  const token = await issueToken(pool, input.data.credential, ref);
+  if (!token.ok) redirect(`${back}?error=generate_${token.error}`);
+  const config = aiConfigFromEnv();
+  if (!config) redirect(`${back}?error=generate_not_configured`);
+
+  const key = generatedKey(ref);
+  const result = await generateDraft(input.data.url, key, {
+    generator: createAnthropicGenerator({ ...config, egress, db: pool }),
+    connectorTypes: connectors.types(),
+    fetchDeps: { egress, db: pool, ...(token.token ? { token: token.token } : {}) },
+  });
+  const outcome = result.ok ? "ok" : result.error;
+  const source = sourceOf(ref);
+  const audit: AuditEntry = {
+    action: "flow.workflow.generated",
+    sourceHost: source.host,
+    sourceRepo: source.repo,
+    sourceNumber: source.number,
+    ...(result.model ? { model: result.model } : {}),
+    ...(result.usage ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens } : {}),
+    outcome,
+    actor: g.subject,
+  };
+  await recordGeneration(pool, { subject: g.subject, outcome, model: result.model, usage: result.usage });
+  log.info("flow.generate", {
+    outcome,
+    ...(result.ok ? {} : { detail: result.detail ?? null, problems: result.problems?.length ?? 0 }),
+  });
+  if (!result.ok) {
+    writeAudit([audit]);
+    redirect(`${back}?error=generate_${result.error}`);
+  }
+
+  const { draft } = result;
+  const saved = await inTransaction(pool, async (tx) => {
+    const r = await engine.saveDraft(tx, {
+      workflowKey: key,
+      name: draft.name,
+      definition: draft.definition,
+      actor: g.subject,
+      expect: "new",
+    });
+    if (!r.ok) return { ok: false as const, error: r.error, audits: [audit] };
+    await tx.query(
+      `INSERT INTO generated_drafts
+         (workflow_id, source_host, source_repo, source_number, summary, trigger_note, notes, model, created_by)
+       SELECT id, $2, $3, $4, $5, $6, $7, $8, $9 FROM workflows WHERE key = $1`,
+      [
+        key,
+        source.host,
+        source.repo,
+        source.number,
+        draft.summary,
+        draft.triggerNote,
+        JSON.stringify(draft.notes),
+        result.model,
+        g.subject,
+      ],
+    );
+    return { ok: true as const, audits: [...r.audits, { ...audit, workflow: key }] };
+  });
+  redirect(saved.ok ? `/workflows/${key}/edit?generated=1` : `${back}?error=${saved.error}`);
 }

@@ -12,7 +12,7 @@ export type FieldMark = { credential: CredentialKind } | { egress: true } | { re
 
 const marks = z.registry<FieldMark>();
 
-/** The id of a credential of `kind` (`smtp`, `github-token`, `webhook-secret`). */
+/** The id of a credential of `kind` (`smtp`, `github-token`, `gitlab-token`, `webhook-secret`). */
 export function credentialField(kind: CredentialKind): z.ZodString {
   const schema = z.string().min(1).max(64);
   marks.add(schema, { credential: kind });

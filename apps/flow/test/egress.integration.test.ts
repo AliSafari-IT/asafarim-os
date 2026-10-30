@@ -19,7 +19,7 @@ import { createEgress, EgressError } from "../lib/egress/egress";
 import { EMAIL_LIMIT_PER_WORKFLOW, EMAIL_SEND } from "../lib/connectors/email";
 import { poolDb, servicesFor, type ConnectorContext, type ConnectorError } from "../lib/engine/connectors";
 import { migrate } from "../lib/migrations";
-import { getSettings, isPausedAll, setList, setPausedAll } from "../lib/settings";
+import { getSettings, isPausedAll, setAiGeneration, setList, setPausedAll } from "../lib/settings";
 
 const ADMIN_URL = process.env.FLOW_TEST_ADMIN_URL ?? process.env.EVENTS_TEST_ADMIN_URL;
 const dbName = `flow_egress_test_${Date.now().toString(36)}`;
@@ -115,14 +115,23 @@ describe.skipIf(!ADMIN_URL)("slice 2 on Postgres (integration)", () => {
   });
 
   it("settings: lists and the kill switch; egress refuses while paused and records the call", async () => {
-    expect(await getSettings(pool)).toEqual({ egressHosts: [], emailRecipients: [], pausedAll: false });
+    expect(await getSettings(pool)).toEqual({
+      egressHosts: [],
+      emailRecipients: [],
+      pausedAll: false,
+      aiGeneration: false,
+    });
     await setList(pool, "egress_hosts", ["hooks.example.com", "hooks.example.com:8443"], "dev-owner");
     await setList(pool, "email_recipients", ["@example.com"], "dev-owner");
     await setPausedAll(pool, true, "dev-owner");
+    expect((await setAiGeneration(pool, true, "dev-owner")).audits).toEqual([
+      { action: "flow.settings.changed", setting: "ai_generation", enabled: true, actor: "dev-owner" },
+    ]);
     expect(await getSettings(pool)).toEqual({
       egressHosts: ["hooks.example.com", "hooks.example.com:8443"],
       emailRecipients: ["@example.com"],
       pausedAll: true,
+      aiGeneration: true,
     });
     expect(await isPausedAll(pool)).toBe(true);
 

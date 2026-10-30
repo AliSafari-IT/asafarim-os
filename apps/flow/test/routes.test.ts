@@ -47,6 +47,8 @@ const ACTIONS: Record<string, string | null> = {
   saveEgressHostsAction: "flow.settings.write",
   saveEmailRecipientsAction: "flow.settings.write",
   setPausedAllAction: "flow.settings.write",
+  setAiGenerationAction: "flow.settings.write",
+  generateWorkflowAction: "flow.workflows.generate",
   createWorkflowAction: "flow.workflows.write",
   duplicateWorkflowAction: "flow.workflows.write",
   createHookAction: "flow.workflows.write",
@@ -171,7 +173,8 @@ vi.mock("@/lib/db", () => {
       calls.db++;
       return {};
     },
-    inTransaction: async (_pool: unknown, fn: (tx: unknown) => Promise<unknown>) => fn({}),
+    inTransaction: async (_pool: unknown, fn: (tx: unknown) => Promise<unknown>) =>
+      fn({ query: async () => ({ rows: [] }) }),
     engine: {
       retry: record("retry"),
       cancel: record("cancel"),
@@ -225,11 +228,46 @@ vi.mock("@/lib/settings", async (importActual) => {
   };
   return {
     ...actual,
-    getSettings: async () => ({ egressHosts: [], emailRecipients: [], pausedAll: false }),
+    getSettings: async () => ({ egressHosts: [], emailRecipients: [], pausedAll: false, aiGeneration: false }),
     setList: record("setList"),
     setPausedAll: record("setPausedAll"),
+    setAiGeneration: record("setAiGeneration"),
   };
 });
+// Generate from issue (#283): available, within limits, and a draft from the (fake) AI; only saving it
+// reaches the engine. lib/generate is unit- and integration-tested on its own.
+vi.mock("@/lib/generate/service", async (importActual) => ({
+  ...(await importActual<Record<string, unknown>>()),
+  availability: async () => ({ ok: true }),
+  checkLimits: async () => ({ ok: true }),
+  issueToken: async () => ({ ok: true }),
+  recordGeneration: async () => undefined,
+  generatedInfo: async () => null,
+}));
+vi.mock("@/lib/generate", async (importActual) => ({
+  ...(await importActual<Record<string, unknown>>()),
+  aiConfigFromEnv: () => ({ apiKey: "k", model: "claude-opus-5-5", effort: "medium" }),
+  generateDraft: async (_url: string, key: string) => ({
+    ok: true,
+    draft: {
+      definition: {
+        version: 2,
+        key,
+        trigger: { type: "manual", input: [] },
+        start: "done",
+        nodes: [{ key: "done", type: "end" }],
+      },
+      notes: {},
+      name: "Generated",
+      summary: "",
+      triggerNote: "",
+    },
+    source: { host: "github", repo: "acme/shop", number: 42 },
+    model: "claude-opus-5-5",
+    usage: { inputTokens: 1, outputTokens: 1 },
+    redactions: 0,
+  }),
+}));
 vi.mock("@/lib/queries", () => ({
   overview: async () => ({ waiting: [], failures: [], latest: [] }),
   listRuns: async () => [],
@@ -296,6 +334,8 @@ const FORM = {
   pausedAll: "on",
   key: "my-flow",
   trigger: "manual",
+  issueUrl: "https://github.com/acme/shop/issues/42",
+  credential: "",
 };
 type Action = (...a: unknown[]) => Promise<unknown>;
 /** Run an action the way its form does: a redirect is an Interrupt, a state action's answer is returned. */
@@ -424,6 +464,7 @@ describe("server actions", () => {
     ["saveEgressHostsAction", "egress_hosts"],
     ["saveEmailRecipientsAction", "email_recipients"],
     ["setPausedAllAction", "paused"],
+    ["setAiGenerationAction", "ai_off"],
   ])("%s reports the completed settings update", async (name, saved) => {
     who.subject = "dev-owner";
     who.permissions = ["flow.read", "flow.settings.write"];
@@ -528,5 +569,35 @@ describe("Run now under the kill switch", () => {
     expect(JSON.stringify(ErrorNotice({ error: "paused_all" }))).toContain(
       "All workflows are paused. Resume them in Settings to run this one.",
     );
+  });
+});
+
+describe("generate from issue (#283)", () => {
+  it("saves the generated draft as a new workflow and opens the builder on it", async () => {
+    who.subject = "dev-owner";
+    who.permissions = ["flow.read", "flow.workflows.generate"];
+    const { stop } = await runAction("generateWorkflowAction");
+    expect(stop?.kind).toBe("redirect");
+    expect(stop?.to).toMatch(/^\/workflows\/gen-shop-42-[a-z0-9]{6}\/edit\?generated=1$/);
+    expect(calls.engine).toEqual(["saveDraft"]);
+  });
+
+  it("refuses a URL that isn't an issue URL before anything else", async () => {
+    who.subject = "dev-owner";
+    who.permissions = ["flow.read", "flow.workflows.generate"];
+    const mod = await load<Record<string, (f: FormData) => Promise<void>>>("actions.ts");
+    const stop = await interruptOf(() =>
+      mod.generateWorkflowAction!(form({ issueUrl: "https://github.com.evil.example/a/b/issues/1", credential: "" })),
+    );
+    expect(stop).toMatchObject({ kind: "redirect", to: "/workflows/new?error=generate_invalid_url" });
+    expect(calls.engine).toEqual([]);
+  });
+
+  it("flow.workflows.write alone isn't enough", async () => {
+    who.subject = "dev-owner";
+    who.permissions = ["flow.read", "flow.workflows.write"];
+    const { stop } = await runAction("generateWorkflowAction");
+    expect(stop?.to).toContain("permission=flow.workflows.generate");
+    expect(calls.engine).toEqual([]);
   });
 });
