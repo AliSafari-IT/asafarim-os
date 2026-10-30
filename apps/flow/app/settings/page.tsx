@@ -1,5 +1,5 @@
 import { saveEgressHostsAction, saveEmailRecipientsAction, setPausedAllAction } from "@/app/actions";
-import { ErrorNotice, Unavailable } from "@/components/Notice";
+import { ErrorNotice, SavedNotice, Unavailable } from "@/components/Notice";
 import { Shell } from "@/components/Shell";
 import { db } from "@/lib/db";
 import { pageAccess } from "@/lib/page";
@@ -24,13 +24,14 @@ export default async function SettingsPage({
       </Shell>
     );
   }
-  const { error, permission } = await searchParams;
+  const { error, permission, saved } = await searchParams;
   const settings = await getSettings(await db());
   const canWrite = access.permissions.includes("flow.settings.write");
   return (
     <Shell current="/settings">
       <h1>Settings</h1>
       <ErrorNotice error={error} permission={permission} />
+      <SavedNotice saved={saved} />
       <section className="card" data-testid="paused-all" data-paused={settings.pausedAll ? "on" : "off"}>
         <h2>Pause all</h2>
         {settings.pausedAll ? (

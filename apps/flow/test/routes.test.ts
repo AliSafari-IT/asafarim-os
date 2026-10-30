@@ -399,6 +399,18 @@ describe("server actions", () => {
     expect(calls.engine).toHaveLength(1);
   });
 
+  it.each([
+    ["saveEgressHostsAction", "egress_hosts"],
+    ["saveEmailRecipientsAction", "email_recipients"],
+    ["setPausedAllAction", "paused"],
+  ])("%s reports the completed settings update", async (name, saved) => {
+    who.subject = "dev-owner";
+    who.permissions = ["flow.read", "flow.settings.write"];
+    const { stop } = await runAction(name);
+    expect(stop).toMatchObject({ kind: "redirect", to: `/settings?saved=${saved}` });
+    expect(calls.engine).toHaveLength(1);
+  });
+
   it("a run id that isn't one goes back to the runs, before anything else", async () => {
     who.subject = "dev-owner";
     who.permissions = ["flow.read", "flow.runs.start"];

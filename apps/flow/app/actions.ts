@@ -370,7 +370,7 @@ async function onList(formData: FormData, key: "egress_hosts" | "email_recipient
   const parsed = key === "egress_hosts" ? parseEgressHosts(raw) : parseEmailRecipients(raw);
   if (!parsed.ok) redirect(`/settings?error=${parsed.error}&list=${key}`);
   await inTransaction(await db(), (tx) => setList(tx, key, parsed.entries, g.subject));
-  redirect("/settings");
+  redirect(`/settings?saved=${key}`);
 }
 
 export async function saveEgressHostsAction(formData: FormData) {
@@ -387,7 +387,7 @@ export async function setPausedAllAction(formData: FormData) {
   const g = await gate("flow.settings.write");
   if (!g.ok) redirect(refused("/settings", g));
   await inTransaction(await db(), (tx) => setPausedAll(tx, on, g.subject));
-  redirect("/settings");
+  redirect(`/settings?saved=${on ? "paused" : "resumed"}`);
 }
 
 /**

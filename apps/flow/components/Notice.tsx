@@ -41,6 +41,23 @@ export function ErrorNotice({ error, permission }: { error?: string; permission?
   );
 }
 
+const SAVED_MESSAGES: Record<string, string> = {
+  egress_hosts: "Webhook hosts saved.",
+  email_recipients: "Email recipients saved.",
+  paused: "Flow paused.",
+  resumed: "Flow resumed.",
+};
+
+export function SavedNotice({ saved }: { saved?: string }) {
+  const message = saved ? SAVED_MESSAGES[saved] : undefined;
+  if (!message) return null;
+  return (
+    <p className="notice" role="status" aria-live="polite" data-testid="saved">
+      {message}
+    </p>
+  );
+}
+
 export function Unavailable({ message }: { message: string }) {
   return (
     <p className="notice bad" role="status" data-testid="state">
