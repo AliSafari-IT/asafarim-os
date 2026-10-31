@@ -663,6 +663,32 @@ describe("hardening (#307 group B)", () => {
     expect(t.mem.runs.size).toBe(1);
   });
 
+  it("B2: two overlapping copies of one signed GitHub call under different delivery ids start one run", async () => {
+    const t = setup();
+    const body = JSON.stringify({ action: "opened", ...REPO });
+    const headers = { "x-hub-signature-256": signGithub(SECRET, body), "x-github-event": "issues" };
+    const answers = await Promise.all([
+      t.post(GITHUB_ID, body, { ...headers, "x-github-delivery": "race-1" }),
+      t.post(GITHUB_ID, body, { ...headers, "x-github-delivery": "race-2" }),
+    ]);
+    expect(answers.map((a) => a.status).sort()).toEqual([200, 202]);
+    expect(t.mem.runs.size).toBe(1);
+  });
+
+  it("B2: a delivery that starts no run does not use up its signature: sent again once the workflow is active, it runs", async () => {
+    const t = setup();
+    await t.mem.store.setWorkflowStatus("github-hook", "paused");
+    const body = JSON.stringify({ action: "opened", ...REPO });
+    const headers = { "x-hub-signature-256": signGithub(SECRET, body), "x-github-event": "issues" };
+    expect(await t.post(GITHUB_ID, body, { ...headers, "x-github-delivery": "p-1" })).toMatchObject({
+      status: 202,
+      body: { started: false },
+    });
+    await t.mem.store.setWorkflowStatus("github-hook", "active");
+    expect((await t.post(GITHUB_ID, body, { ...headers, "x-github-delivery": "p-2" })).status).toBe(202);
+    expect(t.mem.runs.size).toBe(1);
+  });
+
   it("B2: a signed call without a delivery id is refused with 400, generic and GitHub, and starts nothing", async () => {
     const t = setup();
     const sig = { "x-flow-signature": signGeneric(SECRET, BIG, T) };

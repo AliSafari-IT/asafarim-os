@@ -167,17 +167,25 @@ export async function receiveHook(request: Request, id: string, deps: ReceiveDep
         return githubAccepts(trigger, event!, isRecord(data) ? data : {}) ? undefined : "filtered";
       return undefined;
     };
-    const r = await deps.start(hook, {
-      workflowKey: hook.workflowKey,
-      trigger: github ? "github" : "webhook",
-      data: github && isRecord(data) ? githubTriggerData(data) : data,
-      triggerEventId: `hook:${hook.id}:${delivery}`,
-      accepts,
-    });
-    if (r.ok) {
-      if (github) deps.replays.add(replayKey, deps.now().getTime());
-      return answer(202, { runId: r.runId });
+    // Claimed before the run starts, so an overlapping copy sees it; given back if no run starts.
+    if (github) deps.replays.add(replayKey, deps.now().getTime());
+    let r: StartResult;
+    try {
+      r = await deps.start(hook, {
+        workflowKey: hook.workflowKey,
+        trigger: github ? "github" : "webhook",
+        data: github && isRecord(data) ? githubTriggerData(data) : data,
+        triggerEventId: `hook:${hook.id}:${delivery}`,
+        accepts,
+      });
+    } catch (err) {
+      deps.replays.delete(replayKey);
+      throw err;
     }
+    if (r.ok) return answer(202, { runId: r.runId });
+    // A delivery that started nothing (paused, filtered, invalid, duplicate) keeps no claim: sent
+    // again once it can run, it runs.
+    deps.replays.delete(replayKey);
     switch (r.error) {
       case "duplicate":
         return answer(200, { duplicate: true });

@@ -62,9 +62,15 @@ export function createRateLimiter(
 export interface SeenStore {
   has(key: string, now: number): boolean;
   add(key: string, now: number): void;
+  /** Give a claim back (nothing was started under it). */
+  delete(key: string): void;
 }
 
-/** Remember a day: a generic signature is good for ±5 minutes, a GitHub one has no clock at all. */
+/**
+ * Remember a day: a generic signature is good for ±5 minutes, a GitHub one has no clock at all. This is
+ * a known gap, not a guarantee: after the day, or after a restart (the memory is per process), the same
+ * signed GitHub body under a new delivery id starts another run. A durable key would need a table.
+ */
 export const REPLAY_TTL_MS = 24 * 60 * 60_000;
 export const REPLAY_KEYS_MAX = 50_000;
 
@@ -85,5 +91,6 @@ export function createSeenStore(ttlMs = REPLAY_TTL_MS, maxKeys = REPLAY_KEYS_MAX
       if (!seen.has(key)) trim(seen, maxKeys, (at) => now - at >= ttlMs);
       seen.set(key, now);
     },
+    delete: (key) => void seen.delete(key),
   };
 }
