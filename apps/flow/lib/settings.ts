@@ -3,8 +3,9 @@
  *
  * - `egress_hosts`: the hosts webhook out may call ("host" or "host:port"; lib/egress/hosts.ts);
  * - `email_recipients`: who email may go to, an address or a whole "@domain";
- * - `paused_all`: the kill switch. While it is on no new run starts (the engine asks isPausedAll) and
- *   no outbound call is made (lib/egress);
+ * - `paused_all`: the kill switch. While it is on no new run starts (the engine asks isPausedAll), no
+ *   request is published for a run under way (approving, retrying, a wait that ends) and no outbound
+ *   call is made (lib/egress). A stored value that isn't a boolean counts as on;
  * - `ai_generation`: whether a draft may be generated from an issue with AI (#283; lib/generate). It
  *   sends the issue's text to an outside AI provider, so an admin turns it on knowingly.
  *
@@ -40,16 +41,36 @@ export async function getSettings(q: Queryable): Promise<Settings> {
   for (const r of rows as { key: string; value: unknown }[]) {
     if (r.key === "egress_hosts") s.egressHosts = strings(r.value);
     if (r.key === "email_recipients") s.emailRecipients = strings(r.value);
-    if (r.key === "paused_all") s.pausedAll = r.value === true;
+    if (r.key === "paused_all") s.pausedAll = pausedFrom(r.value);
     if (r.key === "ai_generation") s.aiGeneration = r.value === true;
   }
   return s;
 }
 
-/** Whether the kill switch is on. */
-export async function isPausedAll(q: Queryable): Promise<boolean> {
+/**
+ * The kill switch as stored: `true` is on, `false` off. Anything else is a malformed row and fails
+ * closed: the switch counts as on (and `log`, when given, hears about it), because a switch that
+ * can't be read must not be taken for "off".
+ */
+export function pausedFrom(
+  value: unknown,
+  log?: { warn(msg: string, fields?: Record<string, unknown>): void },
+): boolean {
+  if (value === false) return false;
+  if (value !== true) {
+    log?.warn("flow.settings.paused_all_malformed", { storedType: value === null ? "null" : typeof value });
+  }
+  return true;
+}
+
+/** Whether the kill switch is on. No row: off. A row that isn't a boolean: on (see `pausedFrom`). */
+export async function isPausedAll(
+  q: Queryable,
+  log?: { warn(msg: string, fields?: Record<string, unknown>): void },
+): Promise<boolean> {
   const rows = await rowsOf(q, "SELECT value FROM settings WHERE key = 'paused_all'");
-  return (rows[0] as { value?: unknown } | undefined)?.value === true;
+  const row = rows[0] as { value?: unknown } | undefined;
+  return row === undefined ? false : pausedFrom(row.value, log);
 }
 
 /** The entries as typed: comma-, space- or line-separated, trimmed, lower case, each once. */
