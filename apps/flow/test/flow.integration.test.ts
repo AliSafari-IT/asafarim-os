@@ -748,7 +748,7 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
       const secret = created.shownOnce!;
 
       // Not published yet: there is no version to run.
-      expect((await call(created.id, JSON.stringify({ size: "big" }), secret)).status).toBe(409);
+      expect((await call(created.id, JSON.stringify({ size: "big" }), secret, "order-0")).status).toBe(409);
       await tx((c) =>
         flow.engine.saveDraft(c, { workflowKey: "order-hook", definition: definition(created.id), actor: "dev-owner" }),
       );
@@ -779,7 +779,7 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
 
       const deleted = await tx((c) => hooks.deleteHook(c, created.id, "dev-owner"));
       expect(deleted.audits.map((a) => a.action)).toEqual(["flow.credential.deleted", "flow.hook.deleted"]);
-      expect((await call(created.id, JSON.stringify({ size: "big" }), rotated.shownOnce!, "order-4")).status).toBe(404);
+      expect((await call(created.id, JSON.stringify({ size: "big" }), rotated.shownOnce!, "order-4")).status).toBe(401);
       expect(await q("SELECT count(*)::int AS n FROM credentials WHERE kind = 'webhook-secret'")).toEqual([{ n: 0 }]);
     });
 
@@ -790,7 +790,7 @@ describe.skipIf(!ADMIN_URL)("flow on Postgres (integration)", () => {
       const [{ credential_id }] = await q("SELECT credential_id FROM webhook_hooks WHERE id = $1", [created.id]);
       await tx((c) => deleteCredential(c, credential_id as string, "dev-owner"));
       expect(await hooks.listHooks(pool)).toEqual([]);
-      expect((await call(created.id, "{}", created.shownOnce!)).status).toBe(404);
+      expect((await call(created.id, "{}", created.shownOnce!, "gone-1")).status).toBe(401);
     });
   });
 });

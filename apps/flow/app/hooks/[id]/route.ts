@@ -4,7 +4,14 @@
  * authenticates a call.
  */
 import { db, engine, inTransaction } from "@/lib/db";
-import { createRateLimiter, GLOBAL_RATE_LIMIT } from "@/lib/hooks/limiter";
+import {
+  createRateLimiter,
+  createSeenStore,
+  GLOBAL_RATE_LIMIT,
+  RATE_WINDOW_MS,
+  SOURCE_KEYS_MAX,
+  SOURCE_RATE_LIMIT,
+} from "@/lib/hooks/limiter";
 import { receiveHook, type ReceiveDeps } from "@/lib/hooks/receive";
 import { findHook, touchHook } from "@/lib/hooks/store";
 import { log } from "@/lib/log";
@@ -14,6 +21,8 @@ export const dynamic = "force-dynamic";
 const globalForHooks = globalThis as unknown as {
   flowHookLimiter?: ReturnType<typeof createRateLimiter>;
   flowHookGlobalLimiter?: ReturnType<typeof createRateLimiter>;
+  flowHookSourceLimiter?: ReturnType<typeof createRateLimiter>;
+  flowHookReplays?: ReturnType<typeof createSeenStore>;
 };
 
 const deps: ReceiveDeps = {
@@ -25,7 +34,13 @@ const deps: ReceiveDeps = {
     }),
   touch: async (hook) => touchHook(await db(), hook.id),
   limiter: (globalForHooks.flowHookLimiter ??= createRateLimiter()),
+  sourceLimiter: (globalForHooks.flowHookSourceLimiter ??= createRateLimiter(
+    SOURCE_RATE_LIMIT,
+    RATE_WINDOW_MS,
+    SOURCE_KEYS_MAX,
+  )),
   globalLimiter: (globalForHooks.flowHookGlobalLimiter ??= createRateLimiter(GLOBAL_RATE_LIMIT)),
+  replays: (globalForHooks.flowHookReplays ??= createSeenStore()),
   now: () => new Date(),
   log,
 };
