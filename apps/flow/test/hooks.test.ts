@@ -17,7 +17,7 @@ import { publisher } from "../lib/events";
 import { BODY_MAX_BYTES, readCapped } from "../lib/hooks/body";
 import { curlExample, sampleBody } from "../lib/hooks/example";
 import { githubAccepts, githubEventNames, githubTriggerData } from "../lib/hooks/github";
-import { createRateLimiter, GLOBAL_RATE_LIMIT } from "../lib/hooks/limiter";
+import { createRateLimiter, createSeenStore, GLOBAL_RATE_LIMIT, SOURCE_RATE_LIMIT } from "../lib/hooks/limiter";
 import { receiveHook, type ReceiveDeps } from "../lib/hooks/receive";
 import { signGeneric, signGithub, verifyGeneric } from "../lib/hooks/signature";
 import type { ReceivingHook } from "../lib/hooks/store";
@@ -116,7 +116,9 @@ function setup() {
     },
     touch: async (hook) => void touched.push(hook.id),
     limiter: createRateLimiter(),
+    sourceLimiter: createRateLimiter(SOURCE_RATE_LIMIT),
     globalLimiter: createRateLimiter(GLOBAL_RATE_LIMIT),
+    replays: createSeenStore(),
     now: () => clock.now,
     log,
   };
@@ -138,7 +140,11 @@ function setup() {
     return { status: res.status, body: JSON.parse(text) as Record<string, unknown>, headers: res.headers };
   }
   const generic = (body: string, headers: Record<string, string> = {}, t = T) =>
-    post(GENERIC_ID, body, { "x-flow-signature": signGeneric(SECRET, body, t), ...headers });
+    post(GENERIC_ID, body, {
+      "x-flow-signature": signGeneric(SECRET, body, t),
+      "x-flow-delivery": crypto.randomUUID(),
+      ...headers,
+    });
   const github = (event: string, payload: object, headers: Record<string, string> = {}) => {
     const body = JSON.stringify(payload);
     return post(GITHUB_ID, body, {
@@ -169,32 +175,37 @@ describe("POST /hooks/<id>: a signed call", () => {
     expect(t.touched).toEqual([GENERIC_ID]);
   });
 
-  it("logs the hook id, the status and the duration: nothing else", async () => {
+  it("logs a hash of the hook id, the status and the duration: nothing else", async () => {
     const t = setup();
     await t.generic(BIG);
     expect(t.logs.map((l) => JSON.parse(l) as Record<string, unknown>)).toEqual([
-      { msg: "flow.hook.called", hook: GENERIC_ID, status: 202, durationMs: expect.any(Number) },
+      {
+        msg: "flow.hook.called",
+        hook: expect.stringMatching(/^[0-9a-f]{12}$/),
+        status: 202,
+        durationMs: expect.any(Number),
+      },
     ]);
   });
 });
 
 describe("rejected before the body is parsed, in order", () => {
-  it("an unknown hook: 404 with the body a bad signature gets, after the same read and HMAC", async () => {
+  it("an unknown hook: 401, the answer a bad signature gets, after the same read and HMAC", async () => {
     const t = setup();
     const unknown = await t.post(OTHER_ID, BIG, { "x-flow-signature": signGeneric(SECRET, BIG, T) });
     const unknownCompares = vi.mocked(crypto.timingSafeEqual).mock.calls.length;
     vi.mocked(crypto.timingSafeEqual).mockClear();
     const bad = await t.post(GENERIC_ID, BIG, { "x-flow-signature": signGeneric("not the secret", BIG, T) });
-    expect(unknown.status).toBe(404);
+    expect(unknown.status).toBe(401);
     expect(bad.status).toBe(401);
     expect(unknown.body).toEqual(bad.body);
     expect(unknownCompares).toBe(1);
     expect(vi.mocked(crypto.timingSafeEqual).mock.calls.length).toBe(1);
   });
 
-  it("an id that isn't shaped like one: 404 without a lookup, logged as invalid", async () => {
+  it("an id that isn't shaped like one: 401 without a lookup, logged as invalid", async () => {
     const t = setup();
-    expect((await t.post("../../etc/passwd", BIG)).status).toBe(404);
+    expect((await t.post("../../etc/passwd", BIG)).status).toBe(401);
     expect(t.found).toEqual([]);
     expect(t.logs[0]).toContain('"hook":"invalid"');
   });
@@ -245,16 +256,18 @@ describe("rejected before the body is parsed, in order", () => {
   it("429 past 600 calls a minute in all, before the lookup: a flood of unknown ids doesn't reach findHook", async () => {
     const t = setup();
     const randomId = () => crypto.randomBytes(16).toString("base64url");
-    for (let i = 0; i < GLOBAL_RATE_LIMIT; i++) expect((await t.post(randomId(), "{}")).status).toBe(404);
+    // Each call from another source address, so only the shared limit is reached.
+    const source = (i: number) => ({ "x-forwarded-for": `10.${i >> 8}.${i & 255}.1` });
+    for (let i = 0; i < GLOBAL_RATE_LIMIT; i++) expect((await t.post(randomId(), "{}", source(i))).status).toBe(401);
     expect(t.found).toHaveLength(GLOBAL_RATE_LIMIT);
-    const limited = await t.post(randomId(), "{}");
+    const limited = await t.post(randomId(), "{}", source(GLOBAL_RATE_LIMIT));
     expect(limited).toMatchObject({ status: 429, body: { error: "rate_limited" } });
     expect(limited.headers.get("retry-after")).toBe("60");
     expect(t.found).toHaveLength(GLOBAL_RATE_LIMIT);
     // A known hook too, until the minute has passed.
-    expect((await t.generic(BIG)).status).toBe(429);
+    expect((await t.generic(BIG, source(GLOBAL_RATE_LIMIT + 1))).status).toBe(429);
     t.clock.now = new Date(NOW.getTime() + 60_000);
-    expect((await t.generic(BIG, {}, T + 60)).status).toBe(202);
+    expect((await t.generic(BIG, source(GLOBAL_RATE_LIMIT + 2), T + 60)).status).toBe(202);
   });
 
   it("401 for a missing, malformed or wrong signature, or a changed body; the body is never parsed", async () => {
@@ -319,7 +332,7 @@ describe("the signature", () => {
 });
 
 describe("after the signature", () => {
-  it("a redelivery is a duplicate: 200 {duplicate:true}, by X-Flow-Delivery, by signature, by X-GitHub-Delivery", async () => {
+  it("a redelivery is a duplicate: 200 {duplicate:true}, by X-Flow-Delivery, by X-GitHub-Delivery", async () => {
     const t = setup();
     expect((await t.generic(BIG, { "x-flow-delivery": "same" })).status).toBe(202);
     // A new signature (a later timestamp), the same delivery id.
@@ -327,15 +340,11 @@ describe("after the signature", () => {
       status: 200,
       body: { duplicate: true },
     });
-    // No delivery id: the signature is the id.
-    const sig = signGeneric(SECRET, BIG, T);
-    expect((await t.post(GENERIC_ID, BIG, { "x-flow-signature": sig })).status).toBe(202);
-    expect((await t.post(GENERIC_ID, BIG, { "x-flow-signature": sig })).body).toEqual({ duplicate: true });
     const delivery = { "x-github-delivery": "72d3162e-cc78-11e3-81ab-4c9367dc0958" };
     const issue = { action: "opened", ...REPO };
     expect((await t.github("issues", issue, delivery)).status).toBe(202);
     expect(await t.github("issues", issue, delivery)).toMatchObject({ status: 200, body: { duplicate: true } });
-    expect(t.mem.runs.size).toBe(3);
+    expect(t.mem.runs.size).toBe(2);
   });
 
   it("a paused workflow and Settings paused_all: 202 {started:false}, no run", async () => {
@@ -361,7 +370,10 @@ describe("after the signature", () => {
   it("a published trigger that names another hook: 409, no run", async () => {
     const t = setup();
     t.hooks.set(OTHER_ID, { id: OTHER_ID, workflowKey: "order-hook", kind: "generic", secret: SECRET });
-    const r = await t.post(OTHER_ID, BIG, { "x-flow-signature": signGeneric(SECRET, BIG, T) });
+    const r = await t.post(OTHER_ID, BIG, {
+      "x-flow-signature": signGeneric(SECRET, BIG, T),
+      "x-flow-delivery": "d-1",
+    });
     expect(r).toMatchObject({ status: 409, body: { error: "wrong_trigger" } });
   });
 
@@ -589,3 +601,129 @@ function endless(pulled: { bytes: number; cancelled?: boolean }): ReadableStream
     { highWaterMark: 0 },
   );
 }
+
+/** #307 group B: what the public hooks endpoint gives away, lets be replayed, or lets a flood use up. */
+describe("hardening (#307 group B)", () => {
+  const from = (ip: string) => ({ "x-forwarded-for": ip });
+
+  it("B1: a hook that doesn't exist answers as a real one with a wrong signature does: status, body and header names", async () => {
+    const t = setup();
+    const sign = (id: string) => ({ "x-flow-signature": signGeneric("not the secret", BIG, T), "x-flow-delivery": id });
+    const real = await t.post(GENERIC_ID, BIG, sign("a"));
+    const unknown = await t.post(OTHER_ID, BIG, sign("a"));
+    const unshaped = await t.post("../../etc/passwd", BIG, sign("a"));
+    for (const r of [unknown, unshaped]) {
+      expect(r.status).toBe(real.status);
+      expect(r.body).toEqual(real.body);
+      expect([...r.headers.keys()].sort()).toEqual([...real.headers.keys()].sort());
+    }
+    expect(real.status).toBe(401);
+  });
+
+  it("B1: the checks before the signature answer the same for a real and an unknown hook", async () => {
+    const t = setup();
+    for (const [headers, status] of [
+      [{ "content-type": "text/plain" }, 415],
+      [{ "content-length": String(BODY_MAX_BYTES + 1) }, 413],
+    ] as const) {
+      const real = await t.post(GENERIC_ID, BIG, { ...headers });
+      const unknown = await t.post(OTHER_ID, BIG, { ...headers });
+      expect([real.status, unknown.status]).toEqual([status, status]);
+      expect(unknown.body).toEqual(real.body);
+    }
+  });
+
+  it("B1: an unknown hook costs the same single HMAC comparison as a wrong signature", async () => {
+    const t = setup();
+    await t.post(OTHER_ID, BIG, { "x-flow-signature": signGeneric(SECRET, BIG, T) });
+    expect(vi.mocked(crypto.timingSafeEqual).mock.calls.length).toBe(1);
+  });
+
+  it("B2: the same delivery id again is a duplicate; two deliveries with the same body in the same second are both run", async () => {
+    const t = setup();
+    const signature = { "x-flow-signature": signGeneric(SECRET, BIG, T) };
+    expect((await t.post(GENERIC_ID, BIG, { ...signature, "x-flow-delivery": "one" })).status).toBe(202);
+    expect(await t.post(GENERIC_ID, BIG, { ...signature, "x-flow-delivery": "one" })).toMatchObject({
+      status: 200,
+      body: { duplicate: true },
+    });
+    expect((await t.post(GENERIC_ID, BIG, { ...signature, "x-flow-delivery": "two" })).status).toBe(202);
+    expect(t.mem.runs.size).toBe(2);
+  });
+
+  it("B2: a GitHub delivery replayed under another X-GitHub-Delivery is a duplicate too", async () => {
+    const t = setup();
+    const body = JSON.stringify({ action: "opened", ...REPO });
+    const headers = { "x-hub-signature-256": signGithub(SECRET, body), "x-github-event": "issues" };
+    expect((await t.post(GITHUB_ID, body, { ...headers, "x-github-delivery": "d-1" })).status).toBe(202);
+    expect(await t.post(GITHUB_ID, body, { ...headers, "x-github-delivery": "d-2" })).toMatchObject({
+      status: 200,
+      body: { duplicate: true },
+    });
+    expect(t.mem.runs.size).toBe(1);
+  });
+
+  it("B2: a signed call without a delivery id is refused with 400, generic and GitHub, and starts nothing", async () => {
+    const t = setup();
+    const sig = { "x-flow-signature": signGeneric(SECRET, BIG, T) };
+    expect(await t.post(GENERIC_ID, BIG, sig)).toMatchObject({ status: 400, body: { error: "missing_delivery" } });
+    const body = JSON.stringify(REPO);
+    const gh = { "x-hub-signature-256": signGithub(SECRET, body), "x-github-event": "push" };
+    expect(await t.post(GITHUB_ID, body, gh)).toMatchObject({ status: 400, body: { error: "missing_delivery" } });
+    expect(t.mem.runs.size).toBe(0);
+  });
+
+  it("B2: an unsigned call never gets as far as a delivery id: 401", async () => {
+    const t = setup();
+    expect((await t.post(GENERIC_ID, BIG, { "x-flow-delivery": "x" })).status).toBe(401);
+    expect(t.mem.runs.size).toBe(0);
+  });
+
+  it("B3 and B4: calls with a bad signature don't use up the hook's own allowance", async () => {
+    const t = setup();
+    // 100 forged calls, each from another address: more than the per-hook limit of 60.
+    for (let i = 0; i < 100; i++) {
+      const r = await t.post(GENERIC_ID, BIG, {
+        "x-flow-signature": signGeneric("not the secret", BIG, T),
+        "x-flow-delivery": `f-${i}`,
+        ...from(`203.0.113.${i}`),
+      });
+      expect(r.status).toBe(401);
+    }
+    expect((await t.generic(BIG, from("198.51.100.7"))).status).toBe(202);
+  });
+
+  it("B4: one source can't use up the shared allowance: past its limit it is 429, another source is served", async () => {
+    const t = setup();
+    const flood = async () => t.post(OTHER_ID, "{}", from("203.0.113.9"));
+    for (let i = 0; i < SOURCE_RATE_LIMIT; i++) expect((await flood()).status).toBe(401);
+    const limited = await flood();
+    expect(limited).toMatchObject({ status: 429, body: { error: "rate_limited" } });
+    expect(limited.headers.get("retry-after")).toBe("60");
+    expect((await t.generic(BIG, from("198.51.100.7"))).status).toBe(202);
+    // The sender's whole allowance is its own: a minute later it is served again.
+    t.clock.now = new Date(NOW.getTime() + 60_000);
+    expect((await t.generic(BIG, from("203.0.113.9"), T + 60)).status).toBe(202);
+  });
+
+  it("B4: the source is the address the proxy appended (rightmost), so forged entries on the left don't change it", async () => {
+    const t = setup();
+    for (let i = 0; i < SOURCE_RATE_LIMIT; i++)
+      expect((await t.post(OTHER_ID, "{}", from(`10.0.0.${i}, 203.0.113.9`))).status).toBe(401);
+    expect((await t.post(OTHER_ID, "{}", from("1.2.3.4, 203.0.113.9"))).status).toBe(429);
+  });
+
+  it("B5: the log carries a short hash of the hook id, never the id (the URL path)", async () => {
+    const t = setup();
+    await t.generic(BIG);
+    await t.post(GENERIC_ID, BIG, { "x-flow-signature": "bad" });
+    await t.post("../../etc/passwd", BIG);
+    const lines = t.logs.join("\n");
+    expect(lines).not.toContain(GENERIC_ID);
+    expect(lines).not.toContain(OTHER_ID);
+    const hooks = t.logs.map((l) => (JSON.parse(l) as { hook: string }).hook);
+    expect(hooks[0]).toMatch(/^[0-9a-f]{12}$/);
+    expect(hooks[1]).toBe(hooks[0]);
+    expect(hooks[2]).toBe("invalid");
+  });
+});

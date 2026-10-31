@@ -74,11 +74,3 @@ export const signGeneric = (secret: string, body: string, t: number): string => 
 export function signGithub(secret: string, body: string | Uint8Array): string {
   return `sha256=${hmac(secret, body).toString("hex")}`;
 }
-
-/**
- * The same work as a verification, for a hook that doesn't exist: the answer then takes the shape a
- * bad signature's does.
- */
-export function verifyNothing(body: Uint8Array): void {
-  sameDigest(hmac("no hook", body), undefined);
-}
