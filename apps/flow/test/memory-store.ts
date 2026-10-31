@@ -22,13 +22,18 @@ export function memoryDb() {
   /** Run ids locked by "another instance": claimOverdueRun skips them, as SKIP LOCKED does. */
   const lockedElsewhere = new Set<string>();
 
-  /** Settings `paused_all` (lib/settings.ts isPausedAll reads it through the transaction). */
-  const settings = { pausedAll: false };
+  /**
+   * Settings `paused_all` (lib/settings.ts isPausedAll reads it through the transaction): `false` is
+   * no row, `true` the switch on, anything else is a malformed stored value.
+   */
+  const settings: { pausedAll: unknown } = { pausedAll: false };
 
   const tx = {
     async query(text: string, values: unknown[] = []) {
       if (text.startsWith("SELECT value FROM settings WHERE key = 'paused_all'"))
-        return { rows: settings.pausedAll ? [{ value: true }] : [], rowCount: settings.pausedAll ? 1 : 0 };
+        return settings.pausedAll === false
+          ? { rows: [], rowCount: 0 }
+          : { rows: [{ value: settings.pausedAll }], rowCount: 1 };
       if (!text.startsWith("INSERT INTO asafarim_outbox")) throw new Error(`unexpected query: ${text}`);
       outbox.push({
         id: values[0] as string,

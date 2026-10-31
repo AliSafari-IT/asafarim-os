@@ -118,7 +118,7 @@ export type Refusal =
   | "invalid_input"
   /** startRun: this trigger event started a run already. */
   | "duplicate"
-  /** startRun: Settings `paused_all` is on (only a dry run, which calls nothing, still starts). */
+  /** startRun, approve, retry: Settings `paused_all` is on (only a dry run, which calls nothing, still starts). */
   | "paused_all"
   /** Drafts: there is none to publish or run. */
   | "no_draft"
@@ -350,6 +350,16 @@ export function createEngine(deps: EngineDeps) {
       });
       return node.next;
     }
+    // The one place a request goes out: whatever brought the run here (an approval, a retry, a wait
+    // that ended) stops at Pause all. The step fails with `paused_all`; a retry runs it once resumed.
+    if (await isPausedAll(c.tx, deps.log)) {
+      await failStep(c, run, node.key, existing, "paused_all", "Pause all is on, so the request was not sent.", {
+        id: stepId,
+        input: payload,
+        attempts: existing?.attempts ?? 0,
+      });
+      return undefined;
+    }
     const event = await deps.publish(c.tx, node.request, payload, run.id);
     const startedAt = now();
     await writeStep(c, run, node.key, existing, {
@@ -519,7 +529,7 @@ export function createEngine(deps: EngineDeps) {
     if (trigger.type !== opts.trigger) return refuse("wrong_trigger");
     const refusal = opts.accepts?.(trigger);
     if (refusal) return refuse(refusal);
-    if (opts.dryRun !== true && (await isPausedAll(c.tx))) return refuse("paused_all");
+    if (opts.dryRun !== true && (await isPausedAll(c.tx, deps.log))) return refuse("paused_all");
     if (!isRecord(opts.data)) return refuse("invalid_input", [{ path: "", message: "must be an object" }]);
     if (trigger.type === "manual" || trigger.type === "webhook") {
       const problems = inputProblems(trigger.input, opts.data);
@@ -581,7 +591,7 @@ export function createEngine(deps: EngineDeps) {
       deps.log.warn("flow.trigger.ignored", { eventId: event.id, type: event.type, reason: "data_not_an_object" });
       return [];
     }
-    if (await isPausedAll(tx)) return pausedAllRefusal(deps.log, event);
+    if (await isPausedAll(tx, deps.log)) return pausedAllRefusal(deps.log, event);
     const audits: AuditEntry[] = [];
     for (const { workflow } of await deps.store(tx).triggeredBy(event.type)) {
       const r = await startRun(tx, {
@@ -972,6 +982,8 @@ export function createEngine(deps: EngineDeps) {
       const c = call(tx);
       const d = await decidable(c, approvalId);
       if (!d.ok) return { ok: false, error: d.error, audits: [] };
+      // Held, not decided: the approval stays pending until Pause all is off.
+      if (await isPausedAll(tx, deps.log)) return { ok: false, error: "paused_all", audits: [] };
       const decidedAt = now();
       let decision: Decision | { approvalId: string; decidedBy: string; decidedAt: string };
       let changed: Record<string, unknown> | null = null;
@@ -1042,6 +1054,7 @@ export function createEngine(deps: EngineDeps) {
       if (run.status !== "failed" || !failed) return { ok: false, error: "not_retryable", audits: [] };
       const graph = await graphOfRun(c, run);
       if (!graph.nodes.has(failed.stepKey)) return { ok: false, error: "not_retryable", audits: [] };
+      if (await isPausedAll(tx, deps.log)) return { ok: false, error: "paused_all", audits: [] };
 
       await c.store.updateRun(run.id, { status: "running", endedAt: null, errorCode: null });
       c.audits.push({
