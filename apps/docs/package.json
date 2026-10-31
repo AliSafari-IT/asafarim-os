@@ -23,7 +23,7 @@
     "github-slugger": "^2.0.0",
     "hast-util-to-string": "^3.0.1",
     "mdast-util-to-string": "4.0.0",
-    "mermaid": "12.0.0",
+    "mermaid": "12.2.0",
     "next": "^16.4.3",
     "next-auth": "5.0.0-beta.32",
     "pg": "8.23.1",
