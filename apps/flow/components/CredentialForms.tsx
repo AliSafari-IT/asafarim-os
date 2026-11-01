@@ -102,12 +102,13 @@ export function AddCredentialForm() {
             defaultValue={587}
             required
             list="add-port-choices"
-            title="465 (TLS) or 587 (STARTTLS). Another port only with None, on a local server."
+            aria-describedby="add-port-help"
           />
           <datalist id="add-port-choices">
             <option value="465" />
             <option value="587" />
           </datalist>
+          <small id="add-port-help">465 (TLS) or 587 (STARTTLS). Another port only with None, on a local server.</small>
           <label htmlFor="add-mode">Mode</label>
           <select id="add-mode" name="mode" defaultValue="starttls">
             <option value="starttls">STARTTLS</option>

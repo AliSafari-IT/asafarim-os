@@ -116,6 +116,16 @@ describe("the egress boundary", () => {
         'import { createRequire } from "node:module";\nexport const a = createRequire(import.meta.url);\n',
       ],
       ["process.binding", 'export const a = () => process.binding("tcp_wrap");\n'],
+      ["process.binding by a computed name", 'export const a = () => process["binding"]("tcp_wrap");\n'],
+      ["process.dlopen by a computed name", 'export const a = () => process["dlopen"]({}, "x");\n'],
+      [
+        "a dynamic import of the egress factory module",
+        'export const a = async () => (await import("@/lib/egress/egress")).createEgress({});\n',
+      ],
+      [
+        "a dynamic import of the smtp factory module by a relative path",
+        'export const a = async () => (await import("../egress/smtp")).createSmtpEgress({});\n',
+      ],
       [
         "createEgress from the barrel",
         'import { createEgress } from "@/lib/egress";\nexport const a = createEgress({ route: () => undefined });\n',

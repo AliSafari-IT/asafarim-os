@@ -71,6 +71,12 @@ export default [
         { selector: "MemberExpression[computed=true][property.value='fetch']", message: EGRESS },
         { selector: "ObjectPattern > Property[key.name='fetch']", message: EGRESS },
         { selector: "MemberExpression[object.name='process'][property.name=/^(binding|dlopen)$/]", message: EGRESS },
+        {
+          selector: "MemberExpression[object.name='process'][computed=true][property.value=/^(binding|dlopen)$/]",
+          message: EGRESS,
+        },
+        // The factories by a dynamic import (a static import is the import rule's, above).
+        { selector: "ImportExpression[source.value=/(^|\\u002F)egress\\u002F(egress|smtp)$/]", message: FACTORY },
         // The same modules by a re-export (`export * from "node:http"` is the import rule's too).
         { selector: `ExportAllDeclaration[source.value=/^${MODULE_NAMES}$/]`, message: EGRESS },
       ],
