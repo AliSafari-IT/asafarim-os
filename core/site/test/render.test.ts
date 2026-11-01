@@ -6,6 +6,40 @@ import { APP_LINKS, DESCRIPTION, IDENTITY_ORIGIN, TITLE, escapeHtml, formatDate,
 const progress: Progress = parseProgress({
   updated: "2026-10-10",
   repo: "https://github.com/AliSafari-IT/asafarim-os",
+  apps: [
+    {
+      id: "admin",
+      name: "Admin",
+      group: "os",
+      tagline: "Run the OS",
+      summary: "Apps & roles.",
+      surfaces: [{ kind: "Web app", address: "admin.asafarim.site", status: "staff-only", note: "Admins only." }],
+    },
+    {
+      id: "igs-pharma",
+      name: "IGS-Pharma",
+      group: "product",
+      tagline: "An online pharmacy",
+      summary: "A webshop <and> an app.",
+      surfaces: [
+        {
+          kind: "Website",
+          address: "igs.asafarim.site",
+          href: "https://igs.asafarim.site/en/",
+          status: "live",
+          note: "The project.",
+        },
+        {
+          kind: "Webshop",
+          address: "igs-pharma.be",
+          href: "https://igs-pharma.be/",
+          status: "early-access",
+          note: "Closed.",
+        },
+        { kind: "Android app", address: "Google Play", status: "testing", note: "Internal testing." },
+      ],
+    },
+  ],
   shipped: [{ id: "P0", title: "Foundations <b>", date: "2026-10-03", summary: "A & B", prs: [1, 12] }],
   screenshots: [{ file: "apps.png", title: "Apps", alt: 'The "Apps" page', caption: "Every app." }],
   roadmap: [{ id: "P6", title: "Observability", summary: "Telemetry." }],
@@ -55,7 +89,9 @@ describe("renderPage", () => {
       /<script[^>]*>[^<]|\sstyle=|<style|\son[a-z]+=/i,
     );
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
-      expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|((docs|flow|id|breinhap|igs)\.)?asafarim\.site)\//);
+      expect(url).toMatch(
+        /^https:\/\/(github\.com|asafarim\.com|igs-pharma\.be|((docs|flow|id|breinhap|igs)\.)?asafarim\.site)\//,
+      );
     }
     // Stylesheet and icon are this origin's own; only the canonical link names a full URL.
     expect(html).not.toMatch(/<link rel="(?!canonical")[^"]+" [^>]*href="https?:/);
@@ -105,16 +141,41 @@ describe("renderPage", () => {
     expect(html).not.toContain("os-theme-toggle"); // none given, none drawn
   });
 
-  it("links Breinhap's English page from the top bar, a section of its own and the footer", () => {
-    expect(html).toMatch(/<section id="more"[\s\S]*?<a href="https:\/\/breinhap\.asafarim\.site\/en\/">Breinhap<\/a>/);
+  it("links Breinhap's English page from the top bar and the footer", () => {
     const footer = /<footer>([\s\S]*?)<\/footer>/.exec(html)?.[1] ?? "";
     expect(footer).toContain('<a href="https://breinhap.asafarim.site/en/">Breinhap</a>');
   });
 
-  it("links IGS-Pharma's English page from the top bar, the More section and the footer", () => {
-    expect(html).toMatch(/<section id="more"[\s\S]*?<a href="https:\/\/igs\.asafarim\.site\/en\/">IGS-Pharma<\/a>/);
+  it("links IGS-Pharma's English page from the top bar, the Apps section and the footer", () => {
+    expect(html).toMatch(
+      /<section id="apps"[\s\S]*?<a href="https:\/\/igs\.asafarim\.site\/en\/">igs\.asafarim\.site<\/a>/,
+    );
     const footer = /<footer>([\s\S]*?)<\/footer>/.exec(html)?.[1] ?? "";
     expect(footer).toContain('<a href="https://igs.asafarim.site/en/">IGS-Pharma</a>');
+  });
+
+  it("introduces the apps right under the hero, OS apps first, each surface with its status (#312)", () => {
+    const main = html.slice(html.indexOf("<main>"));
+    expect(main.indexOf('<section id="apps"')).toBeLessThan(main.indexOf('<section id="shipped"'));
+    expect(html).not.toContain('<section id="more"');
+    const section = /<section id="apps"[\s\S]*?<\/section>/.exec(html)?.[0] ?? "";
+    expect(section.indexOf("Built into the OS")).toBeLessThan(section.indexOf("Products built by ASafariM"));
+    expect(section).toContain('<li class="app-card app-card-product" id="app-igs-pharma">');
+    expect(section).toContain("A webshop &lt;and&gt; an app.");
+    expect(section).toContain('<a href="https://igs-pharma.be/">igs-pharma.be</a>');
+    expect(section).toContain('<span class="status status-early-access">Early access</span>');
+    expect(section).toContain('<span class="status status-testing">Testing</span>');
+    // a store build in testing and a staff-only console have no link
+    expect(section).toContain('<span class="surface-address">Google Play</span>');
+    expect(section).toContain('<span class="surface-address">admin.asafarim.site</span>');
+    expect(section).not.toContain('href="https://admin.asafarim.site');
+    expect(section).toContain('<span class="status status-staff-only">Staff only</span>');
+  });
+
+  it("the launchers point to the Apps section", () => {
+    const nav = /<nav class="topbar" aria-label="Main">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
+    expect(nav).toContain('<a href="./#apps">Every app</a>');
+    expect(nav).toContain('<a href="./#apps-products">Webshop, Android app and status</a>');
   });
 
   it("frames the OS as a new base platform, not a migration", () => {

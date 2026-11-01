@@ -35,9 +35,38 @@ export interface Link {
   href: string;
 }
 
+/** How far one surface of an app is (asafarim-os#312). */
+export const SURFACE_STATUSES = ["live", "early-access", "testing", "in-development", "staff-only"] as const;
+export type SurfaceStatus = (typeof SURFACE_STATUSES)[number];
+
+/** One place an app can be reached: a website, a webshop, an Android app, a back-office. */
+export interface Surface {
+  /** What it is: "Website", "Webshop", "Android app", "Back-office". */
+  kind: string;
+  /** Where, as shown: a domain, or "Google Play". */
+  address: string;
+  /** The public link, when there is one (an allowed host); none for staff-only or store builds in testing. */
+  href?: string;
+  status: SurfaceStatus;
+  /** One sentence on what this surface does. */
+  note: string;
+}
+
+/** An OS app ("os") or a product ASafariM builds on its own domains ("product"). */
+export interface App {
+  id: string;
+  name: string;
+  group: "os" | "product";
+  /** A few words, under the name. */
+  tagline: string;
+  summary: string;
+  surfaces: Surface[];
+}
+
 export interface Progress {
   updated: string;
   repo: string;
+  apps: App[];
   shipped: Milestone[];
   screenshots: Screenshot[];
   roadmap: RoadmapItem[];
@@ -56,6 +85,8 @@ export const ALLOWED_LINK_HOSTS: readonly string[] = [
   "breinhap.asafarim.site",
   // IGS-Pharma's landing page (served by this stack, its source in AliSafari-IT/igs-pharma, apps/site).
   "igs.asafarim.site",
+  // IGS-Pharma's webshop on its own domain ("coming soon" while it is closed; asafarim-os#312).
+  "igs-pharma.be",
 ];
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -170,12 +201,41 @@ export function parseProgress(raw: unknown): Progress {
   }));
   uniqueIds(roadmap, "roadmap");
 
+  const apps = list(raw, "apps", "").map((a, i): App => {
+    const where = `apps[${i}]`;
+    const group = text(a, "group", where);
+    if (group !== "os" && group !== "product") throw new ProgressError(`${where}.group`, 'must be "os" or "product"');
+    const surfaces = list(a, "surfaces", where).map((v, j): Surface => {
+      const at = `${where}.surfaces[${j}]`;
+      const status = text(v, "status", at);
+      if (!(SURFACE_STATUSES as readonly string[]).includes(status)) {
+        throw new ProgressError(`${at}.status`, `must be one of ${SURFACE_STATUSES.join(", ")}`);
+      }
+      return {
+        kind: text(v, "kind", at),
+        address: text(v, "address", at),
+        ...(v.href === undefined ? {} : { href: link(v, "href", at) }),
+        status: status as SurfaceStatus,
+        note: text(v, "note", at),
+      };
+    });
+    return {
+      id: text(a, "id", where),
+      name: text(a, "name", where),
+      group,
+      tagline: text(a, "tagline", where),
+      summary: text(a, "summary", where),
+      surfaces,
+    };
+  });
+  uniqueIds(apps, "apps");
+
   const links = list(raw, "links", "").map((l, i): Link => ({
     label: text(l, "label", `links[${i}]`),
     href: link(l, "href", `links[${i}]`),
   }));
 
-  return { updated: date(raw, "updated", ""), repo, shipped, screenshots, roadmap, links };
+  return { updated: date(raw, "updated", ""), repo, apps, shipped, screenshots, roadmap, links };
 }
 
 /** The link to a merged pull request in the repository. */
