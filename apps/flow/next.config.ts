@@ -15,6 +15,10 @@ if (existsSync(path.join(process.cwd(), "../../.dev")))
 const nextConfig: NextConfig = {
   output: process.env.BUILD_STANDALONE === "true" ? "standalone" : undefined,
   devIndicators: false,
+  // Inlined when the build runs, not read when the server does: only scripts/dev/e2e.mjs sets it, for
+  // its own build, and it is what lets lib/egress/e2e.ts route calls to the local mocks. An image built
+  // without it ignores FLOW_E2E_EGRESS whatever the server is given later.
+  env: { FLOW_E2E_BUILD: process.env.FLOW_E2E_BUILD ?? "" },
   // pg and the OpenTelemetry SDK (@asafarim/telemetry) use Node APIs; keep them out of the bundler.
   serverExternalPackages: ["pg", "@asafarim/telemetry"],
   transpilePackages: ["@asafarim/app-sdk", "@asafarim/theme"],

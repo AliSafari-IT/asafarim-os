@@ -5,6 +5,9 @@
  */
 import { isIP } from "node:net";
 
+/** The ports an SMTP credential may name (SMTPS, submission), except a loopback server without TLS (development). */
+export const SMTP_PORTS: readonly number[] = [465, 587];
+
 export interface AllowedHost {
   host: string;
   /** Ports besides 443. */

@@ -20,6 +20,7 @@ import { log as appLog } from "../log";
 import { isPausedAll, type Queryable } from "../settings";
 import { isBlockedAddress } from "./address";
 import { pinnedLookup, type EgressRoute, type ResolvedAddress } from "./egress";
+import { SMTP_PORTS } from "./hosts";
 
 /** The whole call, DNS and every SMTP step included. */
 export const SMTP_TIMEOUT_MS = 20_000;
@@ -30,6 +31,8 @@ export type SmtpEgressErrorCode =
   | "private_address"
   /** `none` for a host that isn't loopback, or in production. */
   | "insecure_refused"
+  /** A port that isn't on SMTP_PORTS (lib/egress/hosts.ts), with TLS. */
+  | "port_refused"
   | "smtp_auth"
   | "smtp_unavailable"
   /** A permanent (5xx) answer to the sender, a recipient or the message. */
@@ -118,6 +121,9 @@ export function createSmtpEgress(deps: SmtpEgressDeps = {}) {
     const insecure = req.server.mode === "none";
     if (insecure && (env.NODE_ENV === "production" || !LOOPBACK_NAMES.has(host)))
       throw new SmtpEgressError("insecure_refused", host);
+    // The same list the credential is saved against: a credential (or a row changed by hand) naming
+    // another port can't turn the SMTP client into a port scanner.
+    if (!insecure && !SMTP_PORTS.includes(req.server.port)) throw new SmtpEgressError("port_refused", host);
     if (await isPausedAll(q)) throw new SmtpEgressError("paused_all", host);
     // Only with TLS: the e2e's server proves the name with its certificate.
     const routed = insecure ? undefined : deps.route?.(host, req.server.port);

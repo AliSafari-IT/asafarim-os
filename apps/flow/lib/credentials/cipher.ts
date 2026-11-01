@@ -1,7 +1,14 @@
 /**
- * The credentials' encryption: AES-256-GCM, a random 96-bit IV per encryption, the credential's id as
- * the additional authenticated data (a ciphertext copied onto another credential's row doesn't
- * decrypt), the 16-byte tag appended to the ciphertext.
+ * The credentials' encryption: AES-256-GCM, a random 96-bit IV per encryption, the credential's id,
+ * kind and non-secret settings as the additional authenticated data (a ciphertext copied onto another
+ * credential's row doesn't decrypt, and neither does one whose host or port was changed in the table),
+ * the 16-byte tag appended to the ciphertext.
+ *
+ * What the AAD holds is the row's `aad_version`: 1 is the credential's id alone (rows made before the
+ * settings were bound), 2 is the id, the kind and the `meta` (keys sorted, so the order a database
+ * returns them in doesn't matter). New and rotated credentials are version 2; a version 1 row still
+ * opens, and becomes version 2 when it is first used (store.ts useCredential) or when
+ * scripts/rotate-credentials-key.mjs runs (reencryptAll, which also moves rows to the current key).
  *
  * Keys come from the environment, base64 of 32 bytes each:
  *
@@ -71,28 +78,67 @@ export function keyringFromEnv(env: Record<string, string | undefined> = process
   return { ok: true, keyring: { version, key, keys } };
 }
 
+/** What a ciphertext is bound to: the row's id and kind, and its `meta` (what isn't secret). */
+export interface Binding {
+  id: string;
+  kind: string;
+  meta: unknown;
+}
+
+/** The AAD a new ciphertext carries. */
+export const AAD_VERSION = 2;
+
 export interface Sealed {
   ciphertext: Buffer;
   iv: Buffer;
   keyVersion: number;
+  aadVersion: number;
 }
 
-export function seal(keyring: Keyring, id: string, plaintext: string): Sealed {
+/** JSON with every object's keys sorted: the same value gives the same text whatever order it came in. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** The additional authenticated data of `aadVersion` for `binding`; undefined for a version this code doesn't know. */
+function aadOf(aadVersion: number, binding: Binding): Buffer | undefined {
+  if (aadVersion === 1) return Buffer.from(binding.id, "utf8");
+  if (aadVersion === 2)
+    return Buffer.from(
+      `flow.credential.v2\n${canonical({ id: binding.id, kind: binding.kind, meta: binding.meta })}`,
+      "utf8",
+    );
+  return undefined;
+}
+
+/** `aadVersion` is the current one except where a test or a migration needs a row of the old kind. */
+export function seal(keyring: Keyring, binding: Binding, plaintext: string, aadVersion = AAD_VERSION): Sealed {
+  const aad = aadOf(aadVersion, binding);
+  if (!aad) throw new CredentialError("credential_unreadable");
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", keyring.key, iv);
-  cipher.setAAD(Buffer.from(id, "utf8"));
+  cipher.setAAD(aad);
   const body = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
-  return { ciphertext: Buffer.concat([body, cipher.getAuthTag()]), iv, keyVersion: keyring.version };
+  return { ciphertext: Buffer.concat([body, cipher.getAuthTag()]), iv, keyVersion: keyring.version, aadVersion };
 }
 
-/** The plaintext; `credential_unreadable` when the key, the id or the bytes don't match. */
-export function open(keyring: Keyring, id: string, sealed: Sealed): string {
+/** The plaintext; `credential_unreadable` when the key, the binding or the bytes don't match. */
+export function open(keyring: Keyring, binding: Binding, sealed: Sealed): string {
   const key = keyring.keys.get(sealed.keyVersion);
-  if (!key || sealed.iv.length !== 12 || sealed.ciphertext.length < 16)
+  const aad = aadOf(sealed.aadVersion, binding);
+  if (!key || !aad || sealed.iv.length !== 12 || sealed.ciphertext.length < 16)
     throw new CredentialError("credential_unreadable");
   try {
     const decipher = createDecipheriv("aes-256-gcm", key, sealed.iv);
-    decipher.setAAD(Buffer.from(id, "utf8"));
+    decipher.setAAD(aad);
     decipher.setAuthTag(sealed.ciphertext.subarray(-16));
     return Buffer.concat([decipher.update(sealed.ciphertext.subarray(0, -16)), decipher.final()]).toString("utf8");
   } catch {
@@ -105,30 +151,30 @@ interface Client {
 }
 
 /**
- * Re-encrypt every credential not sealed with the current key, in one transaction (rows locked);
- * how many. A row no key of the keyring opens stops it, and nothing is changed.
+ * Re-encrypt every credential not sealed with the current key or not bound to its settings (aad_version
+ * below the current), in one transaction (rows locked); how many. A row no key of the keyring opens
+ * stops it, and nothing is changed.
  */
 export async function reencryptAll(client: Client, keyring: Keyring): Promise<number> {
   await client.query("BEGIN");
   try {
     const { rows } = await client.query(
-      "SELECT id, ciphertext, iv, key_version FROM credentials WHERE key_version <> $1 FOR UPDATE",
-      [keyring.version],
+      "SELECT id, kind, meta, ciphertext, iv, key_version, aad_version FROM credentials WHERE key_version <> $1 OR aad_version < $2 FOR UPDATE",
+      [keyring.version, AAD_VERSION],
     );
     for (const r of rows) {
-      const id = r.id as string;
-      const plaintext = open(keyring, id, {
+      const binding: Binding = { id: r.id as string, kind: r.kind as string, meta: r.meta };
+      const plaintext = open(keyring, binding, {
         ciphertext: r.ciphertext as Buffer,
         iv: r.iv as Buffer,
         keyVersion: r.key_version as number,
+        aadVersion: r.aad_version as number,
       });
-      const next = seal(keyring, id, plaintext);
-      await client.query("UPDATE credentials SET ciphertext = $2, iv = $3, key_version = $4 WHERE id = $1", [
-        id,
-        next.ciphertext,
-        next.iv,
-        next.keyVersion,
-      ]);
+      const next = seal(keyring, binding, plaintext);
+      await client.query(
+        "UPDATE credentials SET ciphertext = $2, iv = $3, key_version = $4, aad_version = $5 WHERE id = $1",
+        [binding.id, next.ciphertext, next.iv, next.keyVersion, next.aadVersion],
+      );
     }
     await client.query("COMMIT");
     return rows.length;

@@ -641,7 +641,7 @@ describe("generating a draft end to end (fakes only)", () => {
     const d: GenerateDeps = {
       generator,
       connectorTypes: CONNECTORS,
-      fetch: async () => issue,
+      loadIssue: async () => issue,
       fetchDeps: { egress: fakeEgress(() => json(500, {})), db },
     };
     return { d, seen };
@@ -725,7 +725,7 @@ describe("generating a draft end to end (fakes only)", () => {
     const r = await generateDraft(ISSUE_URL, "k", {
       generator,
       connectorTypes: CONNECTORS,
-      fetch: async () => ({ title: "T", body: "B", comments: [], truncated: false }),
+      loadIssue: async () => ({ title: "T", body: "B", comments: [], truncated: false }),
       fetchDeps: { egress: fakeEgress(() => json(500, {})), db },
     });
     expect(r).toMatchObject({ ok: false, error: code, source: { host: "github", repo: "acme/shop", number: 42 } });
@@ -738,7 +738,7 @@ describe("generating a draft end to end (fakes only)", () => {
       called = true;
       return answer();
     });
-    d.fetch = async () => {
+    d.loadIssue = async () => {
       called = true;
       throw new Error("no");
     };
@@ -755,7 +755,7 @@ describe("generating a draft end to end (fakes only)", () => {
       called = true;
       return answer();
     });
-    d.fetch = async () => {
+    d.loadIssue = async () => {
       throw new IssueFetchError("no_access", "http_404");
     };
     expect(await generateDraft(ISSUE_URL, "k", d)).toMatchObject({ ok: false, error: "issue_no_access" });

@@ -102,29 +102,32 @@ describe("the key", () => {
   });
 });
 
+const B1 = { id: "id-1", kind: "smtp", meta: { host: "smtp.example.com", port: 587 } };
+
 describe("AES-256-GCM", () => {
   it("round-trips, with a fresh 96-bit IV each time", () => {
-    const a = seal(K1, "id-1", "hello");
-    const b = seal(K1, "id-1", "hello");
+    const a = seal(K1, B1, "hello");
+    const b = seal(K1, B1, "hello");
     expect(a.iv).toHaveLength(12);
     expect(a.iv.equals(b.iv)).toBe(false);
     expect(a.ciphertext.equals(b.ciphertext)).toBe(false);
     expect(a.ciphertext.includes(Buffer.from("hello"))).toBe(false);
-    expect(open(K1, "id-1", a)).toBe("hello");
+    expect(open(K1, B1, a)).toBe("hello");
   });
 
   it("the AAD binds a ciphertext to its credential: moved to another id, it doesn't open", () => {
-    const sealed = seal(K1, "id-1", "secret-of-1");
-    expect(() => open(K1, "id-2", sealed)).toThrow(CredentialError);
+    const sealed = seal(K1, B1, "secret-of-1");
+    expect(() => open(K1, { ...B1, id: "id-2" }, sealed)).toThrow(CredentialError);
   });
 
   it("a flipped bit, a wrong key or an unknown key version doesn't open", () => {
-    const sealed = seal(K1, "id-1", "x");
+    const sealed = seal(K1, B1, "x");
     const flipped = Buffer.from(sealed.ciphertext);
     flipped[0]! ^= 1;
-    expect(() => open(K1, "id-1", { ...sealed, ciphertext: flipped })).toThrow(CredentialError);
-    expect(() => open(keyring({ FLOW_CREDENTIALS_KEY: KEY2 }), "id-1", sealed)).toThrow(CredentialError);
-    expect(() => open(K1, "id-1", { ...sealed, keyVersion: 7 })).toThrow(CredentialError);
+    expect(() => open(K1, B1, { ...sealed, ciphertext: flipped })).toThrow(CredentialError);
+    expect(() => open(keyring({ FLOW_CREDENTIALS_KEY: KEY2 }), B1, sealed)).toThrow(CredentialError);
+    expect(() => open(K1, B1, { ...sealed, keyVersion: 7 })).toThrow(CredentialError);
+    expect(() => open(K1, B1, { ...sealed, aadVersion: 3 })).toThrow(CredentialError);
   });
 
   it("in the store too: a row's ciphertext copied onto another row is unreadable there", async () => {
@@ -136,6 +139,115 @@ describe("AES-256-GCM", () => {
     Object.assign(rows.get(b.id)!, { ciphertext: ra.ciphertext, iv: ra.iv });
     expect(await codeOf(useCredential(db, b.id, "github-token", K1))).toBe("credential_unreadable");
     expect((await useCredential(db, a.id, "github-token", K1)).token).toBe("ghp_example0123");
+  });
+});
+
+describe("C1: the settings are bound into the encryption (#307)", () => {
+  it("a ciphertext opens only with the kind and the settings it was sealed with", () => {
+    const sealed = seal(K1, B1, "secret");
+    expect(sealed.aadVersion).toBe(2);
+    expect(open(K1, B1, sealed)).toBe("secret");
+    expect(() => open(K1, { ...B1, kind: "github-token" }, sealed)).toThrow(CredentialError);
+    expect(() => open(K1, { ...B1, meta: { host: "evil.example.net", port: 587 } }, sealed)).toThrow(CredentialError);
+    expect(() => open(K1, { ...B1, meta: { host: "smtp.example.com", port: 465 } }, sealed)).toThrow(CredentialError);
+    expect(() => open(K1, { ...B1, meta: { host: "smtp.example.com" } }, sealed)).toThrow(CredentialError);
+  });
+
+  it("the order a database returns the settings in doesn't matter", () => {
+    const meta = { from: "f@example.com", host: "h.example.com", nested: { b: 2, a: [1, { y: 1, x: 2 }] } };
+    const reordered = { nested: { a: [1, { x: 2, y: 1 }], b: 2 }, host: "h.example.com", from: "f@example.com" };
+    const sealed = seal(K1, { id: "i", kind: "smtp", meta }, "s");
+    expect(open(K1, { id: "i", kind: "smtp", meta: reordered }, sealed)).toBe("s");
+  });
+
+  it("in the store: a host changed in the table makes the credential unreadable, the secret is not handed over", async () => {
+    const { db, rows } = memoryCredentials();
+    const r = await createCredential(db, SMTP, "dev-owner", K1);
+    if (!r.ok) throw new Error("create failed");
+    expect(rows.get(r.id)!.aad_version).toBe(2);
+    expect((await useCredential(db, r.id, "smtp", K1)).password).toBe("smtp-pa55");
+    rows.get(r.id)!.meta = { ...rows.get(r.id)!.meta, host: "attacker.example.net" };
+    expect(await codeOf(useCredential(db, r.id, "smtp", K1))).toBe("credential_unreadable");
+    // Changing the port, the mode or the sender is the same.
+    for (const change of [{ port: 465 }, { mode: "tls" }, { from: "other@example.com" }]) {
+      rows.get(r.id)!.meta = { ...SMTP.meta, port: 587, ...change };
+      expect(await codeOf(useCredential(db, r.id, "smtp", K1))).toBe("credential_unreadable");
+    }
+  });
+
+  it("a rotation keeps the binding: the new secret opens with the row's settings and not with changed ones", async () => {
+    const { db, rows } = memoryCredentials();
+    const r = await createCredential(db, SMTP, "dev-owner", K1);
+    if (!r.ok) throw new Error("create failed");
+    const rotated = await rotateCredential(
+      db,
+      r.id,
+      { kind: "smtp", secret: { username: "u2", password: "new-pw" } },
+      "a",
+      K1,
+    );
+    expect(rotated.ok).toBe(true);
+    expect(rows.get(r.id)!.aad_version).toBe(2);
+    expect((await useCredential(db, r.id, "smtp", K1)).password).toBe("new-pw");
+    rows.get(r.id)!.meta = { ...rows.get(r.id)!.meta, host: "attacker.example.net" };
+    expect(await codeOf(useCredential(db, r.id, "smtp", K1))).toBe("credential_unreadable");
+  });
+
+  /** A row as it was before the settings were bound: sealed with the id alone, aad_version 1. */
+  function legacyRow(rows: ReturnType<typeof memoryCredentials>["rows"], id = "01LEGACY0000000000000000A") {
+    const meta = { host: "smtp.example.com", port: 587, mode: "starttls", from: "flow@example.com" };
+    const sealed = seal(
+      K1,
+      { id, kind: "smtp", meta },
+      JSON.stringify({ username: "old-user", password: "old-pw" }),
+      1,
+    );
+    rows.set(id, {
+      id,
+      name: "Legacy",
+      kind: "smtp",
+      ciphertext: sealed.ciphertext,
+      iv: sealed.iv,
+      key_version: sealed.keyVersion,
+      aad_version: sealed.aadVersion,
+      meta,
+      created_at: new Date(),
+      created_by: "dev-owner",
+      rotated_at: null,
+      last_used_at: null,
+    });
+    return id;
+  }
+
+  it("a row from before still opens, and is bound to its settings when it is first used", async () => {
+    const { db, rows } = memoryCredentials();
+    const id = legacyRow(rows);
+    expect(rows.get(id)!.aad_version).toBe(1);
+    expect((await useCredential(db, id, "smtp", K1)).password).toBe("old-pw");
+    expect(rows.get(id)!.aad_version).toBe(2);
+    expect((await useCredential(db, id, "smtp", K1)).password).toBe("old-pw");
+    // From then on a changed setting is refused.
+    rows.get(id)!.meta = { ...rows.get(id)!.meta, host: "attacker.example.net" };
+    expect(await codeOf(useCredential(db, id, "smtp", K1))).toBe("credential_unreadable");
+  });
+
+  it("the migration (reencryptAll) binds the rows that were not used yet, even under the current key", async () => {
+    const { db, rows } = memoryCredentials();
+    const old = legacyRow(rows);
+    const fresh = await createCredential(db, GITHUB, "dev-owner", K1);
+    if (!fresh.ok) throw new Error("create failed");
+    expect(await reencryptAll(db, K1)).toBe(1);
+    expect([...rows.values()].map((r) => r.aad_version)).toEqual([2, 2]);
+    expect((await useCredential(db, old, "smtp", K1)).password).toBe("old-pw");
+    expect(await reencryptAll(db, K1)).toBe(0);
+  });
+
+  it("the migration refuses a legacy row it cannot open, and changes nothing", async () => {
+    const { db, rows } = memoryCredentials();
+    const id = legacyRow(rows);
+    const K3 = keyring({ FLOW_CREDENTIALS_KEY: KEY2, FLOW_CREDENTIALS_KEY_VERSION: "3" });
+    await expect(reencryptAll(db, K3)).rejects.toThrow(CredentialError);
+    expect(rows.get(id)!.aad_version).toBe(1);
   });
 });
 
@@ -234,6 +346,8 @@ describe("the kinds", () => {
     const bad = [
       { ...SMTP, meta: { ...SMTP.meta, host: "10.0.0.1" } },
       { ...SMTP, meta: { ...SMTP.meta, port: "70000" } },
+      { ...SMTP, meta: { ...SMTP.meta, port: "25" } },
+      { ...SMTP, meta: { ...SMTP.meta, port: "2525", mode: "tls" } },
       { ...SMTP, meta: { ...SMTP.meta, from: "nope" } },
       { ...SMTP, secret: { username: "u", password: "" } },
       { ...GITHUB, meta: { repos: [] } },

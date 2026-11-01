@@ -49,6 +49,7 @@ const SMTP_MESSAGES: Record<SmtpEgressError["code"], string> = {
   dns_failed: "The SMTP server's name didn't resolve.",
   private_address: "The SMTP server resolves to a private or reserved address.",
   insecure_refused: "SMTP without TLS is allowed only for a loopback server, and never in production.",
+  port_refused: "The SMTP port isn't one Flow allows (465 or 587).",
   smtp_auth: "The SMTP server refused the login.",
   smtp_unavailable: "The SMTP server couldn't be reached, or answered it can't take the message now.",
   smtp_rejected: "The SMTP server refused the message.",

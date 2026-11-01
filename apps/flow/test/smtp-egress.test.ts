@@ -155,7 +155,9 @@ describe("email out", () => {
         env: {},
         log,
       });
-      expect(await codeOf(smtp.send(db, mail({ host: "smtp.example.com", mode: "starttls" })))).toBe("private_address");
+      expect(await codeOf(smtp.send(db, mail({ host: "smtp.example.com", mode: "starttls", port: 587 })))).toBe(
+        "private_address",
+      );
     }
     expect(connections).toBe(0);
   });
@@ -168,7 +170,9 @@ describe("email out", () => {
       env: {},
       log,
     });
-    const err = await smtp.send(db, mail({ host: "smtp.example.com", mode: "tls" })).catch((e: SmtpEgressError) => e);
+    const err = await smtp
+      .send(db, mail({ host: "smtp.example.com", mode: "tls", port: 465 }))
+      .catch((e: SmtpEgressError) => e);
     expect(err).toMatchObject({ code: "dns_failed", retryable: true });
   });
 
@@ -230,10 +234,34 @@ describe("email out", () => {
         return {};
       },
     });
-    await smtp.send(db, mail({ host: "smtp.example.com", mode: "tls" }));
+    await smtp.send(db, mail({ host: "smtp.example.com", mode: "tls", port: 465 }));
     expect(configs[0]).toMatchObject({ host: "smtp.example.com", security: "tls", user: "user-x", password: PASSWORD });
     await createSmtpEgress({ ...loopbackOnly, env: {}, send: async (c) => (configs.push(c), {}) }).send(db, mail());
     expect(configs[1]).not.toHaveProperty("password");
+  });
+
+  it("C2: with TLS only ports 465 and 587 are used; another is refused before any lookup or connection", async () => {
+    let resolved = 0;
+    const smtp = createSmtpEgress({
+      resolve: async () => {
+        resolved++;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      env: {},
+      log,
+      send: async () => ({}),
+    });
+    for (const p of [25, 22, 2525, 8080, 443, 1])
+      for (const mode of ["tls", "starttls"] as const)
+        expect(await codeOf(smtp.send(db, mail({ host: "smtp.example.com", mode, port: p })))).toBe("port_refused");
+    expect(resolved).toBe(0);
+    expect(connections).toBe(0);
+    for (const p of [465, 587])
+      await expect(smtp.send(db, mail({ host: "smtp.example.com", mode: "starttls", port: p }))).resolves.toBeDefined();
+    // A loopback server without TLS (development) may use any port.
+    await expect(
+      createSmtpEgress({ ...loopbackOnly, env: {}, send: async () => ({}) }).send(db, mail({ port: 1025 })),
+    ).resolves.toBeDefined();
   });
 
   it("loopback addresses", () => {

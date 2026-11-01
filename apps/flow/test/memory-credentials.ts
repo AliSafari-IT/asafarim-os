@@ -10,6 +10,7 @@ interface Row {
   ciphertext: Buffer;
   iv: Buffer;
   key_version: number;
+  aad_version: number;
   meta: Record<string, unknown>;
   created_at: Date;
   created_by: string;
@@ -36,9 +37,10 @@ export function memoryCredentials() {
           ciphertext: v[3] as Buffer,
           iv: v[4] as Buffer,
           key_version: v[5] as number,
-          meta: JSON.parse(v[6] as string) as Record<string, unknown>,
+          aad_version: v[6] as number,
+          meta: JSON.parse(v[7] as string) as Record<string, unknown>,
           created_at: new Date(),
-          created_by: v[7] as string,
+          created_by: v[8] as string,
           rotated_at: null,
           last_used_at: null,
         });
@@ -48,21 +50,29 @@ export function memoryCredentials() {
         return {
           rows: [...rows.values()]
             .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
-            .map(({ ciphertext: _c, iv: _i, key_version: _k, ...r }) => ({ ...r })),
+            .map(({ ciphertext: _c, iv: _i, key_version: _k, aad_version: _a, ...r }) => ({ ...r })),
         };
-      if (sql.startsWith("SELECT kind FROM credentials WHERE id = $1")) {
+      if (sql.startsWith("SELECT kind, meta FROM credentials WHERE id = $1")) {
         const r = rows.get(v[0] as string);
-        return { rows: r ? [{ kind: r.kind }] : [] };
+        return { rows: r ? [{ kind: r.kind, meta: r.meta }] : [] };
       }
-      if (sql.startsWith("SELECT kind, ciphertext, iv, key_version, meta FROM credentials WHERE id = $1")) {
+      if (
+        sql.startsWith("SELECT kind, ciphertext, iv, key_version, aad_version, meta FROM credentials WHERE id = $1")
+      ) {
         const r = rows.get(v[0] as string);
         return { rows: r ? [{ ...r }] : [] };
       }
-      if (sql.startsWith("SELECT id, ciphertext, iv, key_version FROM credentials WHERE key_version <> $1"))
-        return { rows: [...rows.values()].filter((r) => r.key_version !== v[0]).map((r) => ({ ...r })) };
-      if (sql.startsWith("UPDATE credentials SET ciphertext = $2, iv = $3, key_version = $4")) {
+      if (sql.startsWith("SELECT id, kind, meta, ciphertext, iv, key_version, aad_version FROM credentials WHERE"))
+        return {
+          rows: [...rows.values()]
+            .filter((r) => r.key_version !== v[0] || r.aad_version < (v[1] as number))
+            .map((r) => ({ ...r })),
+        };
+      if (sql.startsWith("UPDATE credentials SET ciphertext = $2, iv = $3, key_version = $4, aad_version = $5")) {
         const r = rows.get(v[0] as string)!;
-        Object.assign(r, { ciphertext: v[1], iv: v[2], key_version: v[3] });
+        // useCredential's upgrade is guarded (`AND aad_version < $5`); the others are not.
+        if (sql.includes("AND aad_version < $5") && r.aad_version >= (v[4] as number)) return { rows: [] };
+        Object.assign(r, { ciphertext: v[1], iv: v[2], key_version: v[3], aad_version: v[4] });
         if (sql.includes("rotated_at = now()")) r.rotated_at = new Date();
         return { rows: [] };
       }

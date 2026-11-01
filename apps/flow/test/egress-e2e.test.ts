@@ -5,7 +5,7 @@
  * the e2e makes (scripts/dev/e2e-tls.mjs, openssl).
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:https";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -26,8 +26,8 @@ const call = { connector: "test" };
 
 describe("FLOW_E2E_EGRESS", () => {
   it("is off without it: no route, no CA", () => {
-    expect(e2eEgress({})).toBeUndefined();
-    expect(e2eEgress({ FLOW_E2E_EGRESS: " " })).toBeUndefined();
+    expect(e2eEgress({}, true)).toBeUndefined();
+    expect(e2eEgress({ FLOW_E2E_EGRESS: " " }, true)).toBeUndefined();
   });
 
   it("takes host:port=port only: a route can't name an address", () => {
@@ -35,12 +35,45 @@ describe("FLOW_E2E_EGRESS", () => {
     const ca = path.join(dir, "ca.pem");
     writeFileSync(ca, "not checked here");
     for (const bad of ["api.github.com=4193", "api.github.com:443=10.0.0.1:4193", "x:443=99999", "a b:443=1"])
-      expect(() => e2eEgress({ FLOW_E2E_EGRESS: bad, FLOW_E2E_EGRESS_CA: ca })).toThrow(/host:port=port/);
-    expect(() => e2eEgress({ FLOW_E2E_EGRESS: "api.github.com:443=4193" })).toThrow(/FLOW_E2E_EGRESS_CA/);
-    const e2e = e2eEgress({ FLOW_E2E_EGRESS: "API.github.com:443=4193", FLOW_E2E_EGRESS_CA: ca })!;
+      expect(() => e2eEgress({ FLOW_E2E_EGRESS: bad, FLOW_E2E_EGRESS_CA: ca }, true)).toThrow(/host:port=port/);
+    expect(() => e2eEgress({ FLOW_E2E_EGRESS: "api.github.com:443=4193" }, true)).toThrow(/FLOW_E2E_EGRESS_CA/);
+    const e2e = e2eEgress({ FLOW_E2E_EGRESS: "API.github.com:443=4193", FLOW_E2E_EGRESS_CA: ca }, true)!;
     expect(e2e.route("api.github.com", 443)).toMatchObject({ port: 4193, addresses: [{ address: "127.0.0.1" }] });
     expect(e2e.route("api.github.com", 8443)).toBeUndefined();
     expect(e2e.route("example.com", 443)).toBeUndefined();
+  });
+});
+
+describe("C3: the routes can't be switched on in a production build (#307)", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "flow-e2e-gate-"));
+  const ca = path.join(dir, "ca.pem");
+  writeFileSync(ca, "not checked here");
+  const env = { FLOW_E2E_EGRESS: "api.github.com:443=4193", FLOW_E2E_EGRESS_CA: ca };
+  const root = path.resolve(import.meta.dirname, "../../..");
+
+  it("a build that wasn't made for the e2e ignores both variables, whatever NODE_ENV says", () => {
+    for (const NODE_ENV of ["production", "development", "test", undefined])
+      expect(e2eEgress({ ...env, NODE_ENV }, false)).toBeUndefined();
+    expect(e2eEgress(env, true)).toBeDefined();
+  });
+
+  it("with no second argument the answer is the build's own flag, which is off here", () => {
+    expect(e2eEgress(env)).toBeUndefined();
+  });
+
+  it("next.config.ts inlines FLOW_E2E_BUILD at build time, so a runtime variable can't turn it on in an image", () => {
+    const config = readFileSync(path.join(import.meta.dirname, "../next.config.ts"), "utf8");
+    expect(config).toMatch(/env:\s*{[^}]*FLOW_E2E_BUILD:\s*process\.env\.FLOW_E2E_BUILD\s*\?\?\s*""/);
+  });
+
+  it("only the e2e script's own build sets it; no Dockerfile, compose file or deploy script names it", () => {
+    const e2e = readFileSync(path.join(root, "scripts/dev/e2e.mjs"), "utf8");
+    expect(e2e).toMatch(/FLOW_E2E_BUILD:\s*"1"/);
+    for (const f of ["apps/flow/Dockerfile", "deploy/compose.prod.yml", "deploy/vps-deploy.sh", "docker-bake.hcl"]) {
+      const file = path.join(root, f);
+      if (!existsSync(file)) continue;
+      expect([f, readFileSync(file, "utf8").includes("FLOW_E2E")]).toEqual([f, false]);
+    }
   });
 });
 
@@ -88,10 +121,13 @@ describe.skipIf(!hasOpenssl)("a routed call (real servers, the e2e's certificate
   });
 
   const routes = () =>
-    e2eEgress({
-      FLOW_E2E_EGRESS: `api.github.com:443=${port(https)},smtp.e2e.test:465=${port(smtp)},elsewhere.e2e.test:443=${port(https)}`,
-      FLOW_E2E_EGRESS_CA: caPath,
-    })!;
+    e2eEgress(
+      {
+        FLOW_E2E_EGRESS: `api.github.com:443=${port(https)},smtp.e2e.test:465=${port(smtp)},elsewhere.e2e.test:443=${port(https)}`,
+        FLOW_E2E_EGRESS_CA: caPath,
+      },
+      true,
+    )!;
 
   it("HTTPS: a listed host reaches the local server, with SNI and Host for its name", async () => {
     const egress = createEgress({ route: routes().route, log });

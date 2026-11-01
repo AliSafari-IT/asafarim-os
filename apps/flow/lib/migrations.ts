@@ -240,6 +240,16 @@ CREATE TABLE ai_generations (
 CREATE INDEX ai_generations_subject ON ai_generations (subject, created_at);
 CREATE INDEX ai_generations_created ON ai_generations (created_at);`,
   },
+  {
+    version: 8,
+    name: "credentials: bind the settings into the encryption (#307 C1)",
+    sql: `
+-- 1: sealed with the credential's id alone (every row so far). 2: with its id, kind and settings (meta) too,
+-- so a host or port changed in this table makes the secret unreadable instead of sending it elsewhere
+-- (lib/credentials/cipher.ts). A version 1 row still opens; it becomes 2 when it is used, or when
+-- apps/flow/scripts/rotate-credentials-key.mjs runs. New and rotated credentials are 2.
+ALTER TABLE credentials ADD COLUMN aad_version smallint NOT NULL DEFAULT 1 CHECK (aad_version >= 1);`,
+  },
 ];
 
 /** Run the migrations not applied yet, in one transaction under an advisory lock. */
