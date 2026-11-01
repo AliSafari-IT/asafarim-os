@@ -89,7 +89,9 @@ describe("renderPage", () => {
       /<script[^>]*>[^<]|\sstyle=|<style|\son[a-z]+=/i,
     );
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
-      expect(url).toMatch(/^https:\/\/(github\.com|asafarim\.com|igs-pharma\.be|((docs|flow|id|breinhap|igs)\.)?asafarim\.site)\//);
+      expect(url).toMatch(
+        /^https:\/\/(github\.com|asafarim\.com|igs-pharma\.be|((docs|flow|id|breinhap|igs)\.)?asafarim\.site)\//,
+      );
     }
     // Stylesheet and icon are this origin's own; only the canonical link names a full URL.
     expect(html).not.toMatch(/<link rel="(?!canonical")[^"]+" [^>]*href="https?:/);
