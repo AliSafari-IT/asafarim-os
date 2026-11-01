@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-18",
+  "updated": "2026-11-01",
   "repo": "https://github.com/AliSafari-IT/asafarim-os",
   "shipped": [
     {
@@ -155,6 +155,121 @@
       "date": "2026-10-18",
       "summary": "One command writes a new app with its manifest, sign-in, the OS top bar, a permission-checked example route, health endpoints, telemetry and a test. It passes manifest review with no findings.",
       "prs": [103, 120, 165]
+    },
+    {
+      "id": "Admin live",
+      "title": "Admin console in production",
+      "date": "2026-10-18",
+      "summary": "The Admin console runs at admin.asafarim.site: admins manage apps, roles, grants and the audit log there.",
+      "prs": [176]
+    },
+    {
+      "id": "CLI",
+      "title": "The OS from the command line",
+      "date": "2026-10-19",
+      "summary": "The platform CLI reads what the Admin console shows: the audit log, every app and its state, one app's permissions and roles, who holds which role, and the event catalog with its keyword search.",
+      "prs": [172, 177, 178, 179, 180, 181, 182]
+    },
+    {
+      "id": "Retention part 2",
+      "title": "Backups checked on demand",
+      "date": "2026-10-19",
+      "summary": "A removed app's backup can be verified at any time, from the command line or from the Admin console's Apps page, before its database is purged.",
+      "prs": [168, 183]
+    },
+    {
+      "id": "Look",
+      "title": "One look for every app",
+      "date": "2026-10-23",
+      "summary": "One light and dark theme with a toggle in every header, data tables that fit a phone, a shared layout for the sign-in pages, and a link to the Admin console for admins.",
+      "prs": [202, 204, 205, 206, 207, 234]
+    },
+    {
+      "id": "Sister sites",
+      "title": "Breinhap and IGS-Pharma",
+      "date": "2026-10-25",
+      "summary": "The OS stack also serves the landing pages of two ventures built in their own repositories, breinhap.asafarim.site and igs.asafarim.site, linked from every OS navigation.",
+      "prs": [209, 210, 212, 219, 224, 228, 229]
+    },
+    {
+      "id": "Legal",
+      "title": "Privacy, cookies and terms",
+      "date": "2026-10-25",
+      "summary": "Privacy, cookie and terms pages linked from every OS footer, and a sitemap, share preview and structured data for this page.",
+      "prs": [215, 233]
+    },
+    {
+      "id": "Sign-in part 2",
+      "title": "Continue with Google and access requests",
+      "date": "2026-10-26",
+      "summary": "id.asafarim.site adds Continue with Google next to email codes and passkeys, with redesigned sign-in pages. A new person asks for access to the apps they need, with a note, and an admin approves.",
+      "prs": [201, 235, 245]
+    },
+    {
+      "id": "Audit centre",
+      "title": "An audit centre",
+      "date": "2026-10-26",
+      "summary": "The Admin console shows sign-ins, access decisions and admin changes in one audit centre.",
+      "prs": [248]
+    },
+    {
+      "id": "Flow",
+      "title": "Flow, the workflow app",
+      "date": "2026-10-27",
+      "summary": "flow.asafarim.site, the third built-in app: workflows that run on events, with approval steps a person approves or rejects. Its first workflow has the Docs app draft a GitHub issue and creates it once someone approves.",
+      "prs": [249, 250, 251, 254, 255, 257, 258]
+    },
+    {
+      "id": "Bus in production",
+      "title": "The event bus in production",
+      "date": "2026-10-27",
+      "summary": "NATS joins the production stack, and core-api, Docs and Flow connect to it when it runs.",
+      "prs": [260, 261]
+    },
+    {
+      "id": "Sessions",
+      "title": "One sign-out everywhere",
+      "date": "2026-10-27",
+      "summary": "An app's session ends when the identity session does, and signing out of an app also ends the id.asafarim.site session. A test fails if the two lifetimes drift apart.",
+      "prs": [186, 187, 252, 256]
+    },
+    {
+      "id": "P7.2 part 2",
+      "title": "A deeper manifest review",
+      "date": "2026-10-28",
+      "summary": "Manifest review catches many more mismatches between an app's manifest and its code: secrets, config and permissions declared but never used or used but never declared; routes, health paths and launcher tiles nothing serves; events and schemas that don't line up; database gaps; and names or ports that clash. The CLI's README lists every finding, and a test keeps the list complete.",
+      "prs": [
+        184, 188, 189, 190, 191, 192, 193, 196, 197, 198, 199, 200, 203, 208, 211, 213, 220, 221, 222, 223, 226, 227,
+        230, 231, 232, 236, 237, 238, 239, 241, 242, 244, 246, 247, 263, 264, 265
+      ]
+    },
+    {
+      "id": "Flow slice 2",
+      "title": "The workflow builder and connectors",
+      "date": "2026-10-29",
+      "summary": "Flow gets a visual builder, a new workflow format and the engine that runs it, webhook and GitHub event triggers, six outbound connectors, and an encrypted credential store behind an allow-list of the hosts it may reach.",
+      "prs": [267, 268, 269, 270, 271, 272]
+    },
+    {
+      "id": "Switcher",
+      "title": "A new app switcher",
+      "date": "2026-10-30",
+      "summary": "An icon-only app switcher in every app, one menu open at a time, and a launcher panel that a host page's styles can't break.",
+      "prs": [288, 289, 290, 291, 292, 303]
+    },
+    {
+      "id": "Flow files and AI",
+      "title": "Workflow files and drafts from issues",
+      "date": "2026-10-30",
+      "summary": "Workflows can be exported, printed and imported as files. Flow can also draft a workflow from a GitHub or GitLab issue with Claude: the draft never runs by itself, and every step that sends data out arrives unconfigured.",
+      "prs": [284, 285, 286, 294, 298, 299]
+    },
+    {
+      "id": "Flow hardening",
+      "title": "Flow, hardened",
+      "date": "2026-11-01",
+      "summary": "Pause all stops work already in flight and fails closed. The public webhook endpoint answers unknown and forged calls the same way and limits floods per source, and credentials stay bound to their settings.",
+      "prs": [308, 309, 310]
     }
   ],
   "screenshots": [
@@ -193,7 +308,7 @@
     {
       "id": "P4",
       "title": "Events, finished",
-      "summary": "A read-only live demo of core-api, Admin and Notes, and the production event bus (TLS, operator mode)."
+      "summary": "A read-only live demo of core-api, Admin and Notes, and TLS and operator mode for the event bus, now that it runs in production."
     },
     {
       "id": "P6",
@@ -204,10 +319,21 @@
       "id": "P7",
       "title": "AI assist",
       "summary": "AI help where text matching can't see: drafting a new app's manifest, a deeper manifest review, semantic event search and a read-only copilot in the Admin console."
+    },
+    {
+      "id": "Flow slice 3",
+      "title": "Scheduled workflows",
+      "summary": "Workflows that start on a schedule, and new workflows that run as a dry run first."
     }
   ],
   "links": [
-    { "label": "GitHub repository", "href": "https://github.com/AliSafari-IT/asafarim-os" },
-    { "label": "asafarim.com", "href": "https://asafarim.com/" }
+    {
+      "label": "GitHub repository",
+      "href": "https://github.com/AliSafari-IT/asafarim-os"
+    },
+    {
+      "label": "asafarim.com",
+      "href": "https://asafarim.com/"
+    }
   ]
 }
