@@ -15,6 +15,26 @@ describe("the checked-in progress file", () => {
     expect(progress.roadmap.map((r) => r.id)).toEqual(["P4", "P6", "P7", "Flow slice 3"]);
   });
 
+  it("introduces IGS-Pharma with its website, webshop, Android app and back-office (#312)", () => {
+    const progress = parseProgress(real());
+    expect(progress.apps.filter((a) => a.group === "os").map((a) => a.id)).toEqual([
+      "identity",
+      "docs",
+      "flow",
+      "admin",
+      "notes",
+    ]);
+    const igs = progress.apps.find((a) => a.id === "igs-pharma");
+    expect(igs?.surfaces.map((s) => [s.kind, s.href ?? null, s.status])).toEqual([
+      ["Website", "https://igs.asafarim.site/en/", "live"],
+      ["Webshop", "https://igs-pharma.be/", "early-access"],
+      ["Android app", null, "testing"],
+      ["Back-office", null, "staff-only"],
+    ]);
+    // the Admin console is never linked from the public page
+    expect(progress.apps.find((a) => a.id === "admin")?.surfaces.every((s) => !s.href)).toBe(true);
+  });
+
   it("lists each merged pull request under one milestone only, and in date order", () => {
     const progress = parseProgress(real());
     const prs = progress.shipped.flatMap((m) => m.prs);
@@ -65,6 +85,14 @@ describe("parseProgress", () => {
   it("refuses a screenshot without alt text, and duplicate ids", () => {
     expect(withChange((p) => (p.screenshots[0].alt = " "))).toThrow(/alt/);
     expect(withChange((p) => (p.shipped[1].id = p.shipped[0].id))).toThrow(/twice/);
+    // the apps (#312)
+    expect(withChange((p) => (p.apps = []))).toThrow(/apps/);
+    expect(withChange((p) => (p.apps[0].group = "other"))).toThrow(/apps\[0\]\.group/);
+    expect(withChange((p) => (p.apps[0].surfaces = []))).toThrow(/apps\[0\]\.surfaces/);
+    expect(withChange((p) => (p.apps[0].surfaces[0].status = "soon"))).toThrow(/surfaces\[0\]\.status/);
+    expect(withChange((p) => (p.apps[0].surfaces[0].href = "https://example.com/"))).toThrow(/surfaces\[0\]\.href/);
+    expect(withChange((p) => (p.apps[0].summary = " "))).toThrow(/summary/);
+    expect(withChange((p) => (p.apps[1].id = p.apps[0].id))).toThrow(/twice/);
   });
 });
 

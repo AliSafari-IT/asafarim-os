@@ -1,6 +1,143 @@
 {
   "updated": "2026-11-01",
   "repo": "https://github.com/AliSafari-IT/asafarim-os",
+  "apps": [
+    {
+      "id": "identity",
+      "name": "Identity",
+      "group": "os",
+      "tagline": "One sign-in for every app",
+      "summary": "Sign in once with an email code, a passkey or Google, and every OS app knows who you are. Someone new asks for access to the apps they need, with a note, and an admin approves.",
+      "surfaces": [
+        {
+          "kind": "Web app",
+          "address": "id.asafarim.site",
+          "href": "https://id.asafarim.site/login",
+          "status": "live",
+          "note": "Sign-in, your account and access requests."
+        }
+      ]
+    },
+    {
+      "id": "docs",
+      "name": "Docs",
+      "group": "os",
+      "tagline": "Read your documentation, take notes",
+      "summary": "A private reader for documentation repositories: read the Markdown, keep study notes on it, and turn a note into a GitHub issue in the repository that owns the document.",
+      "surfaces": [
+        {
+          "kind": "Web app",
+          "address": "docs.asafarim.site",
+          "href": "https://docs.asafarim.site/",
+          "status": "live",
+          "note": "For people an admin gave a Docs role."
+        }
+      ]
+    },
+    {
+      "id": "flow",
+      "name": "Flow",
+      "group": "os",
+      "tagline": "Workflows that run on events",
+      "summary": "Build a workflow visually, start it from an OS event, a webhook or GitHub, and let people approve or reject a step before it goes on. Six connectors, an encrypted credential store, and drafts written by Claude from an issue, which never run by themselves.",
+      "surfaces": [
+        {
+          "kind": "Web app",
+          "address": "flow.asafarim.site",
+          "href": "https://flow.asafarim.site/",
+          "status": "live",
+          "note": "For people an admin gave a Flow role."
+        }
+      ]
+    },
+    {
+      "id": "admin",
+      "name": "Admin",
+      "group": "os",
+      "tagline": "Run the OS",
+      "summary": "Installed apps and their state, roles and grants, access requests, and one audit centre for sign-ins, access decisions and admin changes.",
+      "surfaces": [
+        {
+          "kind": "Web app",
+          "address": "admin.asafarim.site",
+          "status": "staff-only",
+          "note": "For admins only, so it is not linked here."
+        }
+      ]
+    },
+    {
+      "id": "notes",
+      "name": "Notes",
+      "group": "os",
+      "tagline": "The reference app",
+      "summary": "The smallest app that shows the contract end to end: a manifest, its own database, registering itself, sign-in through Identity, roles granted by an admin.",
+      "surfaces": [
+        {
+          "kind": "Example",
+          "address": "Local development",
+          "status": "in-development",
+          "note": "Runs in the dev environment; not deployed."
+        }
+      ]
+    },
+    {
+      "id": "igs-pharma",
+      "name": "IGS-Pharma",
+      "group": "product",
+      "tagline": "An online pharmacy for Belgium",
+      "summary": "Built with a Belgian pharmacy: a webshop for non-prescription products with a pharmacist in the loop, a back-office for the pharmacy team, and a free Android app. Its own code and domain, with the OS's look; the project page is served by the OS stack.",
+      "surfaces": [
+        {
+          "kind": "Website",
+          "address": "igs.asafarim.site",
+          "href": "https://igs.asafarim.site/en/",
+          "status": "live",
+          "note": "The project, in Dutch, French, German and English, with the app's privacy pages."
+        },
+        {
+          "kind": "Webshop",
+          "address": "igs-pharma.be",
+          "href": "https://igs-pharma.be/",
+          "status": "early-access",
+          "note": "Closed until launch: customers the pharmacy invites or approves see it already."
+        },
+        {
+          "kind": "Android app",
+          "address": "Google Play",
+          "status": "testing",
+          "note": "Browse, search, scan a pack and keep a list; orders go to the webshop. In internal testing."
+        },
+        {
+          "kind": "Back-office",
+          "address": "Pharmacy staff",
+          "status": "staff-only",
+          "note": "Catalogue, prices, stock and recalls, orders, delivery and early access, behind a passkey."
+        }
+      ]
+    },
+    {
+      "id": "breinhap",
+      "name": "Breinhap",
+      "group": "product",
+      "tagline": "Short study missions for secondary school",
+      "summary": "A study app for Flemish secondary-school students, designed with ADHD and AuDHD in mind: missions of 2 to 6 minutes, always in the same four steps.",
+      "surfaces": [
+        {
+          "kind": "Website",
+          "address": "breinhap.asafarim.site",
+          "href": "https://breinhap.asafarim.site/en/",
+          "status": "live",
+          "note": "What the app is, in Dutch and English, with its privacy pages."
+        },
+        {
+          "kind": "Android app",
+          "address": "Google Play",
+          "status": "testing",
+          "note": "In a closed test before it opens to everyone."
+        }
+      ]
+    }
+  ],
   "shipped": [
     {
       "id": "P0",

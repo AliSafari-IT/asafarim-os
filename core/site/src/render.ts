@@ -7,7 +7,7 @@
  * `script-src 'self'` and `connect-src` identity only (sites/asafarim-os.caddy).
  */
 import { LEGAL_DOCS, LEGAL_UPDATED, type LegalBlock, type LegalDoc } from "./legal.ts";
-import { pullRequestUrl, type Progress } from "./progress.ts";
+import { type App, pullRequestUrl, type Progress, type Surface, type SurfaceStatus } from "./progress.ts";
 
 export interface ImageSize {
   width: number;
@@ -169,7 +169,7 @@ function renderTopbar(themeToggle: string, home = "./"): string {
                   <span class="nav-card-copy"><strong>Flow</strong><small>Automate work with workflows</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
                 </a>
               </div>
-              <p class="nav-panel-foot">One sign-in. A connected workspace.</p>
+              <p class="nav-panel-foot">One sign-in. A connected workspace. <a href="${home}#apps">Every app</a></p>
             </div>
           </details>
         </li>
@@ -180,6 +180,7 @@ function renderTopbar(themeToggle: string, home = "./"): string {
               <div class="nav-panel-heading"><strong>More from ASafariM</strong><span>Explore our products</span></div>
               <a class="nav-product-link" href="${APP_LINKS.breinhap.href}" aria-label="Breinhap"><strong>Breinhap</strong><span>Short study missions for secondary school</span><span aria-hidden="true">↗</span></a>
               <a class="nav-product-link" href="${APP_LINKS.igs.href}" aria-label="IGS-Pharma"><strong>IGS-Pharma</strong><span>Belgian online pharmacy with a pharmacist</span><span aria-hidden="true">↗</span></a>
+              <p class="nav-panel-foot"><a href="${home}#apps-products">Webshop, Android app and status</a></p>
             </div>
           </details>
         </li>
@@ -265,23 +266,59 @@ function renderRoadmap(progress: Progress): string {
       </section>`;
 }
 
-/**
- * Products by ASafariM outside the OS's own apps. Breinhap's page is in Dutch with an English version, IGS-Pharma's in
- * Dutch, French, German and English; this page is English, so it links their English pages.
- */
-function renderMore(): string {
+const STATUS_LABELS: Record<SurfaceStatus, string> = {
+  live: "Live",
+  "early-access": "Early access",
+  testing: "Testing",
+  "in-development": "In development",
+  "staff-only": "Staff only",
+};
+
+function renderSurface(surface: Surface): string {
+  const address = surface.href
+    ? anchor(surface.href, surface.address)
+    : `<span class="surface-address">${escapeHtml(surface.address)}</span>`;
   return `
-      <section id="more" aria-labelledby="more-title">
-        <h2 id="more-title">More from ASafariM</h2>
-        <ul class="roadmap">
-          <li>
-            <span class="tag">Android</span>
-            <div><h3>${anchor(APP_LINKS.breinhap.href, "Breinhap")}</h3><p>A study app for students in their 3rd year of secondary school in Flanders, designed with ADHD and AuDHD in mind: missions of 2 to 6 minutes, always in the same four steps. In development, coming to Google Play.</p></div>
-          </li>
-          <li>
-            <span class="tag">Web + Android</span>
-            <div><h3>${anchor(APP_LINKS.igs.href, "IGS-Pharma")}</h3><p>An online pharmacy for Belgium, being built with a Belgian pharmacy: a webshop for non-prescription products with a pharmacist in the loop, and a free Android app to look up products and reach the pharmacy. Not open yet.</p></div>
-          </li>
+              <li class="surface">
+                <span class="surface-kind">${escapeHtml(surface.kind)}</span>
+                ${address}
+                <span class="status status-${surface.status}">${escapeHtml(STATUS_LABELS[surface.status])}</span>
+                <p class="surface-note">${escapeHtml(surface.note)}</p>
+              </li>`;
+}
+
+function renderAppCard(app: App): string {
+  return `
+          <li class="app-card app-card-${app.group}" id="app-${escapeHtml(app.id)}">
+            <h4>${escapeHtml(app.name)}</h4>
+            <p class="app-tagline">${escapeHtml(app.tagline)}</p>
+            <p class="app-summary">${escapeHtml(app.summary)}</p>
+            <ul class="surfaces" aria-label="Where to find ${escapeHtml(app.name)}">${app.surfaces.map(renderSurface).join("")}
+            </ul>
+          </li>`;
+}
+
+/**
+ * The apps (asafarim-os#312): the OS's own apps, then the products ASafariM builds on their own domains
+ * (IGS-Pharma, Breinhap), each with every place it can be reached and how far that is. Products'
+ * pages are linked in English (this page is English).
+ */
+function renderApps(progress: Progress): string {
+  const group = (g: App["group"]) =>
+    progress.apps
+      .filter((a) => a.group === g)
+      .map(renderAppCard)
+      .join("");
+  return `
+      <section id="apps" aria-labelledby="apps-title">
+        <h2 id="apps-title">Apps</h2>
+        <p class="section-lead">What runs on ASafariM OS, and the products built alongside it: every place you can reach each one, and how far it is.</p>
+        <h3 class="apps-group" id="apps-os">Built into the OS</h3>
+        <ul class="app-grid" aria-labelledby="apps-os">${group("os")}
+        </ul>
+        <h3 class="apps-group" id="apps-products">Products built by ASafariM</h3>
+        <p class="section-lead">Their own code and domains, with the OS's look; their project pages are served by the OS stack.</p>
+        <ul class="app-grid app-grid-products" aria-labelledby="apps-products">${group("product")}
         </ul>
       </section>`;
 }
@@ -322,7 +359,7 @@ export function renderPage(progress: Progress, options: RenderOptions): string {
           ${links}
       </nav>${renderAccess()}
     </header>
-    <main>${renderShipped(progress)}${renderScreenshots(progress, options.imageSizes)}${renderRoadmap(progress)}${renderMore()}
+    <main>${renderApps(progress)}${renderShipped(progress)}${renderScreenshots(progress, options.imageSizes)}${renderRoadmap(progress)}
     </main>
 ${renderFooter(progress.repo)}
   </body>

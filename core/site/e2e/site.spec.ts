@@ -32,7 +32,12 @@ function collectErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("console", (msg) => msg.type() === "error" && errors.push(msg.text()));
   page.on("pageerror", (err) => errors.push(err.message));
-  page.on("requestfailed", (req) => errors.push(`${req.url()} ${req.failure()?.errorText}`));
+  page.on("requestfailed", (req) => {
+    // a lazy screenshot the browser cancels because the test left the page is not a broken asset (a
+    // missing one answers 404 below, and the first test checks every image loads)
+    if (req.resourceType() === "image" && req.failure()?.errorText === "net::ERR_ABORTED") return;
+    errors.push(`${req.url()} ${req.failure()?.errorText}`);
+  });
   page.on("response", (res) => res.status() >= 400 && errors.push(`${res.url()} ${res.status()}`));
   return errors;
 }
@@ -43,11 +48,11 @@ test("the page has its sections, a title and a description, and no console error
   await expect(page).toHaveTitle(/ASafariM OS/);
   expect(await page.locator('meta[name="description"]').getAttribute("content")).toMatch(/apps plug into/);
   await expect(page.getByRole("heading", { level: 1, name: "ASafariM OS" })).toBeVisible();
-  for (const name of ["Shipped", "Screenshots", "Roadmap"]) {
+  for (const name of ["Apps", "Shipped", "Screenshots", "Roadmap"]) {
     await expect(page.getByRole("heading", { level: 2, name })).toBeVisible();
   }
   await expect(page.locator("#shipped li.milestone").first()).toBeVisible();
-  await expect(page.locator("#roadmap li")).toHaveCount(3);
+  await expect(page.locator("#roadmap li")).toHaveCount(4);
   await expect(page.locator("body")).not.toContainText(/migrating|until (its|the) apps migrate/i);
   // Every screenshot has alt text and actually loads.
   const images = page.locator("img");
@@ -98,6 +103,42 @@ test("the top bar groups OS apps and products in accessible launchers", async ({
     "https://breinhap.asafarim.site/en/",
   );
   await expect(nav.getByRole("link", { name: "IGS-Pharma" })).toHaveAttribute("href", "https://igs.asafarim.site/en/");
+});
+
+test("the Apps section introduces every app and product with its addresses and status (#312)", async ({ page }) => {
+  await page.goto("/");
+  const apps = page.getByRole("region", { name: "Apps" });
+  await expect(apps).toBeVisible();
+  const os = apps.getByRole("list", { name: "Built into the OS" });
+  for (const name of ["Identity", "Docs", "Flow", "Admin", "Notes"]) {
+    await expect(os.getByRole("heading", { name, exact: true })).toBeVisible();
+  }
+  await expect(os.getByRole("link", { name: /admin\.asafarim\.site/ })).toHaveCount(0);
+
+  const igs = apps.getByRole("list", { name: "Where to find IGS-Pharma" });
+  await expect(igs.getByRole("link", { name: "igs.asafarim.site" })).toHaveAttribute(
+    "href",
+    "https://igs.asafarim.site/en/",
+  );
+  await expect(igs.getByRole("link", { name: "igs-pharma.be" })).toHaveAttribute("href", "https://igs-pharma.be/");
+  await expect(igs.getByText("Early access", { exact: true })).toBeVisible();
+  await expect(igs.getByText("Android app", { exact: true })).toBeVisible();
+  await expect(igs.getByText("Back-office", { exact: true })).toBeVisible();
+  const breinhap = apps.getByRole("list", { name: "Where to find Breinhap" });
+  await expect(breinhap.getByRole("link", { name: "breinhap.asafarim.site" })).toBeVisible();
+
+  // the Products launcher leads here
+  const nav = page.getByRole("navigation", { name: "Main" });
+  await nav.getByText("Products", { exact: true }).click();
+  await nav.getByRole("link", { name: "Webshop, Android app and status" }).click();
+  await expect(page).toHaveURL(/#apps-products$/);
+});
+
+test("at phone width the Apps section fits without sideways scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/#apps");
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
 });
 
 test("signed in, the top bar shows the person's avatar and menu instead of Sign in", async ({ page }) => {

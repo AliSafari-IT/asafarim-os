@@ -573,6 +573,104 @@ figcaption strong {
   margin: 0.3rem 0 0;
   color: var(--muted);
 }
+/* The apps (asafarim-os#312): one card per app, every surface with its address and status. */
+.apps-group {
+  margin-top: 2rem;
+  font-size: 1.15rem;
+}
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 1rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.app-grid-products {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+}
+.app-card {
+  display: flex;
+  flex-direction: column;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.app-card-product {
+  border-top: 4px solid var(--accent);
+}
+.app-card h4 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+.app-tagline {
+  margin: 0.15rem 0 0;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.app-summary {
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+.surfaces {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.9rem 0 0;
+  padding: 0.9rem 0 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+.surface {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+}
+.surface-kind {
+  min-width: 6.5rem;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.surface a,
+.surface-address {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+.surface-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.status {
+  margin-left: auto;
+  padding: 0.05rem 0.55rem;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.status-live {
+  color: var(--good);
+}
+.status-early-access,
+.status-testing {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+.status-in-development,
+.status-staff-only {
+  color: var(--muted);
+  background: var(--card-2);
+}
+.nav-panel-foot a {
+  font-weight: 600;
+}
 footer {
   margin-top: 4rem;
   padding-bottom: 2.5rem;
