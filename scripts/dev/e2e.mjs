@@ -147,7 +147,12 @@ try {
   if (!SCREENSHOTS) {
     console.log(bold("Building Flow…"));
     const flowNext = path.join(FLOW_DIR, "node_modules/next/dist/bin/next");
-    const flowBuild = spawnSync(process.execPath, [flowNext, "build"], { cwd: FLOW_DIR, stdio: "inherit" });
+    // FLOW_E2E_BUILD makes this build the one kind that honours FLOW_E2E_EGRESS (apps/flow/lib/egress/e2e.ts).
+    const flowBuild = spawnSync(process.execPath, [flowNext, "build"], {
+      cwd: FLOW_DIR,
+      stdio: "inherit",
+      env: { ...process.env, FLOW_E2E_BUILD: "1" },
+    });
     if (flowBuild.status !== 0) throw new Error("next build (flow) failed");
     // A credentials key of its own (none in .dev/): the specs add credentials and hook secrets. And the
     // e2e's routes (apps/flow/lib/egress/e2e.ts): GitHub, the email server and the webhook receiver are

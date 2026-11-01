@@ -13,7 +13,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { keyringFromEnv, type Keyring } from "../lib/credentials/cipher";
+import { keyringFromEnv, seal, type Keyring } from "../lib/credentials/cipher";
 import { createCredential, listCredentials, useCredential } from "../lib/credentials/store";
 import { createEgress, EgressError } from "../lib/egress/egress";
 import { EMAIL_LIMIT_PER_WORKFLOW, EMAIL_SEND } from "../lib/connectors/email";
@@ -112,6 +112,66 @@ describe.skipIf(!ADMIN_URL)("slice 2 on Postgres (integration)", () => {
     expect(rows.map((r) => r.key_version)).toEqual([2]);
     const only2 = keyring({ FLOW_CREDENTIALS_KEY: KEY2, FLOW_CREDENTIALS_KEY_VERSION: "2" });
     expect((await useCredential(pool, rows[0].id, "github-token", only2)).token).toBe("ghp_integration");
+  });
+
+  it("C1: the settings are bound into the encryption; a row from before is bound on first use, the script binds the rest", async () => {
+    const K = keyring({ FLOW_CREDENTIALS_KEY: KEY2, FLOW_CREDENTIALS_KEY_VERSION: "2" });
+    const aadOf = async (id: string) =>
+      (await pool.query("SELECT aad_version FROM credentials WHERE id = $1", [id])).rows[0].aad_version as number;
+
+    // jsonb gives the keys back in an order of its own: the binding must not care.
+    const smtp = await createCredential(
+      pool,
+      {
+        kind: "smtp",
+        name: "Mail",
+        meta: { host: "smtp.example.com", port: "587", mode: "starttls", from: "flow@example.com" },
+        secret: { username: "u", password: "pw-integration" },
+      },
+      "dev-owner",
+      K,
+    );
+    if (!smtp.ok) throw new Error(smtp.error);
+    expect(await aadOf(smtp.id)).toBe(2);
+    expect((await useCredential(pool, smtp.id, "smtp", K)).password).toBe("pw-integration");
+
+    // A host changed in the table: the secret is not handed over; put back, it opens again.
+    await pool.query(
+      "UPDATE credentials SET meta = jsonb_set(meta, '{host}', '\"attacker.example.net\"') WHERE id = $1",
+      [smtp.id],
+    );
+    await expect(useCredential(pool, smtp.id, "smtp", K)).rejects.toMatchObject({ code: "credential_unreadable" });
+    await pool.query("UPDATE credentials SET meta = jsonb_set(meta, '{host}', '\"smtp.example.com\"') WHERE id = $1", [
+      smtp.id,
+    ]);
+    expect((await useCredential(pool, smtp.id, "smtp", K)).password).toBe("pw-integration");
+
+    // Two rows from before (aad_version 1, the id alone), as the migration leaves them.
+    const legacy = async (id: string, name: string) => {
+      const meta = { repos: ["o/r"] };
+      const sealed = seal(K, { id, kind: "github-token", meta }, JSON.stringify({ token: `ghp_${name}` }), 1);
+      await pool.query(
+        `INSERT INTO credentials (id, name, kind, ciphertext, iv, key_version, aad_version, meta, created_by)
+         VALUES ($1, $2, 'github-token', $3, $4, $5, 1, $6, 'dev-owner')`,
+        [id, name, sealed.ciphertext, sealed.iv, sealed.keyVersion, JSON.stringify(meta)],
+      );
+    };
+    await legacy("01LEGACYUSED00000000000000", "used");
+    await legacy("01LEGACYUNUSED000000000000", "unused");
+    expect((await useCredential(pool, "01LEGACYUSED00000000000000", "github-token", K)).token).toBe("ghp_used");
+    expect(await aadOf("01LEGACYUSED00000000000000")).toBe(2);
+    expect(await aadOf("01LEGACYUNUSED000000000000")).toBe(1);
+
+    const script = path.resolve(import.meta.dirname, "../scripts/rotate-credentials-key.mjs");
+    const env = { ...process.env, DATABASE_URL: url, FLOW_CREDENTIALS_KEY: KEY2, FLOW_CREDENTIALS_KEY_VERSION: "2" };
+    const { stdout } = await promisify(execFile)(process.execPath, [script], { env });
+    expect(stdout).toContain("Re-encrypted 1 credential(s) under key version 2.");
+    expect(await aadOf("01LEGACYUNUSED000000000000")).toBe(2);
+    expect((await useCredential(pool, "01LEGACYUNUSED000000000000", "github-token", K)).token).toBe("ghp_unused");
+
+    await pool.query("DELETE FROM credentials WHERE id = ANY($1)", [
+      [smtp.id, "01LEGACYUSED00000000000000", "01LEGACYUNUSED000000000000"],
+    ]);
   });
 
   it("settings: lists and the kill switch; egress refuses while paused and records the call", async () => {

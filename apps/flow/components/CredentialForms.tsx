@@ -93,7 +93,22 @@ export function AddCredentialForm() {
           <label htmlFor="add-host">Host</label>
           <input id="add-host" name="host" required placeholder="smtp.example.com" />
           <label htmlFor="add-port">Port</label>
-          <input id="add-port" name="port" type="number" min={1} max={65535} defaultValue={587} required />
+          <input
+            id="add-port"
+            name="port"
+            type="number"
+            min={1}
+            max={65535}
+            defaultValue={587}
+            required
+            list="add-port-choices"
+            aria-describedby="add-port-help"
+          />
+          <datalist id="add-port-choices">
+            <option value="465" />
+            <option value="587" />
+          </datalist>
+          <small id="add-port-help">465 (TLS) or 587 (STARTTLS). Another port only with None, on a local server.</small>
           <label htmlFor="add-mode">Mode</label>
           <select id="add-mode" name="mode" defaultValue="starttls">
             <option value="starttls">STARTTLS</option>

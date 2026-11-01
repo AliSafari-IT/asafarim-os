@@ -54,7 +54,7 @@ export interface GenerateDeps {
   /** The connector node types a draft may use (the registry's). */
   connectorTypes: readonly string[];
   /** Reads the issue (lib/generate/issue-source.ts); tests pass a fake. */
-  fetch?: (ref: IssueRef, deps: FetchIssueDeps) => Promise<FetchedIssue>;
+  loadIssue?: (ref: IssueRef, deps: FetchIssueDeps) => Promise<FetchedIssue>;
   fetchDeps: FetchIssueDeps;
 }
 
@@ -95,7 +95,7 @@ export async function generateDraft(url: string, key: string, deps: GenerateDeps
 
   let fetched: FetchedIssue;
   try {
-    fetched = await (deps.fetch ?? fetchIssue)(ref, deps.fetchDeps);
+    fetched = await (deps.loadIssue ?? fetchIssue)(ref, deps.fetchDeps);
   } catch (err) {
     if (err instanceof IssueFetchError) return { ok: false, error: ISSUE_ERRORS[err.code], source, detail: err.detail };
     return { ok: false, error: "issue_unavailable", source, detail: "fetch_failed" };

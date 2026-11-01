@@ -19,7 +19,8 @@ const files = readdirSync(ROOT, { recursive: true })
   .filter((f) => /\.(ts|tsx|js|mjs|cjs)$/.test(f) && !f.endsWith(".d.ts"))
   .filter((f) => !EXEMPT.some((e) => f.startsWith(e)));
 
-const MODULES = "(?:node:)?(?:https?|http2|net|tls|dgram)|undici(?:/[\\w/-]+)?|@asafarim/smtp";
+const MODULES =
+  "(?:node:)?(?:https?|http2|net|tls|dgram|dns(?:/promises)?|child_process|module)|undici(?:/[\\w/-]+)?|@asafarim/smtp";
 const PATTERNS: [string, RegExp][] = [
   ["fetch(", /(?<![\w.])fetch\s*\(|\.fetch\s*\(|\bfetch\s*\)/],
   ["XMLHttpRequest / WebSocket / EventSource", /\b(?:XMLHttpRequest|WebSocket|EventSource)\b/],
@@ -83,4 +84,85 @@ describe("the egress boundary", () => {
       expect(await lint(s, "lib/egress/inside.ts")).toEqual([]);
     }
   }, 60_000);
+
+  // #307 C4: each of these got past the rule once; every one is a negative test now.
+  it("the lint rule also flags DNS, child processes, re-exports, aliases of the global object and an egress made outside lib/egress", async () => {
+    const eslint = new ESLint({ cwd: ROOT });
+    const lint = async (text: string, file: string) =>
+      (await eslint.lintText(text, { filePath: path.join(ROOT, file) }))[0]!.messages.map((m) => m.ruleId);
+    const samples: [string, string][] = [
+      ["node:dns", 'import dns from "node:dns";\nexport const a = dns;\n'],
+      ["dns", 'import { lookup } from "dns";\nexport const a = lookup;\n'],
+      ["dns/promises", 'import { resolve4 } from "node:dns/promises";\nexport const a = resolve4;\n'],
+      ["child_process", 'import { exec } from "child_process";\nexport const a = exec;\n'],
+      ["node:child_process", 'import cp from "node:child_process";\nexport const a = cp;\n'],
+      ["a dynamic import of dns", 'export const a = () => import("node:dns");\n'],
+      ["a require of child_process", 'export const a = require("node:child_process");\n'],
+      ["a re-export of http", 'export { request } from "node:http";\n'],
+      ["a star re-export of https", 'export * from "node:https";\n'],
+      ["a re-export of dns", 'export { lookup } from "node:dns";\n'],
+      ["an aliased import", 'import { request as send } from "http";\nexport const a = send;\n'],
+      [
+        "the global object under another name",
+        'const g = globalThis;\nexport const a = () => g.fetch("https://example.com");\n',
+      ],
+      ["fetch by a computed name", 'export const a = () => globalThis["fetch"]("https://example.com");\n'],
+      [
+        "fetch taken from an object",
+        'export const a = (w: { fetch: typeof fetch }) => w.fetch("https://example.com");\n',
+      ],
+      [
+        "createRequire",
+        'import { createRequire } from "node:module";\nexport const a = createRequire(import.meta.url);\n',
+      ],
+      ["process.binding", 'export const a = () => process.binding("tcp_wrap");\n'],
+      ["process.binding by a computed name", 'export const a = () => process["binding"]("tcp_wrap");\n'],
+      ["process.dlopen by a computed name", 'export const a = () => process["dlopen"]({}, "x");\n'],
+      [
+        "a dynamic import of the egress factory module",
+        'export const a = async () => (await import("@/lib/egress/egress")).createEgress({});\n',
+      ],
+      [
+        "a dynamic import of the smtp factory module by a relative path",
+        'export const a = async () => (await import("../egress/smtp")).createSmtpEgress({});\n',
+      ],
+      [
+        "createEgress from the barrel",
+        'import { createEgress } from "@/lib/egress";\nexport const a = createEgress({ route: () => undefined });\n',
+      ],
+      [
+        "createEgress by a relative path",
+        'import { createEgress } from "../egress/egress";\nexport const a = createEgress({});\n',
+      ],
+      ["createEgress renamed", 'import { createEgress as make } from "@/lib/egress";\nexport const a = make({});\n'],
+      [
+        "createSmtpEgress",
+        'import { createSmtpEgress } from "@/lib/egress/smtp";\nexport const a = createSmtpEgress({});\n',
+      ],
+      ["createEgress re-exported", 'export { createEgress } from "@/lib/egress";\n'],
+    ];
+    // Only the boundary rules count: another rule (no-require-imports) may flag a sample for its own reasons.
+    const boundary = async (text: string, file: string) =>
+      (await lint(text, file)).filter((id) => id?.startsWith("no-restricted"));
+    const missed: string[] = [];
+    for (const [what, src] of samples) if ((await boundary(src, "lib/connector.ts")).length === 0) missed.push(what);
+    expect(missed).toEqual([]);
+    // Inside lib/egress the same code is the module's own business.
+    for (const [, src] of samples) expect(await boundary(src, "lib/egress/inside.ts")).toEqual([]);
+    // What the app does use is not flagged.
+    const ok = 'import { egress, smtpEgress } from "@/lib/egress";\nexport const a = [egress, smtpEgress];\n';
+    expect(await lint(ok, "lib/connector.ts")).toEqual([]);
+  }, 60_000);
+
+  it("the file search knows dns and child_process too", () => {
+    const hits = (src: string) => PATTERNS.some(([, re]) => re.test(code(src)));
+    for (const src of [
+      'import { lookup } from "node:dns"',
+      'import { resolve } from "dns/promises"',
+      'import { exec } from "child_process"',
+      'const cp = require("node:child_process")',
+      'export { request } from "node:http"',
+    ])
+      expect({ src, hit: hits(src) }).toEqual({ src, hit: true });
+  });
 });

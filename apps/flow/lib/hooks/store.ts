@@ -176,7 +176,8 @@ export async function findHook(
   const r = (
     await rowsOf(
       q,
-      `SELECT h.id, h.kind, w.key AS workflow_key, c.id AS credential_id, c.ciphertext, c.iv, c.key_version
+      `SELECT h.id, h.kind, w.key AS workflow_key, c.id AS credential_id, c.kind AS credential_kind, c.meta,
+              c.ciphertext, c.iv, c.key_version, c.aad_version
          FROM webhook_hooks h
          JOIN workflows w ON w.id = h.workflow_id
          JOIN credentials c ON c.id = h.credential_id AND c.kind = 'webhook-secret'
@@ -186,11 +187,16 @@ export async function findHook(
   )[0];
   if (!r) return undefined;
   if (!keyring) throw new CredentialError("credentials_unavailable");
-  const plaintext = open(keyring, r.credential_id as string, {
-    ciphertext: r.ciphertext as Buffer,
-    iv: r.iv as Buffer,
-    keyVersion: r.key_version as number,
-  });
+  const plaintext = open(
+    keyring,
+    { id: r.credential_id as string, kind: r.credential_kind as string, meta: r.meta },
+    {
+      ciphertext: r.ciphertext as Buffer,
+      iv: r.iv as Buffer,
+      keyVersion: r.key_version as number,
+      aadVersion: r.aad_version as number,
+    },
+  );
   let secret: unknown;
   try {
     secret = (JSON.parse(plaintext) as { secret?: unknown }).secret;

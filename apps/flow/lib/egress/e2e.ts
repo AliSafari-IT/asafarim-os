@@ -12,6 +12,12 @@
  * Everything else is checked as always: https, the allow-list (a connector's hosts, Settings
  * `egress_hosts`), the port, the certificate for the host's name, paused_all, the record. Without
  * FLOW_E2E_EGRESS there is no route and no extra CA, and its being on is logged when it is read.
+ *
+ * Neither variable is enough on its own account: the routes exist only in a build made for the e2e
+ * (`FLOW_E2E_BUILD=1` when `next build` ran, which scripts/dev/e2e.mjs sets for its own build and nothing
+ * else does). NODE_ENV can't tell the two apart (the e2e runs a production build with `next start`),
+ * and an environment variable read at run time could be set on any server. next.config.ts inlines the
+ * build's flag, so an image built without it ignores a FLOW_E2E_EGRESS given to it later.
  */
 import { readFileSync } from "node:fs";
 import type { EgressRoute } from "./egress";
@@ -25,8 +31,21 @@ export interface E2eEgress {
   hosts: string[];
 }
 
-/** The routes and the CA, or undefined when FLOW_E2E_EGRESS isn't set. Throws on a malformed entry or a missing CA. */
-export function e2eEgress(env: Record<string, string | undefined> = process.env): E2eEgress | undefined {
+/**
+ * Whether this build was made for the e2e. Written out as `process.env.FLOW_E2E_BUILD` so that Next
+ * replaces it with the value `next build` saw (next.config.ts `env`); anywhere else it is read as it is.
+ */
+export const BUILT_FOR_E2E = process.env.FLOW_E2E_BUILD === "1";
+
+/**
+ * The routes and the CA, or undefined when FLOW_E2E_EGRESS isn't set or the build wasn't made for the
+ * e2e. Throws on a malformed entry or a missing CA.
+ */
+export function e2eEgress(
+  env: Record<string, string | undefined> = process.env,
+  builtForE2e: boolean = BUILT_FOR_E2E,
+): E2eEgress | undefined {
+  if (!builtForE2e) return undefined;
   const raw = env.FLOW_E2E_EGRESS?.trim();
   if (!raw) return undefined;
   const routes = new Map<string, number>();

@@ -18,9 +18,9 @@ import { randomBytes } from "node:crypto";
 import { ulid } from "@asafarim/app-sdk/events";
 import { z } from "zod";
 import type { AuditEntry } from "../audit";
-import { isHostName } from "../egress/hosts";
+import { isHostName, SMTP_PORTS } from "../egress/hosts";
 import { rowsOf, type Queryable } from "../settings";
-import { CredentialError, keyringFromEnv, open, seal, type Keyring } from "./cipher";
+import { AAD_VERSION, CredentialError, keyringFromEnv, open, seal, type Binding, type Keyring } from "./cipher";
 
 export { CredentialError };
 
@@ -56,7 +56,9 @@ const SmtpMeta = z
   })
   .refine((m) => (m.mode === "none" ? LOOPBACK_HOSTS.includes(m.host) : Host.safeParse(m.host).success), {
     path: ["host"],
-  });
+  })
+  // With TLS the port is 465 or 587, as the host is a name, not an address; `none` is a loopback server.
+  .refine((m) => m.mode === "none" || SMTP_PORTS.includes(m.port), { path: ["port"] });
 const GithubMeta = z.object({ repos: z.array(Repo).min(1).max(50) });
 const GitlabMeta = z.object({ projects: z.array(Project).min(1).max(50) });
 
@@ -153,12 +155,22 @@ export async function createCredential(
   const shownOnce = c.kind === "webhook-secret" ? newWebhookSecret() : undefined;
   const secret = c.kind === "webhook-secret" ? { secret: shownOnce } : c.secret;
   const meta = c.kind === "webhook-secret" ? {} : c.meta;
-  const sealed = seal(keyring, id, JSON.stringify(secret));
+  const sealed = seal(keyring, { id, kind: c.kind, meta }, JSON.stringify(secret));
   const rows = await rowsOf(
     q,
-    `INSERT INTO credentials (id, name, kind, ciphertext, iv, key_version, meta, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (name) DO NOTHING RETURNING id`,
-    [id, c.name, c.kind, sealed.ciphertext, sealed.iv, sealed.keyVersion, JSON.stringify(meta), actor],
+    `INSERT INTO credentials (id, name, kind, ciphertext, iv, key_version, aad_version, meta, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (name) DO NOTHING RETURNING id`,
+    [
+      id,
+      c.name,
+      c.kind,
+      sealed.ciphertext,
+      sealed.iv,
+      sealed.keyVersion,
+      sealed.aadVersion,
+      JSON.stringify(meta),
+      actor,
+    ],
   );
   if (!rows.length) return { ok: false, error: "credential_name_taken", audits: [] };
   return {
@@ -181,20 +193,19 @@ export async function rotateCredential(
   if (!keyring) return { ok: false, error: "credentials_unavailable", audits: [] };
   const parsed = RotationInput.safeParse(input);
   if (!parsed.success) return { ok: false, error: "invalid_credential", audits: [] };
-  const rows = await rowsOf(q, "SELECT kind FROM credentials WHERE id = $1 FOR UPDATE", [id]);
+  const rows = await rowsOf(q, "SELECT kind, meta FROM credentials WHERE id = $1 FOR UPDATE", [id]);
   const kind = rows[0]?.kind as CredentialKind | undefined;
   if (!kind) return { ok: false, error: "credential_not_found", audits: [] };
   if (kind !== parsed.data.kind) return { ok: false, error: "invalid_credential", audits: [] };
   const r = parsed.data;
   const shownOnce = r.kind === "webhook-secret" ? newWebhookSecret() : undefined;
   const secret = r.kind === "webhook-secret" ? { secret: shownOnce } : r.secret;
-  const sealed = seal(keyring, id, JSON.stringify(secret));
-  await q.query("UPDATE credentials SET ciphertext = $2, iv = $3, key_version = $4, rotated_at = now() WHERE id = $1", [
-    id,
-    sealed.ciphertext,
-    sealed.iv,
-    sealed.keyVersion,
-  ]);
+  // Sealed under the settings the row has now: a rotation is also what binds an older row to them.
+  const sealed = seal(keyring, { id, kind, meta: rows[0]!.meta }, JSON.stringify(secret));
+  await q.query(
+    "UPDATE credentials SET ciphertext = $2, iv = $3, key_version = $4, aad_version = $5, rotated_at = now() WHERE id = $1",
+    [id, sealed.ciphertext, sealed.iv, sealed.keyVersion, sealed.aadVersion],
+  );
   return {
     ok: true,
     id,
@@ -223,15 +234,31 @@ export async function useCredential<K extends CredentialKind>(
   keyring = credentialKeys(),
 ): Promise<CredentialOf[K]> {
   if (!keyring) throw new CredentialError("credentials_unavailable");
-  const rows = await rowsOf(tx, "SELECT kind, ciphertext, iv, key_version, meta FROM credentials WHERE id = $1", [id]);
+  const rows = await rowsOf(
+    tx,
+    "SELECT kind, ciphertext, iv, key_version, aad_version, meta FROM credentials WHERE id = $1",
+    [id],
+  );
   const row = rows[0];
   if (!row) throw new CredentialError("credential_not_found");
   if (row.kind !== kind) throw new CredentialError("credential_kind_mismatch");
-  const plaintext = open(keyring, id, {
+  // The settings are part of what the ciphertext was sealed with: a host or a port changed in the table
+  // makes the row unreadable instead of sending the secret somewhere else.
+  const binding: Binding = { id, kind, meta: row.meta };
+  const plaintext = open(keyring, binding, {
     ciphertext: row.ciphertext as Buffer,
     iv: row.iv as Buffer,
     keyVersion: row.key_version as number,
+    aadVersion: row.aad_version as number,
   });
+  // A row made before the settings were bound is bound now, as the secret has just been read with them.
+  if ((row.aad_version as number) < AAD_VERSION) {
+    const upgraded = seal(keyring, binding, plaintext);
+    await tx.query(
+      "UPDATE credentials SET ciphertext = $2, iv = $3, key_version = $4, aad_version = $5 WHERE id = $1 AND aad_version < $5",
+      [id, upgraded.ciphertext, upgraded.iv, upgraded.keyVersion, upgraded.aadVersion],
+    );
+  }
   let secret: unknown;
   try {
     secret = SECRET_SCHEMA[kind].parse(JSON.parse(plaintext));
