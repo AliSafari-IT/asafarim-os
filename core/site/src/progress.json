@@ -137,7 +137,7 @@
           "note": "Public introduction and adult login/register entry pages; browser missions are not available yet."
         },
         {
-          "kind": "Adult management",
+          "kind": "Breinhap management",
           "address": "management.breinhap.com",
           "href": "https://management.breinhap.com/login",
           "status": "early-access",
