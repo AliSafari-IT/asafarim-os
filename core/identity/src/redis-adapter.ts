@@ -138,6 +138,7 @@ export async function endSessionsOfAccount(
 ): Promise<number> {
   let cursor = "0";
   let ended = 0;
+  const notifications: EndedProviderSession[] = [];
   do {
     const [next, keys] = await client.scan(cursor, "MATCH", `${KEY_PREFIX}Session:*`, "COUNT", 200);
     cursor = next;
@@ -161,8 +162,9 @@ export async function endSessionsOfAccount(
       multi.del(key);
       await multi.exec();
       ended += 1;
-      await onEnded?.({ accountId, authorizations: session.authorizations });
+      notifications.push({ accountId, authorizations: session.authorizations });
     }
   } while (cursor !== "0");
+  if (onEnded) await Promise.allSettled(notifications.map((session) => onEnded(session)));
   return ended;
 }
