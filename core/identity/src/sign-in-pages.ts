@@ -19,6 +19,12 @@ export const PASSKEY_PAGE_CSP = `${PAGE_CSP}; connect-src 'self'`;
 export const NOTE_MAX = 500;
 
 const EXTRA_STYLE = `<style>
+.account-id{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.account-id code{overflow-wrap:anywhere}
+.copy-account{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:8px;margin:0}
+.copy-account[hidden]{display:none}
+.copy-account svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6}
+@media(hover:hover) and (pointer:fine){.copy-account{opacity:0}.account-id:hover .copy-account,.copy-account:focus-visible{opacity:1}}
 label{display:block;font-weight:600;margin:0 0 6px}
 input[type=tel],input[type=text],input[type=email],textarea{width:100%;font:inherit;font-size:1.05rem;padding:11px 12px;
 border:1px solid var(--line);border-radius:10px;background:var(--card-2);color:var(--ink);margin:0 0 14px}
@@ -384,7 +390,9 @@ export function accountPage(opts: {
     `<h1>Your account</h1>
 ${opts.notice ? `<p class="notice" role="status">${escapeHtml(opts.notice)}</p>` : ""}
 <div class="who"><span class="avatar" aria-hidden="true">${escapeHtml(opts.initials ?? "?")}</span><div><strong>${escapeHtml(opts.label ?? "—")}</strong>${state}</div></div>
-<p class="small">Account id: <code data-account-id>${escapeHtml(opts.accountId)}</code>. An admin uses it to give you access to an app.</p>
+<div class="account-id small"><span>Account id: <code data-account-id>${escapeHtml(opts.accountId)}</code></span><button type="button" class="secondary copy-account" data-copy-account-id aria-label="Copy account ID" title="Copy account ID" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg></button></div>
+<p class="small" data-copy-account-status role="status" aria-live="polite"></p>
+<p class="small">An admin uses your account ID to give you access to an app.</p>
 ${access}
 ${nextSteps(opts.apps, opts.connected)}
 <h2>How you sign in</h2>
@@ -396,7 +404,7 @@ ${list}
 <p class="small" data-passkey-status role="status"></p>
 <form method="post" action="/logout">${csrf}<button class="secondary" type="submit" style="margin-left:0">Sign out</button></form>`,
     {
-      head: `${EXTRA_STYLE}<style>main>.card{max-width:720px}</style><script src="/static/passkey.js" defer></script>`,
+      head: `${EXTRA_STYLE}<style>main>.card{max-width:720px}</style><script src="/static/passkey.js" defer></script><script src="/static/account.js" defer></script>`,
       nav: signedInNav("account", opts.isAdmin, opts.adminConsoleUrl),
     },
   );

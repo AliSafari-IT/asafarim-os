@@ -11,6 +11,7 @@
  * every use. Until a code is proved, every answer is the same whether or not the address is known.
  * A signed-in person adds passkeys on /account.
  */
+import { ACCOUNT_JS } from "./account-client.ts";
 import { SmtpError } from "@asafarim/smtp";
 import {
   type AuthSession,
@@ -1082,6 +1083,13 @@ export function createSignIn(d: SignInDeps): SignIn {
           return true;
         case "/whoami":
           await whoami(ctx);
+          return true;
+        case "/static/account.js":
+          ctx.status = 200;
+          ctx.type = "application/javascript";
+          ctx.set("Cache-Control", "public, max-age=300");
+          ctx.set("X-Content-Type-Options", "nosniff");
+          ctx.body = ACCOUNT_JS;
           return true;
         case "/static/passkey.js":
           if (!d.passkeys) return false;

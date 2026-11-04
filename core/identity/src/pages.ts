@@ -17,6 +17,10 @@ const THEME_CSS = themeFile("theme.css").replace(/\/\*[\s\S]*?\*\//g, "");
 export const THEME_JS = themeFile("theme.js");
 const THEME_TOGGLE = themeFile("toggle.html").trim();
 
+const { version: identityVersion } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+  version: string;
+};
+
 const STYLE = `
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;flex-direction:column;color:var(--ink);
 background:var(--bg);
@@ -140,7 +144,7 @@ ${themeToggle ? '<script src="/static/theme.js"></script>' : ""}${head}<title>${
 <body><header class="os-topbar"><div class="topbar"><a class="brand" href="${home}">${BRAND_MARK}<span>ASafariM <span>OS</span></span></a>
 <div class="tools"><nav aria-label="Main"><ul class="nav">${links}</ul></nav>${themeToggle ? THEME_TOGGLE : ""}</div></div></header>
 <main><div class="card">${body}</div></main>
-<footer class="foot"><p>ASafariM OS · sign-in and accounts for ASafariM apps · ${PRODUCT_FOOTER}</p><p class="legal">${LEGAL_FOOTER}<a href="${home}">${escapeHtml(new URL(homeUrl).host)}</a></p></footer>
+<footer class="foot"><p>ASafariM OS · Identity v${escapeHtml(identityVersion)} · sign-in and accounts for ASafariM apps · ${PRODUCT_FOOTER}</p><p class="legal">${LEGAL_FOOTER}<a href="${home}">${escapeHtml(new URL(homeUrl).host)}</a></p></footer>
 </body></html>`;
 }
 
