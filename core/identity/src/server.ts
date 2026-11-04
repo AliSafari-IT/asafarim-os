@@ -1,3 +1,4 @@
+import { notifySessionLogout } from "./logout.ts";
 /**
  * Entry point: `node src/server.ts` (Node 24 runs the TypeScript directly).
  */
@@ -85,9 +86,12 @@ async function localSignIn(
     limits: new RedisRateLimiter(redis),
     sessions: new RedisAuthSessions(redis),
     flows: new RedisLoginFlows(redis),
-    endProviderSessions: (principalId) => endSessionsOfAccount(redis, principalId),
+    endProviderSessions: (principalId) =>
+      endSessionsOfAccount(redis, principalId, async (session) => {
+        if (oidcProvider) await notifySessionLogout(oidcProvider, session, logger);
+      }),
     endBrowserProviderSession: async (ctx) => {
-      if (oidcProvider) await endBrowserSession(oidcProvider, ctx);
+      if (oidcProvider) await endBrowserSession(oidcProvider, ctx, logger);
     },
     log: logger,
   });
