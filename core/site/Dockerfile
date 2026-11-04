@@ -6,6 +6,7 @@
 FROM node:24-alpine AS build
 # The repository's layout, so the build finds the manifest schema at ../../packages/app-manifest/schema (#87).
 WORKDIR /repo/core/site
+COPY core/site/package.json ./package.json
 COPY core/site/src ./src
 COPY core/site/public ./public
 COPY packages/app-manifest/schema/app-manifest.schema.json /repo/packages/app-manifest/schema/

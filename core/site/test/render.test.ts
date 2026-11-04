@@ -90,7 +90,7 @@ describe("renderPage", () => {
     );
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
       expect(url).toMatch(
-        /^https:\/\/(github\.com|asafarim\.com|igs-pharma\.be|((docs|flow|id|breinhap|igs)\.)?asafarim\.site)\//,
+        /^https:\/\/(github\.com|asafarim\.com|igs-pharma\.be|(?:management\.)?breinhap\.com|((docs|flow|id|breinhap|igs)\.)?asafarim\.site)\//,
       );
     }
     // Stylesheet and icon are this origin's own; only the canonical link names a full URL.

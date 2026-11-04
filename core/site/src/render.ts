@@ -6,8 +6,13 @@
  * web fonts, no third-party assets. That is what lets the edge serve it under a CSP with
  * `script-src 'self'` and `connect-src` identity only (sites/asafarim-os.caddy).
  */
+import { readFileSync } from "node:fs";
 import { LEGAL_DOCS, LEGAL_UPDATED, type LegalBlock, type LegalDoc } from "./legal.ts";
 import { type App, pullRequestUrl, type Progress, type Surface, type SurfaceStatus } from "./progress.ts";
+
+const { version: siteVersion } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+  version: string;
+};
 
 export interface ImageSize {
   width: number;
@@ -109,6 +114,8 @@ export const IDENTITY_ORIGIN = "https://id.asafarim.site";
 
 export const APP_LINKS = {
   breinhap: { label: "Breinhap", href: "https://breinhap.asafarim.site/en/" },
+  breinhapWeb: { label: "Breinhap web", href: "https://breinhap.com/en/" },
+  breinhapManagement: { label: "Breinhap management", href: "https://management.breinhap.com/login" },
   docs: { label: "Docs", href: "https://docs.asafarim.site/" },
   flow: { label: "Flow", href: "https://flow.asafarim.site/" },
   igs: { label: "IGS-Pharma", href: "https://igs.asafarim.site/en/" },
@@ -167,6 +174,14 @@ function renderTopbar(themeToggle: string, home = "./"): string {
                 <a class="nav-card" href="${APP_LINKS.flow.href}" aria-label="Flow">
                   <span class="nav-card-icon nav-card-flow" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="5" height="5" rx="1" /><rect x="15" y="15" width="5" height="5" rx="1" /><path d="M9 6.5h4a2 2 0 0 1 2 2v4.5M15 13v2" /></svg></span>
                   <span class="nav-card-copy"><strong>Flow</strong><small>Automate work with workflows</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
+                </a>
+                <a class="nav-card" href="${APP_LINKS.breinhapWeb.href}" aria-label="Breinhap web">
+                  <span class="nav-card-icon nav-card-docs" aria-hidden="true">BH</span>
+                  <span class="nav-card-copy"><strong>Breinhap web</strong><small>Website; browser missions are coming later</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
+                </a>
+                <a class="nav-card" href="${APP_LINKS.breinhapManagement.href}" aria-label="Breinhap management">
+                  <span class="nav-card-icon nav-card-flow" aria-hidden="true">BH</span>
+                  <span class="nav-card-copy"><strong>Breinhap management</strong><small>Workspace for invited adults</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
                 </a>
               </div>
               <p class="nav-panel-foot">One sign-in. A connected workspace. <a href="${home}#apps">Every app</a></p>
@@ -371,7 +386,7 @@ ${renderFooter(progress.repo)}
 function renderFooter(repo: string): string {
   const legal = LEGAL_DOCS.map((d) => anchor(`/${d.slug}`, d.label)).join(" · ");
   return `    <footer>
-      <p>ASafariM OS · ${anchor(repo, "Source on GitHub")} · ${anchor(APP_LINKS.docs.href, "Docs")} · ${anchor(APP_LINKS.flow.href, "Flow")} · ${anchor(APP_LINKS.breinhap.href, "Breinhap")} · ${anchor(APP_LINKS.igs.href, "IGS-Pharma")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
+      <p>ASafariM OS · Website v${siteVersion} · ${anchor(repo, "Source on GitHub")} · ${anchor(APP_LINKS.docs.href, "Docs")} · ${anchor(APP_LINKS.flow.href, "Flow")} · ${anchor(APP_LINKS.breinhap.href, "Breinhap")} · ${anchor(APP_LINKS.igs.href, "IGS-Pharma")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
       <p class="legal-links">${legal} · ${anchor("mailto:privacy@asafarim.site", "privacy@asafarim.site")}</p>
     </footer>`;
 }

@@ -97,6 +97,14 @@ test("the top bar groups OS apps and products in accessible launchers", async ({
   await expect(nav.getByRole("link", { name: "Docs" })).toHaveAttribute("href", "https://docs.asafarim.site/");
   await expect(nav.getByRole("link", { name: "Flow" })).toHaveAttribute("href", "https://flow.asafarim.site/");
 
+  await expect(nav.getByRole("link", { name: "Breinhap web", exact: true })).toHaveAttribute(
+    "href",
+    "https://breinhap.com/en/",
+  );
+  await expect(nav.getByRole("link", { name: "Breinhap management", exact: true })).toHaveAttribute(
+    "href",
+    "https://management.breinhap.com/login",
+  );
   await nav.getByText("Products", { exact: true }).click();
   await expect(nav.getByRole("link", { name: "Breinhap" })).toHaveAttribute(
     "href",
@@ -126,6 +134,9 @@ test("the Apps section introduces every app and product with its addresses and s
   await expect(igs.getByText("Back-office", { exact: true })).toBeVisible();
   const breinhap = apps.getByRole("list", { name: "Where to find Breinhap" });
   await expect(breinhap.getByRole("link", { name: "breinhap.asafarim.site" })).toBeVisible();
+
+  await expect(breinhap.getByRole("link", { name: "breinhap.com", exact: true })).toBeVisible();
+  await expect(breinhap.getByRole("link", { name: "management.breinhap.com", exact: true })).toBeVisible();
 
   // the Products launcher leads here
   const nav = page.getByRole("navigation", { name: "Main" });

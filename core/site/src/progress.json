@@ -123,11 +123,25 @@
       "summary": "A study app for Flemish secondary-school students, designed with ADHD and AuDHD in mind: missions of 2 to 6 minutes, always in the same four steps.",
       "surfaces": [
         {
-          "kind": "Website",
+          "kind": "Android introduction",
           "address": "breinhap.asafarim.site",
           "href": "https://breinhap.asafarim.site/en/",
           "status": "live",
           "note": "What the app is, in Dutch and English, with its privacy pages."
+        },
+        {
+          "kind": "Web app",
+          "address": "breinhap.com",
+          "href": "https://breinhap.com/en/",
+          "status": "in-development",
+          "note": "Public introduction and adult login/register entry pages; browser missions are not available yet."
+        },
+        {
+          "kind": "Adult management",
+          "address": "management.breinhap.com",
+          "href": "https://management.breinhap.com/login",
+          "status": "early-access",
+          "note": "Invitation-only pilot for active ASafariM adults with explicit Breinhap access."
         },
         {
           "kind": "Android app",
