@@ -1,3 +1,4 @@
+import type { EndedProviderSession } from "./logout.ts";
 /**
  * oidc-provider storage in Redis (ADR 0002, A4): sessions, interactions,
  * grants, codes and tokens under the `oidc:` prefix in a dedicated logical DB
@@ -130,16 +131,21 @@ export class RedisReplayGuard implements ReplayGuard {
  * indexed by account, so this scans `oidc:Session:*`: fine at this service's scale.
  * Returns how many sessions were ended.
  */
-export async function endSessionsOfAccount(client: Redis, accountId: string): Promise<number> {
+export async function endSessionsOfAccount(
+  client: Redis,
+  accountId: string,
+  onEnded?: (session: EndedProviderSession) => Promise<void>,
+): Promise<number> {
   let cursor = "0";
   let ended = 0;
+  const notifications: EndedProviderSession[] = [];
   do {
     const [next, keys] = await client.scan(cursor, "MATCH", `${KEY_PREFIX}Session:*`, "COUNT", 200);
     cursor = next;
     for (const key of keys) {
       const raw = await client.get(key);
       if (!raw) continue;
-      let session: { accountId?: string; authorizations?: Record<string, { grantId?: string }> };
+      let session: { accountId?: string; authorizations?: Record<string, { grantId?: string; sid?: string }> };
       try {
         session = JSON.parse(raw) as typeof session;
       } catch {
@@ -156,7 +162,9 @@ export async function endSessionsOfAccount(client: Redis, accountId: string): Pr
       multi.del(key);
       await multi.exec();
       ended += 1;
+      notifications.push({ accountId, authorizations: session.authorizations });
     }
   } while (cursor !== "0");
+  if (onEnded) await Promise.allSettled(notifications.map((session) => onEnded(session)));
   return ended;
 }

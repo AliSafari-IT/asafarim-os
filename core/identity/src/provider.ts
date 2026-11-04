@@ -1,3 +1,4 @@
+import { notifySessionLogout } from "./logout.ts";
 /**
  * The OIDC provider (panva/oidc-provider) for id.asafarim.site. How a person
  * signs in is a login method chosen by config (IDENTITY_LOGIN_METHOD):
@@ -496,7 +497,11 @@ export function createProvider(deps: ProviderDeps): Provider {
  * Ends this browser's provider session, as RP-initiated logout's "Sign out" does: revokes the grants (and their
  * tokens) it holds, destroys it, and drops its cookie. For identity's own Sign out button (sign-in.ts).
  */
-export async function endBrowserSession(provider: Provider, ctx: HttpContext): Promise<void> {
+export async function endBrowserSession(
+  provider: Provider,
+  ctx: HttpContext,
+  log?: Pick<Logger, "warn">,
+): Promise<void> {
   const koa = ctx as unknown as Parameters<Provider["Session"]["get"]>[0];
   const session = await provider.Session.get(koa);
   for (const { grantId } of Object.values(session.authorizations ?? {})) {
@@ -508,7 +513,10 @@ export async function endBrowserSession(provider: Provider, ctx: HttpContext): P
       provider.Grant.adapter.destroy(grantId),
     ]);
   }
-  if (session.accountId) await session.destroy();
+  if (session.accountId) {
+    await session.destroy();
+    await notifySessionLogout(provider, { accountId: session.accountId, authorizations: session.authorizations }, log);
+  }
   ctx.cookies.set(provider.cookieName("session"), null, {
     path: "/",
     httpOnly: true,

@@ -17,9 +17,10 @@ import type { Account, AccountStore } from "../src/accounts.ts";
 import { loadClients } from "../src/clients.ts";
 import { ASSERTION_AUDIENCE, ASSERTION_ISSUER, verifyTicket } from "../src/handoff.ts";
 import { createLogger } from "../src/log.ts";
-import { createProvider } from "../src/provider.ts";
+import { createProvider, endBrowserSession } from "../src/provider.ts";
 import { RedisPendingLogins } from "../src/pending.ts";
-import { RedisReplayGuard, redisAdapterFactory } from "../src/redis-adapter.ts";
+import { notifySessionLogout } from "../src/logout.ts";
+import { RedisReplayGuard, redisAdapterFactory, endSessionsOfAccount } from "../src/redis-adapter.ts";
 
 const REDIS_URL = process.env.IDENTITY_TEST_REDIS_URL;
 // CI must run these, never skip them silently.
@@ -64,6 +65,7 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
   let identityHandoff: Awaited<ReturnType<typeof generateKeyPair>>;
   const accounts = new MemoryAccounts();
   const backchannel: string[] = [];
+  let provider: ReturnType<typeof createProvider>;
   const log = createLogger((l) => process.env.IDENTITY_TEST_LOG && console.log(l));
 
   beforeAll(async () => {
@@ -96,7 +98,7 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
     await new Promise<void>((r) => op.listen(0, r));
     issuer = `http://localhost:${(op.address() as AddressInfo).port}`;
 
-    const provider = createProvider({
+    provider = createProvider({
       issuer,
       jwks: { keys: [signing] },
       cookieKeys: [randomBytes(32).toString("hex")],
@@ -132,6 +134,12 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
         const { dispatcher: _ssrfGuard, ...rest } = options as RequestInit & { dispatcher?: unknown };
         return fetch(url, rest);
       },
+    });
+    provider.use(async (ctx, next) => {
+      if (ctx.path === "/test-local-logout") {
+        await endBrowserSession(provider, ctx as never, log);
+        ctx.status = 204;
+      } else await next();
     });
     op.on("request", provider.callback());
   });
@@ -593,6 +601,37 @@ describe.skipIf(!REDIS_URL)("identity service, end to end (Redis + stub Hub + st
       events: { "http://schemas.openid.net/event/backchannel-logout": {} },
     });
   });
+
+  for (const path of ["local sign-out", "connection revocation"]) {
+    it(`${path} sends a signed back-channel logout and invalidates tokens`, async () => {
+      const sub = path === "local sign-out" ? "local-person" : "revoked-person";
+      accounts.rows.set(sub, { sub, email: null, name: null, picture: null, roles: [], isActive: true });
+      const { verifier, challenge } = pkce();
+      const { callback, jar } = await signIn(sub, { code_challenge: challenge, code_challenge_method: "S256" });
+      const t = await token({
+        grant_type: "authorization_code",
+        code: callback!.searchParams.get("code")!,
+        redirect_uri: `${rpBase}/cb`,
+        code_verifier: verifier,
+      });
+      expect(t.status).toBe(200);
+      const sid = decodeJwt(t.json.id_token as string).sid;
+      backchannel.length = 0;
+      if (path === "local sign-out") expect((await get(`${issuer}/test-local-logout`, jar)).status).toBe(204);
+      else
+        expect(await endSessionsOfAccount(redis, sub, (session) => notifySessionLogout(provider, session, log))).toBe(
+          1,
+        );
+      await expect.poll(() => backchannel.length, { timeout: 5000 }).toBe(1);
+      const { payload } = await jwtVerify(backchannel[0]!, createRemoteJWKSet(new URL(`${issuer}/jwks`)), {
+        issuer,
+        audience: CLIENT_ID,
+      });
+      expect(payload).toMatchObject({ sub, sid, events: { "http://schemas.openid.net/event/backchannel-logout": {} } });
+      const userinfo = await fetch(`${issuer}/me`, { headers: { authorization: `Bearer ${t.json.access_token}` } });
+      expect(userinfo.status).toBe(401);
+    });
+  }
 
   it("stores everything under the oidc: prefix with a TTL", async () => {
     const keys = await redis.keys("*");
