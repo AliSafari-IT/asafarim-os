@@ -1,6 +1,9 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { getLocale } from "@asafarim/locale/next";
+import { LocaleSelector } from "@asafarim/locale/react";
 import { ThemeToggle } from "@asafarim/theme/react";
+import { messagesFor } from "@/lib/i18n";
 import { AdminLogo } from "@/components/AdminLogo";
 import { SIGNED_OUT_COOKIE, signIn } from "@/lib/auth";
 import { adminState } from "@/lib/session";
@@ -15,17 +18,22 @@ async function signInAction() {
 
 export default async function SignIn() {
   if ((await adminState()).state === "ok") redirect("/admin");
+  const locale = await getLocale();
+  const m = messagesFor(locale);
   return (
     <main className="center" id="main">
-      <ThemeToggle className="center-toggle" />
+      <span className="center-toggle">
+        <LocaleSelector locale={locale} />
+        <ThemeToggle locale={locale} />
+      </span>
       <div className="center-mark">
         <AdminLogo size={72} />
       </div>
       <h1>ASafariM OS Admin</h1>
       <div className="card">
-        <p>Sign in with your ASafariM account. Only platform administrators can use the console.</p>
+        <p>{m.signInIntro}</p>
         <form action={signInAction}>
-          <button type="submit">Sign in</button>
+          <button type="submit">{m.signIn}</button>
         </form>
       </div>
     </main>

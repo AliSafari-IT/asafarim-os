@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/admin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "The ASafariM OS Admin console (P3.3b): apps, roles and grants, audit. A pure OIDC client of core/identity, built with @asafarim/app-sdk; every action is a call to core-api's admin API as the signed-in administrator.",
   "scripts": {
@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@asafarim/app-sdk": "workspace:*",
+    "@asafarim/locale": "workspace:*",
     "@asafarim/event-catalog": "workspace:*",
     "@asafarim/telemetry": "workspace:*",
     "@asafarim/theme": "workspace:*",

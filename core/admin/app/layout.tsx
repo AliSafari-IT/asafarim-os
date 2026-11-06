@@ -1,3 +1,4 @@
+import { getLocale } from "@asafarim/locale/next";
 import { parseTheme, THEME_COOKIE } from "@asafarim/theme";
 import { LegalFooter } from "@asafarim/theme/react";
 import type { Metadata } from "next";
@@ -10,11 +11,12 @@ export const metadata: Metadata = { title: "Admin · ASafariM OS", description: 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // The light/dark choice made with the toggle on any *.asafarim.site page; none = follow the system.
   const theme = parseTheme((await cookies()).get(THEME_COOKIE)?.value);
+  const locale = await getLocale();
   return (
-    <html lang="en" data-theme={theme}>
+    <html lang={locale} data-theme={theme}>
       <body>
         {children}
-        <LegalFooter app="Admin" />
+        <LegalFooter app="Admin" locale={locale} />
       </body>
     </html>
   );

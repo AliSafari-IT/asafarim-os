@@ -474,6 +474,9 @@ importers:
       '@asafarim/event-catalog':
         specifier: workspace:*
         version: link:../../packages/event-catalog
+      '@asafarim/locale':
+        specifier: workspace:*
+        version: link:../../packages/locale
       '@asafarim/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry
