@@ -198,6 +198,9 @@ importers:
       '@asafarim/app-sdk':
         specifier: workspace:*
         version: link:../../packages/app-sdk
+      '@asafarim/locale':
+        specifier: workspace:*
+        version: link:../../packages/locale
       '@asafarim/markdown-utils':
         specifier: 1.3.3
         version: 1.3.3

@@ -10,6 +10,7 @@
  * regenerated for before it can be created in, so the banner is never out of date.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useMessages } from "./I18n";
 
 /** What the draft route answers: the preview, or an error to show. */
 interface DraftAnswer {
@@ -135,6 +136,7 @@ export function IssueDialog({
   onClose: () => void;
   onCreated: (url: string) => void;
 }) {
+  const m = useMessages();
   const dialog = useRef<HTMLDialogElement>(null);
   const [phase, setPhase] = useState<"drafting" | "ready" | "failed">("drafting");
   const [error, setError] = useState("");
@@ -236,8 +238,8 @@ export function IssueDialog({
       data-testid="issue-dialog"
     >
       <form onSubmit={create} aria-busy={busy}>
-        <h2 id="issue-dialog-title">Generate GitHub issue</h2>
-        <p className="muted">Nothing is created until you choose Create issue.</p>
+        <h2 id="issue-dialog-title">{m.generateIssue}</h2>
+        <p className="muted">{m.issueNothing}</p>
 
         {current?.public ? (
           <p className="public-banner" role="alert" data-testid="public-banner">
@@ -246,11 +248,11 @@ export function IssueDialog({
         ) : null}
 
         <p className="visually-hidden" role="status" aria-live="polite">
-          {phase === "drafting" ? "Drafting the issue…" : phase === "ready" ? "The draft is ready." : ""}
+          {phase === "drafting" ? m.issueDrafting.split(" (")[0]! : phase === "ready" ? m.issueReady : ""}
         </p>
         {phase === "drafting" ? (
           <p className="muted" data-testid="issue-drafting">
-            Drafting the issue… (this can take up to a minute)
+            {m.issueDrafting}
           </p>
         ) : null}
         {error ? (
@@ -264,13 +266,13 @@ export function IssueDialog({
               disabled={busy}
               onClick={() => void generate(typedRepo || undefined)}
             >
-              Try again
+              {m.tryAgain}
             </button>
           </div>
         ) : null}
 
         <label>
-          Target repository <span className="muted">(owner/name)</span>
+          {m.targetRepo} <span className="muted">{m.ownerName}</span>
           <input
             name="repo"
             value={repo}
@@ -295,7 +297,7 @@ export function IssueDialog({
         {title ? (
           <>
             <label>
-              Title
+              {m.title}
               <input
                 name="title"
                 value={title}
@@ -319,7 +321,7 @@ export function IssueDialog({
             </label>
             {current && current.labels.length ? (
               <fieldset className="issue-labels" disabled={phase === "drafting"}>
-                <legend>Labels</legend>
+                <legend>{m.labels}</legend>
                 <div className="issue-label-list">
                   {current.labels.map((l) => (
                     <label key={l} className="check">
@@ -334,7 +336,7 @@ export function IssueDialog({
                 </div>
               </fieldset>
             ) : current ? (
-              <p className="muted">This repo has no labels.</p>
+              <p className="muted">{m.noLabels}</p>
             ) : null}
           </>
         ) : null}
@@ -342,7 +344,7 @@ export function IssueDialog({
         {existing ? (
           <div className="notice issue-existing" role="status">
             <p>
-              This note already has an issue:{" "}
+              {m.alreadyIssue}{" "}
               <a href={existing} target="_blank" rel="noopener noreferrer">
                 {existing.replace(/^https:\/\/github\.com\//, "")}
               </a>
@@ -355,7 +357,7 @@ export function IssueDialog({
                 onChange={(e) => setSecond(e.target.checked)}
                 data-testid="confirm-second"
               />
-              Yes, create a second issue
+              {m.secondIssue}
             </label>
           </div>
         ) : null}
@@ -370,7 +372,7 @@ export function IssueDialog({
 
         <div className="actions">
           <button type="button" className="secondary" onClick={() => dialog.current?.close()}>
-            {unsaved ? "Close" : "Cancel"}
+            {unsaved ? m.close : m.cancel}
           </button>
           <button
             type="button"
@@ -378,10 +380,10 @@ export function IssueDialog({
             disabled={busy || Boolean(unsaved)}
             onClick={() => void generate(typedRepo || undefined)}
           >
-            Regenerate
+            {m.regenerate}
           </button>
           <button type="submit" disabled={!canCreate} data-testid="create-issue">
-            {creating ? "Creating…" : "Create issue"}
+            {creating ? m.creating : m.createIssue}
           </button>
         </div>
       </form>

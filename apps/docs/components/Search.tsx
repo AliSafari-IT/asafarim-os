@@ -6,6 +6,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { docHref } from "@/lib/links";
+import { useMessages } from "./I18n";
 
 interface Entry {
   path: string;
@@ -48,6 +49,7 @@ export function searchDocs(docs: Entry[], query: string, limit = 20): Hit[] {
 }
 
 export function Search() {
+  const m = useMessages();
   const router = useRouter();
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -94,9 +96,9 @@ export function Search() {
   return (
     <>
       <button type="button" className="secondary search-button" onClick={open} data-testid="search-open">
-        Search <kbd>⌘K</kbd>
+        {m.search} <kbd>⌘K</kbd>
       </button>
-      <dialog ref={dialog} className="search" aria-label="Search the documents" onClose={() => setQuery("")}>
+      <dialog ref={dialog} className="search" aria-label={m.searchDocs} onClose={() => setQuery("")}>
         <input
           ref={input}
           type="search"
@@ -104,8 +106,8 @@ export function Search() {
           aria-expanded={hits.length > 0}
           aria-controls={listId}
           aria-activedescendant={hits[cursor] ? `${listId}-${cursor}` : undefined}
-          aria-label="Search titles and headings"
-          placeholder="Search titles and headings"
+          aria-label={m.searchTitles}
+          placeholder={m.searchTitles}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -117,7 +119,7 @@ export function Search() {
           }}
           data-testid="search-input"
         />
-        <ul id={listId} role="listbox" aria-label="Results" data-testid="search-results">
+        <ul id={listId} role="listbox" aria-label={m.results} data-testid="search-results">
           {hits.map((h, i) => (
             <li
               key={`${h.path}${h.hash}`}
@@ -134,12 +136,12 @@ export function Search() {
         </ul>
         <p className="muted hint" role="status">
           {error
-            ? "Search isn't available right now."
+            ? m.searchUnavailable
             : !docs
               ? "Loading…"
               : query.trim() && !hits.length
-                ? "Nothing matches."
-                : "↑ ↓ to move, Enter to open, Esc to close."}
+                ? m.nothingMatches
+                : m.searchHint}
         </p>
       </dialog>
     </>
