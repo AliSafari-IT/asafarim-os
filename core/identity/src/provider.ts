@@ -27,6 +27,7 @@ import type { Logger } from "./log.ts";
 import {
   CONTINUE_PAGE_CSP,
   FAVICON_SVG,
+  SELECTOR_JS,
   THEME_JS,
   continuePage,
   errorPage,
@@ -35,6 +36,7 @@ import {
 } from "./pages.ts";
 import { PENDING_TTL_SECONDS, hashSecret, type PendingLogins } from "./pending.ts";
 import type { SignIn } from "./sign-in.ts";
+import { msg, withRequestLocale } from "./i18n.ts";
 
 export const ACCESS_TOKEN_TTL = 600;
 export const SCOPES = ["openid", "offline_access", "email", "profile", "roles"];
@@ -209,7 +211,7 @@ export function createProvider(deps: ProviderDeps): Provider {
         ctx,
         ctx.status >= 400 ? ctx.status : 400,
         errorPage({
-          message: "The sign-in request couldn't be processed.",
+          message: msg().errors.unprocessable,
           code: String(out.error ?? "server_error"),
         }),
       );
@@ -225,6 +227,14 @@ export function createProvider(deps: ProviderDeps): Provider {
   );
   provider.on("backchannel.error", (_ctx, err, client) =>
     log.warn("oidc.backchannel_error", { errorCode: err.name, clientId: client.clientId }),
+  );
+
+  // Every request runs in its language (i18n.ts): the URL's ?lang= (then remembered in the shared
+  // asafarim-locale cookie), the cookie, the browser's, or English. Registered first, so the pages and
+  // oidc-provider's own error page built while handling the request all read it.
+  const issuerHost = new URL(deps.issuer).host;
+  provider.use((ctx, next) =>
+    withRequestLocale(ctx, issuerHost, (cookie) => ctx.append("Set-Cookie", cookie), next as () => Promise<void>),
   );
 
   provider.use(async (ctx, next) => {
@@ -252,6 +262,15 @@ export function createProvider(deps: ProviderDeps): Provider {
       return;
     }
 
+    // @asafarim/locale's country & language selector, which every page with scripts loads.
+    if (path === "/static/selector.js" && ctx.method === "GET") {
+      ctx.type = "application/javascript";
+      ctx.set("Cache-Control", "public, max-age=300");
+      ctx.set("X-Content-Type-Options", "nosniff");
+      ctx.body = SELECTOR_JS;
+      return;
+    }
+
     if (path === "/readyz" && ctx.method === "GET") {
       let checks: Record<string, boolean>;
       try {
@@ -273,15 +292,11 @@ export function createProvider(deps: ProviderDeps): Provider {
       try {
         details = await provider.interactionDetails(ctx.req, ctx.res);
       } catch {
-        sendHtml(ctx, 400, errorPage({ message: "This sign-in link has expired.", code: "interaction_expired" }));
+        sendHtml(ctx, 400, errorPage({ message: msg().errors.linkExpired, code: "interaction_expired" }));
         return;
       }
       if (details.uid !== uid) {
-        sendHtml(
-          ctx,
-          400,
-          errorPage({ message: "This sign-in link doesn't match your session.", code: "interaction_mismatch" }),
-        );
+        sendHtml(ctx, 400, errorPage({ message: msg().errors.linkMismatch, code: "interaction_mismatch" }));
         return;
       }
       if (details.prompt.name === "consent" && details.session?.accountId) {
@@ -307,11 +322,7 @@ export function createProvider(deps: ProviderDeps): Provider {
       if (details.prompt.name !== "login") {
         // With loadExistingGrant there is no consent prompt; anything else is unexpected.
         log.warn("interaction.unexpected_prompt", { uid, reason: details.prompt.name });
-        sendHtml(
-          ctx,
-          400,
-          errorPage({ message: "The sign-in request couldn't be processed.", code: "unexpected_prompt" }),
-        );
+        sendHtml(ctx, 400, errorPage({ message: msg().errors.unprocessable, code: "unexpected_prompt" }));
         return;
       }
       if (login.method === "local") {
@@ -365,13 +376,13 @@ export function createProvider(deps: ProviderDeps): Provider {
       // (a top-level GET, which does carry the interaction cookie).
       const interaction = await provider.Interaction.find(uid);
       if (!interaction) {
-        sendHtml(ctx, 400, errorPage({ message: "This sign-in has expired.", code: "interaction_expired" }));
+        sendHtml(ctx, 400, errorPage({ message: msg().errors.expired, code: "interaction_expired" }));
         return;
       }
       const form = await readForm(ctx);
       const assertion = form?.get("assertion");
       if (!assertion) {
-        sendHtml(ctx, 400, errorPage({ message: "Hub didn't send a sign-in assertion.", code: "missing_assertion" }));
+        sendHtml(ctx, 400, errorPage({ message: msg().errors.noAssertion, code: "missing_assertion" }));
         return;
       }
       let sub: string;
@@ -384,13 +395,13 @@ export function createProvider(deps: ProviderDeps): Provider {
       } catch (err) {
         const code = err instanceof HandoffError ? err.code : "invalid";
         log.warn("interaction.assertion_refused", { uid, reason: code });
-        sendHtml(ctx, 400, errorPage({ message: "Your sign-in couldn't be verified.", code: `assertion_${code}` }));
+        sendHtml(ctx, 400, errorPage({ message: msg().errors.unverified, code: `assertion_${code}` }));
         return;
       }
       const account = await deps.accounts.find(sub);
       if (!account || !account.isActive) {
         log.warn("interaction.account_refused", { uid, reason: account ? "inactive" : "unknown" });
-        sendHtml(ctx, 403, errorPage({ message: "This account can't sign in.", code: "account_inactive" }));
+        sendHtml(ctx, 403, errorPage({ message: msg().errors.inactive, code: "account_inactive" }));
         return;
       }
       // Don't finish here: this POST can't prove it comes from the browser
@@ -438,11 +449,7 @@ export function createProvider(deps: ProviderDeps): Provider {
           uid,
           reason: secret ? "completion_secret" : "no_completion_cookie",
         });
-        sendHtml(
-          ctx,
-          400,
-          errorPage({ message: "This sign-in can't be completed in this browser.", code: "browser_mismatch" }),
-        );
+        sendHtml(ctx, 400, errorPage({ message: msg().errors.browser, code: "browser_mismatch" }));
         return;
       }
       let details;
@@ -453,11 +460,7 @@ export function createProvider(deps: ProviderDeps): Provider {
       }
       if (!details || details.uid !== uid) {
         log.warn("interaction.completion_refused", { uid, reason: "interaction_cookie" });
-        sendHtml(
-          ctx,
-          400,
-          errorPage({ message: "This sign-in can't be completed in this browser.", code: "browser_mismatch" }),
-        );
+        sendHtml(ctx, 400, errorPage({ message: msg().errors.browser, code: "browser_mismatch" }));
         return;
       }
       log.info("interaction.login", { uid });

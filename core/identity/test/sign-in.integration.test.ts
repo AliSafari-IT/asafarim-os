@@ -143,6 +143,7 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
       "002_email_passkeys.sql",
       "003_passkey_id_check.sql",
       "004_google_access_requests.sql",
+      "005_request_locale.sql",
     ]);
     expect(await store.migrate()).toEqual([]);
   });
@@ -227,12 +228,15 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
     await expect(store.verifiedGoogleLogin("../bad", null, false)).rejects.toThrow();
 
     // Requests carry apps and a note; a connected person can ask for more apps.
-    expect(await store.requestConnection(other, { apps: ["docs"], note: "hi" })).toBe("created");
+    expect(await store.requestConnection(other, { apps: ["docs"], note: "hi", locale: "fr" })).toBe("created");
     expect(await store.requestConnection(other, { apps: ["docs"], note: null })).toBe("already_pending");
     expect(await store.requestConnection(other, { apps: ["notes"], note: null })).toBe("updated");
     expect(await store.pendingRequest(other)).toMatchObject({ apps: ["docs", "notes"], note: "hi" });
     const [r] = (await store.pendingRequests()).filter((x) => x.principalId === other);
     expect(r).toMatchObject({ label: OTHER, methods: ["google"], connected: false, apps: ["docs", "notes"] });
+    // the language it was asked in, for the decision e-mail; only the four the OS speaks
+    expect(r!.locale).toBe("fr");
+    await expect(store.requestConnection(fresh, { apps: [], note: null, locale: "xx" })).rejects.toThrow();
     await store.decideRequest(r!.id, "approved", adminId);
     expect(await store.requestConnection(other)).toBe("already_connected");
     expect(await store.requestConnection(other, { apps: ["admin"], note: null })).toBe("created");

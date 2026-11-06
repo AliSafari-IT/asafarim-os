@@ -162,6 +162,21 @@ The caller sends the signed-in person's ID token as `Bearer`. It must be identit
 
 `IDENTITY_DATABASE_URL` is a Postgres database the service owns. `migrations/*.sql` are applied at start, one at a time across replicas (advisory lock). It is a separate database from the platform's, so it isn't the read-only `identity_ro` login.
 
+## Languages
+
+Every page, message and e-mail is in English, Nederlands, Français or Deutsch (`src/i18n.ts`, with `@asafarim/locale`). Each request picks its language in this order:
+
+1. `?lang=` in the URL, which is then remembered;
+2. the `asafarim-locale` cookie, shared by every `*.asafarim.site` host, so a choice made on asafarim.site holds here too;
+3. the browser's `Accept-Language`;
+4. English.
+
+Every page with scripts shows the country & language selector in its header. It is served at `/static/selector.js`, and its fallback is one plain link per language.
+
+- **Code e-mails and SMS** go out in the language of the request that asked for them.
+- **Access requests** store their language (`connection_requests.locale`, migration 005), so the approval or rejection e-mail is in the person's language whatever the admin's. The notification to admins stays English.
+- **Adding a message:** add it to `Messages` and to all four dictionaries. `test/i18n.test.ts` fails when one is missing.
+
 ## Configuration (env)
 
 | Variable                         | What                                                                                                                       |

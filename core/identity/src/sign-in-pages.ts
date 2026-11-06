@@ -5,7 +5,8 @@
  * how access works.
  */
 import type { AppLink } from "./clients.ts";
-import { type NavLink, escapeHtml, homeHref, homeLink, page, PRODUCT_LINKS } from "./pages.ts";
+import { currentLocale, msg, sitePage } from "./i18n.ts";
+import { type NavLink, escapeHtml, homeHref, homeLink, page, productLinks } from "./pages.ts";
 import type { AuditRow, ConnectionRequestRow, ConnectionRow, IdentityMethod, PendingRequest } from "./store.ts";
 
 /** Pages that post forms to this origin only, and run only this origin's scripts (the theme's). */
@@ -146,13 +147,20 @@ const cell = (label: string, html: string, className = "") =>
 const csrfField = (csrf: string) => `<input type="hidden" name="csrf" value="${escapeHtml(csrf)}">`;
 const err = (message?: string) => (message ? `<p class="error" role="alert">${escapeHtml(message)}</p>` : "");
 
-const METHOD_NAMES: Record<IdentityMethod, string> = { google: "Google", email: "Email code", phone: "SMS code" };
+/** The passkey script's words (passkey-client.ts reads them from its status line). */
+const passkeyMessages = () => {
+  const m = msg();
+  return ` data-msg-waiting="${escapeHtml(m.account.passkeyWaiting)}" data-msg-cancelled="${escapeHtml(m.account.passkeyCancelled)}" data-msg-failed="${escapeHtml(m.account.passkeyFailed)}" data-msg-error="${escapeHtml(m.flow.somethingWrong)}"`;
+};
 
 /** How someone signs in, as chips. */
 const methodChips = (methods: readonly IdentityMethod[], passkeys = 0) => {
-  const chips = methods.map((m) => `<li class="chip">${escapeHtml(METHOD_NAMES[m] ?? m)}</li>`);
-  if (passkeys) chips.push(`<li class="chip">Passkey${passkeys > 1 ? ` ×${passkeys}` : ""}</li>`);
-  return chips.length ? `<ul class="chips" aria-label="Sign-in methods">${chips.join("")}</ul>` : "";
+  const names = msg().account.methods;
+  const chips = methods.map((m) => `<li class="chip">${escapeHtml(names[m] ?? m)}</li>`);
+  if (passkeys) chips.push(`<li class="chip">${escapeHtml(names.passkey)}${passkeys > 1 ? ` ×${passkeys}` : ""}</li>`);
+  return chips.length
+    ? `<ul class="chips" aria-label="${escapeHtml(msg().account.methodsLabel)}">${chips.join("")}</ul>`
+    : "";
 };
 
 /** App names for client ids; an id no longer configured is shown as itself. */
@@ -161,11 +169,7 @@ const appChips = (ids: readonly string[], apps: readonly AppLink[]) =>
     ? `<ul class="chips">${ids
         .map((id) => `<li class="chip">${escapeHtml(apps.find((a) => a.id === id)?.name ?? id)}</li>`)
         .join("")}</ul>`
-    : `<span class="small">Just an account</span>`;
-
-/** "a", "a or b", "a, b or c". */
-const listOr = (items: string[]) =>
-  items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
+    : `<span class="small">${escapeHtml(msg().request.justAccount)}</span>`;
 
 export interface LoginPageOptions {
   csrf: string;
@@ -181,96 +185,101 @@ export interface LoginPageOptions {
 }
 
 export function loginPage(o: LoginPageOptions): string {
+  const t = msg().login;
   const quick = [
     o.google
-      ? `<a class="gbtn" href="/login/google" data-testid="google-sign-in">${GOOGLE_G}<span>Continue with Google</span></a>`
+      ? `<a class="gbtn" href="/login/google" data-testid="google-sign-in">${GOOGLE_G}<span>${escapeHtml(t.google)}</span></a>`
       : "",
     o.passkey
-      ? `<button type="button" class="secondary pk" data-passkey="login" data-csrf="${escapeHtml(o.csrf)}" hidden>${KEY_ICON}<span>Sign in with a passkey</span></button>`
+      ? `<button type="button" class="secondary pk" data-passkey="login" data-csrf="${escapeHtml(o.csrf)}" hidden>${KEY_ICON}<span>${escapeHtml(t.passkey)}</span></button>`
       : "",
   ].join("");
   const quickBlock = quick
-    ? `<div class="stack">${quick}</div>${o.passkey ? '<p class="small" data-passkey-status role="status"></p>' : ""}`
+    ? `<div class="stack">${quick}</div>${o.passkey ? `<p class="small" data-passkey-status role="status"${passkeyMessages()}></p>` : ""}`
     : "";
   const email = o.email
     ? `<form method="post" action="/login/start">
 ${csrfField(o.csrf)}<input type="hidden" name="via" value="email">
-<label for="email">Email address</label>
+<label for="email">${escapeHtml(t.email)}</label>
 <input id="email" name="identifier" type="email" autocomplete="email" required maxlength="254"
- placeholder="you@example.com" value="${escapeHtml(o.value && o.value.includes("@") ? o.value : "")}">
-<button type="submit">Email me a sign-in code</button>
+ placeholder="${escapeHtml(t.emailPlaceholder)}" value="${escapeHtml(o.value && o.value.includes("@") ? o.value : "")}">
+<button type="submit">${escapeHtml(t.emailSubmit)}</button>
 </form>`
     : "";
   const smsForm = `<form method="post" action="/login/start">
 ${csrfField(o.csrf)}<input type="hidden" name="via" value="sms">
-<label for="phone">Mobile number</label>
+<label for="phone">${escapeHtml(t.mobile)}</label>
 <input id="phone" name="identifier" type="tel" inputmode="tel" autocomplete="tel" required maxlength="32"
  placeholder="+32 470 12 34 56" value="${escapeHtml(o.value && !o.value.includes("@") ? o.value : "")}">
-<button type="submit">Text me a code</button>
+<button type="submit">${escapeHtml(t.smsSubmit)}</button>
 </form>`;
   // SMS is the fallback: tucked away under the email form, unless it is the only code method.
   const sms = !o.sms
     ? ""
     : o.email
-      ? `<details class="more"${o.value && !o.value.includes("@") ? " open" : ""}><summary>Use a mobile number instead</summary>${smsForm}</details>`
+      ? `<details class="more"${o.value && !o.value.includes("@") ? " open" : ""}><summary>${escapeHtml(t.useMobile)}</summary>${smsForm}</details>`
       : smsForm;
   const codes = email || sms;
-  const divider = quick && codes ? `<div class="or">or get a one-time code</div>` : "";
-  const ways = [
-    o.google ? "Google" : "",
-    o.passkey ? "a passkey" : "",
-    o.email ? "a code by email" : "",
-    o.sms ? "a code by SMS" : "",
-  ].filter(Boolean);
+  const divider = quick && codes ? `<div class="or">${escapeHtml(t.or)}</div>` : "";
+  const ways = t.listOr(
+    [
+      o.google ? t.ways.google : "",
+      o.passkey ? t.ways.passkey : "",
+      o.email ? t.ways.email : "",
+      o.sms ? t.ways.sms : "",
+    ].filter(Boolean),
+  );
   const how = `<section class="intro" aria-labelledby="how">
-<p class="eyebrow">Your ASafariM account</p>
-<h2 id="how">One sign-in for every ASafariM app</h2>
+<p class="eyebrow">${escapeHtml(t.eyebrow)}</p>
+<h2 id="how">${escapeHtml(t.howTitle)}</h2>
 <ol class="how">
-<li><span class="n">1</span><div><strong>Sign in</strong><small>With ${escapeHtml(listOr(ways))}. The first time creates your account.</small></div></li>
-<li><span class="n">2</span><div><strong>Ask for access</strong><small>Pick the apps you need and tell the admin why.</small></div></li>
-<li><span class="n">3</span><div><strong>An admin approves</strong><small>You get an email, and your apps open with this same sign-in.</small></div></li>
+${t.steps
+  .map(
+    ([title, text], i) =>
+      `<li><span class="n">${i + 1}</span><div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(text(ways))}</small></div></li>`,
+  )
+  .join("\n")}
 </ol>
-<p class="small">Signing in only proves who you are. No app opens until an administrator gives you access.</p>
+<p class="small">${escapeHtml(t.onlyProves)}</p>
 </section>`;
+  const locale = currentLocale();
   return page(
-    "Sign in",
+    t.title,
     `<div class="split"><section class="signin" aria-labelledby="signin">
 ${
   o.app
-    ? `<p class="eyebrow">Continue to ${escapeHtml(o.app)}</p>
-<h1 id="signin">Sign in to ${escapeHtml(o.app)}</h1>
-<p class="lead">${escapeHtml(o.app)} uses your ASafariM account. New here? Signing in creates your account.</p>`
-    : `<h1 id="signin">Sign in</h1>
-<p class="lead">Welcome to ASafariM. New here? Signing in creates your account.</p>`
+    ? `<p class="eyebrow">${escapeHtml(t.continueTo(o.app))}</p>
+<h1 id="signin">${escapeHtml(t.signInTo(o.app))}</h1>
+<p class="lead">${escapeHtml(t.appLead(o.app))}</p>`
+    : `<h1 id="signin">${escapeHtml(t.title)}</h1>
+<p class="lead">${escapeHtml(t.welcome)}</p>`
 }
 ${err(o.error)}${quickBlock}${divider}${email}${sms}
-<p class="fine">By continuing you accept the <a href="https://asafarim.site/terms">terms</a> and the
-<a href="https://asafarim.site/privacy">privacy notice</a>.</p>
+<p class="fine">${t.fine(sitePage(locale, "terms"), sitePage(locale, "privacy"))}</p>
 </section>${how}</div>`,
     `${EXTRA_STYLE}${LOGIN_STYLE}${o.passkey ? '<script src="/static/passkey.js" defer></script>' : ""}`,
   );
 }
 
 export function codePage(opts: { csrf: string; masked: string; via: "email" | "sms"; error?: string }): string {
-  const where = opts.via === "email" ? "this address" : "this number";
-  const what = opts.via === "email" ? "an email" : "an SMS";
+  const t = msg().code;
   return page(
-    "Enter your code",
-    `<h1>${opts.via === "email" ? "Check your email" : "Check your phone"}</h1>
-<p>If ${where} can sign in, ${what} with a 6-digit code is on its way to <strong>${escapeHtml(opts.masked)}</strong>. It expires in 5 minutes.</p>
+    t.title,
+    `<h1>${escapeHtml(opts.via === "email" ? t.checkEmail : t.checkPhone)}</h1>
+<p>${t.sent(opts.via, escapeHtml(opts.masked), 5)}</p>
 ${err(opts.error)}
 <form method="post" action="/login/verify">
 ${csrfField(opts.csrf)}
-<label for="code">Sign-in code</label>
+<label for="code">${escapeHtml(t.label)}</label>
 <input id="code" name="code" class="code" type="text" inputmode="numeric" autocomplete="one-time-code"
  pattern="[0-9]{6}" maxlength="6" required autofocus>
-<button type="submit" style="width:100%">Verify and sign in</button>
+<button type="submit" style="width:100%">${escapeHtml(t.verify)}</button>
 </form>
 <div class="row" style="margin-top:14px">
-<form class="inline" method="post" action="/login/resend">${csrfField(opts.csrf)}<button class="secondary" type="submit" style="margin-left:0">Send a new code</button></form>
-<a class="button secondary" href="/login/restart">Use another way</a>
+<form class="inline" method="post" action="/login/resend">${csrfField(opts.csrf)}<button class="secondary" type="submit" style="margin-left:0">${escapeHtml(t.resend)}</button></form>
+<a class="button secondary" href="/login/restart">${escapeHtml(t.another)}</a>
 </div>
-<p class="small" style="margin-top:14px">No email? Check your spam folder. Codes come from ASafariM and are never asked for by anyone.</p>`,
+<p class="small" style="margin-top:14px">${escapeHtml(t.spam)}</p>`,
     EXTRA_STYLE,
   );
 }
@@ -280,11 +289,12 @@ ${csrfField(opts.csrf)}
  * configured, the Admin console (admin.asafarim.site, which still checks core.admin itself).
  */
 function signedInNav(current: "account" | "admin", isAdmin: boolean, adminConsoleUrl?: string): NavLink[] {
+  const t = msg().nav;
   return [
     homeLink(),
-    { href: "/account", label: "Account", current: current === "account" },
-    ...(isAdmin ? [{ href: "/admin", label: "Connections", current: current === "admin" }] : []),
-    ...(isAdmin && adminConsoleUrl ? [{ href: adminConsoleUrl, label: "Admin console" }] : []),
+    { href: "/account", label: t.account, current: current === "account" },
+    ...(isAdmin ? [{ href: "/admin", label: t.connections, current: current === "admin" }] : []),
+    ...(isAdmin && adminConsoleUrl ? [{ href: adminConsoleUrl, label: t.adminConsole }] : []),
   ];
 }
 
@@ -304,17 +314,20 @@ const tile = (href: string, glyph: string, name: string, description: string) =>
  * ASafariM's products outside the OS, which open for everyone.
  */
 function nextSteps(apps: readonly AppLink[], connected: boolean): string {
+  const t = msg().next;
   const tiles = [
-    tile(homeHref(), "OS", "ASafariM OS", "The home page: what the OS is, and what's new."),
+    tile(homeHref(), "OS", t.os, t.osText),
     ...apps.map((a) => tile(a.href, glyphOf(a.name), a.name, a.description ?? new URL(a.href).host)),
   ].join("");
   const note = !apps.length
     ? ""
     : connected
-      ? '<p class="small">An app opens once an admin has given your account access to it.</p>'
-      : '<p class="small">Apps open once your account is connected and an admin has given it access.</p>';
-  const more = PRODUCT_LINKS.map((p) => tile(p.href, glyphOf(p.name), p.name, p.description)).join("");
-  return `<h2>Where to next</h2><ul class="apps two">${tiles}</ul>${note}<h3>More from ASafariM</h3><ul class="apps two">${more}</ul>`;
+      ? `<p class="small">${escapeHtml(t.appsConnected)}</p>`
+      : `<p class="small">${escapeHtml(t.appsNotConnected)}</p>`;
+  const more = productLinks()
+    .map((p) => tile(p.href, glyphOf(p.name), p.name, p.description))
+    .join("");
+  return `<h2>${escapeHtml(t.title)}</h2><ul class="apps two">${tiles}</ul>${note}<h3>${escapeHtml(t.more)}</h3><ul class="apps two">${more}</ul>`;
 }
 
 /** The request form: which apps, and a note. Already-requested apps are shown checked and kept. */
@@ -324,9 +337,10 @@ function requestForm(opts: {
   pending: PendingRequest | null;
   submit: string;
 }): string {
+  const t = msg().request;
   const asked = new Set(opts.pending?.apps ?? []);
   const picks = opts.apps.length
-    ? `<fieldset class="pick"><legend>Which apps do you need?</legend>${opts.apps
+    ? `<fieldset class="pick"><legend>${escapeHtml(t.which)}</legend>${opts.apps
         .map(
           (a) =>
             `<label><input type="checkbox" name="app" value="${escapeHtml(a.id)}"${asked.has(a.id) ? " checked" : ""}><span><strong>${escapeHtml(a.name)}</strong>${
@@ -336,15 +350,16 @@ function requestForm(opts: {
         .join("")}</fieldset>`
     : "";
   return `<form method="post" action="/login/request">${csrfField(opts.csrf)}${picks}
-<label for="note">Anything the admin should know? <span class="small" style="font-weight:400">(optional)</span></label>
-<textarea id="note" name="note" maxlength="${NOTE_MAX}" placeholder="For example: I'm on the IGS-Pharma team and need Docs.">${escapeHtml(opts.pending?.note ?? "")}</textarea>
+<label for="note">${escapeHtml(t.note)} <span class="small" style="font-weight:400">${escapeHtml(t.optional)}</span></label>
+<textarea id="note" name="note" maxlength="${NOTE_MAX}" placeholder="${escapeHtml(t.placeholder)}">${escapeHtml(opts.pending?.note ?? "")}</textarea>
 <button type="submit">${escapeHtml(opts.submit)}</button></form>`;
 }
 
 /** Where a pending request stands, for its owner. */
 function pendingStatus(pending: PendingRequest, apps: readonly AppLink[]): string {
-  return `<div class="status" role="status"><p><span class="pill wait">Waiting for an admin</span> <span class="small">sent ${when(pending.createdAt)}</span></p>
-<p class="small">Apps: </p>${appChips(pending.apps, apps)}${pending.note ? `<p class="note" style="margin-top:8px">${escapeHtml(pending.note)}</p>` : ""}</div>`;
+  const t = msg().request;
+  return `<div class="status" role="status"><p><span class="pill wait">${escapeHtml(t.waiting)}</span> <span class="small">${escapeHtml(t.sent)} ${when(pending.createdAt)}</span></p>
+<p class="small">${escapeHtml(t.apps)} </p>${appChips(pending.apps, apps)}${pending.note ? `<p class="note" style="margin-top:8px">${escapeHtml(pending.note)}</p>` : ""}</div>`;
 }
 
 export function accountPage(opts: {
@@ -368,49 +383,49 @@ export function accountPage(opts: {
 }): string {
   const csrf = csrfField(opts.csrf);
   const pending = opts.pending ?? null;
+  const m = msg();
+  const t = m.account;
   const list = opts.passkeys.length
     ? // A list, not a table: the account card is too narrow for four columns at any screen width.
       `<ul class="keys">${opts.passkeys
         .map(
           (k) =>
-            `<li class="key"><div><strong>${escapeHtml(k.name)}</strong><small>Added ${when(k.createdAt)}</small><small>Last used ${when(k.lastUsedAt)}</small></div><form class="inline" method="post" action="/account/passkeys/remove">${csrf}<input type="hidden" name="id" value="${escapeHtml(k.credentialId)}"><button class="secondary" type="submit">Remove</button></form></li>`,
+            `<li class="key"><div><strong>${escapeHtml(k.name)}</strong><small>${escapeHtml(t.added)} ${when(k.createdAt)}</small><small>${escapeHtml(t.lastUsed)} ${when(k.lastUsedAt)}</small></div><form class="inline" method="post" action="/account/passkeys/remove">${csrf}<input type="hidden" name="id" value="${escapeHtml(k.credentialId)}"><button class="secondary" type="submit">${escapeHtml(t.remove)}</button></form></li>`,
         )
         .join("")}</ul>`
-    : "<p>No passkeys yet.</p>";
+    : `<p>${escapeHtml(t.noPasskeys)}</p>`;
   const state = opts.connected
-    ? '<span class="pill ok">Connected</span>'
+    ? `<span class="pill ok">${escapeHtml(t.connected)}</span>`
     : pending
-      ? '<span class="pill wait">Waiting for approval</span>'
-      : '<span class="pill off">Not connected yet</span>';
+      ? `<span class="pill wait">${escapeHtml(t.waitingApproval)}</span>`
+      : `<span class="pill off">${escapeHtml(t.notConnected)}</span>`;
   const access = opts.connected
     ? pending
-      ? `<h2>Access request</h2>${pendingStatus(pending, opts.apps)}<details class="more"><summary>Add apps or change your note</summary>${requestForm({ csrf: opts.csrf, apps: opts.apps, pending, submit: "Update request" })}</details>`
+      ? `<h2>${escapeHtml(t.accessRequest)}</h2>${pendingStatus(pending, opts.apps)}<details class="more"><summary>${escapeHtml(t.changeRequest)}</summary>${requestForm({ csrf: opts.csrf, apps: opts.apps, pending, submit: m.request.update })}</details>`
       : opts.apps.length
-        ? `<details class="more"><summary>Need another app? Ask for access</summary>${requestForm({ csrf: opts.csrf, apps: opts.apps, pending: null, submit: "Send request" })}</details>`
+        ? `<details class="more"><summary>${escapeHtml(t.needAnother)}</summary>${requestForm({ csrf: opts.csrf, apps: opts.apps, pending: null, submit: m.request.send })}</details>`
         : ""
-    : `<h2>Access</h2>${
-        pending
-          ? pendingStatus(pending, opts.apps)
-          : "<p>Your account isn't connected yet. Ask an administrator for access to start using ASafariM apps.</p>"
-      }<p><a class="button" href="/login">${pending ? "See or change your request" : "Ask for access"}</a></p>`;
+    : `<h2>${escapeHtml(t.access)}</h2>${
+        pending ? pendingStatus(pending, opts.apps) : `<p>${escapeHtml(t.notConnectedText)}</p>`
+      }<p><a class="button" href="/login">${escapeHtml(pending ? t.seeRequest : t.ask)}</a></p>`;
   return page(
-    "Your account",
-    `<h1>Your account</h1>
+    t.title,
+    `<h1>${escapeHtml(t.title)}</h1>
 ${opts.notice ? `<p class="notice" role="status">${escapeHtml(opts.notice)}</p>` : ""}
 <div class="who"><span class="avatar" aria-hidden="true">${escapeHtml(opts.initials ?? "?")}</span><div><strong>${escapeHtml(opts.label ?? "—")}</strong>${state}</div></div>
-<div class="account-id small"><span>Account id: <code data-account-id>${escapeHtml(opts.accountId)}</code></span><button type="button" class="secondary copy-account" data-copy-account-id aria-label="Copy account ID" title="Copy account ID" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg></button></div>
-<p class="small" data-copy-account-status role="status" aria-live="polite"></p>
-<p class="small">An admin uses your account ID to give you access to an app.</p>
+<div class="account-id small"><span>${escapeHtml(t.accountId)} <code data-account-id>${escapeHtml(opts.accountId)}</code></span><button type="button" class="secondary copy-account" data-copy-account-id aria-label="${escapeHtml(t.copy)}" title="${escapeHtml(t.copy)}" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg></button></div>
+<p class="small" data-copy-account-status role="status" aria-live="polite" data-msg-copied="${escapeHtml(t.copied)}" data-msg-failed="${escapeHtml(t.copyFailed)}"></p>
+<p class="small">${escapeHtml(t.idHint)}</p>
 ${access}
 ${nextSteps(opts.apps, opts.connected)}
-<h2>How you sign in</h2>
+<h2>${escapeHtml(t.howSignIn)}</h2>
 ${methodChips(opts.methods ?? [], opts.passkeys.length)}
-<h3>Passkeys</h3>
-<p class="small">A passkey lets you sign in with your fingerprint, face or device PIN instead of a code.</p>
+<h3>${escapeHtml(t.passkeys)}</h3>
+<p class="small">${escapeHtml(t.passkeyHint)}</p>
 ${list}
-<p><button type="button" data-passkey="register" data-csrf="${escapeHtml(opts.csrf)}" hidden>Add a passkey</button></p>
-<p class="small" data-passkey-status role="status"></p>
-<form method="post" action="/logout">${csrf}<button class="secondary" type="submit" style="margin-left:0">Sign out</button></form>`,
+<p><button type="button" data-passkey="register" data-csrf="${escapeHtml(opts.csrf)}" hidden>${escapeHtml(t.addPasskey)}</button></p>
+<p class="small" data-passkey-status role="status"${passkeyMessages()}></p>
+<form method="post" action="/logout">${csrf}<button class="secondary" type="submit" style="margin-left:0">${escapeHtml(m.common.signOut)}</button></form>`,
     {
       head: `${EXTRA_STYLE}<style>main>.card{max-width:720px}</style><script src="/static/passkey.js" defer></script><script src="/static/account.js" defer></script>`,
       nav: signedInNav("account", opts.isAdmin, opts.adminConsoleUrl),
@@ -420,10 +435,10 @@ ${list}
 
 /** The four steps from a first sign-in to an open app; `at` is the current one (1-based). */
 const progress = (at: number) =>
-  `<ol class="steps" aria-label="Your progress">${["Signed in", "Ask for access", "Admin review", "Open your apps"]
-    .map(
+  `<ol class="steps" aria-label="${escapeHtml(msg().progress.label)}">${msg()
+    .progress.steps.map(
       (s, i) =>
-        `<li class="${i + 1 < at ? "done" : i + 1 === at ? "now" : ""}"${i + 1 === at ? ' aria-current="step"' : ""}>${s}</li>`,
+        `<li class="${i + 1 < at ? "done" : i + 1 === at ? "now" : ""}"${i + 1 === at ? ' aria-current="step"' : ""}>${escapeHtml(s)}</li>`,
     )
     .join("")}</ol>`;
 
@@ -440,22 +455,22 @@ export function notConnectedPage(opts: {
   const apps = opts.apps ?? [];
   const pending = typeof opts.pending === "object" ? opts.pending : null;
   const isPending = Boolean(opts.pending);
-  const who = opts.label
-    ? `<p>Signed in as <strong>${escapeHtml(opts.label)}</strong></p>${methodChips(opts.methods ?? [])}`
-    : "";
+  const m = msg();
+  const t = m.notConnected;
+  const who = opts.label ? `<p>${t.signedInAs(escapeHtml(opts.label))}</p>${methodChips(opts.methods ?? [])}` : "";
   const body = isPending
-    ? `<h1>Request pending</h1>${progress(3)}
-<p class="notice" role="status">${opts.justRequested ? "Your request has been sent." : "You've already asked for access."} An administrator will review it, and you'll get an email when it's decided. Then sign in again.</p>
+    ? `<h1>${escapeHtml(t.pendingTitle)}</h1>${progress(3)}
+<p class="notice" role="status">${escapeHtml(opts.justRequested ? t.justSent : t.already)} ${escapeHtml(t.review)}</p>
 ${pending ? pendingStatus(pending, apps) : ""}
-${pending ? `<details class="more"><summary>Add apps or change your note</summary>${requestForm({ csrf: opts.csrf, apps, pending, submit: "Update request" })}</details>` : ""}`
-    : `<h1>Ask for access</h1>${progress(2)}
-<p>You're signed in, but your account isn't connected to ASafariM yet. Tell an administrator what you need: they'll review it and you'll get an email.</p>
-${err(opts.error)}${requestForm({ csrf: opts.csrf, apps, pending: null, submit: "Send request" })}`;
+${pending ? `<details class="more"><summary>${escapeHtml(m.account.changeRequest)}</summary>${requestForm({ csrf: opts.csrf, apps, pending, submit: m.request.update })}</details>` : ""}`
+    : `<h1>${escapeHtml(t.askTitle)}</h1>${progress(2)}
+<p>${escapeHtml(t.askText)}</p>
+${err(opts.error)}${requestForm({ csrf: opts.csrf, apps, pending: null, submit: m.request.send })}`;
   return page(
-    isPending ? "Request pending" : "Ask for access",
+    isPending ? t.pendingTitle : t.askTitle,
     `${body}
 <div style="margin-top:20px;border-top:1px solid var(--line);padding-top:14px">${who}
-<form method="post" action="/logout">${csrfField(opts.csrf)}<button class="secondary" type="submit" style="margin-left:0">Sign out</button></form></div>`,
+<form method="post" action="/logout">${csrfField(opts.csrf)}<button class="secondary" type="submit" style="margin-left:0">${escapeHtml(m.common.signOut)}</button></form></div>`,
     { head: `${EXTRA_STYLE}<style>main>.card{max-width:560px}</style>` },
   );
 }
@@ -475,14 +490,15 @@ export function messagePage(opts: { title: string; message: string; link?: { hre
  */
 export function continueToPage(href: string): string {
   const safe = escapeHtml(href);
+  const m = msg();
   return page(
-    "Signed in",
-    `<h1>You're signed in</h1><p>Taking you on…</p><p><a class="button" href="${safe}">Continue</a></p>`,
+    m.signedIn.title,
+    `<h1>${escapeHtml(m.signedIn.heading)}</h1><p>${escapeHtml(m.signedIn.text)}</p><p><a class="button" href="${safe}">${escapeHtml(m.common.continue)}</a></p>`,
     `<meta http-equiv="refresh" content="0;url=${safe}">`,
   );
 }
 
-const labelCell = (label: string | null) => (label ? escapeHtml(label) : "<em>none</em>");
+const labelCell = (label: string | null) => (label ? escapeHtml(label) : `<em>${escapeHtml(msg().admin.none)}</em>`);
 
 export function adminPage(opts: {
   csrf: string;
@@ -501,64 +517,66 @@ export function adminPage(opts: {
 }): string {
   const csrf = csrfField(opts.csrf);
   const apps = opts.apps ?? [];
+  const m = msg();
+  const t = m.admin;
   const requests = opts.requests.length
     ? table(
-        ["Who", "Apps", "Note", "Requested", ""],
+        [t.who, t.apps, t.note, t.requested, ""],
         opts.requests
           .map(
             (r) =>
               `<tr>${cell(
-                "Who",
-                `<strong>${labelCell(r.label)}</strong>${r.connected ? ' <span class="pill ok">connected</span>' : ""}<div style="margin-top:4px">${methodChips(r.methods)}</div>`,
-              )}${cell("Apps", appChips(r.apps, apps))}${cell(
-                "Note",
+                t.who,
+                `<strong>${labelCell(r.label)}</strong>${r.connected ? ` <span class="pill ok">${escapeHtml(t.connectedPill)}</span>` : ""}<div style="margin-top:4px">${methodChips(r.methods)}</div>`,
+              )}${cell(t.apps, appChips(r.apps, apps))}${cell(
+                t.note,
                 r.note ? `<span class="note">${escapeHtml(r.note)}</span>` : '<span class="small">—</span>',
-              )}${cell("Requested", when(r.createdAt))}${cell(
+              )}${cell(t.requested, when(r.createdAt))}${cell(
                 "",
                 `<div class="row">
-<form class="inline" method="post" action="/admin/requests/${escapeHtml(r.id)}/approve">${csrf}<button type="submit">Approve</button></form>
-<form class="inline" method="post" action="/admin/requests/${escapeHtml(r.id)}/reject">${csrf}<button class="secondary" type="submit" style="margin-left:0">Reject</button></form>
+<form class="inline" method="post" action="/admin/requests/${escapeHtml(r.id)}/approve">${csrf}<button type="submit">${escapeHtml(t.approve)}</button></form>
+<form class="inline" method="post" action="/admin/requests/${escapeHtml(r.id)}/reject">${csrf}<button class="secondary" type="submit" style="margin-left:0">${escapeHtml(t.reject)}</button></form>
 </div>`,
               )}</tr>`,
           )
           .join(""),
       )
-    : "<p>No pending requests. You're all caught up.</p>";
+    : `<p>${escapeHtml(t.noRequests)}</p>`;
 
   const connections = opts.connections.length
     ? table(
-        ["Who", "Status", "Granted", "Last sign-in", ""],
+        [t.who, t.status, t.granted, t.lastSignIn, ""],
         opts.connections
           .map((c) => {
             const self = c.principalId === opts.me;
             const action =
               c.status === "active" && !self
-                ? `<form class="inline" method="post" action="/admin/connections/${escapeHtml(c.principalId)}/revoke">${csrf}<button class="danger" type="submit">Revoke</button></form>`
+                ? `<form class="inline" method="post" action="/admin/connections/${escapeHtml(c.principalId)}/revoke">${csrf}<button class="danger" type="submit">${escapeHtml(t.revoke)}</button></form>`
                 : c.status === "revoked"
-                  ? `<form class="inline" method="post" action="/admin/connections/${escapeHtml(c.principalId)}/reconnect">${csrf}<button class="secondary" type="submit" style="margin-left:0">Reconnect</button></form>`
+                  ? `<form class="inline" method="post" action="/admin/connections/${escapeHtml(c.principalId)}/reconnect">${csrf}<button class="secondary" type="submit" style="margin-left:0">${escapeHtml(t.reconnect)}</button></form>`
                   : self
-                    ? `<span class="small">you</span>`
+                    ? `<span class="small">${escapeHtml(t.you)}</span>`
                     : "";
-            return `<tr>${cell("Who", `${labelCell(c.label)}${c.isAdmin ? ' <span class="small">(admin)</span>' : ""}`)}${cell(
-              "Status",
-              `<span class="pill ${c.status === "active" ? "ok" : "off"}">${escapeHtml(c.status)}</span>${c.revokedAt ? ` <span class="small">${when(c.revokedAt)}</span>` : ""}`,
-            )}${cell("Granted", when(c.grantedAt))}${cell("Last sign-in", when(c.lastLoginAt))}${cell("", action)}</tr>`;
+            return `<tr>${cell(t.who, `${labelCell(c.label)}${c.isAdmin ? ` <span class="small">${escapeHtml(t.adminSuffix)}</span>` : ""}`)}${cell(
+              t.status,
+              `<span class="pill ${c.status === "active" ? "ok" : "off"}">${escapeHtml(t.statuses[c.status as "active" | "revoked"] ?? c.status)}</span>${c.revokedAt ? ` <span class="small">${when(c.revokedAt)}</span>` : ""}`,
+            )}${cell(t.granted, when(c.grantedAt))}${cell(t.lastSignIn, when(c.lastLoginAt))}${cell("", action)}</tr>`;
           })
           .join(""),
       )
-    : "<p>No connections.</p>";
+    : `<p>${escapeHtml(t.noConnections)}</p>`;
 
   const audit = opts.audit.length
     ? table(
-        ["When", "Event", "Who", "Details"],
+        [t.when, t.event, t.who, t.details],
         opts.audit
           .map(
             (a) =>
-              `<tr>${cell("When", when(a.at))}${cell("Event", `<span class="os-nowrap">${escapeHtml(a.event)}</span>`)}${cell(
-                "Who",
+              `<tr>${cell(t.when, when(a.at))}${cell(t.event, `<span class="os-nowrap">${escapeHtml(a.event)}</span>`)}${cell(
+                t.who,
                 a.label ? escapeHtml(a.label) : "—",
               )}${cell(
-                "Details",
+                t.details,
                 `<span class="details">${escapeHtml(
                   Object.entries(a.detail)
                     .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(",") : String(v)}`)
@@ -568,31 +586,31 @@ export function adminPage(opts: {
           )
           .join(""),
       )
-    : "<p>Nothing yet.</p>";
+    : `<p>${escapeHtml(t.nothingYet)}</p>`;
 
   const active = opts.connections.filter((c) => c.status === "active").length;
-  const stats = `<div class="stats"><div class="stat"><b>${opts.requests.length}</b><span>pending</span></div>
-<div class="stat"><b>${active}</b><span>connected</span></div>
-<div class="stat"><b>${opts.connections.length - active}</b><span>revoked</span></div></div>`;
+  const stats = `<div class="stats"><div class="stat"><b>${opts.requests.length}</b><span>${escapeHtml(t.pending)}</span></div>
+<div class="stat"><b>${active}</b><span>${escapeHtml(t.connected)}</span></div>
+<div class="stat"><b>${opts.connections.length - active}</b><span>${escapeHtml(t.revoked)}</span></div></div>`;
   const hint =
     opts.grantHint && opts.adminConsoleUrl
-      ? ` <a href="${escapeHtml(opts.adminConsoleUrl)}">Give them roles for their apps in the Admin console</a>.`
+      ? ` <a href="${escapeHtml(opts.adminConsoleUrl)}">${escapeHtml(t.grantHint)}</a>.`
       : "";
 
   return page(
-    "Connections",
-    `<h1>Connections</h1>
-<p class="small">Who may sign in to ASafariM apps. Approving connects an account; what each person may do inside an app is a role you grant in the Admin console.</p>
+    t.title,
+    `<h1>${escapeHtml(t.title)}</h1>
+<p class="small">${escapeHtml(t.lead)}</p>
 ${stats}
 ${opts.notice ? `<p class="notice" role="status">${escapeHtml(opts.notice)}${hint}</p>` : ""}${err(opts.error)}
-<h2>Access requests</h2>${requests}
-<h2>Connect someone</h2>
+<h2>${escapeHtml(t.requestsTitle)}</h2>${requests}
+<h2>${escapeHtml(t.connectTitle)}</h2>
 <form method="post" action="/admin/connections" class="row">${csrf}
-<input name="identifier" type="text" required maxlength="254" placeholder="email or +32 470 12 34 56" style="max-width:300px;margin:0" aria-label="Email address or mobile number">
-<button type="submit">Connect</button></form>
-<h2>Connections</h2>${connections}
-<h2>Recent activity</h2>${audit}
-<form method="post" action="/logout">${csrf}<button class="secondary" type="submit" style="margin-left:0">Sign out</button></form>`,
+<input name="identifier" type="text" required maxlength="254" placeholder="${escapeHtml(t.connectPlaceholder)}" style="max-width:300px;margin:0" aria-label="${escapeHtml(t.connectLabel)}">
+<button type="submit">${escapeHtml(t.connect)}</button></form>
+<h2>${escapeHtml(t.connectionsTitle)}</h2>${connections}
+<h2>${escapeHtml(t.activity)}</h2>${audit}
+<form method="post" action="/logout">${csrf}<button class="secondary" type="submit" style="margin-left:0">${escapeHtml(m.common.signOut)}</button></form>`,
     {
       head: `${EXTRA_STYLE}<style>main>.card{max-width:1040px}</style>`,
       nav: signedInNav("admin", true, opts.adminConsoleUrl),

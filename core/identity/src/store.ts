@@ -29,6 +29,8 @@ export interface Principal {
 export interface RequestDetails {
   apps: string[];
   note: string | null;
+  /** The language the request was made in (en, nl, fr, de), for the decision e-mail. */
+  locale?: string | null;
 }
 
 export interface PendingRequest extends RequestDetails {
@@ -389,18 +391,19 @@ export class PgIdentityStore implements IdentityStore {
       ]);
       if (conn.rows[0]?.status === "active" && details.apps.length === 0) return "already_connected";
       const inserted = await c.query(
-        `INSERT INTO connection_requests (principal_id, apps, note) VALUES ($1, $2, $3)
+        `INSERT INTO connection_requests (principal_id, apps, note, locale) VALUES ($1, $2, $3, $4)
          ON CONFLICT (principal_id) WHERE status = 'pending' DO NOTHING`,
-        [principalId, details.apps, details.note],
+        [principalId, details.apps, details.note, details.locale ?? null],
       );
       if (inserted.rowCount === 1) return "created";
       const updated = await c.query(
         `UPDATE connection_requests
          SET apps = (SELECT coalesce(array_agg(DISTINCT a ORDER BY a), '{}') FROM unnest(apps || $2::text[]) a),
-             note = coalesce($3, note)
+             note = coalesce($3, note),
+             locale = coalesce($4, locale)
          WHERE principal_id = $1 AND status = 'pending'
            AND (NOT (apps @> $2::text[]) OR ($3::text IS NOT NULL AND note IS DISTINCT FROM $3))`,
-        [principalId, details.apps, details.note],
+        [principalId, details.apps, details.note, details.locale ?? null],
       );
       return updated.rowCount === 1 ? "updated" : "already_pending";
     });
@@ -424,10 +427,11 @@ export class PgIdentityStore implements IdentityStore {
       created_at: Date;
       apps: string[];
       note: string | null;
+      locale: string | null;
       methods: IdentityMethod[];
       connected: boolean;
     }>(
-      `SELECT r.id, r.principal_id, r.created_at, r.apps, r.note, ${labelOf("r.principal_id")} AS label,
+      `SELECT r.id, r.principal_id, r.created_at, r.apps, r.note, r.locale, ${labelOf("r.principal_id")} AS label,
               ${methodsOf("r.principal_id")} AS methods,
               EXISTS (SELECT 1 FROM connections c WHERE c.principal_id = r.principal_id AND c.status = 'active') AS connected
        FROM connection_requests r WHERE r.status = 'pending' ORDER BY r.created_at`,
@@ -439,6 +443,7 @@ export class PgIdentityStore implements IdentityStore {
       createdAt: r.created_at,
       apps: r.apps,
       note: r.note,
+      locale: r.locale,
       methods: r.methods,
       connected: r.connected,
     }));
