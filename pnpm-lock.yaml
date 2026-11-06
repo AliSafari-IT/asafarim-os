@@ -319,6 +319,9 @@ importers:
       '@asafarim/app-sdk':
         specifier: workspace:*
         version: link:../../packages/app-sdk
+      '@asafarim/locale':
+        specifier: workspace:*
+        version: link:../../packages/locale
       '@asafarim/progress-bars':
         specifier: ^0.7.3
         version: 0.7.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
