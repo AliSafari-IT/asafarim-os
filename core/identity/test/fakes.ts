@@ -54,6 +54,7 @@ interface R {
   createdAt: Date;
   apps: string[];
   note: string | null;
+  locale?: string | null;
 }
 
 export class MemoryStore implements IdentityStore {
@@ -159,6 +160,7 @@ export class MemoryStore implements IdentityStore {
         createdAt: new Date(),
         apps: [...new Set(details.apps)].sort(),
         note: details.note,
+        locale: details.locale ?? null,
       });
       return "created";
     }
@@ -166,6 +168,7 @@ export class MemoryStore implements IdentityStore {
     const changed = apps.length !== open.apps.length || (details.note !== null && details.note !== open.note);
     open.apps = apps;
     if (details.note !== null) open.note = details.note;
+    if (details.locale) open.locale = details.locale;
     return changed ? "updated" : "already_pending";
   }
 
@@ -184,6 +187,7 @@ export class MemoryStore implements IdentityStore {
         createdAt: r.createdAt,
         apps: r.apps,
         note: r.note,
+        locale: r.locale ?? null,
         methods: this.methodsOf(r.principalId),
         connected: this.connectionsById.get(r.principalId)?.status === "active",
       }));

@@ -57,6 +57,7 @@ import {
   messagePage,
   notConnectedPage,
 } from "./sign-in-pages.ts";
+import { currentLocale, messagesFor, msg } from "./i18n.ts";
 import { CONTINUE_PAGE_CSP } from "./pages.ts";
 import type { AuditEntry, IdentityMethod, IdentityStore, Principal, RequestDetails } from "./store.ts";
 import {
@@ -133,29 +134,24 @@ const UID = /^[\w-]{1,64}$/;
 const clientKey = (uid: string) => `interaction-client:${uid}`;
 const REQUEST_ACTION = /^\/admin\/requests\/([0-9a-f-]{36})\/(approve|reject)$/;
 const REVOKE_ACTION = /^\/admin\/connections\/([0-9a-f-]{36})\/(revoke|reconnect)$/;
-const NOTICES: Record<string, string> = {
-  approved: "Request approved: they're now connected, and they've been emailed.",
-  rejected: "Request rejected. They've been emailed.",
-  revoked: "Connection revoked. Their sign-in sessions have ended.",
-  reconnected: "Reconnected.",
-  added: "Connected.",
-  stale: "That request or connection had already changed. Nothing was done.",
-  self: "You can't revoke your own connection.",
-};
+/** The admin page's notice after an action (?done=), in the admin's language. */
+function notice(done: string | undefined): string | undefined {
+  const notices = msg().admin.notices;
+  return done && Object.hasOwn(notices, done) ? notices[done as keyof typeof notices] : undefined;
+}
 
 type Via = "email" | "sms";
 
 interface Channel {
   method: IdentityMethod;
   normalize(input: string): string | null;
-  invalid: string;
+  /** The error for input that isn't an address or number, in the request's language. */
+  invalid(): string;
   /** A refusal that isn't secret (a country not served), or null. */
   refuse(identifier: string): string | null;
   mask(identifier: string): string;
   send(identifier: string, code: string): Promise<void>;
   dailyLimit: number;
-  /** "the email" / "the SMS", in error texts. */
-  noun: string;
 }
 
 export function createSignIn(d: SignInDeps): SignIn {
@@ -170,17 +166,17 @@ export function createSignIn(d: SignInDeps): SignIn {
     channels.email = {
       method: "email",
       normalize: normalizeEmail,
-      invalid: "Enter a valid email address.",
+      invalid: () => msg().flow.invalidEmail,
       refuse: () => null,
       mask: maskEmail,
+      // In the language of the request that asked for it.
       send: (to, code) =>
         mailer.send({
           to,
-          subject: `Your ASafariM sign-in code: ${code}`,
-          text: `Your ASafariM sign-in code is ${code}.\n\nIt expires in ${minutes} minutes and works once. Never share it with anyone: ASafariM will never ask you for it.\n\nIf you didn't try to sign in at ${issuerHost}, you can ignore this email.\n`,
+          subject: msg().mail.codeSubject(code),
+          text: msg().mail.codeText(code, minutes, issuerHost),
         }),
       dailyLimit,
-      noun: "the email",
     };
   }
   if (d.sms) {
@@ -188,13 +184,11 @@ export function createSignIn(d: SignInDeps): SignIn {
     channels.sms = {
       method: "phone",
       normalize: normalizePhone,
-      invalid: "Enter your full mobile number with its country code, for example +32 470 12 34 56.",
-      refuse: (phone) =>
-        prefixAllowed(phone, allowedPrefixes) ? null : "Sign-in by SMS isn't available for numbers in this country.",
+      invalid: () => msg().flow.invalidPhone,
+      refuse: (phone) => (prefixAllowed(phone, allowedPrefixes) ? null : msg().flow.smsCountry),
       mask: maskPhone,
       send: (to, code) => sender.send(to, codeMessage(code, issuerHost, minutes)),
       dailyLimit,
-      noun: "the SMS",
     };
   }
   const apps = d.apps ?? [];
@@ -316,9 +310,9 @@ export function createSignIn(d: SignInDeps): SignIn {
       ctx,
       400,
       messagePage({
-        title: "This page has expired",
-        message: "For your security, sign-in pages are only valid for a short time.",
-        link: { href: "/login", label: "Start again" },
+        title: msg().flow.expiredTitle,
+        message: msg().flow.expiredText,
+        link: { href: "/login", label: msg().flow.startAgain },
       }),
     );
   }
@@ -361,11 +355,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     const budget = await d.limits.hit("flow-ip", ipHandle(ctx), LIMITS.flowsPerIp);
     if (!budget.allowed) {
       ctx.set("Retry-After", String(budget.retryAfter));
-      return render(
-        ctx,
-        429,
-        messagePage({ title: "Too many attempts", message: "Please wait a while before trying to sign in again." }),
-      );
+      return render(ctx, 429, messagePage({ title: msg().flow.tooManyTitle, message: msg().flow.tooManyText }));
     }
     const flow: LoginFlow = { csrf: newToken(), target };
     const token = await d.flows.create(flow);
@@ -391,10 +381,7 @@ export function createSignIn(d: SignInDeps): SignIn {
       detail: { reason },
     });
     const mins = Math.max(1, Math.ceil(retryAfter / 60));
-    const message =
-      reason === "cooldown"
-        ? "A code was just sent. Wait a minute before asking for another one."
-        : `Too many codes were requested. Try again in ${mins} minute${mins === 1 ? "" : "s"}.`;
+    const message = reason === "cooldown" ? msg().flow.cooldown : msg().flow.tooManyCodes(mins);
     ctx.set("Retry-After", String(retryAfter));
     if (flow.identifier === identifier && flow.challengeId) {
       const masked = channels[via]!.mask(identifier);
@@ -438,7 +425,7 @@ export function createSignIn(d: SignInDeps): SignIn {
       const reason = err instanceof SmsError || err instanceof SmtpError ? err.reason : "error";
       d.log.error("code.send_failed", { reason: `${via}:${reason}` });
       await audit({ event: "otp.send_failed", method: via, subjectHandle: subject, ipHandle: ip, detail: { reason } });
-      const error = "We couldn't send a code right now. Please try again in a few minutes.";
+      const error = msg().flow.sendFailed;
       return render(ctx, 503, login(flow, { error, value: identifier }), PASSKEY_PAGE_CSP);
     }
     await d.flows.update(flowToken, { csrf: flow.csrf, target: flow.target, via, identifier, challengeId });
@@ -459,7 +446,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     const typed = (form.get("identifier") ?? "").slice(0, 256);
     const identifier = channel.normalize(typed);
     if (!identifier) {
-      return render(ctx, 400, login(flow, { error: channel.invalid, value: typed }), PASSKEY_PAGE_CSP);
+      return render(ctx, 400, login(flow, { error: channel.invalid(), value: typed }), PASSKEY_PAGE_CSP);
     }
     const refused = channel.refuse(identifier);
     if (refused) {
@@ -563,13 +550,13 @@ export function createSignIn(d: SignInDeps): SignIn {
           detail: { reason },
         });
         ctx.set("Retry-After", String(result.retryAfter));
-        return page(429, "Too many tries. Wait a while, then ask for a new code.");
+        return page(429, msg().flow.tooManyCodeTries);
       }
     }
 
     const code = (form.get("code") ?? "").replace(/\s/g, "");
-    if (!isCodeShaped(code)) return page(400, `Enter the 6-digit code from ${channel.noun}.`);
-    if (!flow.challengeId) return page(400, "This code is no longer valid. Send a new code.");
+    if (!isCodeShaped(code)) return page(400, msg().flow.enterCode(via));
+    if (!flow.challengeId) return page(400, msg().flow.noLongerValid);
     const result = await d.challenges.verify(
       flow.challengeId,
       hashCode(d.otpSecret, flow.challengeId, `${via}:${identifier}`, code),
@@ -582,9 +569,9 @@ export function createSignIn(d: SignInDeps): SignIn {
         ipHandle: ip,
         detail: { reason: result },
       });
-      if (result === "wrong") return page(400, `That code isn't right. Check ${channel.noun} and try again.`);
+      if (result === "wrong") return page(400, msg().flow.wrongCode(via));
       await d.flows.update(token, { csrf: flow.csrf, target: flow.target, via, identifier });
-      return page(400, "This code has expired or had too many wrong tries. Send a new code.");
+      return page(400, msg().flow.codeExpired);
     }
 
     const principalId = await d.store.verifiedLogin(channel.method, identifier);
@@ -609,11 +596,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     const budget = await d.limits.hit("google-ip", ipHandle(ctx), LIMITS.flowsPerIp);
     if (!budget.allowed) {
       ctx.set("Retry-After", String(budget.retryAfter));
-      return render(
-        ctx,
-        429,
-        messagePage({ title: "Too many attempts", message: "Please wait a while before trying to sign in again." }),
-      );
+      return render(ctx, 429, messagePage({ title: msg().flow.tooManyTitle, message: msg().flow.tooManyText }));
     }
     const state = newToken();
     const nonce = newToken();
@@ -637,9 +620,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     if (error) {
       return fail(
         error === "access_denied" ? "cancelled" : "provider_error",
-        error === "access_denied"
-          ? "Google sign-in was cancelled. Try again, or use another way."
-          : "Google couldn't sign you in. Try again, or use another way.",
+        error === "access_denied" ? msg().flow.googleCancelled : msg().flow.googleFailed,
       );
     }
     let saved: { state: string; nonce: string; verifier: string } | null = null;
@@ -651,12 +632,12 @@ export function createSignIn(d: SignInDeps): SignIn {
     const state = queryValue(ctx, "state");
     const code = queryValue(ctx, "code");
     if (!saved || !sameToken(state, saved.state) || !code || code.length > 2048) {
-      return fail("state_mismatch", "That Google sign-in has expired. Please try again.");
+      return fail("state_mismatch", msg().flow.googleExpired);
     }
     const limit = await d.limits.hit("verify-ip", ip, LIMITS.verifyPerIp);
     if (!limit.allowed) {
       ctx.set("Retry-After", String(limit.retryAfter));
-      return fail("rate_limited", "Too many tries. Wait a while and try again.");
+      return fail("rate_limited", msg().flow.tooManyTries);
     }
     let who;
     try {
@@ -668,7 +649,7 @@ export function createSignIn(d: SignInDeps): SignIn {
       });
     } catch (err) {
       const reason = err instanceof GoogleError ? err.reason : "error";
-      return fail(reason, "Google couldn't sign you in. Try again, or use another way.");
+      return fail(reason, msg().flow.googleFailed);
     }
     const principalId = await d.store.verifiedGoogleLogin(who.subject, who.email, who.authoritative);
     await audit({
@@ -693,7 +674,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     ctx.body = JSON.stringify(body);
   }
 
-  const EXPIRED = { error: "This page has expired. Reload it." };
+  const expiredJson = () => ({ error: msg().flow.reload });
 
   /** JSON calls from our own script: the page's CSRF token in a header, and a JSON body. */
   async function jsonCall(ctx: HttpContext, csrf: string): Promise<unknown> {
@@ -704,8 +685,8 @@ export function createSignIn(d: SignInDeps): SignIn {
 
   async function passkeyLoginOptions(ctx: HttpContext) {
     const current = await currentFlow(ctx);
-    if (!current || !d.passkeys) return json(ctx, 400, EXPIRED);
-    if ((await jsonCall(ctx, current.flow.csrf)) === undefined) return json(ctx, 403, EXPIRED);
+    if (!current || !d.passkeys) return json(ctx, 400, expiredJson());
+    if ((await jsonCall(ctx, current.flow.csrf)) === undefined) return json(ctx, 403, expiredJson());
     const challenge = newToken();
     await d.ephemeral.put(`passkey-login:${current.token}`, challenge, 300);
     json(ctx, 200, authenticationOptions(d.passkeys.rp, challenge));
@@ -713,16 +694,16 @@ export function createSignIn(d: SignInDeps): SignIn {
 
   async function passkeyLoginVerify(ctx: HttpContext) {
     const current = await currentFlow(ctx);
-    if (!current || !d.passkeys) return json(ctx, 400, EXPIRED);
+    if (!current || !d.passkeys) return json(ctx, 400, expiredJson());
     const body = await jsonCall(ctx, current.flow.csrf);
-    if (body === undefined) return json(ctx, 403, EXPIRED);
+    if (body === undefined) return json(ctx, 403, expiredJson());
     const ip = ipHandle(ctx);
     const limit = await d.limits.hit("verify-ip", ip, LIMITS.verifyPerIp);
-    if (!limit.allowed) return json(ctx, 429, { error: "Too many tries. Wait a while and try again." });
+    if (!limit.allowed) return json(ctx, 429, { error: msg().flow.tooManyTries });
     const challenge = await d.ephemeral.take(`passkey-login:${current.token}`);
     const refuse = async (code: string) => {
       await audit({ event: "passkey.failed", method: "passkey", ipHandle: ip, detail: { reason: code } });
-      json(ctx, 400, { error: "That passkey couldn't be used here. Try again, or use a code." });
+      json(ctx, 400, { error: msg().flow.passkeyUnusable });
     };
     if (!challenge) return refuse("no_challenge");
     let credentialId: string;
@@ -780,8 +761,8 @@ export function createSignIn(d: SignInDeps): SignIn {
 
   async function passkeyRegisterOptions(ctx: HttpContext) {
     const me = await requireSession(ctx);
-    if (!me || !d.passkeys) return json(ctx, 401, { error: "Sign in first." });
-    if ((await jsonCall(ctx, me.session.csrf)) === undefined) return json(ctx, 403, EXPIRED);
+    if (!me || !d.passkeys) return json(ctx, 401, { error: msg().flow.signInFirst });
+    if ((await jsonCall(ctx, me.session.csrf)) === undefined) return json(ctx, 403, expiredJson());
     const challenge = newToken();
     await d.ephemeral.put(`passkey-register:${me.token}`, challenge, 300);
     const existing = await d.store.passkeysOf(me.principal.id);
@@ -801,9 +782,9 @@ export function createSignIn(d: SignInDeps): SignIn {
 
   async function passkeyRegisterVerify(ctx: HttpContext) {
     const me = await requireSession(ctx);
-    if (!me || !d.passkeys) return json(ctx, 401, { error: "Sign in first." });
+    if (!me || !d.passkeys) return json(ctx, 401, { error: msg().flow.signInFirst });
     const body = await jsonCall(ctx, me.session.csrf);
-    if (body === undefined) return json(ctx, 403, EXPIRED);
+    if (body === undefined) return json(ctx, 403, expiredJson());
     const challenge = await d.ephemeral.take(`passkey-register:${me.token}`);
     try {
       if (!challenge) throw new WebAuthnError("no_challenge");
@@ -827,7 +808,7 @@ export function createSignIn(d: SignInDeps): SignIn {
         principalId: me.principal.id,
         detail: { reason: code, step: "register" },
       });
-      json(ctx, 400, { error: "That passkey couldn't be added. Try again." });
+      json(ctx, 400, { error: msg().flow.passkeyNotAdded });
     }
   }
 
@@ -838,9 +819,9 @@ export function createSignIn(d: SignInDeps): SignIn {
     if (!me) return seeOther(ctx, "/login");
     const done = queryValue(ctx, "done");
     const notices: Record<string, string> = {
-      removed: "Passkey removed.",
-      requested: "Request sent. An administrator will review it, and you'll get an email.",
-      unchanged: "Your request already has those apps.",
+      removed: msg().flow.removed,
+      requested: msg().flow.requested,
+      unchanged: msg().flow.unchanged,
     };
     render(
       ctx,
@@ -887,7 +868,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     if (!me) return seeOther(ctx, "/login");
     if (!form || !sameToken(form.get("csrf"), me.session.csrf)) return expired(ctx);
     const connected = me.principal.connection === "active";
-    const details = requestDetails(form);
+    const details = { ...requestDetails(form), locale: currentLocale() };
     if (connected && details.apps.length === 0) return seeOther(ctx, "/account?done=unchanged");
     const outcome = await d.store.requestConnection(me.principal.id, details);
     if (outcome === "already_connected") return seeOther(ctx, "/account");
@@ -924,10 +905,9 @@ export function createSignIn(d: SignInDeps): SignIn {
       ctx,
       200,
       messagePage({
-        title: "Signed out",
-        message:
-          "You're signed out of your ASafariM account on this device, so the next sign-in asks who you are. Apps you already opened keep their own session until you sign out there.",
-        link: { href: "/login", label: "Sign in again" },
+        title: msg().signedOut.title,
+        message: msg().flow.signedOutText,
+        link: { href: "/login", label: msg().signedOut.again },
       }),
     );
   }
@@ -953,7 +933,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     const principal = await d.store.principal(current.session.principalId);
     if (!principal || principal.connection !== "active" || !principal.isAdmin) {
       await audit({ event: "admin.denied", principalId: current.session.principalId, ipHandle: ipHandle(ctx) });
-      render(ctx, 403, messagePage({ title: "No access", message: "This page is for ASafariM administrators." }));
+      render(ctx, 403, messagePage({ title: msg().flow.noAccessTitle, message: msg().flow.noAccessText }));
       return null;
     }
     return { session: current.session, principal };
@@ -982,7 +962,7 @@ export function createSignIn(d: SignInDeps): SignIn {
         audit: recent,
         apps,
         ...(d.adminConsoleUrl ? { adminConsoleUrl: d.adminConsoleUrl } : {}),
-        ...(done && NOTICES[done] ? { notice: NOTICES[done] } : {}),
+        ...(notice(done) ? { notice: notice(done)! } : {}),
         grantHint: done === "approved",
         ...(error ? { error } : {}),
       }),
@@ -1018,12 +998,12 @@ export function createSignIn(d: SignInDeps): SignIn {
       const principalId = await d.store.decideRequest(request[1]!, decision, actor);
       if (principalId && asked?.label?.includes("@")) {
         const names = asked.apps.map(appName).join(", ");
+        // In the language the person asked in (English for requests from before languages).
+        const mail = messagesFor(asked.locale).mail;
         await notify(
           [asked.label],
-          decision === "approved" ? "ASafariM: your access request was approved" : "ASafariM: your access request",
-          decision === "approved"
-            ? `Good news: an administrator approved your access request${names ? ` for ${names}` : ""}.\n\nSign in at ${d.issuer}/account to see your apps. If an app still says you have no access, its roles are being set up: try again a little later.\n`
-            : `An administrator didn't approve your access request${names ? ` for ${names}` : ""}.\n\nIf you think this is a mistake, sign in at ${d.issuer}/login and send a new request with a note.\n`,
+          decision === "approved" ? mail.approvedSubject : mail.rejectedSubject,
+          decision === "approved" ? mail.approvedText(names, d.issuer) : mail.rejectedText(names, d.issuer),
         );
       }
       seeOther(ctx, `/admin?done=${principalId ? decision : "stale"}`);
@@ -1057,7 +1037,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     const email = normalizeEmail(typed);
     const phone = email ? null : normalizePhone(typed);
     if (!email && !phone) {
-      await showAdmin(ctx, admin, 400, "Enter an email address, or a mobile number with its country code (+32 …).");
+      await showAdmin(ctx, admin, 400, msg().admin.enterIdentifier);
       return true;
     }
     await d.store.addConnection(email ? "email" : "phone", (email ?? phone)!, actor);

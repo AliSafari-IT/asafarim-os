@@ -27,7 +27,7 @@ export const PASSKEY_JS = `"use strict";
       body: JSON.stringify(body || {})
     }).then(function (r) {
       return r.json().then(function (j) {
-        if (!r.ok) throw new Error(j && j.error ? j.error : "Something went wrong.");
+        if (!r.ok) throw new Error(j && j.error ? j.error : say("error", "Something went wrong."));
         return j;
       });
     });
@@ -35,6 +35,11 @@ export const PASSKEY_JS = `"use strict";
   var status = function (msg) {
     var el = document.querySelector("[data-passkey-status]");
     if (el) el.textContent = msg;
+  };
+  // The words, in the page's language, from the status line's data-msg-* attributes.
+  var say = function (name, fallback) {
+    var el = document.querySelector("[data-passkey-status]");
+    return (el && el.getAttribute("data-msg-" + name)) || fallback;
   };
   var login = function (csrf) {
     return post("/login/passkey/options", csrf).then(function (o) {
@@ -78,9 +83,9 @@ export const PASSKEY_JS = `"use strict";
       var csrf = button.getAttribute("data-csrf") || "";
       var run = button.getAttribute("data-passkey") === "register" ? register : login;
       button.disabled = true;
-      status("Waiting for your passkey…");
+      status(say("waiting", "Waiting for your passkey…"));
       run(csrf).catch(function (e) {
-        status(e && e.name === "NotAllowedError" ? "Cancelled." : (e && e.message) || "That didn't work.");
+        status(e && e.name === "NotAllowedError" ? say("cancelled", "Cancelled.") : (e && e.message) || say("failed", "That didn't work."));
       }).then(function () { button.disabled = false; });
     });
   });

@@ -575,6 +575,9 @@ importers:
 
   core/identity:
     dependencies:
+      '@asafarim/locale':
+        specifier: workspace:*
+        version: link:../../packages/locale
       '@asafarim/smtp':
         specifier: workspace:*
         version: link:../../packages/smtp

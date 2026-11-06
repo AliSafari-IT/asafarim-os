@@ -6,6 +6,8 @@
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { localeSwitcher } from "@asafarim/locale";
+import { currentLocale, hrefFor, msg, productHref, sitePage } from "./i18n.ts";
 /**
  * @asafarim/theme, shared with asafarim.site and every app: its tokens and top bar (theme.css, inlined into
  * the page's style), its light/dark script (theme.js, served at /static/theme.js and run in <head>, so a
@@ -16,6 +18,14 @@ const themeFile = (name: string) => readFileSync(fileURLToPath(import.meta.resol
 const THEME_CSS = themeFile("theme.css").replace(/\/\*[\s\S]*?\*\//g, "");
 export const THEME_JS = themeFile("theme.js");
 const THEME_TOGGLE = themeFile("toggle.html").trim();
+/**
+ * @asafarim/locale's country & language selector (one bundle for every site and app): its script is served at
+ * /static/selector.js, its styles go inline like the theme's (the pages' CSP allows inline styles only).
+ */
+const localeFile = (name: string) =>
+  readFileSync(fileURLToPath(import.meta.resolve(`@asafarim/locale/${name}`)), "utf8");
+export const SELECTOR_JS = localeFile("selector.js");
+const SELECTOR_CSS = localeFile("selector.css").replace(/\/\*[\s\S]*?\*\//g, "");
 
 const { version: identityVersion } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   version: string;
@@ -32,7 +42,7 @@ justify-content:space-between;gap:12px;flex-wrap:wrap}
 .brand{display:inline-flex;align-items:center;gap:.55rem;color:var(--ink);text-decoration:none;font-weight:700;letter-spacing:-.01em}
 .brand span span{color:var(--accent)}.mark{flex:none}.mark rect{fill:var(--brand-b)}.mark circle{fill:var(--brand-a)}.mark .soft{opacity:.6}
 .nav{display:flex;gap:16px;margin:0;padding:0;list-style:none}.nav a{font-weight:600;text-decoration:none}
-.nav a[aria-current]{color:var(--ink)}
+.nav a[aria-current]{color:var(--ink)}.os-topbar .locale-selector{color:var(--top-ink)}
 main{flex:1;width:100%;display:flex;justify-content:center;align-items:flex-start;padding:32px 16px}
 .card{max-width:440px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px;
 box-shadow:var(--shadow)}
@@ -89,37 +99,30 @@ export interface PageOptions {
 }
 
 /**
- * The privacy, cookie and terms pages (served by asafarim.site, the same links as @asafarim/theme's LEGAL_LINKS),
- * in every page's footer.
+ * The privacy, cookie and terms pages (served by asafarim.site, the same pages as @asafarim/theme's LEGAL_LINKS), in
+ * every page's footer, in the page's language.
  */
-const LEGAL_FOOTER = [
-  ["Privacy", "https://asafarim.site/privacy"],
-  ["Cookies", "https://asafarim.site/cookies"],
-  ["Terms", "https://asafarim.site/terms"],
-]
-  .map(([label, href]) => `<a href="${href}">${label}</a>`)
-  .join("");
+function legalFooter(): string {
+  const l = currentLocale();
+  const m = msg().common.legal;
+  return (["privacy", "cookies", "terms"] as const).map((p) => `<a href="${sitePage(l, p)}">${m[p]}</a>`).join("");
+}
 
 /**
  * ASafariM's products outside the OS (the same as @asafarim/theme's PRODUCT_LINKS), in every page's footer and on
- * the account page's "Where to next". English pages, like this service.
+ * the account page's "Where to next", in the page's language where their sites have it.
  */
-export const PRODUCT_LINKS = [
-  {
-    name: "Breinhap",
-    href: "https://breinhap.asafarim.site/en/",
-    description: "Study app for Flemish students (Android).",
-  },
-  {
-    name: "IGS-Pharma",
-    href: "https://igs.asafarim.site/en/",
-    description: "Online pharmacy for Belgium, and its Android app.",
-  },
-] as const;
-const PRODUCT_FOOTER = PRODUCT_LINKS.map((p) => `<a href="${p.href}">${p.name}</a>`).join(" · ");
+export function productLinks() {
+  const l = currentLocale();
+  const m = msg().common.products;
+  return [
+    { name: "Breinhap", href: productHref("breinhap", l), description: m.breinhap },
+    { name: "IGS-Pharma", href: productHref("igs", l), description: m.igs },
+  ];
+}
 
 /** The header's "Home" link, first on every page. */
-export const homeLink = (): NavLink => ({ href: homeUrl, label: "Home" });
+export const homeLink = (): NavLink => ({ href: homeUrl, label: msg().common.home });
 
 /**
  * Every page: a header with the brand (back to the OS home) and its links, the page's card, and a
@@ -132,48 +135,60 @@ export function page(title: string, body: string, options: PageOptions | string 
     themeToggle = true,
   } = typeof options === "string" ? { head: options } : options;
   const home = escapeHtml(homeUrl);
+  const m = msg();
+  const locale = currentLocale();
+  // The language selector needs its script; a page without scripts keeps the plain language links.
+  const selector = localeSwitcher(locale, hrefFor);
   const links = nav
     .map(
       (l) =>
         `<li><a href="${escapeHtml(l.href)}"${l.current ? ' aria-current="page"' : ""}>${escapeHtml(l.label)}</a></li>`,
     )
     .join("");
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  return `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><link rel="icon" href="/favicon.svg" type="image/svg+xml">
-${themeToggle ? '<script src="/static/theme.js"></script>' : ""}${head}<title>${escapeHtml(title)} · ASafariM</title><style>${THEME_CSS}${STYLE}</style></head>
+${themeToggle ? '<script src="/static/theme.js"></script><script src="/static/selector.js" defer></script>' : ""}${head}<title>${escapeHtml(title)} · ASafariM</title><style>${THEME_CSS}${SELECTOR_CSS}${STYLE}</style></head>
 <body><header class="os-topbar"><div class="topbar"><a class="brand" href="${home}">${BRAND_MARK}<span>ASafariM <span>OS</span></span></a>
-<div class="tools"><nav aria-label="Main"><ul class="nav">${links}</ul></nav>${themeToggle ? THEME_TOGGLE : ""}</div></div></header>
+<div class="tools"><nav aria-label="${escapeHtml(m.nav.main)}"><ul class="nav">${links}</ul></nav>${selector}${themeToggle ? THEME_TOGGLE : ""}</div></div></header>
 <main><div class="card">${body}</div></main>
-<footer class="foot"><p>ASafariM OS · Identity v${escapeHtml(identityVersion)} · sign-in and accounts for ASafariM apps · ${PRODUCT_FOOTER}</p><p class="legal">${LEGAL_FOOTER}<a href="${home}">${escapeHtml(new URL(homeUrl).host)}</a></p></footer>
+<footer class="foot"><p>ASafariM OS · Identity v${escapeHtml(identityVersion)} · ${escapeHtml(m.common.tagline)} · ${productLinks()
+    .map((p) => `<a href="${p.href}">${p.name}</a>`)
+    .join(
+      " · ",
+    )}</p><p class="legal">${legalFooter()}<a href="${home}">${escapeHtml(new URL(homeUrl).host)}</a></p></footer>
 </body></html>`;
 }
 
 /** A sign-in failure. Shows a code, never token contents or account data. */
 export function errorPage(opts: { title?: string; message: string; code?: string }): string {
+  const m = msg();
   const code = opts.code ? `<p><code>${escapeHtml(opts.code)}</code></p>` : "";
+  const title = opts.title ?? m.errors.title;
   return page(
-    opts.title ?? "Sign-in didn't complete",
-    `<h1>${escapeHtml(opts.title ?? "Sign-in didn't complete")}</h1><p>${escapeHtml(opts.message)}</p>${code}
-<p>Go back to the app and start signing in again.</p>
-<p><a class="button" href="${escapeHtml(homeUrl)}">Go to ASafariM OS home</a></p>`,
+    title,
+    `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(opts.message)}</p>${code}
+<p>${escapeHtml(m.errors.again)}</p>
+<p><a class="button" href="${escapeHtml(homeUrl)}">${escapeHtml(m.common.goHome)}</a></p>`,
   );
 }
 
 /** RP-initiated logout confirmation; `form` is oidc-provider's hidden form (xsrf). */
 export function logoutPage(form: string): string {
+  const m = msg().logout;
   return page(
-    "Sign out",
-    `<h1>Sign out of ASafariM?</h1><p>This signs you out of your ASafariM account on this device, so the next sign-in asks who you are. Apps you already opened keep their own session until you sign out there.</p>${form}
-<button form="op.logoutForm" name="logout" value="yes" autofocus>Sign out</button>
-<button form="op.logoutForm" class="secondary">Stay signed in</button>`,
+    m.title,
+    `<h1>${escapeHtml(m.heading)}</h1><p>${escapeHtml(m.text)}</p>${form}
+<button form="op.logoutForm" name="logout" value="yes" autofocus>${escapeHtml(m.confirm)}</button>
+<button form="op.logoutForm" class="secondary">${escapeHtml(m.stay)}</button>`,
   );
 }
 
 export function loggedOutPage(): string {
+  const m = msg();
   return page(
-    "Signed out",
-    `<h1>You're signed out</h1><p>You can close this tab, or carry on to the ASafariM OS home page.</p>
-<p><a class="button" href="${escapeHtml(homeUrl)}">Go to ASafariM OS home</a></p>`,
+    m.signedOut.title,
+    `<h1>${escapeHtml(m.signedOut.heading)}</h1><p>${escapeHtml(m.signedOut.text)}</p>
+<p><a class="button" href="${escapeHtml(homeUrl)}">${escapeHtml(m.common.goHome)}</a></p>`,
   );
 }
 
@@ -188,10 +203,11 @@ export function loggedOutPage(): string {
  */
 export function continuePage(uid: string): string {
   const next = `/interaction/${escapeHtml(uid)}/complete`;
+  const m = msg();
   return page(
-    "Signing you in",
-    `<h1>Signing you in…</h1><p>Taking you back to the app.</p>
-<p><a class="button" href="${next}">Continue</a></p>`,
+    m.signingIn.title,
+    `<h1>${escapeHtml(m.signingIn.heading)}</h1><p>${escapeHtml(m.signingIn.text)}</p>
+<p><a class="button" href="${next}">${escapeHtml(m.common.continue)}</a></p>`,
     { head: `<meta http-equiv="refresh" content="0;url=${next}">`, themeToggle: false },
   );
 }

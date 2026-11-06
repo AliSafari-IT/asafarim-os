@@ -4,6 +4,8 @@
  *
  * The message never goes into a log, and neither does the number.
  */
+import { msg } from "./i18n.ts";
+
 export interface SmsSender {
   /** Resolves when the provider accepted the message; rejects with SmsError otherwise. */
   send(to: string, body: string): Promise<void>;
@@ -25,7 +27,8 @@ export class SmsError extends Error {
  * (`@<host> #<code>`), so phones offer to fill the code in on that site only.
  */
 export function codeMessage(code: string, issuerHost: string, minutes: number): string {
-  return `Your ASafariM sign-in code is ${code}. It expires in ${minutes} minutes. Never share it with anyone.\n\n@${issuerHost} #${code}`;
+  // The last line is the origin-bound one-time code format (WebOTP), the same in every language.
+  return `${msg().mail.sms(code, minutes)}\n\n@${issuerHost} #${code}`;
 }
 
 export interface TwilioConfig {
