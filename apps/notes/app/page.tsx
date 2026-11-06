@@ -1,25 +1,21 @@
 import { AppBrand, AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import { LocaleSelector } from "@asafarim/locale/react";
+import { getLocale } from "@asafarim/locale/next";
 import { ThemeToggle } from "@asafarim/theme/react";
 import { createNoteAction, signInAction, signOutAction } from "./actions";
 import { SignOutIcon } from "@/components/SignOutIcon";
 import { auth } from "@/lib/auth";
 import { listNotes } from "@/lib/db";
 import { describeAccess } from "@/lib/gate";
+import { messagesFor } from "@/lib/i18n";
 import { getPlatform } from "@/lib/platform";
 
 export const dynamic = "force-dynamic";
 
-const MESSAGES: Record<string, string> = {
-  forbidden: "403 Forbidden: you don't have the permission",
-  invalid_note: "A title of 1–200 characters is required.",
-  limit_reached: "The app has reached its note limit.",
-  app_inactive: "The app isn't active.",
-  unauthenticated: "Sign in first.",
-  permissions_unavailable: "Permissions can't be checked right now.",
-};
-
 export default async function Home({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const { error, permission } = await searchParams;
+  const locale = await getLocale();
+  const m = messagesFor(locale);
   const session = await auth();
   const subject = session?.user?.id;
 
@@ -29,14 +25,17 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
         <header className="os-topbar">
           <div className="topbar-inner">
             <h1>Notes</h1>
-            <ThemeToggle />
+            <span className="tools">
+              <LocaleSelector locale={locale} />
+              <ThemeToggle locale={locale} />
+            </span>
           </div>
         </header>
         <main>
           <div className="card">
-            <p>Sign in with your ASafariM account to read and write notes.</p>
+            <p>{m.signInIntro}</p>
             <form action={signInAction}>
-              <button type="submit">Sign in</button>
+              <button type="submit">{m.signIn}</button>
             </form>
           </div>
         </main>
@@ -62,17 +61,25 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
             <AppBrand name="Notes" glyph="NT" as="h1" />
           </div>
           <span className="tools" data-testid="who">
-            <ThemeToggle />
+            <LocaleSelector locale={locale} />
+            <ThemeToggle locale={locale} />
             {/* The OS's app switcher, as an icon next to the account menu: the brand is on the left (#288). */}
-            <AppSwitcher apps={apps} current="notes" fallback={{ name: "Notes", glyph: "NT" }} variant="icon" />
+            <AppSwitcher
+              apps={apps}
+              current="notes"
+              fallback={{ name: "Notes", glyph: "NT" }}
+              variant="icon"
+              locale={locale}
+            />
             <UserMenu
               name={session?.user?.name}
               email={session?.user?.email}
+              locale={locale}
               signOut={
                 <form action={signOutAction}>
                   <button type="submit" data-testid="sign-out">
                     <SignOutIcon />
-                    Sign out
+                    {m.signOut}
                   </button>
                 </form>
               }
@@ -84,7 +91,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
       <main>
         {error ? (
           <div className="notice bad" role="alert" data-testid="error">
-            {MESSAGES[error] ?? error}
+            {m.errors[error] ?? error}
             {permission ? (
               <>
                 {" "}
@@ -96,33 +103,35 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
 
         {!access.available ? (
           <div className="notice bad" data-testid="state">
-            Permissions can&apos;t be checked right now (core-api is unreachable).
+            {m.permissionsUnavailable}
           </div>
         ) : access.state !== "active" ? (
           <div className="notice bad" data-testid="state">
-            This app is <strong>{access.state}</strong>. An admin has to activate it.
+            {m.stateBefore}
+            <strong>{access.state}</strong>
+            {m.stateAfter}
           </div>
         ) : (
           <>
             <p className="muted" data-testid="access">
-              Your roles: {access.roles.join(", ") || "none"} · permissions:{" "}
-              <span className="perm">{access.permissions.join(", ") || "none"}</span>
+              {m.yourRoles}: {access.roles.join(", ") || m.none} · {m.permissions}:{" "}
+              <span className="perm">{access.permissions.join(", ") || m.none}</span>
             </p>
 
             <form action={createNoteAction} className="card" data-testid="new-note">
               <label>
-                Title
+                {m.title}
                 <input name="title" maxLength={200} required />
               </label>
               <label>
-                Note
+                {m.note}
                 <textarea name="body" rows={3} maxLength={10000} />
               </label>
-              <button type="submit">Add note</button>
+              <button type="submit">{m.addNote}</button>
               {!canWrite ? (
                 <span className="muted">
                   {" "}
-                  Adding notes needs the permission <span className="perm">notes.write</span>.
+                  {m.needsWrite} <span className="perm">notes.write</span>.
                 </span>
               ) : null}
             </form>
@@ -140,13 +149,13 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
                 ))
               ) : (
                 <p className="muted" data-testid="empty">
-                  No notes yet.
+                  {m.noNotes}
                 </p>
               )
             ) : (
               <div className="notice" data-testid="no-read">
-                Reading notes needs the permission <span className="perm">notes.read</span>. Ask an admin for the{" "}
-                <span className="perm">notes.viewer</span> role.
+                {m.needsRead} <span className="perm">notes.read</span>. {m.askAdmin}{" "}
+                <span className="perm">notes.viewer</span>.
               </div>
             )}
           </>

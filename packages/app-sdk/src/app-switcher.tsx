@@ -22,6 +22,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { LauncherTile } from "./launcher.ts";
 import { safeHref } from "./safe-href.ts";
+import { osHomeHref, productHref, shellText, type ShellLocale } from "./shell-text.ts";
 
 /*
  * The SDK compiles without the DOM library (most of it runs on servers), so the few browser calls this
@@ -58,6 +59,8 @@ export interface AppSwitcherProps {
   more?: readonly MoreLink[];
   /** "full" (default): the current app's glyph and name, then the grid. "icon": the grid alone, round. */
   variant?: "full" | "icon";
+  /** The language of the words and of the links to asafarim.site and the products (default English). */
+  locale?: ShellLocale;
 }
 
 /** A product with its own site, not an OS app: no access check, it opens for everyone. */
@@ -256,6 +259,15 @@ export const APP_SWITCHER_CSS = `
 /** The way back to the OS homepage, at the foot of the panel. */
 export const OS_HOME = { href: "https://asafarim.site/", label: "ASafariM OS home" } as const;
 
+/** "More from ASafariM" in a language. */
+export const moreFromAsafarim = (locale: ShellLocale = "en"): readonly MoreLink[] => {
+  const t = shellText(locale);
+  return [
+    { ...MORE_FROM_ASAFARIM[0]!, description: t.breinhap, href: productHref("breinhap", locale) },
+    { ...MORE_FROM_ASAFARIM[1]!, description: t.igs, href: productHref("igs", locale) },
+  ];
+};
+
 /** The 3×3 apps-grid icon (its dots ripple on hover). */
 function GridIcon() {
   const dots = [];
@@ -368,11 +380,17 @@ export function AppSwitcher({
   apps,
   current,
   fallback,
-  label = "Your apps",
-  home = OS_HOME,
-  more = MORE_FROM_ASAFARIM,
+  label: labelProp,
+  home: homeProp = OS_HOME,
+  more: moreProp = MORE_FROM_ASAFARIM,
   variant = "full",
+  locale = "en",
 }: AppSwitcherProps) {
+  const t = shellText(locale);
+  const label = labelProp ?? t.yourApps;
+  // the defaults follow the language; an app's own links are kept as given
+  const home = homeProp === OS_HOME ? { href: osHomeHref(locale), label: t.osHome } : homeProp;
+  const more = moreProp === MORE_FROM_ASAFARIM ? moreFromAsafarim(locale) : moreProp;
   const tiles = switcherTiles(apps);
   const extras = more.flatMap((m) => {
     const href = safeHref(m.href);
@@ -470,7 +488,7 @@ export function AppSwitcher({
   };
 
   const currentTile = tiles.find((t) => t.key === current);
-  const caption = hint ?? currentTile?.description ?? "Choose an app to open.";
+  const caption = hint ?? currentTile?.description ?? t.choose;
   const show = (text: string | undefined) => () => setHint(text ?? null);
   const ref = (i: number) => (el: HTMLAnchorElement | null) => {
     itemRefs.current[i] = el;
@@ -489,8 +507,8 @@ export function AppSwitcher({
         className="asafarim-switcher__button"
         aria-expanded={open}
         aria-controls={panelId}
-        aria-label={`${face.name}: switch app`}
-        title={variant === "icon" ? "Switch app" : undefined}
+        aria-label={t.switchApp(face.name)}
+        title={variant === "icon" ? t.switchTitle : undefined}
         onClick={() => (open ? close(false) : openAt(-1))}
         onKeyDown={onButtonKey}
       >
@@ -518,31 +536,31 @@ export function AppSwitcher({
         >
           <div className="asafarim-switcher__head">
             <p className="asafarim-switcher__title" id={titleId}>
-              Apps
+              {t.apps}
             </p>
           </div>
           <div className="asafarim-switcher__body">
             {tiles.length === 0 ? (
-              <p className="asafarim-switcher__empty">No apps to show right now.</p>
+              <p className="asafarim-switcher__empty">{t.noApps}</p>
             ) : (
               <ul className="asafarim-switcher__apps" aria-labelledby={titleId}>
-                {tiles.map((t, i) => (
-                  <li key={t.key} style={{ "--i": i } as object}>
+                {tiles.map((tile, i) => (
+                  <li key={tile.key} style={{ "--i": i } as object}>
                     <a
                       ref={ref(i)}
                       className="asafarim-switcher__tile"
-                      href={t.href}
-                      title={t.description || undefined}
-                      aria-current={t.key === current ? "page" : undefined}
-                      data-testid={`app-switcher-${t.key}`}
-                      onMouseEnter={show(t.description)}
-                      onFocus={show(t.description)}
+                      href={tile.href}
+                      title={tile.description || undefined}
+                      aria-current={tile.key === current ? "page" : undefined}
+                      data-testid={`app-switcher-${tile.key}`}
+                      onMouseEnter={show(tile.description)}
+                      onFocus={show(tile.description)}
                     >
-                      <span className="asafarim-switcher__icon" aria-hidden="true" style={tint(t.key, t.color)}>
-                        <Mark appKey={t.key} glyph={t.glyph} />
+                      <span className="asafarim-switcher__icon" aria-hidden="true" style={tint(tile.key, tile.color)}>
+                        <Mark appKey={tile.key} glyph={tile.glyph} />
                       </span>
-                      <span className="asafarim-switcher__name">{t.name}</span>
-                      {t.key === current ? <span className="asafarim-switcher__open">Open</span> : null}
+                      <span className="asafarim-switcher__name">{tile.name}</span>
+                      {tile.key === current ? <span className="asafarim-switcher__open">{t.open}</span> : null}
                     </a>
                   </li>
                 ))}
@@ -550,13 +568,13 @@ export function AppSwitcher({
             )}
             {tiles.length === 1 ? (
               <p className="asafarim-switcher__note" data-testid="app-switcher-note">
-                More apps appear here as you get access to them.
+                {t.moreNote}
               </p>
             ) : null}
             {extras.length ? (
               <>
                 <div className="asafarim-switcher__section" data-testid="app-switcher-more">
-                  More from ASafariM
+                  {t.moreFrom}
                 </div>
                 <ul className="asafarim-switcher__more">
                   {extras.map((m, j) => {

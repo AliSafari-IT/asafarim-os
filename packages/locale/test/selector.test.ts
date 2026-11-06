@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import { OUTPUT, render, STYLES } from "../scripts/build-selector.ts";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
-  devDependencies: Record<string, string>;
+  dependencies: Record<string, string>;
 };
 
 describe("the bundled country & language selector", () => {
   it("is a fresh build of the pinned @asafarim/country-language-selector (run build:selector after an upgrade)", async () => {
     const built = await render();
-    const pinned = pkg.devDependencies["@asafarim/country-language-selector"];
+    const pinned = pkg.dependencies["@asafarim/country-language-selector"];
     expect(pinned).toMatch(/^\d+\.\d+\.\d+$/);
     expect(readFileSync(OUTPUT, "utf8")).toBe(built.js);
     expect(readFileSync(STYLES, "utf8")).toBe(built.css);

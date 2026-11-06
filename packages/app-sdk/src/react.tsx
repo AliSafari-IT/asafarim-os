@@ -32,6 +32,7 @@ export {
 } from "./app-switcher.tsx";
 export { ACCOUNT_URL, hueOf, initialsOf, UserMenu, USER_MENU_CSS, type UserMenuProps } from "./user-menu.tsx";
 export { AppBrand, APP_BRAND_CSS, type AppBrandProps } from "./brand.tsx";
+export { shellText, osHomeHref, productHref, type ShellLocale, type ShellText } from "./shell-text.ts";
 
 export interface LauncherProps {
   apps: readonly LauncherTile[];

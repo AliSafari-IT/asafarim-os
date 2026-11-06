@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/notes",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Notes: the first ASafariM OS reference app (P3.2). Tiny on purpose: it proves the plug-and-play contract end to end.",
   "scripts": {
@@ -15,6 +15,7 @@
   "dependencies": {
     "@asafarim/app-manifest": "workspace:*",
     "@asafarim/app-sdk": "workspace:*",
+    "@asafarim/locale": "workspace:*",
     "@asafarim/telemetry": "workspace:*",
     "@asafarim/theme": "workspace:*",
     "next": "^16.4.3",
