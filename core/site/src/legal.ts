@@ -13,7 +13,7 @@
 
 export const CONTACT_EMAIL = "privacy@asafarim.site";
 /** The day the text last changed in substance (YYYY-MM-DD). */
-export const LEGAL_UPDATED = "2026-10-23";
+export const LEGAL_UPDATED = "2026-11-06";
 
 export type LegalSlug = "privacy" | "cookies" | "terms";
 
@@ -96,6 +96,11 @@ const privacy: LegalDoc = {
               [
                 "Your light or dark theme choice",
                 'To show the theme you picked. See the <a href="/cookies">cookie policy</a>.',
+                "Your request (a cookie you set yourself)",
+              ],
+              [
+                "Your language choice (English, Nederlands, Français or Deutsch)",
+                'To show the pages in the language you picked. See the <a href="/cookies">cookie policy</a>.',
                 "Your request (a cookie you set yourself)",
               ],
             ],
@@ -186,6 +191,12 @@ const cookieRows: string[][] = [
     "1 year",
   ],
   [
+    "<code>asafarim-locale</code>",
+    "All *.asafarim.site hosts",
+    "Remembers the language you chose (en, nl, fr or de). Set only when you choose one in the language selector.",
+    "1 year",
+  ],
+  [
     "<code>identity_auth</code>",
     "id.asafarim.site",
     "Keeps you signed in to your ASafariM account.",
@@ -248,7 +259,7 @@ const cookies: LegalDoc = {
   title: "Cookie policy",
   description:
     "Every cookie ASafariM OS sets, what it is for and how long it lasts. No tracking or advertising cookies.",
-  lead: "ASafariM OS uses only cookies it needs to work, plus one that remembers your theme. There are no analytics, advertising or tracking cookies, and nothing from other companies, so there is no cookie banner.",
+  lead: "ASafariM OS uses only cookies it needs to work, plus two that remember your theme and your language. There are no analytics, advertising or tracking cookies, and nothing from other companies, so there is no cookie banner.",
   sections: [
     {
       id: "what",
@@ -269,7 +280,7 @@ const cookies: LegalDoc = {
             rows: cookieRows,
           },
         },
-        "Cookies on <code>__Host-</code> names stay on the one host that set them: another app or subdomain cannot read them. Only <code>asafarim-theme</code> is shared across *.asafarim.site, so your theme choice follows you.",
+        "Cookies on <code>__Host-</code> names stay on the one host that set them: another app or subdomain cannot read them. Only <code>asafarim-theme</code> and <code>asafarim-locale</code> are shared across *.asafarim.site, so your theme and language follow you.",
       ],
     },
     {
@@ -283,7 +294,7 @@ const cookies: LegalDoc = {
       id: "control",
       heading: "Your choice",
       blocks: [
-        "You can see and delete cookies in your browser's settings, or block them. Deleting the sign-in cookies signs you out; blocking them means you cannot sign in. Deleting <code>asafarim-theme</code> makes pages follow your system's light or dark setting again.",
+        "You can see and delete cookies in your browser's settings, or block them. Deleting the sign-in cookies signs you out; blocking them means you cannot sign in. Deleting <code>asafarim-theme</code> makes pages follow your system's light or dark setting again; deleting <code>asafarim-locale</code> shows them in English, or in your browser's language where a page can tell.",
         `Questions? Email ${mail}. How we handle personal data in general is in the <a href="/privacy">privacy policy</a>.`,
       ],
     },

@@ -323,9 +323,14 @@ footer {
 .btn.btn-small:hover {
   background: var(--accent-hover);
 }
-.nav-theme {
+.nav-theme,
+.nav-locale {
   display: flex;
   align-items: center;
+}
+/* The language selector (@asafarim/locale) sits on the charcoal top bar in both themes. */
+.nav-locale .locale-selector {
+  color: var(--top-ink);
 }
 .primary-nav #account {
   margin-left: 0.35rem;
@@ -383,7 +388,8 @@ footer {
   .primary-nav #account > .btn {
     justify-content: center;
   }
-  .nav-theme {
+  .nav-theme,
+  .nav-locale {
     padding: 0.25rem 0.55rem;
   }
 }
@@ -970,6 +976,13 @@ footer p {
   margin: 2.25rem 0 0.75rem;
   font-size: 1.3rem;
   scroll-margin-top: 1rem;
+}
+.legal-language {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.9rem;
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
 }
 .legal .lead {
   font-size: 1.1rem;

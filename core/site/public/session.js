@@ -8,6 +8,82 @@
   "use strict";
   // Fixed here, not read from the page: every link this script builds is a constant.
   const identity = "https://id.asafarim.site";
+  // The page's language (<html lang>, render.ts) picks the words this script adds; English otherwise.
+  const WORDS = {
+    en: {
+      openNav: "Open navigation",
+      closeNav: "Close navigation",
+      admin: "Admin console",
+      adminSub: "Apps, access and audit",
+      signedIn: "Signed in",
+      noAccess: "Signed in · no access yet",
+      menu: "Your account menu",
+      openDocs: "Open Docs",
+      openFlow: "Open Flow",
+      request: "Request access",
+      account: "Account and sign out",
+      as: "You're signed in as ",
+      or: " or ",
+      hasAccess: " if your account has access.",
+      without: ", without access yet. ",
+      approves: ": an admin approves it.",
+    },
+    nl: {
+      openNav: "Menu openen",
+      closeNav: "Menu sluiten",
+      admin: "Beheerconsole",
+      adminSub: "Apps, toegang en audit",
+      signedIn: "Aangemeld",
+      noAccess: "Aangemeld · nog geen toegang",
+      menu: "Je accountmenu",
+      openDocs: "Docs openen",
+      openFlow: "Flow openen",
+      request: "Toegang vragen",
+      account: "Account en afmelden",
+      as: "Je bent aangemeld als ",
+      or: " of ",
+      hasAccess: " als je account er toegang toe heeft.",
+      without: ", nog zonder toegang. ",
+      approves: ": een beheerder keurt het goed.",
+    },
+    fr: {
+      openNav: "Ouvrir le menu",
+      closeNav: "Fermer le menu",
+      admin: "Console d’administration",
+      adminSub: "Applications, accès et audit",
+      signedIn: "Connecté",
+      noAccess: "Connecté · pas encore d’accès",
+      menu: "Menu de votre compte",
+      openDocs: "Ouvrir Docs",
+      openFlow: "Ouvrir Flow",
+      request: "Demander l’accès",
+      account: "Compte et déconnexion",
+      as: "Vous êtes connecté en tant que ",
+      or: " ou ",
+      hasAccess: " si votre compte y a accès.",
+      without: ", sans accès pour l’instant. ",
+      approves: " : un administrateur l’approuve.",
+    },
+    de: {
+      openNav: "Menü öffnen",
+      closeNav: "Menü schließen",
+      admin: "Admin-Konsole",
+      adminSub: "Apps, Zugang und Audit",
+      signedIn: "Angemeldet",
+      noAccess: "Angemeldet · noch kein Zugang",
+      menu: "Ihr Kontomenü",
+      openDocs: "Docs öffnen",
+      openFlow: "Flow öffnen",
+      request: "Zugang anfragen",
+      account: "Konto und Abmelden",
+      as: "Sie sind angemeldet als ",
+      or: " oder ",
+      hasAccess: ", wenn Ihr Konto Zugang hat.",
+      without: ", noch ohne Zugang. ",
+      approves: ": Ein Administrator genehmigt es.",
+    },
+  };
+  const T = WORDS[document.documentElement.lang] || WORDS.en;
   const slot = document.getElementById("account");
   const shell = document.querySelector(".os-topbar");
   const navToggle = document.querySelector(".nav-toggle");
@@ -37,7 +113,7 @@
     const setNavOpen = (open, focusToggle = false) => {
       primaryNav.classList.toggle("is-open", open);
       navToggle.setAttribute("aria-expanded", String(open));
-      navToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+      navToggle.setAttribute("aria-label", open ? T.closeNav : T.openNav);
       if (focusToggle) navToggle.focus();
     };
     const syncNav = () => {
@@ -120,21 +196,16 @@
     grid.append(
       el(
         "a",
-        { class: "nav-card nav-card-wide", href: ADMIN, "aria-label": "Admin console", "data-testid": "nav-admin" },
+        { class: "nav-card nav-card-wide", href: ADMIN, "aria-label": T.admin, "data-testid": "nav-admin" },
         el("span", { class: "nav-card-icon nav-card-admin", "aria-hidden": "true" }, icon(ICONS.admin)),
-        el(
-          "span",
-          { class: "nav-card-copy" },
-          el("strong", {}, "Admin console"),
-          el("small", {}, "Apps, access and audit"),
-        ),
+        el("span", { class: "nav-card-copy" }, el("strong", {}, T.admin), el("small", {}, T.adminSub)),
         el("span", { class: "nav-card-arrow", "aria-hidden": "true" }, "↗"),
       ),
     );
   }
 
   function render(me) {
-    const label = typeof me.label === "string" && me.label ? me.label : "Signed in";
+    const label = typeof me.label === "string" && me.label ? me.label : T.signedIn;
     const initials = typeof me.initials === "string" && me.initials ? me.initials.slice(0, 2) : "?";
     const hue = String(hueOf(label));
 
@@ -155,7 +226,7 @@
         class: "user-button",
         "aria-expanded": "false",
         "aria-controls": "user-menu",
-        "aria-label": "Your account menu: " + label,
+        "aria-label": T.menu + ": " + label,
         title: label,
         "data-testid": "user-button",
       },
@@ -164,16 +235,16 @@
     button.firstChild.append(el("span", { class: "avatar-dot" }));
 
     const who = el("span", { class: "user-who" }, el("strong", { "data-testid": "user-name" }, label));
-    who.append(el("small", {}, me.connected ? "Signed in" : "Signed in · no access yet"));
+    who.append(el("small", {}, me.connected ? T.signedIn : T.noAccess));
     const menu = el(
       "div",
-      { id: "user-menu", class: "user-menu", role: "group", "aria-label": "Your account menu", hidden: "" },
+      { id: "user-menu", class: "user-menu", role: "group", "aria-label": T.menu, hidden: "" },
       el("div", { class: "user-card" }, avatar("avatar avatar-lg"), who),
       ...(me.connected
-        ? [item(DOCS, "Open Docs", "docs", "user-docs"), item(FLOW, "Open Flow", "flow", "user-flow")]
-        : [item(identity + "/connect", "Request access", "request", "user-request")]),
-      ...(me.admin === true ? [item(ADMIN, "Admin console", "admin", "user-admin")] : []),
-      item(ACCOUNT, "Account and sign out", "account", "user-account"),
+        ? [item(DOCS, T.openDocs, "docs", "user-docs"), item(FLOW, T.openFlow, "flow", "user-flow")]
+        : [item(identity + "/connect", T.request, "request", "user-request")]),
+      ...(me.admin === true ? [item(ADMIN, T.admin, "admin", "user-admin")] : []),
+      item(ACCOUNT, T.account, "account", "user-account"),
     );
     const root = el("div", { class: "user", "data-testid": "user" }, button, menu);
     slot.replaceChildren(root);
@@ -227,21 +298,15 @@
     if (access) {
       const hint = me.connected
         ? [
-            "You're signed in as ",
+            T.as,
             el("strong", {}, label),
             ". ",
-            el("a", { href: DOCS }, "Open Docs"),
-            " or ",
+            el("a", { href: DOCS }, T.openDocs),
+            T.or,
             el("a", { href: FLOW }, "Flow"),
-            " if your account has access.",
+            T.hasAccess,
           ]
-        : [
-            "You're signed in as ",
-            el("strong", {}, label),
-            ", without access yet. ",
-            el("a", { href: identity + "/connect" }, "Request access"),
-            ": an admin approves it.",
-          ];
+        : [T.as, el("strong", {}, label), T.without, el("a", { href: identity + "/connect" }, T.request), T.approves];
       access.replaceChildren(...hint);
       access.classList.add("access-signed-in");
     }

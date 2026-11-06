@@ -62,8 +62,10 @@ describe("buildSite", () => {
     // @asafarim/theme's stylesheet and script, and its toggle in the top bar.
     expect(written).toEqual(expect.arrayContaining(["theme.css", "theme.js"]));
     const html = readFileSync(path.join(out, "index.html"), "utf8");
-    for (const [, src] of html.matchAll(/<img src="([^"]+)"/g)) expect(written).toContain(src);
-    for (const [, src] of html.matchAll(/<script src="([^"]+)"/g)) expect(written).toContain(src);
+    // Every page links its files from the root (/nl/ pages share them).
+    for (const [, src] of html.matchAll(/<img src="\/([^"]+)"/g)) expect(written).toContain(src);
+    for (const [, src] of html.matchAll(/<script src="\/([^"]+)"/g)) expect(written).toContain(src);
+    expect(html.match(/<(?:img|script) src="(?!\/)/g)).toBeNull();
     expect(html).toContain('data-testid="theme-toggle"');
   });
 

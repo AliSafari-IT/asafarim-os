@@ -1,0 +1,41 @@
+{
+  "name": "@asafarim/locale",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The languages of ASafariM OS (en, nl, fr, de; English by default) and the country & language selector, shared by every site and app: one choice across *.asafarim.site, kept in a cookie. Server helpers, plus @asafarim/country-language-selector bundled once into a plain browser script and stylesheet, so upgrading it here upgrades every page.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./selector.js": "./selector.js",
+    "./selector.css": "./selector.css"
+  },
+  "files": [
+    "dist",
+    "selector.js",
+    "selector.css"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:selector": "node scripts/build-selector.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@asafarim/country-language-selector": "0.5.3",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "esbuild": "0.28.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

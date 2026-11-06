@@ -50,7 +50,7 @@
 set -euo pipefail
 
 # The inputs of the site image: the same list as `on.push.paths` in .github/workflows/site-image.yml.
-SITE_IMAGE_PATHS=("core/site/**" "packages/app-manifest/schema/**" ".github/workflows/site-image.yml")
+SITE_IMAGE_PATHS=("core/site/**" "packages/app-manifest/schema/**" "packages/theme/theme.css" "packages/theme/theme.js" "packages/theme/toggle.html" "packages/locale/selector.js" "packages/locale/selector.css" "packages/locale/src/index.ts" ".github/workflows/site-image.yml")
 # The inputs of the docs image: the same list as `on.push.paths` in .github/workflows/docs-image.yml.
 DOCS_IMAGE_PATHS=("apps/docs/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/docs-image.yml")
 # The inputs of the identity image: the same list as `on.push.paths` in .github/workflows/identity-image.yml.

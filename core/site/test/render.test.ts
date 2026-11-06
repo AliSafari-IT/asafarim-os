@@ -76,7 +76,7 @@ describe("renderPage", () => {
   });
 
   it("gives every image its alt text and its size", () => {
-    expect(html).toMatch(/<img src="screenshots\/apps\.png" alt="[^"]+" width="1280" height="800"/);
+    expect(html).toMatch(/<img src="\/screenshots\/apps\.png" alt="[^"]+" width="1280" height="800"/);
     for (const img of html.match(/<img [^>]*>/g) ?? []) expect(img).toMatch(/ alt="[^"]+"/);
   });
 
@@ -84,7 +84,11 @@ describe("renderPage", () => {
     // theme.js runs before paint (no flash of the other theme); session.js after parsing.
     // The JSON-LD block is data, not a script: the CSP does not apply to it and browsers never run it.
     const scripts = html.match(/<script\b[^>]*>/gi)?.filter((tag) => !tag.includes('type="application/ld+json"'));
-    expect(scripts).toEqual(['<script src="theme.js">', '<script src="session.js" defer>']);
+    expect(scripts).toEqual([
+      '<script src="/theme.js">',
+      '<script src="/selector.js" defer>',
+      '<script src="/session.js" defer>',
+    ]);
     expect(html.replace(/<script type="application\/ld\+json">[^<]*<\/script>/, "")).not.toMatch(
       /<script[^>]*>[^<]|\sstyle=|<style|\son[a-z]+=/i,
     );
@@ -93,8 +97,8 @@ describe("renderPage", () => {
         /^https:\/\/(github\.com|asafarim\.com|igs-pharma\.be|(?:management\.)?breinhap\.com|((docs|flow|id|breinhap|igs)\.)?asafarim\.site)\//,
       );
     }
-    // Stylesheet and icon are this origin's own; only the canonical link names a full URL.
-    expect(html).not.toMatch(/<link rel="(?!canonical")[^"]+" [^>]*href="https?:/);
+    // Stylesheets and icon are this origin's own; only the canonical and language links name a full URL.
+    expect(html).not.toMatch(/<link rel="(?!canonical"|alternate")[^"]+" [^>]*href="https?:/);
   });
 
   it("has a share preview and structured data for search engines", () => {
@@ -119,7 +123,7 @@ describe("renderPage", () => {
       '<a class="nav-product-link" href="https://breinhap.asafarim.site/en/" aria-label="Breinhap">',
     );
     expect(nav).toContain('<a class="nav-product-link" href="https://igs.asafarim.site/en/" aria-label="IGS-Pharma">');
-    expect(nav).toContain('<a class="nav-link" href="#shipped">Platform</a>');
+    expect(nav).toContain('<a class="nav-link" href="/#shipped">Platform</a>');
     expect(nav).toContain('<a href="https://id.asafarim.site/login" class="btn btn-small">Sign in</a>');
     // session.js swaps the "Sign in" slot for the avatar, asking identity at this origin.
     expect(nav).toContain('<li id="account">');
@@ -137,7 +141,8 @@ describe("renderPage", () => {
     const nav = /<nav class="topbar" aria-label="Main">([\s\S]*?)<\/nav>/.exec(themed)?.[1] ?? "";
     expect(nav).toContain(`<li class="nav-theme">${toggle}</li>`);
     expect(themed).toMatch(/<div class="os-topbar">\s*<nav class="topbar"/);
-    expect(themed.indexOf('href="theme.css"')).toBeLessThan(themed.indexOf('href="styles.css"'));
+    expect(themed.indexOf('href="/theme.css"')).toBeLessThan(themed.indexOf('href="/selector.css"'));
+    expect(themed.indexOf('href="/selector.css"')).toBeLessThan(themed.indexOf('href="/styles.css"'));
     expect(html).not.toContain("os-theme-toggle"); // none given, none drawn
   });
 
@@ -174,8 +179,8 @@ describe("renderPage", () => {
 
   it("the launchers point to the Apps section", () => {
     const nav = /<nav class="topbar" aria-label="Main">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
-    expect(nav).toContain('<a href="./#apps">Every app</a>');
-    expect(nav).toContain('<a href="./#apps-products">Webshop, Android app and status</a>');
+    expect(nav).toContain('<a href="/#apps">Every app</a>');
+    expect(nav).toContain('<a href="/#apps-products">Webshop, Android app and status</a>');
   });
 
   it("frames the OS as a new base platform, not a migration", () => {

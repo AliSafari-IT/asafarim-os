@@ -1,5 +1,6 @@
 # Build context filter for core/site/Dockerfile: the image needs core/site's sources and the app manifest's
-# JSON Schema (served under /schemas/, #87) and @asafarim/theme's browser files only.
+# JSON Schema (served under /schemas/, #87), @asafarim/theme's browser files and @asafarim/locale's languages and
+# selector only.
 *
 !core/site/package.json
 !core/site/src
@@ -9,3 +10,6 @@
 !packages/theme/theme.css
 !packages/theme/theme.js
 !packages/theme/toggle.html
+!packages/locale/selector.js
+!packages/locale/selector.css
+!packages/locale/src/index.ts

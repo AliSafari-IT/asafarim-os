@@ -47,6 +47,7 @@ describe("the legal pages", () => {
     const text = JSON.stringify(docOf("cookies"));
     const names = [
       /var COOKIE = "([^"]+)"/.exec(source("packages/theme/theme.js"))?.[1],
+      /LOCALE_COOKIE = "([^"]+)"/.exec(source("packages/locale/src/index.ts"))?.[1],
       /SESSION_COOKIE_NAME = "([^"]+)"/.exec(source("packages/app-sdk/src/auth.ts"))?.[1],
       /ACCESS_COOKIE_NAME = "([^"]+)"/.exec(source("packages/registry-protocol/src/access-token.ts"))?.[1],
       /AUTH_COOKIE = "([^"]+)"/.exec(source("core/identity/src/sign-in.ts"))?.[1],

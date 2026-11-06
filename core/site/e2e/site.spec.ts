@@ -74,8 +74,8 @@ test("every link goes to this site or an allowed host, over https", async ({ pag
   const self = new URL(baseURL!).host;
   for (const href of hrefs) {
     const url = new URL(href);
-    // This page itself: relative URLs, and the canonical https://asafarim.site/.
-    if (url.host === self || href === "https://asafarim.site/") continue;
+    // This site itself: relative URLs, and the canonical and language (hreflang) URLs on https://asafarim.site/.
+    if (url.host === self || url.origin === "https://asafarim.site") continue;
     // The footer's privacy contact.
     if (url.protocol === "mailto:") {
       expect(url.pathname, href).toBe("privacy@asafarim.site");
@@ -90,7 +90,7 @@ test("the top bar groups OS apps and products in accessible launchers", async ({
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Main" });
   await expect(nav.locator(".brand .mark")).toHaveAttribute("width", "38");
-  await expect(nav.getByRole("link", { name: "Platform" })).toHaveAttribute("href", "#shipped");
+  await expect(nav.getByRole("link", { name: "Platform" })).toHaveAttribute("href", "/#shipped");
   await expect(nav.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "https://id.asafarim.site/login");
 
   await nav.getByText("Apps", { exact: true }).click();
@@ -328,4 +328,37 @@ test("the privacy, cookie and terms pages load from the footer and fit a phone",
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   }
   expect(errors).toEqual([]);
+});
+
+test("the language selector (@asafarim/locale) moves to the same page in French and remembers the choice", async ({
+  page,
+  context,
+}) => {
+  const errors = collectErrors(page);
+  await page.goto("/cookies");
+  const trigger = page.getByRole("button", { name: "Language · Taal · Langue · Sprache" });
+  await expect(trigger).toContainText("en");
+  await trigger.click();
+  await page.getByRole("option", { name: /Belgium/ }).click();
+  await page.getByRole("option", { name: /Français/ }).click();
+  await expect(page).toHaveURL(/\/fr\/cookies$/);
+  await expect(page.locator("html")).toHaveAttribute("lang", "fr");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Politique en matière de cookies");
+  await expect(page.getByRole("button", { name: "Language · Taal · Langue · Sprache" })).toContainText("fr");
+  const cookie = (await context.cookies()).find((c) => c.name === "asafarim-locale");
+  expect(cookie?.value).toBe("fr");
+  expect(errors).toEqual([]);
+});
+
+test("without JavaScript the language links still work", async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false, baseURL });
+  const page = await context.newPage();
+  await page.goto("/");
+  await page
+    .getByRole("group", { name: "Language · Taal · Langue · Sprache" })
+    .getByRole("link", { name: "NL" })
+    .click();
+  await expect(page).toHaveURL(/\/nl\/$/);
+  await expect(page.getByRole("link", { name: "Aanmelden" }).first()).toBeVisible();
+  await context.close();
 });
