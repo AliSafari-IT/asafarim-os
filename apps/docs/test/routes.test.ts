@@ -58,7 +58,10 @@ vi.mock("next/navigation", () => ({
     throw new Interrupt("redirect", to);
   },
 }));
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined, set: () => undefined }) }));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined, set: () => undefined }),
+  headers: async () => new Headers(),
+}));
 vi.mock("@/lib/auth", () => ({
   auth: async () => (who.subject ? { user: { id: who.subject, name: who.subject } } : null),
   signIn: vi.fn(),
@@ -223,7 +226,7 @@ describe("signed in as dev-member, without docs.owner (#79)", () => {
   it("the 403 page names docs.read and shows nothing of the documents", async () => {
     const { default: Forbidden } = await load<{ default: () => unknown }>("forbidden.tsx");
     const text: string[] = [];
-    walk(Forbidden(), (p) => {
+    walk(await Forbidden(), (p) => {
       if (typeof p.children === "string") text.push(p.children);
       if (Array.isArray(p.children)) text.push(...p.children.filter((c): c is string => typeof c === "string"));
       expect(p).not.toHaveProperty("nodes");

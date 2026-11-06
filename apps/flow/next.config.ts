@@ -21,7 +21,7 @@ const nextConfig: NextConfig = {
   env: { FLOW_E2E_BUILD: process.env.FLOW_E2E_BUILD ?? "" },
   // pg and the OpenTelemetry SDK (@asafarim/telemetry) use Node APIs; keep them out of the bundler.
   serverExternalPackages: ["pg", "@asafarim/telemetry"],
-  transpilePackages: ["@asafarim/app-sdk", "@asafarim/theme"],
+  transpilePackages: ["@asafarim/app-sdk", "@asafarim/locale", "@asafarim/theme"],
   // unauthorized() and forbidden() answer 401 and 403 with app/unauthorized.tsx and app/forbidden.tsx.
   experimental: { authInterrupts: true },
 };

@@ -1,4 +1,6 @@
 import { AppBrand, AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import { getLocale } from "@asafarim/locale/next";
+import { LocaleSelector } from "@asafarim/locale/react";
 import { ThemeToggle } from "@asafarim/theme/react";
 import Link from "next/link";
 import { forbidden, unauthorized } from "next/navigation";
@@ -14,6 +16,7 @@ import { auth } from "@/lib/auth";
 import { anchorNote, sectionsOf } from "@/lib/anchor";
 import { gate } from "@/lib/gate";
 import { homeOf, neighboursOf } from "@/lib/home";
+import { messagesFor } from "@/lib/i18n";
 import { issuesConfigured } from "@/lib/issue-api";
 import { docHref } from "@/lib/links";
 import { getNotes, issueViaFlow } from "@/lib/notes";
@@ -43,6 +46,8 @@ function toNav(nodes: TreeNode[]): NavNode[] {
  * in the centre, "On this page" on the right, ⌘K search in the top bar. Documents come from the source repository at runtime (lib/source.ts).
  */
 export default async function Home({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
+  const locale = await getLocale();
+  const m = messagesFor(locale);
   // The gate comes first (#79): signed out is a 401 sign-in page, no docs.read a plain 403 page.
   const g = await gate("docs.read");
   if (!g.ok && g.status === 401) unauthorized();
@@ -50,20 +55,25 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
   if (!g.ok) {
     return (
       <div className="signin">
-        <ThemeToggle className="corner-toggle" />
+        <span className="corner-toggle">
+          <LocaleSelector locale={locale} />
+          <ThemeToggle locale={locale} />
+        </span>
         <h1>Docs</h1>
         <p className="notice" role="status" data-testid="state">
           {g.body.error === "app_inactive" ? (
             <>
-              This app is <strong>{g.body.state}</strong>. An admin has to activate it.
+              {m.appIsBefore}
+              <strong>{g.body.state}</strong>
+              {m.appIsAfter}
             </>
           ) : (
-            "Permissions can't be checked right now (core-api is unreachable)."
+            m.permissionsUnavailable
           )}
         </p>
         <form action={signOutAction}>
           <button type="submit" className="secondary">
-            Sign out
+            {m.signOut}
           </button>
         </form>
       </div>
@@ -135,7 +145,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
   return (
     <>
       <a className="skip" href="#document">
-        Skip to the document
+        {m.skipToDocument}
       </a>
       <header className="topbar os-topbar">
         <div className="brand">
@@ -145,7 +155,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           </span>
           {view.status === "ok" && view.mode === "fixtures" ? (
             <span className="badge" data-testid="fixtures">
-              local fixtures
+              {m.localFixtures}
             </span>
           ) : null}
         </div>
@@ -154,24 +164,32 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           <form action={refreshAction}>
             {selected ? <input type="hidden" name="doc" value={selected} /> : null}
             <button type="submit" className="secondary" data-testid="refresh">
-              Refresh
+              {m.refresh}
             </button>
           </form>
           <a className="button secondary" href="/notes" data-testid="all-notes">
-            All notes
+            {m.allNotes}
           </a>
-          <ThemeToggle />
+          <LocaleSelector locale={locale} />
+          <ThemeToggle locale={locale} />
           {/* The OS's app switcher, as an icon next to the account menu: the brand is on the left (#288). */}
-          <AppSwitcher apps={apps} current="docs" fallback={{ name: "Docs", glyph: "DC" }} variant="icon" />
+          <AppSwitcher
+            apps={apps}
+            current="docs"
+            fallback={{ name: "Docs", glyph: "DC" }}
+            variant="icon"
+            locale={locale}
+          />
           <span data-testid="who">
             <UserMenu
               name={session?.user?.name}
               email={session?.user?.email}
+              locale={locale}
               signOut={
                 <form action={signOutAction}>
                   <button type="submit" data-testid="sign-out">
                     <SignOutIcon />
-                    Sign out
+                    {m.signOut}
                   </button>
                 </form>
               }
@@ -182,12 +200,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
 
       {view.status === "unavailable" ? (
         <p className="notice" role="status" data-testid="unavailable">
-          Documents temporarily unavailable. Try Refresh in a minute.
+          {m.unavailable}
         </p>
       ) : view.status === "ok" && view.ownersError ? (
         <p className="notice" role="status" data-testid="owners-error">
-          {view.ownersError}. Every document is shown as owned by <span className="mono">{repo}</span> until it&apos;s
-          fixed.
+          {view.ownersError}. <span className="mono">{repo}</span> {m.ownersErrorTail}.
         </p>
       ) : null}
 
@@ -198,7 +215,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           doc && !doc.missing ? (
             <Toc items={tocOf(doc.headings)} />
           ) : (
-            <p className="muted">{home ? "Open a document to see its sections here." : "Nothing open."}</p>
+            <p className="muted">{home ? m.openToSeeSections : m.nothingOpen}</p>
           )
         }
       >
@@ -206,15 +223,15 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           <article>
             {doc?.missing ? (
               <>
-                <h1>Not found</h1>
+                <h1>{m.notFound}</h1>
                 <p className="lead">
-                  <span className="mono">{doc.path}</span> isn&apos;t in the source repository (any more).
+                  <span className="mono">{doc.path}</span> {m.notInSource}
                 </p>
               </>
             ) : doc && view.status === "ok" ? (
               <>
                 {doc.breadcrumb.length ? (
-                  <nav aria-label="Breadcrumb" className="crumbs" data-testid="breadcrumb">
+                  <nav aria-label={m.breadcrumb} className="crumbs" data-testid="breadcrumb">
                     <ol>
                       {doc.breadcrumb.map((c, i) => (
                         <li key={`${i}:${c}`}>{c}</li>
@@ -224,11 +241,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
                 ) : null}
                 <h1 data-testid="doc-title">{doc.title}</h1>
                 <p className="meta">
-                  <span className="badge owner" data-testid="owner" title={`Owner (from ${doc.owner.via})`}>
+                  <span className="badge owner" data-testid="owner" title={m.ownerFrom(doc.owner.via)}>
                     {doc.owner.repo}
                   </span>
                   <span className="muted" data-testid="stats">
-                    {doc.stats.minutes} min read · {doc.stats.words.toLocaleString("en")} words
+                    {m.minRead(doc.stats.minutes)} · {m.words(doc.stats.words.toLocaleString(locale))}
                   </span>
                 </p>
                 <Notes
@@ -247,10 +264,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
                   />
                 </Notes>
                 {pager.prev || pager.next ? (
-                  <nav className="pager" aria-label="Previous and next document" data-testid="pager">
+                  <nav className="pager" aria-label={m.previousNext} data-testid="pager">
                     {pager.prev ? (
                       <Link className="prev" href={docHref(pager.prev.path)} data-testid="pager-prev">
-                        <span className="dir">Previous</span>
+                        <span className="dir">{m.previous}</span>
                         <span className="title">
                           {pager.prev.where ? <span className="where">{pager.prev.where} · </span> : null}
                           {pager.prev.label}
@@ -261,7 +278,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
                     )}
                     {pager.next ? (
                       <Link className="next" href={docHref(pager.next.path)} data-testid="pager-next">
-                        <span className="dir">Next</span>
+                        <span className="dir">{m.next}</span>
                         <span className="title">
                           {pager.next.where ? <span className="where">{pager.next.where} · </span> : null}
                           {pager.next.label}
@@ -274,30 +291,28 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
             ) : home && view.status === "ok" ? (
               <div className="home" data-testid="home">
                 <header className="home-hero">
-                  <p className="eyebrow">Documentation</p>
-                  <h1>{home.start ? "Welcome" : "Documents"}</h1>
+                  <p className="eyebrow">{m.documentation}</p>
+                  <h1>{home.start ? m.welcome : m.documentsTitle}</h1>
                   <p className="lead">
-                    {view.docCount.toLocaleString("en")} {view.docCount === 1 ? "document" : "documents"} from{" "}
-                    <span className="mono">{repo}</span>, read live from the repository. Search with <kbd>⌘K</kbd> or{" "}
-                    <kbd>Ctrl K</kbd>.
+                    {m.documentCount(view.docCount.toLocaleString(locale), view.docCount)}{" "}
+                    <span className="mono">{repo}</span>
+                    {m.searchWith} <kbd>⌘K</kbd> {m.or} <kbd>Ctrl K</kbd>.
                   </p>
                 </header>
                 {home.start ? (
                   <Link className="card start" href={docHref(home.start.path)} data-testid="home-start">
-                    <span className="eyebrow">Start here</span>
+                    <span className="eyebrow">{m.startHere}</span>
                     <span className="card-title">{home.start.label}</span>
-                    <span className="muted">The overview of this documentation.</span>
+                    <span className="muted">{m.overview}</span>
                   </Link>
                 ) : null}
                 {home.sections.length ? (
-                  <ul className="cards" aria-label="Sections" data-testid="home-sections">
+                  <ul className="cards" aria-label={m.sections} data-testid="home-sections">
                     {home.sections.map((section) => (
                       <li key={section.label} className="card section">
                         <h2>
                           {section.label}
-                          <span className="count">
-                            {section.count} {section.count === 1 ? "doc" : "docs"}
-                          </span>
+                          <span className="count">{m.docsCount(section.count)}</span>
                         </h2>
                         <ul>
                           {section.docs.map((d) => (
@@ -309,14 +324,14 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
                             </li>
                           ))}
                         </ul>
-                        {section.more ? <p className="muted more">and {section.more} more in the sidebar</p> : null}
+                        {section.more ? <p className="muted more">{m.moreInSidebar(section.more)}</p> : null}
                       </li>
                     ))}
                   </ul>
                 ) : null}
                 {home.loose.length ? (
                   <section className="loose" aria-labelledby="loose-title">
-                    <h2 id="loose-title">Also at the top level</h2>
+                    <h2 id="loose-title">{m.topLevel}</h2>
                     <ul>
                       {home.loose.map((d) => (
                         <li key={d.path}>
@@ -328,17 +343,14 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
                 ) : null}
                 {view.docCount === 0 ? (
                   <p className="lead" data-testid="home-empty">
-                    There are no documents in <span className="mono">{repo}</span> yet.
+                    {m.noDocuments} <span className="mono">{repo}</span>.
                   </p>
                 ) : null}
               </div>
             ) : (
               <>
-                <h1>Nothing open</h1>
-                <p className="lead">
-                  Pick a document to read it here. Documents are loaded from <span className="mono">{repo}</span> when
-                  you open them; none are stored in this app.
-                </p>
+                <h1>{m.nothingOpen.replace(/\.$/, "")}</h1>
+                <p className="lead">{m.nothingOpenLead}</p>
               </>
             )}
           </article>

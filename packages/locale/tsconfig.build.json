@@ -4,7 +4,9 @@
     "rootDir": "src",
     "outDir": "dist",
     "rewriteRelativeImportExtensions": true,
-    "types": ["node"]
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
-  "include": ["src/index.ts"]
+  "include": ["src/index.ts", "src/react.tsx", "src/next.ts"]
 }

@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/flow",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Flow: ASafariM OS workflows across apps, through events only (ADR 0001). Its first workflow turns a #issue study note in Docs into a GitHub issue.",
   "scripts": {
@@ -16,6 +16,7 @@
   "dependencies": {
     "@asafarim/app-manifest": "workspace:*",
     "@asafarim/app-sdk": "workspace:*",
+    "@asafarim/locale": "workspace:*",
     "@asafarim/progress-bars": "^0.7.3",
     "@asafarim/smtp": "workspace:*",
     "@asafarim/telemetry": "workspace:*",

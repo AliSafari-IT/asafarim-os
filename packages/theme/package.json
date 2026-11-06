@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/theme",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "The ASafariM OS look, shared by every site and app: the light and dark theme tokens, the charcoal top bar, and the light/dark toggle (one choice across *.asafarim.site, kept in a cookie). Plain CSS and a plain browser script for static and server-rendered pages, and a React toggle for Next.js apps.",
   "type": "module",

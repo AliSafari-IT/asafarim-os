@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DocTree } from "./DocTree";
+import { useMessages } from "./I18n";
 import type { NavNode } from "./nav";
 
 export function ReaderShell({
@@ -20,6 +21,7 @@ export function ReaderShell({
   toc: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const m = useMessages();
   const nav = useRef<HTMLElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
   const refocus = useRef(false);
@@ -71,14 +73,14 @@ export function ReaderShell({
       >
         Documents
       </button>
-      <nav ref={nav} id="documents" className="tree" aria-label="Documents">
-        <h2>Documents</h2>
+      <nav ref={nav} id="documents" className="tree" aria-label={m.documents}>
+        <h2>{m.documents}</h2>
         <DocTree nodes={nodes} selected={selected} onOpen={() => close(false)} />
       </nav>
       {open ? <div className="scrim" aria-hidden="true" onClick={() => close(true)} /> : null}
       {children}
-      <aside className="toc" aria-label="On this page">
-        <h2>On this page</h2>
+      <aside className="toc" aria-label={m.onThisPage}>
+        <h2>{m.onThisPage}</h2>
         {toc}
       </aside>
     </div>

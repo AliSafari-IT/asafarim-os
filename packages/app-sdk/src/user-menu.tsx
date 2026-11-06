@@ -15,6 +15,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { HomeIcon, moveIndex, OS_HOME } from "./app-switcher.tsx";
 import { safeHref } from "./safe-href.ts";
+import { osHomeHref, shellText, type ShellLocale } from "./shell-text.ts";
 
 interface Focusable {
   focus(): void;
@@ -44,6 +45,8 @@ export interface UserMenuProps {
   signOut?: ReactNode;
   /** The avatar button's accessible name. */
   label?: string;
+  /** The language of the words and of the asafarim.site link (default English). */
+  locale?: ShellLocale;
 }
 
 /** Two letters for an avatar: "ali.safari@x" → "AS", "ali@x" → "AL"; "#" for no letters, "?" for nothing. */
@@ -117,11 +120,15 @@ export function UserMenu({
   name,
   email,
   accountHref = ACCOUNT_URL,
-  home = OS_HOME,
+  home: homeProp = OS_HOME,
   signOut,
-  label = "Your account menu",
+  label: labelProp,
+  locale = "en",
 }: UserMenuProps) {
-  const shownName = name || email || "Signed in";
+  const t = shellText(locale);
+  const label = labelProp ?? t.accountMenu;
+  const home = homeProp === OS_HOME ? { href: osHomeHref(locale), label: t.osHome } : homeProp;
+  const shownName = name || email || t.signedIn;
   const shownEmail = email && email !== shownName ? email : null;
   const initials = initialsOf(name || email);
   const hue = { "--u-hue": hueOf(email || name) } as object;
@@ -241,7 +248,7 @@ export function UserMenu({
               data-testid="user-menu-account"
             >
               <PersonIcon />
-              Your account
+              {t.yourAccount}
             </a>
           ) : null}
           {homeHref && home ? (

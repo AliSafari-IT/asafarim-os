@@ -1,4 +1,5 @@
 "use client";
+import { useMessages } from "./I18n";
 /**
  * The documents on the left (#80): folders with readable names, a filter box that keeps the matching
  * documents and the folders above them, and the open document marked as the current page.
@@ -62,16 +63,17 @@ function Branch({ nodes, selected, onOpen }: { nodes: NavNode[]; selected?: stri
 }
 
 export function DocTree({ nodes, selected, onOpen }: { nodes: NavNode[]; selected?: string; onOpen?: () => void }) {
+  const m = useMessages();
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const shown = useMemo(() => filterTree(nodes, q), [nodes, q]);
   return (
     <>
       <label className="filter">
-        <span className="visually-hidden">Filter documents</span>
+        <span className="visually-hidden">{m.filterDocuments}</span>
         <input
           type="search"
-          placeholder="Filter documents"
+          placeholder={m.filterDocuments}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           data-testid="tree-filter"
@@ -82,7 +84,7 @@ export function DocTree({ nodes, selected, onOpen }: { nodes: NavNode[]; selecte
         <Branch key={q} nodes={shown} selected={selected} onOpen={onOpen} />
       ) : (
         <p className="muted" data-testid="tree-empty">
-          {q ? "No document matches." : "No documents yet."}
+          {q ? m.noMatchDoc : m.noDocumentsYet}
         </p>
       )}
     </>

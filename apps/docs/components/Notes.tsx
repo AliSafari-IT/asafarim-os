@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { findQuote } from "@/lib/quote";
 import { IssueDialog } from "./IssueDialog";
+import { useMessages } from "./I18n";
 import { IssueLink } from "./IssueLink";
 
 export interface NoteView {
@@ -35,7 +36,6 @@ export interface NoteView {
 
 const HEADINGS = "h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]";
 const BLOCKS = "p, li, td, th, h1, h2, h3, h4, h5, h6, pre, blockquote, dt, dd, figcaption";
-const ISSUES_NOT_SET_UP = "Not set up yet: the server needs DOCS_AI_API_KEY and DOCS_ISSUES_TOKEN.";
 const MAX_QUOTE = 1000;
 
 /** The document's text nodes in order, as a reader sees them: no heading anchors, no drawn charts. */
@@ -111,6 +111,7 @@ export function Notes({
   issues: IssuesState;
   children: React.ReactNode;
 }) {
+  const m = useMessages();
   const router = useRouter();
   const wrap = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -247,7 +248,7 @@ export function Notes({
       setError(answer?.message ?? `The note couldn't be saved (${res.status}).`);
       return null;
     } catch {
-      setError("The note couldn't be saved: the app isn't reachable.");
+      setError(m.notSaved);
       return null;
     } finally {
       setBusy(false);
@@ -280,7 +281,7 @@ export function Notes({
     if (removing && (await send(`/api/notes/${removing.id}`, "DELETE"))) done();
   }
 
-  /** "Show in the text": scroll to the note's highlight and mark it. */
+  /** "{m.showInText}": scroll to the note's highlight and mark it. */
   const show = (id: string) => {
     const range = ranges.current.get(id);
     if (!range) return;
@@ -306,7 +307,7 @@ export function Notes({
               className="secondary small"
               onClick={() => open({ kind: "new", headingId: hovered.headingId, quote: "" })}
             >
-              Add note
+              {m.addNote}
             </button>
             <IssueButton
               issues={issues}
@@ -318,14 +319,14 @@ export function Notes({
           <div
             className="selection-tools"
             role="toolbar"
-            aria-label="Selected text"
+            aria-label={m.selectedText}
             style={{ top: selection.top, left: selection.left }}
             data-testid="selection-tools"
             // Keep the selection while a button is pressed.
             onMouseDown={(e) => e.preventDefault()}
           >
             <button type="button" className="small" onClick={() => open({ kind: "new", ...selection })}>
-              Add note
+              {m.addNote}
             </button>
             <IssueButton issues={issues} onClick={() => open({ kind: "new", ...selection, issue: true })} />
           </div>
@@ -335,7 +336,7 @@ export function Notes({
       <section className="notes" aria-labelledby="notes-title" data-testid="notes">
         <div className="notes-head">
           <h2 id="notes-title">
-            Notes <span className="muted">({notes.length})</span>
+            {m.notes} <span className="muted">({notes.length})</span>
           </h2>
           {writable ? (
             <button
@@ -344,18 +345,18 @@ export function Notes({
               data-testid="add-note"
               onClick={() => open({ kind: "new", headingId: "", quote: "", pick: true })}
             >
-              Add a note
+              {m.addANote}
             </button>
           ) : null}
         </div>
         {!available ? (
           <p className="muted" data-testid="notes-unavailable">
-            Notes aren&apos;t available right now.
+            {m.notesUnavailable}
           </p>
         ) : notes.length === 0 ? (
           <p className="muted">
-            No notes on this document yet.
-            {writable ? " Select some text, or point at a heading, to add one." : null}
+            {m.noNotesOnDoc}
+            {writable ? m.selectToAdd : null}
           </p>
         ) : (
           <ol className="note-list">
@@ -373,15 +374,11 @@ export function Notes({
                     {n.headingId ? (
                       <a href={`#${encodeURIComponent(n.headingId)}`}>{n.headingTitle || n.headingId}</a>
                     ) : (
-                      "The whole document"
+                      m.wholeDocument
                     )}
                     {n.status === "changed" ? (
-                      <span
-                        className="badge warn"
-                        data-testid="text-changed"
-                        title="The document changed: the text this note quoted isn't in it any more."
-                      >
-                        text changed
+                      <span className="badge warn" data-testid="text-changed" title={m.textChangedWhy}>
+                        {m.textChanged}
                       </span>
                     ) : null}
                   </p>
@@ -410,7 +407,7 @@ export function Notes({
                     {writable ? (
                       <>
                         <button type="button" className="link" onClick={() => open({ kind: "edit", note: n })}>
-                          Edit
+                          {m.edit}
                         </button>
                         <button
                           type="button"
@@ -421,7 +418,7 @@ export function Notes({
                             requestAnimationFrame(() => confirm.current?.showModal());
                           }}
                         >
-                          Delete
+                          {m.delete}
                         </button>
                       </>
                     ) : null}
@@ -436,16 +433,16 @@ export function Notes({
       <dialog ref={editor} className="note-editor" aria-labelledby="note-editor-title" onClose={() => setDraft(null)}>
         {draft ? (
           <form onSubmit={save}>
-            <h2 id="note-editor-title">{draft.kind === "edit" ? "Edit note" : "Add a note"}</h2>
+            <h2 id="note-editor-title">{draft.kind === "edit" ? m.editNote : m.addANote}</h2>
             {draft.kind === "edit" || !draft.pick ? (
               <p className="muted">
-                On <strong>{draftHeading ? titleOf(draftHeading) || draftHeading : "the whole document"}</strong>
+                {m.on} <strong>{draftHeading ? titleOf(draftHeading) || draftHeading : m.wholeDocument}</strong>
               </p>
             ) : (
               <label>
-                On
+                {m.on}
                 <select name="heading" defaultValue={draftHeading}>
-                  <option value="">The whole document</option>
+                  <option value="">{m.wholeDocument}</option>
                   {headings.map((h) => (
                     <option key={h.id} value={h.id}>
                       {h.title}
@@ -456,7 +453,7 @@ export function Notes({
             )}
             {draftQuote ? <blockquote className="note-quote">{draftQuote.slice(0, MAX_QUOTE)}</blockquote> : null}
             <label>
-              Note <span className="muted">(Markdown)</span>
+              {m.noteLabel} <span className="muted">{m.markdown}</span>
               <textarea
                 name="body"
                 rows={6}
@@ -472,10 +469,10 @@ export function Notes({
             ) : null}
             <div className="actions">
               <button type="button" className="secondary" onClick={() => editor.current?.close()}>
-                Cancel
+                {m.cancel}
               </button>
               <button type="submit" disabled={busy}>
-                {draft.kind === "new" && draft.issue ? "Save note and generate issue" : "Save note"}
+                {draft.kind === "new" && draft.issue ? m.saveNoteIssue : m.saveNote}
               </button>
             </div>
           </form>
@@ -488,8 +485,8 @@ export function Notes({
         aria-labelledby="note-delete-title"
         onClose={() => setRemoving(null)}
       >
-        <h2 id="note-delete-title">Delete this note?</h2>
-        <p>It can&apos;t be brought back.</p>
+        <h2 id="note-delete-title">{m.deleteTitle}</h2>
+        <p>{m.deleteWarn}</p>
         {error ? (
           <p className="error" role="alert">
             {error}
@@ -497,10 +494,10 @@ export function Notes({
         ) : null}
         <div className="actions">
           <button type="button" className="secondary" onClick={() => confirm.current?.close()}>
-            Cancel
+            {m.cancel}
           </button>
           <button type="button" className="danger" disabled={busy} onClick={remove}>
-            Delete
+            {m.delete}
           </button>
         </div>
       </dialog>
@@ -534,6 +531,7 @@ function IssueButton({
   onClick: () => void;
   className?: string;
 }) {
+  const m = useMessages();
   if (!issues.allowed) return null;
   if (!issues.ready) {
     return (
@@ -541,16 +539,16 @@ function IssueButton({
         type="button"
         className={className}
         aria-disabled="true"
-        title={ISSUES_NOT_SET_UP}
+        title={m.issuesNotSetUp}
         onClick={(e) => e.preventDefault()}
       >
-        Generate GitHub issue
+        {m.generateIssue}
       </button>
     );
   }
   return (
     <button type="button" className={className} onClick={onClick}>
-      Generate GitHub issue
+      {m.generateIssue}
     </button>
   );
 }

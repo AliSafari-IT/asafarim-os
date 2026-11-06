@@ -11,6 +11,8 @@
  * screen at its natural size.
  */
 import { useEffect, useId, useRef, useState } from "react";
+import { messagesFor, type Messages } from "@/lib/i18n";
+import { useMessages } from "./I18n";
 
 /** Dark when picked with the theme toggle (data-theme on <html>), else when the system is. */
 const dark = () => {
@@ -19,9 +21,12 @@ const dark = () => {
 };
 
 /** What a screen reader hears: the diagram's own `title`, if it has one. */
-export const mermaidLabel = (source: string) => {
+export const mermaidLabel = (
+  source: string,
+  words: Pick<Messages, "diagram" | "diagramTitled"> = messagesFor("en"),
+) => {
   const title = /^\s*title:?\s+(.+?)\s*$/m.exec(source)?.[1];
-  return title ? `Diagram: ${title}` : "Diagram";
+  return title ? words.diagramTitled(title) : words.diagram;
 };
 
 /** A diagram is shrunk to fit at most down to this part of its natural size; past that it scrolls. */
@@ -181,7 +186,9 @@ export function Mermaid({ source, children }: { source: string; children: React.
     };
   }, [id, source]);
 
-  const label = mermaidLabel(source);
+  const m = useMessages();
+  const heading = mermaidLabel(source, m);
+  const label = heading;
   return (
     <figure className="mermaid" data-state={state} data-testid="mermaid">
       <div
@@ -196,13 +203,13 @@ export function Mermaid({ source, children }: { source: string; children: React.
       {state !== "drawn" ? children : null}
       {state === "drawn" ? (
         <figcaption className="mermaid-tools">
-          {scrolls ? <span className="muted">Scroll sideways to see all of it.</span> : <span />}
+          {scrolls ? <span className="muted">{m.scrollSideways}</span> : <span />}
           <button type="button" className="mermaid-enlarge" onClick={() => big.current?.showModal()}>
-            Enlarge
+            {m.enlarge}
           </button>
         </figcaption>
       ) : null}
-      {state === "failed" ? <figcaption className="muted">This diagram can&apos;t be drawn.</figcaption> : null}
+      {state === "failed" ? <figcaption className="muted">{m.diagramFailed}</figcaption> : null}
       <dialog
         ref={big}
         className="mermaid-dialog"
@@ -210,8 +217,8 @@ export function Mermaid({ source, children }: { source: string; children: React.
         onClick={(e) => e.target === big.current && big.current?.close()}
       >
         <form method="dialog" className="mermaid-dialog-bar">
-          <span>{label.replace(/^Diagram: /, "")}</span>
-          <button type="submit">Close</button>
+          <span>{heading === m.diagram ? heading : heading.slice(heading.indexOf(":") + 2)}</span>
+          <button type="submit">{m.close}</button>
         </form>
         {/* The same sanitized SVG mermaid drew above (securityLevel strict), at its natural size. */}
         <div className="mermaid-dialog-body" dangerouslySetInnerHTML={{ __html: svg }} />

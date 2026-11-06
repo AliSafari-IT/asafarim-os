@@ -1,4 +1,6 @@
 import { AppBrand, AppSwitcher, UserMenu } from "@asafarim/app-sdk/react";
+import { getLocale } from "@asafarim/locale/next";
+import { LocaleSelector } from "@asafarim/locale/react";
 import { ThemeToggle } from "@asafarim/theme/react";
 import { forbidden, unauthorized } from "next/navigation";
 import { signOutAction } from "../actions";
@@ -8,6 +10,7 @@ import { Markdown } from "@/components/Markdown";
 import { anchorNote, sectionsOf, type Section } from "@/lib/anchor";
 import { auth } from "@/lib/auth";
 import { gate } from "@/lib/gate";
+import { messagesFor } from "@/lib/i18n";
 import { getNotes, issueViaFlow, type Note } from "@/lib/notes";
 import { readableName } from "@/lib/outline";
 import { getPlatform } from "@/lib/platform";
@@ -29,6 +32,8 @@ export default async function NotesPage({
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
+  const locale = await getLocale();
+  const m = messagesFor(locale);
   const g = await gate("docs.read");
   if (!g.ok && g.status === 401) unauthorized();
   if (!g.ok && g.status === 403) forbidden();
@@ -87,7 +92,7 @@ export default async function NotesPage({
   return (
     <>
       <a className="skip" href="#all-notes">
-        Skip to the notes
+        {m.skipToNotes}
       </a>
       <header className="topbar os-topbar">
         <div className="brand">
@@ -95,19 +100,27 @@ export default async function NotesPage({
         </div>
         <div className="who">
           <a className="button secondary" href="/">
-            Documents
+            {m.documents}
           </a>
-          <ThemeToggle />
-          <AppSwitcher apps={apps} current="docs" fallback={{ name: "Docs", glyph: "DC" }} variant="icon" />
+          <LocaleSelector locale={locale} />
+          <ThemeToggle locale={locale} />
+          <AppSwitcher
+            apps={apps}
+            current="docs"
+            fallback={{ name: "Docs", glyph: "DC" }}
+            variant="icon"
+            locale={locale}
+          />
           <span data-testid="who">
             <UserMenu
               name={session?.user?.name}
               email={session?.user?.email}
+              locale={locale}
               signOut={
                 <form action={signOutAction}>
                   <button type="submit" data-testid="sign-out">
                     <SignOutIcon />
-                    Sign out
+                    {m.signOut}
                   </button>
                 </form>
               }
@@ -117,22 +130,22 @@ export default async function NotesPage({
       </header>
       <main id="all-notes" className="document" tabIndex={-1}>
         <article>
-          <h1>Your notes</h1>
+          <h1>{m.yourNotes}</h1>
           {!store || !all ? (
             <p className="notice" role="status" data-testid="notes-unavailable">
-              Notes aren&apos;t available right now.
+              {m.notesUnavailable}
             </p>
           ) : all.length === 0 ? (
             <p className="lead">
-              No notes yet. Open a document, select some text and choose <strong>Add note</strong>.
+              {m.noNotesYetPage} <strong>{m.addNoteBold}</strong>.
             </p>
           ) : (
             <>
               <form className="notes-filter" method="get" action="/notes">
                 <label>
-                  Document
+                  {m.document}
                   <select name="doc" defaultValue={filter ?? ""} data-testid="notes-filter">
-                    <option value="">All documents</option>
+                    <option value="">{m.allDocuments}</option>
                     {docsWithNotes.map((p) => (
                       <option key={p} value={p}>
                         {p}
@@ -141,10 +154,10 @@ export default async function NotesPage({
                   </select>
                 </label>
                 <button type="submit" className="secondary">
-                  Show
+                  {m.show}
                 </button>
               </form>
-              <p className="muted">Notes are private: only you see them. Edit or delete a note on its document.</p>
+              <p className="muted">{m.notesPrivate}</p>
               {groups.map((group) => (
                 <section
                   key={group.path}
@@ -162,7 +175,7 @@ export default async function NotesPage({
                   </h2>
                   {group.sections === "gone" ? (
                     <p className="notice" role="status">
-                      This document isn&apos;t in the source any more; its notes are kept.
+                      {m.goneKept}
                     </p>
                   ) : null}
                   <ol className="note-list">
@@ -175,17 +188,13 @@ export default async function NotesPage({
                           <article className="note" data-testid="note" data-status={at?.status ?? "unknown"}>
                             <p className="note-where">
                               {sections ? (
-                                <a href={docHref(n.docPath, at?.headingId)}>{title || "The whole document"}</a>
+                                <a href={docHref(n.docPath, at?.headingId)}>{title || m.wholeDocument}</a>
                               ) : (
-                                n.headingId || "The whole document"
+                                n.headingId || m.wholeDocument
                               )}
                               {at?.status === "changed" ? (
-                                <span
-                                  className="badge warn"
-                                  data-testid="text-changed"
-                                  title="The document changed: the text this note quoted isn't in it any more."
-                                >
-                                  text changed
+                                <span className="badge warn" data-testid="text-changed" title={m.textChangedWhy}>
+                                  {m.textChanged}
                                 </span>
                               ) : null}
                             </p>

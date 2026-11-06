@@ -1,24 +1,31 @@
+import { getLocale } from "@asafarim/locale/next";
+import { LocaleSelector } from "@asafarim/locale/react";
 import { ThemeToggle } from "@asafarim/theme/react";
+import { messagesFor } from "@/lib/i18n";
 import { AdminLogo } from "@/components/AdminLogo";
 import { signOutAction } from "@/lib/sign-out";
 
 /** Shown (with a real 403) to a signed-in person who doesn't hold core.admin. */
-export default function Forbidden() {
+export default async function Forbidden() {
+  const locale = await getLocale();
+  const m = messagesFor(locale);
   return (
     <main className="center" id="main">
-      <ThemeToggle className="center-toggle" />
+      <span className="center-toggle">
+        <LocaleSelector locale={locale} />
+        <ThemeToggle locale={locale} />
+      </span>
       <div className="center-mark">
         <AdminLogo size={72} />
       </div>
-      <h1>403: not allowed</h1>
+      <h1>{m.forbiddenTitle}</h1>
       <div className="card" role="alert">
         <p>
-          The Admin console needs the platform role <code>core.admin</code>, and your account doesn&apos;t hold it. Ask
-          an administrator to grant it.
+          {m.forbiddenBefore} <code>core.admin</code>, {m.forbiddenAfter}
         </p>
         <form action={signOutAction}>
           <button type="submit" className="secondary">
-            Sign out
+            {m.signOut}
           </button>
         </form>
       </div>

@@ -1,20 +1,28 @@
+import { getLocale } from "@asafarim/locale/next";
+import { LocaleSelector } from "@asafarim/locale/react";
 import { ThemeToggle } from "@asafarim/theme/react";
+import { messagesFor } from "@/lib/i18n";
 import { signOutAction } from "./actions";
 
 /** 403: signed in, but without flow.read. A plain page: no workflows, runs or counts. */
-export default function Forbidden() {
+export default async function Forbidden() {
+  const locale = await getLocale();
+  const m = messagesFor(locale);
   return (
     <main className="signin" data-testid="forbidden">
-      <ThemeToggle className="corner-toggle" />
+      <span className="corner-toggle">
+        <LocaleSelector locale={locale} />
+        <ThemeToggle locale={locale} />
+      </span>
       <div className="card signin-card">
-        <h1>You don&apos;t have access</h1>
+        <h1>{m.noAccess}</h1>
         <p className="muted">
-          Flow needs the permission <span className="perm">flow.read</span>. Ask an admin for the{" "}
-          <span className="perm">flow.viewer</span> role.
+          {m.needsBefore} <span className="perm">flow.read</span>. {m.askAdminFor}{" "}
+          <span className="perm">flow.viewer</span>.
         </p>
         <form action={signOutAction}>
           <button type="submit" className="secondary">
-            Sign out
+            {m.signOut}
           </button>
         </form>
       </div>
