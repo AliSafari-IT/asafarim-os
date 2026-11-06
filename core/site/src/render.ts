@@ -7,8 +7,11 @@
  * `script-src 'self'` and `connect-src` identity only (sites/asafarim-os.caddy).
  */
 import { readFileSync } from "node:fs";
+import { alternateLinks, localeSwitcher, OG_LOCALES } from "../../../packages/locale/src/index.ts";
+import { type Locale, localePath, PRODUCT_HREFS, type SiteText, TEXT } from "./i18n.ts";
 import { LEGAL_DOCS, LEGAL_UPDATED, type LegalBlock, type LegalDoc } from "./legal.ts";
-import { type App, pullRequestUrl, type Progress, type Surface, type SurfaceStatus } from "./progress.ts";
+import { type App, pullRequestUrl, type Progress, type Surface } from "./progress.ts";
+import { localizeProgress } from "./progress-i18n.ts";
 
 const { version: siteVersion } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   version: string;
@@ -24,12 +27,16 @@ export interface RenderOptions {
   imageSizes: ReadonlyMap<string, ImageSize>;
   /** The light/dark toggle's markup (@asafarim/theme's toggle.html), put in the top bar. Default: none. */
   themeToggle?: string;
+  /** The page's language (i18n.ts). Default: English, at /. */
+  locale?: Locale;
 }
 
 export const SITE_URL = "https://asafarim.site/";
-export const TITLE = "ASafariM OS: the operating system apps plug into";
-export const DESCRIPTION =
-  "ASafariM OS is a base platform that apps plug into. Every app gets sign-in, permissions, routing, events, lifecycle and monitoring from the OS instead of building them itself.";
+export const TITLE = TEXT.en.title;
+export const DESCRIPTION = TEXT.en.description;
+
+/** A page's absolute URL in a language: "" the home page, "privacy" a legal page. */
+export const pageUrl = (locale: Locale, page = "") => `${SITE_URL.slice(0, -1)}${localePath(locale, page)}`;
 
 const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
@@ -45,11 +52,11 @@ export const OG_IMAGE = { file: "og.png", width: 1200, height: 630 } as const;
  * Open Graph and Twitter card tags: how a link to the page looks when shared (LinkedIn, WhatsApp, Slack, X).
  * Crawlers fetch the image themselves, so its full URL does not need the page's CSP.
  */
-export function shareMeta(title: string, description: string, url: string): string {
+export function shareMeta(title: string, description: string, url: string, locale: Locale = "en"): string {
   return `
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="ASafariM OS" />
-    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale" content="${OG_LOCALES[locale]}" />
     <meta property="og:url" content="${escapeHtml(url)}" />
     <meta property="og:title" content="${escapeHtml(title)}" />
     <meta property="og:description" content="${escapeHtml(description)}" />
@@ -64,7 +71,7 @@ export function shareMeta(title: string, description: string, url: string): stri
  * schema.org JSON-LD for the home page: the organisation and the site. A JSON data block, not a script: the
  * CSP's script-src does not apply to it and browsers never run it. "<" is escaped so no text can close it.
  */
-export function structuredData(repo: string): string {
+export function structuredData(repo: string, locale: Locale = "en"): string {
   const graph = {
     "@context": "https://schema.org",
     "@graph": [
@@ -79,10 +86,10 @@ export function structuredData(repo: string): string {
       {
         "@type": "WebSite",
         "@id": `${SITE_URL}#website`,
-        url: SITE_URL,
+        url: pageUrl(locale),
         name: "ASafariM OS",
-        description: DESCRIPTION,
-        inLanguage: "en",
+        description: TEXT[locale].description,
+        inLanguage: locale,
         publisher: { "@id": `${SITE_URL}#org` },
       },
     ],
@@ -91,12 +98,10 @@ export function structuredData(repo: string): string {
     <script type="application/ld+json">${JSON.stringify(graph).replaceAll("<", "\\u003c")}</script>`;
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** "2026-10-03" → "3 Oct 2026", the same in every locale and time zone. */
-export function formatDate(iso: string): string {
+/** "2026-10-03" → "3 Oct 2026" ("3 okt 2026" in Dutch), the same in every time zone. */
+export function formatDate(iso: string, locale: Locale = "en"): string {
   const [year, month, day] = iso.split("-").map(Number);
-  return `${day} ${MONTHS[(month ?? 1) - 1]} ${year}`;
+  return `${day} ${TEXT[locale].months[(month ?? 1) - 1]} ${year}`;
 }
 
 const anchor = (href: string, label: string, extra = "") =>
@@ -152,72 +157,77 @@ const HERO_ART = `
         <text class="core-text" x="120" y="129" text-anchor="middle">OS</text>
       </svg>`;
 
-function renderTopbar(themeToggle: string, home = "./"): string {
+/** The top bar's language selector (@asafarim/locale): to the same page in each language. */
+function localeMenu(locale: Locale, page: string): string {
+  return localeSwitcher(locale, (l) => localePath(l, page), { className: "nav-locale-selector" });
+}
+
+function renderTopbar(t: SiteText, locale: Locale, themeToggle: string, page = ""): string {
+  const home = localePath(locale);
+  const products = (key: keyof typeof PRODUCT_HREFS) => PRODUCT_HREFS[key][locale];
   return `
     <div class="os-topbar">
-    <nav class="topbar" aria-label="Main">
+    <nav class="topbar" aria-label="${escapeHtml(t.nav.main)}">
       <a class="brand" href="${home}">${BRAND_MARK}<span class="brand-name">ASafariM <span>OS</span></span></a>
-      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Open navigation" hidden>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="${escapeHtml(t.nav.open)}" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
       </button>
       <ul class="primary-nav" id="primary-nav">
         <li>
           <details class="nav-dropdown">
-            <summary>Apps <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3.5 6 4.5 4 4.5-4" /></svg></summary>
+            <summary>${t.nav.apps} <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3.5 6 4.5 4 4.5-4" /></svg></summary>
             <div class="nav-panel">
-              <div class="nav-panel-heading"><strong>Your workspace</strong><span>Tools connected to ASafariM OS</span></div>
+              <div class="nav-panel-heading"><strong>${t.nav.workspace}</strong><span>${t.nav.workspaceLead}</span></div>
               <div class="nav-card-grid">
                 <a class="nav-card" href="${APP_LINKS.docs.href}" aria-label="Docs">
                   <span class="nav-card-icon nav-card-docs" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4.5h4M9 12h6M9 15.5h6" /></svg></span>
-                  <span class="nav-card-copy"><strong>Docs</strong><small>Guides and your workspace</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
+                  <span class="nav-card-copy"><strong>Docs</strong><small>${t.nav.docs}</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
                 </a>
                 <a class="nav-card" href="${APP_LINKS.flow.href}" aria-label="Flow">
                   <span class="nav-card-icon nav-card-flow" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="5" height="5" rx="1" /><rect x="15" y="15" width="5" height="5" rx="1" /><path d="M9 6.5h4a2 2 0 0 1 2 2v4.5M15 13v2" /></svg></span>
-                  <span class="nav-card-copy"><strong>Flow</strong><small>Automate work with workflows</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
+                  <span class="nav-card-copy"><strong>Flow</strong><small>${t.nav.flow}</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
                 </a>
-                <a class="nav-card" href="${APP_LINKS.breinhapWeb.href}" aria-label="Breinhap web">
+                <a class="nav-card" href="${products("breinhapWeb")}" aria-label="Breinhap web">
                   <span class="nav-card-icon nav-card-docs" aria-hidden="true">BH</span>
-                  <span class="nav-card-copy"><strong>Breinhap web</strong><small>Website; browser missions are coming later</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
+                  <span class="nav-card-copy"><strong>Breinhap web</strong><small>${t.nav.breinhapWeb}</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
                 </a>
                 <a class="nav-card" href="${APP_LINKS.breinhapManagement.href}" aria-label="Breinhap management">
                   <span class="nav-card-icon nav-card-flow" aria-hidden="true">BH</span>
-                  <span class="nav-card-copy"><strong>Breinhap management</strong><small>Workspace for invited adults</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
+                  <span class="nav-card-copy"><strong>Breinhap management</strong><small>${t.nav.breinhapManagement}</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
                 </a>
               </div>
-              <p class="nav-panel-foot">One sign-in. A connected workspace. <a href="${home}#apps">Every app</a></p>
+              <p class="nav-panel-foot">${t.nav.appsFoot} <a href="${home}#apps">${t.nav.everyApp}</a></p>
             </div>
           </details>
         </li>
         <li>
           <details class="nav-dropdown">
-            <summary>Products <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3.5 6 4.5 4 4.5-4" /></svg></summary>
+            <summary>${t.nav.products} <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3.5 6 4.5 4 4.5-4" /></svg></summary>
             <div class="nav-panel nav-panel-compact">
-              <div class="nav-panel-heading"><strong>More from ASafariM</strong><span>Explore our products</span></div>
-              <a class="nav-product-link" href="${APP_LINKS.breinhap.href}" aria-label="Breinhap"><strong>Breinhap</strong><span>Short study missions for secondary school</span><span aria-hidden="true">↗</span></a>
-              <a class="nav-product-link" href="${APP_LINKS.igs.href}" aria-label="IGS-Pharma"><strong>IGS-Pharma</strong><span>Belgian online pharmacy with a pharmacist</span><span aria-hidden="true">↗</span></a>
-              <p class="nav-panel-foot"><a href="${home}#apps-products">Webshop, Android app and status</a></p>
+              <div class="nav-panel-heading"><strong>${t.nav.moreFrom}</strong><span>${t.nav.explore}</span></div>
+              <a class="nav-product-link" href="${products("breinhap")}" aria-label="Breinhap"><strong>Breinhap</strong><span>${t.nav.breinhap}</span><span aria-hidden="true">↗</span></a>
+              <a class="nav-product-link" href="${products("igs")}" aria-label="IGS-Pharma"><strong>IGS-Pharma</strong><span>${t.nav.igs}</span><span aria-hidden="true">↗</span></a>
+              <p class="nav-panel-foot"><a href="${home}#apps-products">${t.nav.productsFoot}</a></p>
             </div>
           </details>
         </li>
-        <li><a class="nav-link" href="#shipped">Platform</a></li>
-${themeToggle ? `        <li class="nav-theme">${themeToggle.trim()}</li>\n` : ""}        <li id="account">${anchor(APP_LINKS.signIn.href, APP_LINKS.signIn.label, ' class="btn btn-small"')}</li>
+        <li><a class="nav-link" href="${home}#shipped">${t.nav.platform}</a></li>
+        <li class="nav-locale">${localeMenu(locale, page)}</li>
+${themeToggle ? `        <li class="nav-theme">${themeToggle.trim()}</li>\n` : ""}        <li id="account">${anchor(APP_LINKS.signIn.href, t.nav.signIn, ' class="btn btn-small"')}</li>
       </ul>
     </nav>
     </div>`;
 }
 
-function renderAccess(): string {
+function renderAccess(t: SiteText): string {
   return `
       <p class="access" id="access">
-        Have access? ${anchor(APP_LINKS.signIn.href, "Sign in")}, then open ${anchor(APP_LINKS.docs.href, "Docs")} or
-        ${anchor(APP_LINKS.flow.href, "Flow")}, if your account has access.
-        No access yet? Sign in with your email and choose <em>Request connection</em>: an admin approves it.
+        ${t.access(anchor(APP_LINKS.signIn.href, t.nav.signIn), anchor(APP_LINKS.docs.href, "Docs"), anchor(APP_LINKS.flow.href, "Flow"))}
       </p>`;
 }
 
-const BENEFITS = ["Sign-in", "Permissions", "Routing", "Events", "Lifecycle", "Monitoring"];
-
-function renderShipped(progress: Progress): string {
+/** The milestones: a changelog of merged pull requests, English on every page (lang="en" elsewhere). */
+function renderShipped(progress: Progress, t: SiteText, locale: Locale): string {
   const items = progress.shipped
     .map((m) => {
       const prs = m.prs.map((n) => anchor(pullRequestUrl(progress.repo, n), `#${n}`)).join(", ");
@@ -226,44 +236,44 @@ function renderShipped(progress: Progress): string {
           <div class="milestone-head">
             <span class="tag">${escapeHtml(m.id)}</span>
             <h3>${escapeHtml(m.title)}</h3>
-            <time datetime="${escapeHtml(m.date)}">${escapeHtml(formatDate(m.date))}</time>
+            <time datetime="${escapeHtml(m.date)}">${escapeHtml(formatDate(m.date, locale))}</time>
           </div>
           <p>${escapeHtml(m.summary)}</p>
-          <p class="prs">Merged pull requests: ${prs}</p>
+          <p class="prs"${locale === "en" ? "" : ` lang="${locale}"`}>${escapeHtml(t.shipped.prs)} ${prs}</p>
         </li>`;
     })
     .join("");
   return `
       <section id="shipped" aria-labelledby="shipped-title">
-        <h2 id="shipped-title">Shipped</h2>
-        <p class="section-lead">What is built and merged so far, phase by phase.</p>
-        <ol class="milestones">${items}
+        <h2 id="shipped-title">${escapeHtml(t.shipped.title)}</h2>
+        <p class="section-lead">${escapeHtml(t.shipped.lead)}${t.shipped.inEnglish ? ` ${escapeHtml(t.shipped.inEnglish)}` : ""}</p>
+        <ol class="milestones"${locale === "en" ? "" : ' lang="en"'}>${items}
         </ol>
       </section>`;
 }
 
-function renderScreenshots(progress: Progress, sizes: RenderOptions["imageSizes"]): string {
+function renderScreenshots(progress: Progress, sizes: RenderOptions["imageSizes"], t: SiteText): string {
   const figures = progress.screenshots
     .map((s) => {
       const size = sizes.get(s.file);
       if (!size) throw new Error(`render: no size for screenshots/${s.file} (is the file there?)`);
       return `
           <figure>
-            <img src="screenshots/${escapeHtml(s.file)}" alt="${escapeHtml(s.alt)}" width="${size.width}" height="${size.height}" loading="lazy" decoding="async" />
+            <img src="/screenshots/${escapeHtml(s.file)}" alt="${escapeHtml(s.alt)}" width="${size.width}" height="${size.height}" loading="lazy" decoding="async" />
             <figcaption><strong>${escapeHtml(s.title)}.</strong> ${escapeHtml(s.caption)}</figcaption>
           </figure>`;
     })
     .join("");
   return `
       <section id="screenshots" aria-labelledby="screenshots-title">
-        <h2 id="screenshots-title">Screenshots</h2>
-        <p class="section-lead">Taken by Playwright from the end-to-end test environment, not drawn by hand.</p>
+        <h2 id="screenshots-title">${escapeHtml(t.screenshots.title)}</h2>
+        <p class="section-lead">${escapeHtml(t.screenshots.lead)}</p>
         <div class="gallery">${figures}
         </div>
       </section>`;
 }
 
-function renderRoadmap(progress: Progress): string {
+function renderRoadmap(progress: Progress, t: SiteText): string {
   const items = progress.roadmap
     .map(
       (r) => `
@@ -275,21 +285,13 @@ function renderRoadmap(progress: Progress): string {
     .join("");
   return `
       <section id="roadmap" aria-labelledby="roadmap-title">
-        <h2 id="roadmap-title">Roadmap</h2>
+        <h2 id="roadmap-title">${escapeHtml(t.roadmap.title)}</h2>
         <ol class="roadmap">${items}
         </ol>
       </section>`;
 }
 
-const STATUS_LABELS: Record<SurfaceStatus, string> = {
-  live: "Live",
-  "early-access": "Early access",
-  testing: "Testing",
-  "in-development": "In development",
-  "staff-only": "Staff only",
-};
-
-function renderSurface(surface: Surface): string {
+function renderSurface(surface: Surface, t: SiteText): string {
   const address = surface.href
     ? anchor(surface.href, surface.address)
     : `<span class="surface-address">${escapeHtml(surface.address)}</span>`;
@@ -297,18 +299,18 @@ function renderSurface(surface: Surface): string {
               <li class="surface">
                 <span class="surface-kind">${escapeHtml(surface.kind)}</span>
                 ${address}
-                <span class="status status-${surface.status}">${escapeHtml(STATUS_LABELS[surface.status])}</span>
+                <span class="status status-${surface.status}">${escapeHtml(t.status[surface.status])}</span>
                 <p class="surface-note">${escapeHtml(surface.note)}</p>
               </li>`;
 }
 
-function renderAppCard(app: App): string {
+function renderAppCard(app: App, t: SiteText): string {
   return `
           <li class="app-card app-card-${app.group}" id="app-${escapeHtml(app.id)}">
             <h4>${escapeHtml(app.name)}</h4>
             <p class="app-tagline">${escapeHtml(app.tagline)}</p>
             <p class="app-summary">${escapeHtml(app.summary)}</p>
-            <ul class="surfaces" aria-label="Where to find ${escapeHtml(app.name)}">${app.surfaces.map(renderSurface).join("")}
+            <ul class="surfaces" aria-label="${escapeHtml(t.apps.whereToFind(app.name))}">${app.surfaces.map((s) => renderSurface(s, t)).join("")}
             </ul>
           </li>`;
 }
@@ -316,77 +318,88 @@ function renderAppCard(app: App): string {
 /**
  * The apps (asafarim-os#312): the OS's own apps, then the products ASafariM builds on their own domains
  * (IGS-Pharma, Breinhap), each with every place it can be reached and how far that is. Products'
- * pages are linked in English (this page is English).
+ * pages are linked in the page's language where they have it (i18n.ts PRODUCT_HREFS).
  */
-function renderApps(progress: Progress): string {
+function renderApps(progress: Progress, t: SiteText): string {
   const group = (g: App["group"]) =>
     progress.apps
       .filter((a) => a.group === g)
-      .map(renderAppCard)
+      .map((a) => renderAppCard(a, t))
       .join("");
   return `
       <section id="apps" aria-labelledby="apps-title">
-        <h2 id="apps-title">Apps</h2>
-        <p class="section-lead">What runs on ASafariM OS, and the products built alongside it: every place you can reach each one, and how far it is.</p>
-        <h3 class="apps-group" id="apps-os">Built into the OS</h3>
+        <h2 id="apps-title">${escapeHtml(t.apps.title)}</h2>
+        <p class="section-lead">${escapeHtml(t.apps.lead)}</p>
+        <h3 class="apps-group" id="apps-os">${escapeHtml(t.apps.os)}</h3>
         <ul class="app-grid" aria-labelledby="apps-os">${group("os")}
         </ul>
-        <h3 class="apps-group" id="apps-products">Products built by ASafariM</h3>
-        <p class="section-lead">Their own code and domains, with the OS's look; their project pages are served by the OS stack.</p>
+        <h3 class="apps-group" id="apps-products">${escapeHtml(t.apps.products)}</h3>
+        <p class="section-lead">${escapeHtml(t.apps.productsLead)}</p>
         <ul class="app-grid app-grid-products" aria-labelledby="apps-products">${group("product")}
         </ul>
       </section>`;
 }
 
-/** The whole page. */
-export function renderPage(progress: Progress, options: RenderOptions): string {
+/** The <head> lines every page shares: icons, the shared look and the language selector (@asafarim/locale). */
+function assets(): string {
+  return `
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/theme.css" />
+    <link rel="stylesheet" href="/selector.css" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/theme.js"></script>
+    <script src="/selector.js" defer></script>
+    <script src="/session.js" defer></script>`;
+}
+
+/** The whole page, in `options.locale` (English by default). */
+export function renderPage(englishProgress: Progress, options: RenderOptions): string {
+  const locale = options.locale ?? "en";
+  const t = TEXT[locale];
+  const progress = localizeProgress(englishProgress, locale);
   const links = progress.links.map((l) => anchor(l.href, l.label, ' class="btn"')).join("\n          ");
-  const benefits = BENEFITS.map((b) => `<li>${escapeHtml(b)}</li>`).join("");
+  const benefits = t.benefits.map((b) => `<li>${escapeHtml(b)}</li>`).join("");
+  const url = pageUrl(locale);
   return `<!doctype html>
-<html lang="en">
+<html lang="${locale}">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(TITLE)}</title>
-    <meta name="description" content="${escapeHtml(DESCRIPTION)}" />
+    <title>${escapeHtml(t.title)}</title>
+    <meta name="description" content="${escapeHtml(t.description)}" />
     <meta name="color-scheme" content="light dark" />
-    <link rel="canonical" href="${SITE_URL}" />${shareMeta(TITLE, DESCRIPTION, SITE_URL)}${structuredData(progress.repo)}
-    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="theme.css" />
-    <link rel="stylesheet" href="styles.css" />
-    <script src="theme.js"></script>
-    <script src="session.js" defer></script>
+    <link rel="canonical" href="${url}" />
+    ${alternateLinks((l) => pageUrl(l))}${shareMeta(t.title, t.description, url, locale)}${structuredData(progress.repo, locale)}${assets()}
   </head>
-  <body>${renderTopbar(options.themeToggle ?? "")}
+  <body>${renderTopbar(t, locale, options.themeToggle ?? "")}
     <header class="hero">${HERO_ART}
-      <span class="badge">In development · updated ${escapeHtml(formatDate(progress.updated))}</span>
+      <span class="badge">${escapeHtml(t.badge(formatDate(progress.updated, locale)))}</span>
       <h1>ASafariM <span>OS</span></h1>
       <p class="lead">
-        A base platform: an operating system that apps plug into. Every app gets the OS's advantages
-        without building them itself.
+        ${escapeHtml(t.lead)}
       </p>
-      <ul class="benefits" aria-label="What every app gets from the OS">${benefits}</ul>
+      <ul class="benefits" aria-label="${escapeHtml(t.benefitsLabel)}">${benefits}</ul>
       <p class="note">
-        ASafariM OS is a new system with its own apps. It is not a migration of the asafarim.com
-        platform, which keeps running as it is.
+        ${escapeHtml(t.note)}
       </p>
-      <nav class="actions" aria-label="Links">
+      <nav class="actions" aria-label="${escapeHtml(t.linksLabel)}">
           ${links}
-      </nav>${renderAccess()}
+      </nav>${renderAccess(t)}
     </header>
-    <main>${renderApps(progress)}${renderShipped(progress)}${renderScreenshots(progress, options.imageSizes)}${renderRoadmap(progress)}
+    <main>${renderApps(progress, t)}${renderShipped(progress, t, locale)}${renderScreenshots(progress, options.imageSizes, t)}${renderRoadmap(progress, t)}
     </main>
-${renderFooter(progress.repo)}
+${renderFooter(progress.repo, locale)}
   </body>
 </html>
 `;
 }
 
 /** The footer of every page here: the project's links, then the legal pages. */
-function renderFooter(repo: string): string {
-  const legal = LEGAL_DOCS.map((d) => anchor(`/${d.slug}`, d.label)).join(" · ");
+function renderFooter(repo: string, locale: Locale): string {
+  const t = TEXT[locale];
+  const legal = LEGAL_DOCS.map((d) => anchor(localePath(locale, d.slug), t.legal.labels[d.slug])).join(" · ");
   return `    <footer>
-      <p>ASafariM OS · Website v${siteVersion} · ${anchor(repo, "Source on GitHub")} · ${anchor(APP_LINKS.docs.href, "Docs")} · ${anchor(APP_LINKS.flow.href, "Flow")} · ${anchor(APP_LINKS.breinhap.href, "Breinhap")} · ${anchor(APP_LINKS.igs.href, "IGS-Pharma")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
+      <p>ASafariM OS · ${escapeHtml(t.footer.website)} v${siteVersion} · ${anchor(repo, t.footer.source)} · ${anchor(APP_LINKS.docs.href, "Docs")} · ${anchor(APP_LINKS.flow.href, "Flow")} · ${anchor(PRODUCT_HREFS.breinhap[locale], "Breinhap")} · ${anchor(PRODUCT_HREFS.igs[locale], "IGS-Pharma")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
       <p class="legal-links">${legal} · ${anchor("mailto:privacy@asafarim.site", "privacy@asafarim.site")}</p>
     </footer>`;
 }
@@ -407,8 +420,19 @@ function renderBlock(block: LegalBlock): string {
     .join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-/** A legal page (privacy, cookies, terms), served at /<slug>: the same top bar and footer as the home page. */
-export function renderLegalPage(doc: LegalDoc, options: { repo: string; themeToggle?: string }): string {
+/**
+ * A legal page (privacy, cookies, terms), served at /<slug> and /<locale>/<slug>: the same top bar and footer as
+ * the home page. The text itself is English until a reviewed translation exists: a translated page says so
+ * and marks the text lang="en".
+ */
+export function renderLegalPage(
+  doc: LegalDoc,
+  options: { repo: string; themeToggle?: string; locale?: Locale },
+): string {
+  const locale = options.locale ?? "en";
+  const t = TEXT[locale];
+  const english = locale === "en" ? "" : ' lang="en"';
+  const title = t.legal.titles[doc.slug];
   const toc = doc.sections.map((s) => `<li>${anchor(`#${s.id}`, s.heading)}</li>`).join("");
   const sections = doc.sections
     .map(
@@ -420,31 +444,30 @@ export function renderLegalPage(doc: LegalDoc, options: { repo: string; themeTog
     )
     .join("");
   const others = LEGAL_DOCS.filter((d) => d.slug !== doc.slug)
-    .map((d) => anchor(`/${d.slug}`, d.title))
+    .map((d) => anchor(localePath(locale, d.slug), t.legal.titles[d.slug]))
     .join(" · ");
+  const url = pageUrl(locale, doc.slug);
   return `<!doctype html>
-<html lang="en">
+<html lang="${locale}">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(doc.title)} · ASafariM OS</title>
-    <meta name="description" content="${escapeHtml(doc.description)}" />
+    <title>${escapeHtml(title)} · ASafariM OS</title>
+    <meta name="description" content="${escapeHtml(doc.description)}"${english} />
     <meta name="color-scheme" content="light dark" />
-    <link rel="canonical" href="${SITE_URL}${doc.slug}" />${shareMeta(`${doc.title} · ASafariM OS`, doc.description, `${SITE_URL}${doc.slug}`)}
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/theme.css" />
-    <link rel="stylesheet" href="/styles.css" />
-    <script src="/theme.js"></script>
-    <script src="/session.js" defer></script>
+    <link rel="canonical" href="${url}" />
+    ${alternateLinks((l) => pageUrl(l, doc.slug))}${shareMeta(`${title} · ASafariM OS`, doc.description, url, locale)}${assets()}
   </head>
-  <body>${renderTopbar(options.themeToggle ?? "", "/")}
+  <body>${renderTopbar(t, locale, options.themeToggle ?? "", doc.slug)}
     <main class="legal">
-      <h1>${escapeHtml(doc.title)}</h1>
+      <h1>${escapeHtml(title)}</h1>${t.legal.inEnglish ? `\n      <p class="legal-language" role="note">${escapeHtml(t.legal.inEnglish)}</p>` : ""}
+      <div class="legal-body"${english}>
       <p class="lead">${escapeHtml(doc.lead)}</p>
-      <nav class="legal-toc" aria-label="On this page"><ol>${toc}</ol></nav>${sections}
-      <p class="legal-meta">Last updated ${escapeHtml(formatDate(LEGAL_UPDATED))}. See also ${others}.</p>
+      <nav class="legal-toc" aria-label="${escapeHtml(t.legal.onThisPage)}"><ol>${toc}</ol></nav>${sections}
+      </div>
+      <p class="legal-meta">${escapeHtml(t.legal.updated(formatDate(LEGAL_UPDATED, locale)))} ${escapeHtml(t.legal.seeAlso)} ${others}.</p>
     </main>
-${renderFooter(options.repo)}
+${renderFooter(options.repo, locale)}
   </body>
 </html>
 `;

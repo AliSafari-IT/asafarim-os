@@ -1,0 +1,26 @@
+/* @asafarim/locale: the selector's mount and its no-JavaScript fallback (one link per language), in the
+   @asafarim/theme tokens. selector.js replaces the links with the country & language selector. */
+.locale-selector {
+  display: inline-flex;
+  align-items: center;
+}
+.locale-links {
+  display: inline-flex;
+  gap: 0.15rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.locale-links a,
+.locale-links span {
+  padding: 0.25rem 0.45rem;
+  border-radius: 0.4rem;
+  color: inherit;
+  text-decoration: none;
+}
+.locale-links a:hover,
+.locale-links a:focus-visible {
+  text-decoration: underline;
+}
+.locale-links [aria-current="true"] {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
