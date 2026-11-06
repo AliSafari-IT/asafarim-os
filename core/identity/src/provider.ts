@@ -325,6 +325,7 @@ export function createProvider(deps: ProviderDeps): Provider {
           (!reasons.includes("max_age") || (Number.isFinite(maxAge) && age <= maxAge));
         if (!authorized || !fresh) {
           log.info("interaction.sms_login", { uid, reason: authorized ? "fresh_login" : "no_session" });
+          await sms.rememberClient(uid, String(details.params.client_id ?? ""));
           ctx.set("Cache-Control", "no-store");
           ctx.redirect(sms.loginUrl(uid, Boolean(authorized)));
           return;

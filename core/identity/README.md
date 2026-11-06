@@ -23,6 +23,8 @@ It runs [`oidc-provider`](https://github.com/panva/node-oidc-provider) (major ve
 
 Endpoints: discovery (`/.well-known/openid-configuration`), `/jwks`, `/auth`, `/token`, `/me` (userinfo), `/session/end`, `/token/revocation`, plus `/healthz` (live), `/readyz` (Redis and accounts DB) and `/favicon.svg`.
 
+**Signing in for an app:** when an app sends someone to sign in, `/login` names it: "Sign in to Breinhap", "Breinhap uses your ASafariM account". The provider records which client the interaction is for, server-side for 10 minutes. The login flow keeps it, so a reload still shows the name. Only a configured client with a `name` is shown. Nothing in the URL can choose the name.
+
 Every page the service renders shares one layout (`src/pages.ts`): a header whose brand goes back to the OS home (`IDENTITY_HOME_URL`, asafarim.site with the hub method), the favicon, and a footer, so no page is a dead end.
 
 ## Login hand-off (ADR 0002, A2)

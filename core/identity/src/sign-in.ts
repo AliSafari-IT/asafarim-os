@@ -123,11 +123,14 @@ export interface SignIn {
   /** Records that an OIDC sign-in was completed from an existing auth session. */
   auditInteractionLogin(ctx: HttpContext, principalId: string, clientId: string): Promise<void>;
   loginUrl(uid: string, fresh: boolean): string;
+  /** Records which client an interaction is for, so its login page can name the app (10 minutes). */
+  rememberClient(uid: string, clientId: string): Promise<void>;
   /** Ends this browser's auth session, if any (the app-initiated sign-out, after identity's own confirmation). */
   endAuthSession(ctx: HttpContext): Promise<void>;
 }
 
 const UID = /^[\w-]{1,64}$/;
+const clientKey = (uid: string) => `interaction-client:${uid}`;
 const REQUEST_ACTION = /^\/admin\/requests\/([0-9a-f-]{36})\/(approve|reject)$/;
 const REVOKE_ACTION = /^\/admin\/connections\/([0-9a-f-]{36})\/(revoke|reconnect)$/;
 const NOTICES: Record<string, string> = {
@@ -194,17 +197,21 @@ export function createSignIn(d: SignInDeps): SignIn {
       noun: "the SMS",
     };
   }
-  const login = (csrf: string, extra: { error?: string; value?: string } = {}) =>
+  const apps = d.apps ?? [];
+  const appName = (id: string) => apps.find((a) => a.id === id)?.name ?? id;
+  /** The named app this sign-in is for (only a configured client counts), shown on the login page. */
+  const appOf = (target: LoginTarget) =>
+    target.kind === "interaction" && target.clientId ? apps.find((a) => a.id === target.clientId) : undefined;
+  const login = (flow: LoginFlow, extra: { error?: string; value?: string } = {}) =>
     loginPage({
-      csrf,
+      csrf: flow.csrf,
+      app: appOf(flow.target)?.name,
       email: Boolean(channels.email),
       sms: Boolean(channels.sms),
       passkey: Boolean(d.passkeys),
       google: Boolean(d.google),
       ...extra,
     });
-  const apps = d.apps ?? [];
-  const appName = (id: string) => apps.find((a) => a.id === id)?.name ?? id;
 
   /**
    * A notice by email (new requests to the admins, decisions to the requester), when email is configured.
@@ -321,7 +328,7 @@ export function createSignIn(d: SignInDeps): SignIn {
   async function startLogin(ctx: HttpContext) {
     const uid = queryValue(ctx, "uid");
     const next = queryValue(ctx, "next");
-    const target: LoginTarget =
+    let target: LoginTarget =
       uid && UID.test(uid) ? { kind: "interaction", uid } : next === "admin" ? { kind: "admin" } : { kind: "home" };
     // `fresh=1`: the app asked for a new sign-in (prompt=login, max_age), so an existing session doesn't count.
     const fresh = queryValue(ctx, "fresh") === "1";
@@ -335,10 +342,21 @@ export function createSignIn(d: SignInDeps): SignIn {
     // Reuse this browser's flow if it has one (a reload doesn't store a new one); otherwise start one,
     // within a per-IP budget so the page can't be used to fill Redis.
     const existing = await currentFlow(ctx);
+    if (target.kind === "interaction") {
+      // Which app asked, as the provider recorded it for this interaction (never from the URL). A reload
+      // keeps the one this browser's flow already has for the same interaction.
+      const remembered = await d.ephemeral.take(clientKey(target.uid));
+      const kept =
+        existing?.flow.target.kind === "interaction" && existing.flow.target.uid === target.uid
+          ? existing.flow.target.clientId
+          : undefined;
+      const clientId = remembered ?? kept;
+      if (clientId && apps.some((a) => a.id === clientId)) target = { ...target, clientId };
+    }
     if (existing) {
       const flow: LoginFlow = { csrf: existing.flow.csrf, target };
       await d.flows.update(existing.token, flow);
-      return render(ctx, 200, login(flow.csrf), PASSKEY_PAGE_CSP);
+      return render(ctx, 200, login(flow), PASSKEY_PAGE_CSP);
     }
     const budget = await d.limits.hit("flow-ip", ipHandle(ctx), LIMITS.flowsPerIp);
     if (!budget.allowed) {
@@ -352,7 +370,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     const flow: LoginFlow = { csrf: newToken(), target };
     const token = await d.flows.create(flow);
     setCookie(ctx, FLOW_COOKIE, token, FLOW_COOKIE_PATH, LOGIN_FLOW_TTL_SECONDS);
-    render(ctx, 200, login(flow.csrf), PASSKEY_PAGE_CSP);
+    render(ctx, 200, login(flow), PASSKEY_PAGE_CSP);
   }
 
   // ---- sending a code ---------------------------------------------------------------------------
@@ -382,7 +400,7 @@ export function createSignIn(d: SignInDeps): SignIn {
       const masked = channels[via]!.mask(identifier);
       return render(ctx, 429, codePage({ csrf: flow.csrf, masked, via, error: message }));
     }
-    return render(ctx, 429, login(flow.csrf, { error: message, value: identifier }), PASSKEY_PAGE_CSP);
+    return render(ctx, 429, login(flow, { error: message, value: identifier }), PASSKEY_PAGE_CSP);
   }
 
   async function sendCode(ctx: HttpContext, flowToken: string, flow: LoginFlow, via: Via, identifier: string) {
@@ -421,7 +439,7 @@ export function createSignIn(d: SignInDeps): SignIn {
       d.log.error("code.send_failed", { reason: `${via}:${reason}` });
       await audit({ event: "otp.send_failed", method: via, subjectHandle: subject, ipHandle: ip, detail: { reason } });
       const error = "We couldn't send a code right now. Please try again in a few minutes.";
-      return render(ctx, 503, login(flow.csrf, { error, value: identifier }), PASSKEY_PAGE_CSP);
+      return render(ctx, 503, login(flow, { error, value: identifier }), PASSKEY_PAGE_CSP);
     }
     await d.flows.update(flowToken, { csrf: flow.csrf, target: flow.target, via, identifier, challengeId });
     await audit({ event: "otp.sent", method: via, subjectHandle: subject, ipHandle: ip });
@@ -441,7 +459,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     const typed = (form.get("identifier") ?? "").slice(0, 256);
     const identifier = channel.normalize(typed);
     if (!identifier) {
-      return render(ctx, 400, login(flow.csrf, { error: channel.invalid, value: typed }), PASSKEY_PAGE_CSP);
+      return render(ctx, 400, login(flow, { error: channel.invalid, value: typed }), PASSKEY_PAGE_CSP);
     }
     const refused = channel.refuse(identifier);
     if (refused) {
@@ -452,7 +470,7 @@ export function createSignIn(d: SignInDeps): SignIn {
         ipHandle: ipHandle(ctx),
         detail: { reason: "not_served" },
       });
-      return render(ctx, 400, login(flow.csrf, { error: refused, value: typed }), PASSKEY_PAGE_CSP);
+      return render(ctx, 400, login(flow, { error: refused, value: typed }), PASSKEY_PAGE_CSP);
     }
     // A new address starts a new challenge: the previous one is never redeemable from this flow.
     return sendCode(ctx, token, { csrf: flow.csrf, target: flow.target }, via, identifier);
@@ -480,7 +498,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     if (!current) return seeOther(ctx, "/login");
     const flow: LoginFlow = { csrf: current.flow.csrf, target: current.flow.target };
     await d.flows.update(current.token, flow);
-    render(ctx, 200, login(flow.csrf), PASSKEY_PAGE_CSP);
+    render(ctx, 200, login(flow), PASSKEY_PAGE_CSP);
   }
 
   // ---- after a proof (a code or a passkey) ------------------------------------------------------
@@ -613,7 +631,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     const fail = async (reason: string, message: string) => {
       await audit({ event: "google.failed", method: "google", ipHandle: ip, detail: { reason } });
       d.log.info("google.failed", { reason });
-      render(ctx, 400, login(current.flow.csrf, { error: message }), PASSKEY_PAGE_CSP);
+      render(ctx, 400, login(current.flow, { error: message }), PASSKEY_PAGE_CSP);
     };
     const error = queryValue(ctx, "error");
     if (error) {
@@ -1157,6 +1175,9 @@ export function createSignIn(d: SignInDeps): SignIn {
     auditInteractionLogin,
     endAuthSession,
     loginUrl: (uid, fresh) => `/login?uid=${encodeURIComponent(uid)}${fresh ? "&fresh=1" : ""}`,
+    rememberClient: async (uid, clientId) => {
+      if (UID.test(uid) && clientId) await d.ephemeral.put(clientKey(uid), clientId, LOGIN_FLOW_TTL_SECONDS);
+    },
   };
 }
 

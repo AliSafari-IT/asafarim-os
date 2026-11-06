@@ -176,6 +176,8 @@ export interface LoginPageOptions {
   error?: string;
   /** What was typed, shown again after an error. */
   value?: string;
+  /** The app this sign-in is for (a configured client's name), when it came from an app. */
+  app?: string;
 }
 
 export function loginPage(o: LoginPageOptions): string {
@@ -233,8 +235,14 @@ ${csrfField(o.csrf)}<input type="hidden" name="via" value="sms">
   return page(
     "Sign in",
     `<div class="split"><section class="signin" aria-labelledby="signin">
-<h1 id="signin">Sign in</h1>
-<p class="lead">Welcome to ASafariM. New here? Signing in creates your account.</p>
+${
+  o.app
+    ? `<p class="eyebrow">Continue to ${escapeHtml(o.app)}</p>
+<h1 id="signin">Sign in to ${escapeHtml(o.app)}</h1>
+<p class="lead">${escapeHtml(o.app)} uses your ASafariM account. New here? Signing in creates your account.</p>`
+    : `<h1 id="signin">Sign in</h1>
+<p class="lead">Welcome to ASafariM. New here? Signing in creates your account.</p>`
+}
 ${err(o.error)}${quickBlock}${divider}${email}${sms}
 <p class="fine">By continuing you accept the <a href="https://asafarim.site/terms">terms</a> and the
 <a href="https://asafarim.site/privacy">privacy notice</a>.</p>
