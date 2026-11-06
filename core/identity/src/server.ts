@@ -18,6 +18,8 @@ import { setHomeUrl } from "./pages.ts";
 import { createProvider, endBrowserSession, type ProviderDeps } from "./provider.ts";
 import { RedisPendingLogins } from "./pending.ts";
 import { RedisReplayGuard, endSessionsOfAccount, redisAdapterFactory } from "./redis-adapter.ts";
+import { createHeadless } from "./headless.ts";
+import type { HeadlessClient } from "./clients.ts";
 import { createSignIn } from "./sign-in.ts";
 import { DevLogSmsSender, TwilioSmsSender } from "./sms.ts";
 import { DevLogMailer, SmtpMailer } from "./mailer.ts";
@@ -36,6 +38,7 @@ async function localSignIn(
   apps: AppLink[],
   redis: Redis,
   logger: Logger,
+  headlessApps: Map<string, HeadlessClient> = new Map(),
 ) {
   const store = new PgIdentityStore(config.databaseUrl, (err) =>
     logger.warn("database.idle_error", { errorCode: (err as { code?: string }).code ?? err.name }),
@@ -47,6 +50,13 @@ async function localSignIn(
     logger.info("identity.bootstrap_admin", { reason: outcome });
   }
   const issuerUrl = new URL(issuer);
+  const mailer = config.email
+    ? config.email.mailer.kind === "smtp"
+      ? new SmtpMailer({ ...config.email.mailer.smtp, heloName: issuerUrl.hostname })
+      : new DevLogMailer()
+    : undefined;
+  const challenges = new RedisOtpChallenges(redis);
+  const limits = new RedisRateLimiter(redis);
   const signIn = createSignIn({
     issuer,
     homeUrl: config.homeUrl,
@@ -56,10 +66,7 @@ async function localSignIn(
     ...(config.email
       ? {
           email: {
-            mailer:
-              config.email.mailer.kind === "smtp"
-                ? new SmtpMailer({ ...config.email.mailer.smtp, heloName: issuerUrl.hostname })
-                : new DevLogMailer(),
+            mailer: mailer!,
             dailyLimit: config.email.dailyLimit,
           },
         }
@@ -82,8 +89,8 @@ async function localSignIn(
     ...(config.google ? { google: new GoogleOidc(config.google) } : {}),
     ephemeral: new RedisEphemeral(redis),
     store,
-    challenges: new RedisOtpChallenges(redis),
-    limits: new RedisRateLimiter(redis),
+    challenges,
+    limits,
     sessions: new RedisAuthSessions(redis),
     flows: new RedisLoginFlows(redis),
     endProviderSessions: (principalId) =>
@@ -96,7 +103,22 @@ async function localSignIn(
     log: logger,
   });
   const auditApi = createAuditApi({ issuer, jwks, readers: config.auditReaders, store, log: logger });
-  return { store, signIn, auditApi };
+  // Trusted apps that show their own sign-in pages (headless.ts): only with email codes configured.
+  const headless =
+    config.email && headlessApps.size
+      ? createHeadless({
+          issuer,
+          otpSecret: config.otpSecret,
+          clients: headlessApps,
+          mailer: mailer!,
+          dailyLimit: config.email.dailyLimit,
+          store,
+          challenges,
+          limits,
+          log: logger,
+        })
+      : undefined;
+  return { store, signIn, auditApi, headless };
 }
 
 async function main() {
@@ -116,20 +138,22 @@ async function main() {
     | "pending"
     | "signIn"
     | "auditApi"
+    | "headless"
   >;
   if (config.login.method === "local") {
     setHomeUrl(config.login.homeUrl);
-    const { store, signIn, auditApi } = await localSignIn(
+    const { store, signIn, auditApi, headless } = await localSignIn(
       config.login,
       config.issuer,
       config.jwks,
       config.apps,
       redis,
       log,
+      config.headless,
     );
     accounts = new PrincipalAccounts(store);
     closeDatabase = () => store.close();
-    method = { loginMethod: "local", signIn, auditApi };
+    method = { loginMethod: "local", signIn, auditApi, ...(headless ? { headless } : {}) };
   } else {
     const platform = new PgAccountStore(config.login.accountsDatabaseUrl);
     accounts = platform;

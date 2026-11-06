@@ -6,7 +6,15 @@
 import { readFileSync } from "node:fs";
 import type { SmtpConfig, SmtpSecurity } from "@asafarim/smtp";
 import { importJWK, type CryptoKey, type JWK, type KeyObject } from "jose";
-import { appLinks, loadClients, type AppLink, type ClientConfigFile, type OidcClient } from "./clients.ts";
+import {
+  appLinks,
+  headlessClients,
+  loadClients,
+  type AppLink,
+  type ClientConfigFile,
+  type HeadlessClient,
+  type OidcClient,
+} from "./clients.ts";
 import { normalizeEmail } from "./email.ts";
 import type { GoogleConfig } from "./google.ts";
 import { isE164, normalizePhone, parsePrefixes } from "./phone.ts";
@@ -58,6 +66,8 @@ export interface IdentityConfig {
   clients: OidcClient[];
   /** The named clients, offered on the account page. */
   apps: AppLink[];
+  /** The clients that may use the headless API (headless.ts), by id. */
+  headless: Map<string, HeadlessClient>;
   trustProxy: boolean;
   login: HubLoginConfig | LocalLoginConfig;
 }
@@ -171,14 +181,16 @@ export async function loadConfig(env: Env = process.env): Promise<IdentityConfig
     throw new ConfigError(`IDENTITY_CLIENTS_FILE (${clientsFile}) can't be read as JSON`);
   }
 
+  const clients = loadClients(clientConfig, env, { allowLocalhost: local });
   return {
     issuer,
     port: Number(env.PORT ?? 3000),
     redisUrl: required(env, "IDENTITY_REDIS_URL"),
     jwks: parseSigningJwks(env),
     cookieKeys,
-    clients: loadClients(clientConfig, env, { allowLocalhost: local }),
+    clients,
     apps: appLinks(clientConfig),
+    headless: headlessClients(clientConfig, clients),
     trustProxy: env.IDENTITY_TRUST_PROXY !== "false",
     login,
   };

@@ -26,6 +26,20 @@ export interface ClientEntry {
   /** Shown on the account page's "Where to next" when set. A client without one (a test client) isn't listed. */
   name?: string;
   description?: string;
+  /**
+   * A trusted first-party app that shows its own sign-in pages and calls /headless/v1/… from its server
+   * (headless.ts). Needs a client secret and a name (the code e-mail names the app). `self_signup`: a new
+   * account may use this app before an ASafariM admin connects it; the app runs its own approval.
+   */
+  headless?: { self_signup?: boolean };
+}
+
+/** A client allowed to use the headless API. */
+export interface HeadlessClient {
+  id: string;
+  name: string;
+  secret: string;
+  selfSignup: boolean;
 }
 
 /** An app a signed-in person can go on to from the account page. */
@@ -153,4 +167,31 @@ export function appLinks(file: ClientConfigFile): AppLink[] {
     });
   }
   return links;
+}
+
+/**
+ * The headless clients (`headless` in the config), by client id. Call after loadClients, which has
+ * already checked the secrets. A headless client must be confidential and named.
+ */
+export function headlessClients(file: ClientConfigFile, clients: readonly OidcClient[]): Map<string, HeadlessClient> {
+  const map = new Map<string, HeadlessClient>();
+  for (const c of file.clients) {
+    if (c.headless === undefined) continue;
+    if (typeof c.headless !== "object" || c.headless === null || Array.isArray(c.headless))
+      throw new ClientConfigError(`${c.client_id}: headless must be an object`);
+    const loaded = clients.find((x) => x.client_id === c.client_id);
+    if (!loaded?.client_secret)
+      throw new ClientConfigError(`${c.client_id}: a headless client needs client_secret_env`);
+    if (typeof c.name !== "string" || !c.name.trim())
+      throw new ClientConfigError(`${c.client_id}: a headless client needs a name`);
+    if (c.headless.self_signup !== undefined && typeof c.headless.self_signup !== "boolean")
+      throw new ClientConfigError(`${c.client_id}: headless.self_signup must be true or false`);
+    map.set(c.client_id, {
+      id: c.client_id,
+      name: c.name.trim(),
+      secret: loaded.client_secret,
+      selfSignup: c.headless.self_signup === true,
+    });
+  }
+  return map;
 }

@@ -17,6 +17,7 @@ import { notifySessionLogout } from "./logout.ts";
 import { randomBytes } from "node:crypto";
 import Provider, { type Configuration } from "oidc-provider";
 import type { CryptoKey, JWK, KeyObject } from "jose";
+import type { Headless } from "./headless.ts";
 import type { AuditApi } from "./audit-api.ts";
 import type { AccountStore } from "./accounts.ts";
 import type { OidcClient } from "./clients.ts";
@@ -53,6 +54,8 @@ export interface ProviderDeps {
   signIn?: SignIn;
   /** `local` only: the sign-in trail for the Admin console (audit-api.ts). */
   auditApi?: AuditApi;
+  /** Trusted apps' own sign-in pages call this from their servers (headless.ts). */
+  headless?: Headless;
   trustProxy: boolean;
   // oidc-provider's adapter contract is a constructor taking the model name.
   adapter: Configuration["adapter"];
@@ -470,6 +473,14 @@ export function createProvider(deps: ProviderDeps): Provider {
 
     // The Admin console's read of the sign-in trail (JSON, Bearer ID token), before the /admin… pages.
     if (deps.auditApi && path.startsWith("/admin/v1/") && (await deps.auditApi.handle(ctx as unknown as HttpContext)))
+      return;
+
+    // Trusted apps' servers (JSON, client secret): their own sign-in pages, e-mail codes (headless.ts).
+    if (
+      deps.headless &&
+      path.startsWith("/headless/v1/") &&
+      (await deps.headless.handle(ctx as unknown as HttpContext))
+    )
       return;
 
     // The local sign-in's own pages: /connect, /login…, /logout, /account…, /passkeys… and /admin….

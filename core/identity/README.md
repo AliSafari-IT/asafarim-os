@@ -62,6 +62,41 @@ The flow with codes (the same for email and SMS):
 
 Settings: `IDENTITY_GOOGLE_CLIENT_ID` and `IDENTITY_GOOGLE_CLIENT_SECRET`, from a Google Cloud OAuth client of type _Web application_ whose authorized redirect URI is `https://id.asafarim.site/login/google/callback`. Audit events: `google.verified`, `google.failed` (`detail.reason`), and `method = google` on `login.granted` / `login.not_authorized`.
 
+### Headless sign-in for trusted apps
+
+A trusted first-party app can show its own sign-in and registration pages, in its own style and language, while the account stays here. An example is Breinhap's management at `/aanmelden` and `/registreren`. The app's **server** calls three JSON endpoints with its client secret (HTTP Basic); `@asafarim/app-sdk/headless` wraps them:
+
+| Endpoint                         | Body                                                                                                  | Answer                          |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `POST /headless/v1/email/start`  | `email`, `locale` (`nl`, `fr`, `en`, `de`; else `en`), `intent` (`signin` or `register`), `client_ip` | `202 { challenge, expires_in }` |
+| `POST /headless/v1/email/verify` | `challenge`, `email`, `code`, `client_ip`                                                             | `200 { sub, email, connected }` |
+| `POST /headless/v1/principal`    | `sub`                                                                                                 | `200 { active, email? }`        |
+
+- **The code e-mail.** Identity sends it, never the app, naming the app in the person's language.
+- **No probing.** `start` answers the same for a known and an unknown address.
+- **Shared limits.** The same per-address cooldown and limits apply as on `/login`, plus per-IP limits on the end user's address, which the app passes and which is only ever hashed.
+- **Codes are bound to the address and the app.** A code sent for one app is wrong in another.
+- **Who may use the app:**
+  - an account with an active connection may use any headless app;
+  - a client with `"headless": { "self_signup": true }` also accepts a new account that has no connection yet, **for that app only**, and runs its own approval (Breinhap's administrator approves the role);
+  - other apps, and the OIDC provider, still refuse that account;
+  - a revoked connection is refused everywhere.
+- **`principal`** tells the app whether the account may still use it. The app checks this on each request, briefly cached, and ends its own session when the answer is no.
+- **Client config.** A headless client needs `client_secret_env` and a `name`:
+
+```json
+{
+  "client_id": "breinhap",
+  "name": "Breinhap",
+  "client_secret_env": "IDENTITY_CLIENT_SECRET_BREINHAP",
+  "headless": { "self_signup": true },
+  "primary_domain": "management.breinhap.com",
+  "redirect_uris": ["…"]
+}
+```
+
+- **Requirements.** It works only with the local login method and e-mail codes configured. Passkeys and Google stay on `/login`: a passkey is bound to this domain, and Google needs its own redirect.
+
 ### Access requests
 
 Someone signed in but not connected sees **Ask for access**: they pick the apps they need (the named clients) and may add a note (500 characters). The admins get an email (when email is configured); `/admin` shows who asked, how they sign in, the apps and the note. **Approve** connects the account and emails the requester; **Reject** emails them too. A connected person can ask for more apps from `/account`; approving that closes the request, and the admin grants the app roles in the Admin console (core-api decides who may open an app). One open request per person: asking again adds apps and replaces the note (`request.updated`). Reconnecting a revoked account works by principal, whatever way they sign in.
