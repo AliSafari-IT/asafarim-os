@@ -1,8 +1,8 @@
 {
   "name": "@asafarim/app-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "The ASafariM OS app SDK (P3.2): self-registration with core-api, permission checks resolved from core-api, typed config from the manifest, and an Auth.js OIDC configuration for core/identity, the access token and session endpoint, the launcher, and (`/events`) publishing events through the outbox",
+  "description": "The ASafariM OS app SDK (P3.2): self-registration with core-api, permission checks resolved from core-api, typed config from the manifest, and an Auth.js OIDC configuration for core/identity, the access token and session endpoint, the launcher, (`/headless`) a server-side client for apps that show their own e-mail-code sign-in pages, and (`/events`) publishing events through the outbox",
   "type": "module",
   "exports": {
     ".": {
@@ -12,6 +12,10 @@
     "./events": {
       "types": "./dist/events.d.ts",
       "default": "./dist/events.js"
+    },
+    "./headless": {
+      "types": "./dist/headless.d.ts",
+      "default": "./dist/headless.js"
     },
     "./react": {
       "types": "./dist/react.d.ts",

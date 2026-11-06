@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/identity",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "ASafariM OS identity service: the OIDC provider for id.asafarim.site, with login delegated to Hub (ADR 0002, Addendum A)",
   "type": "module",
