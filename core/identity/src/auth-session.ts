@@ -51,7 +51,9 @@ export interface AuthSessions {
 }
 
 /** Where the person goes once signed in. */
-export type LoginTarget = { kind: "interaction"; uid: string } | { kind: "home" } | { kind: "admin" };
+export type LoginTarget =
+  /** `clientId`: the app that asked, as the provider recorded it (only ever used to name the app). */
+  { kind: "interaction"; uid: string; clientId?: string } | { kind: "home" } | { kind: "admin" };
 
 export interface LoginFlow {
   csrf: string;

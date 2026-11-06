@@ -8,6 +8,7 @@ import { createLogger } from "../src/log.ts";
 import { type SignIn, createSignIn, initialsOf } from "../src/sign-in.ts";
 import { SoftPasskey } from "./authenticator.ts";
 import { GoogleError } from "../src/google.ts";
+import { loginPage } from "../src/sign-in-pages.ts";
 import {
   Browser,
   CapturingMailer,
@@ -104,6 +105,27 @@ describe("local sign-in", () => {
     const js = await go(new Browser(), "GET", "/static/passkey.js");
     expect(js.status).toBe(200);
     expect(js.body).toContain("navigator.credentials");
+  });
+
+  it("a sign-in for an app names that app, as the provider recorded it, never as the URL says", async () => {
+    const b = new Browser();
+    await signIn.rememberClient("uid-notes-1", "notes");
+    const page = await go(b, "GET", "/login?uid=uid-notes-1");
+    expect(page.body).toContain('<h1 id="signin">Sign in to Notes</h1>');
+    expect(page.body).toContain("Notes uses your ASafariM account.");
+    // a reload keeps the app for the same interaction (the record was used once)
+    expect((await go(b, "GET", "/login?uid=uid-notes-1")).body).toContain("Sign in to Notes");
+    // the same browser, another interaction with nothing recorded: the plain page
+    expect((await go(b, "GET", "/login?uid=uid-other-2")).body).toContain('<h1 id="signin">Sign in</h1>');
+    // no query parameter names the app, and a client that is not a configured app is never shown
+    const spoof = await go(new Browser(), "GET", "/login?uid=uid-3&client=notes&clientId=notes");
+    expect(spoof.body).not.toContain("Sign in to");
+    await signIn.rememberClient("uid-4", "unknown-client");
+    expect((await go(new Browser(), "GET", "/login?uid=uid-4")).body).not.toContain("Sign in to");
+    // names are escaped
+    expect(loginPage({ csrf: "c", email: true, sms: false, passkey: false, app: "<b>X</b>" })).toContain(
+      "Sign in to &lt;b&gt;X&lt;/b&gt;",
+    );
   });
 
   it("the site root goes to the account page, and from there a signed-out visitor to sign in", async () => {
