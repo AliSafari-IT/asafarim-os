@@ -50,6 +50,11 @@ export interface NodeAuthOptions<A = unknown>
   exposeDisplayHint?: boolean;
   /** Use a prebuilt OIDC client instead of building one from the issuer options. */
   oidc?: OidcClient;
+  /**
+   * Called after a successful sign-in with what the server-side flow carried (never anything from the callback query).
+   * Return extra `Set-Cookie` values, for example the app's own locale cookie. Never put tokens or ids in them.
+   */
+  afterSignIn?(info: { returnTo: string; locale?: string; intent?: string }): string[] | void;
 }
 
 export interface NodeAuth {

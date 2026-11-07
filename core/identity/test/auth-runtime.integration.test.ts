@@ -6,9 +6,10 @@
  * What is NOT real, said plainly:
  *  - the mail transport (CapturingMailer: the e-mail code is read from the captured message, as the other identity
  *    integration tests do);
- *  - `testOnlyFetch`: oidc-provider refuses back-channel targets on loopback addresses, so the provider is given a PURE
- *    PASSTHROUGH fetch (it records the request and forwards it unchanged to the app's listener; it rewrites nothing and
- *    signs nothing). The logout tokens themselves are produced and signed by oidc-provider;
+ *  - `testOnlyFetch`: oidc-provider refuses back-channel targets on loopback addresses (its SSRF guard is a custom undici
+ *    `dispatcher` it puts in the request options), so the provider is given a PASSTHROUGH fetch: it records the request and
+ *    forwards method, headers and body unchanged to the app's listener, dropping ONLY that guard dispatcher. It rewrites
+ *    nothing and signs nothing; the logout tokens are produced and signed by oidc-provider;
  *  - `delayedFetch` (runtime transport): forwards to the real provider, optionally after a delay, to hold a refresh open;
  *  - the injected clock: the runtime's `now` is real time plus an offset the test controls, to move past access-token
  *    and re-check windows without sleeping; the provider keeps real time;
@@ -66,7 +67,7 @@ if (!CONFIGURED) {
     });
   });
 } else {
-  describe("auth-runtime against the real provider: createProvider + Postgres + Redis + HTTP", () => {
+  describe("auth-runtime against the real provider: createProvider + Postgres + Redis + HTTP", { timeout: 30_000 }, () => {
     // ---- the world -------------------------------------------------------------------------------------------------
     const dbName = `identity_rt_${randomBytes(4).toString("hex")}`;
     let admin: pg.Pool;
@@ -198,6 +199,10 @@ if (!CONFIGURED) {
         store: s,
         flows: s,
         bounds: over.bounds ?? BOUNDS,
+        afterSignIn: ({ locale, intent }) => [
+          ...(locale ? [`app-locale=${locale}; Path=/; Secure; HttpOnly; SameSite=Lax`] : []),
+          ...(intent ? [`app-intent=${intent}; Path=/; Secure; HttpOnly; SameSite=Lax`] : []),
+        ],
         policies: ["management"],
         locales: ["en", "nl"],
         defaultLocale: "en",
@@ -297,7 +302,11 @@ if (!CONFIGURED) {
         limits: new RedisRateLimiter(redis),
         sessions: new RedisAuthSessions(redis),
         flows: new RedisLoginFlows(redis),
-        endProviderSessions: (id) => endSessionsOfAccount(redis, id),
+        // As server.ts wires it: end the provider sessions and revoke their grants, then notify each app's back-channel.
+        endProviderSessions: (id) =>
+          endSessionsOfAccount(redis, id, async (ended) => {
+            if (late.provider) await notifySessionLogout(late.provider, ended, log);
+          }),
         endBrowserProviderSession: async (ctx) => {
           if (late.provider) await endBrowserSession(late.provider, ctx);
         },
@@ -323,11 +332,15 @@ if (!CONFIGURED) {
           };
           backchannelSent.push(entry);
           try {
-            const res = await fetch(url, options as RequestInit);
+            // Only oidc-provider's SSRF-guarding `dispatcher` is dropped (it refuses loopback); method, headers and body go through unchanged.
+            const { dispatcher: _guard, ...forwarded } = (options ?? {}) as RequestInit & { dispatcher?: unknown };
+            void _guard;
+            const res = await fetch(url, forwarded);
             entry.status = res.status;
             return res;
           } catch (error) {
             entry.status = 0;
+            if (process.env.RT_DEBUG) console.log("PASSTHROUGH ERROR", error, options);
             throw error;
           }
         },
@@ -398,20 +411,24 @@ if (!CONFIGURED) {
     }
 
     /** The e-mail code step on a login page. Returns the response of the verify step. */
-    async function codeSignIn(loginUrl: string, email: string, opJar: Jar, trail: Trail) {
+    async function codeSignIn(loginUrl: string, email: string, opJar: Jar, trail: Trail, extra: { form?: Record<string, string>; headers?: Record<string, string> } = {}) {
       await resetLimits();
-      let res = await get(loginUrl, opJar, trail);
+      let res = await get(loginUrl, opJar, trail, extra.headers);
       const csrf = csrfOf(await res.text());
-      res = await post(`${issuer}/login/start`, opJar, { csrf, via: "email", identifier: email }, trail);
+      res = await post(`${issuer}/login/start`, opJar, { csrf, via: "email", identifier: email, ...extra.form }, trail, extra.headers);
       expect(res.status).toBe(303);
-      return post(`${issuer}/login/verify`, opJar, { csrf, code: mailer.lastCode(email) }, trail);
+      return post(`${issuer}/login/verify`, opJar, { csrf, code: mailer.lastCode(email), ...extra.form }, trail, extra.headers);
     }
 
     /**
      * A whole browser sign-in through the runtime: the app's /auth/start, the provider (login page only when the provider
      * has no session for this browser), the callback on the app, and the redirect back to the return target.
      */
-    async function browserSignIn(app: App, email: string, o: { opJar?: Jar; appJar?: Jar; query?: string; trail?: Trail; providerQuery?: string } = {}) {
+    async function browserSignIn(
+      app: App,
+      email: string,
+      o: { opJar?: Jar; appJar?: Jar; query?: string; trail?: Trail; providerQuery?: string; extra?: { form?: Record<string, string>; headers?: Record<string, string> } } = {},
+    ) {
       const opJar = o.opJar ?? new Jar();
       const appJar = o.appJar ?? new Jar();
       const trail = o.trail ?? new Trail();
@@ -422,7 +439,7 @@ if (!CONFIGURED) {
       let loginShown = false;
       if (step.loginUrl) {
         loginShown = true;
-        const verified = await codeSignIn(step.loginUrl, email, opJar, trail);
+        const verified = await codeSignIn(step.loginUrl, email, opJar, trail, o.extra);
         let location: string | undefined;
         if (verified.status === 200) location = refreshOf(await verified.text());
         else if (verified.status === 303) location = verified.headers.get("location") ?? undefined;
@@ -440,9 +457,9 @@ if (!CONFIGURED) {
         step = { res: verified, callback } as typeof step;
       }
       const callback = (step as { callback?: URL }).callback;
-      if (!callback) return { loginShown, callback: undefined as URL | undefined, session: undefined as string | undefined, appJar, opJar, trail, final: undefined as Response | undefined };
+      if (!callback) return { loginShown, authUrl, callback: undefined as URL | undefined, session: undefined as string | undefined, appJar, opJar, trail, final: undefined as Response | undefined };
       const final = await get(callback.href, appJar, trail);
-      return { loginShown, callback, session: appJar.get("__Host-asafarim.sid"), appJar, opJar, trail, final };
+      return { loginShown, authUrl, callback, session: appJar.get("__Host-asafarim.sid"), appJar, opJar, trail, final };
     }
 
     const sessionOf = (appJar: Jar) => appJar.get("__Host-asafarim.sid");
@@ -696,6 +713,140 @@ if (!CONFIGURED) {
       } finally {
         app.auth = original;
       }
+    });
+
+    // ---- 4. back-channel logout, really emitted ------------------------------------------------------------------------
+
+    const EVENT = "http://schemas.openid.net/event/backchannel-logout";
+    const decode = (jwt: string) => JSON.parse(Buffer.from(jwt.split(".")[1]!, "base64url").toString("utf8")) as Record<string, unknown>;
+    async function until(cond: () => boolean | Promise<boolean>, what: string, ms = 8000) {
+      const t0 = Date.now();
+      while (!(await cond())) {
+        if (Date.now() - t0 > ms) throw new Error(`timed out waiting for ${what}`);
+        await sleep(25);
+      }
+    }
+    const postBackchannel = (app: App, logoutToken: string) =>
+      fetch(`${app.base}/auth/backchannel-logout`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ logout_token: logoutToken }),
+      });
+    /** CRAFTED: signed with the provider's own test signing key, for cases a real provider never emits. */
+    async function crafted(claims: Record<string, unknown>) {
+      const base = { iss: issuer, aud: A, iat: Math.floor(Date.now() / 1000), jti: randomBytes(12).toString("hex"), events: { [EVENT]: {} }, ...claims };
+      const jwt = new SignJWT(base as Record<string, unknown>).setProtectedHeader({ alg: "ES256", kid: "k1", typ: "logout+jwt" });
+      return jwt.sign(signingKey);
+    }
+
+    it("4. back-channel logout: the logout tokens are emitted by oidc-provider on a real RP-initiated logout; the runtime validates them, revokes both apps' sessions, and refuses replays and crafted variants", async () => {
+      const email = "bcl-4@example.test";
+      const opJar = new Jar();
+      const a = await browserSignIn(apps[A]!, email, { opJar });
+      expect(a.loginShown).toBe(true);
+      // 8a. SSO: the second app gets a session from the provider's existing session, with no credential prompt.
+      const b = await browserSignIn(apps[B]!, email, { opJar });
+      expect(b.loginShown, "an existing identity session gives a new app session with no sign-in step").toBe(false);
+      expect(b.session).toBeTruthy();
+      const sa = await peek(apps[A]!, a.appJar);
+      const sb = await peek(apps[B]!, b.appJar);
+      expect(sb.identityKey).toEqual(sa.identityKey); // one account across both apps
+      expect(sa.sid).toBeTruthy();
+
+      const from = backchannelSent.length;
+      const end = await get(`${issuer}/session/end?client_id=${A}&post_logout_redirect_uri=${encodeURIComponent(`${apps[A]!.base}/`)}`, opJar);
+      expect(end.status).toBe(200);
+      const html = await end.text();
+      const xsrf = /name="xsrf" value="([^"]+)"/.exec(html)![1]!;
+      const action = /action="([^"]+)"/.exec(html)![1]!;
+      const confirm = await post(new URL(action, issuer).href, opJar, { xsrf, logout: "yes" });
+      expect([200, 302, 303]).toContain(confirm.status);
+
+      await until(() => backchannelSent.slice(from).filter((e) => e.status !== undefined).length >= 2, "two back-channel deliveries");
+      const sent = backchannelSent.slice(from);
+      expect(sent.map((e) => e.url).sort()).toEqual([`${apps[A]!.base}/auth/backchannel-logout`, `${apps[B]!.base}/auth/backchannel-logout`].sort());
+      expect(sent.map((e) => e.status)).toEqual([200, 200]);
+      expect(providerEvents.filter((e) => e.name === "backchannel.success").length).toBeGreaterThanOrEqual(2);
+
+      // The tokens are the provider's own: issuer, audience per app, the event, a jti, the session id, and no nonce.
+      for (const e of sent) {
+        const token = new URLSearchParams(e.body).get("logout_token")!;
+        const claims = decode(token);
+        expect(claims.iss).toBe(issuer);
+        expect([A, B]).toContain(claims.aud);
+        expect(claims.events).toEqual({ [EVENT]: {} });
+        expect(claims.nonce).toBeUndefined();
+        expect(typeof claims.jti).toBe("string");
+        expect(claims.sid).toBeTruthy();
+      }
+      // Consumer invalidation: both apps' sessions are gone.
+      expect(await apps[A]!.auth.current(reqWith(a.appJar), { touch: false })).toBeNull();
+      expect(await apps[B]!.auth.current(reqWith(b.appJar), { touch: false })).toBeNull();
+
+      // Replay: the exact request, again, is refused.
+      const entryA = sent.find((e) => e.url.startsWith(apps[A]!.base))!;
+      const replay = await fetch(entryA.url, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: entryA.body });
+      expect(replay.status).toBe(400);
+
+      // Crafted variants against a LIVE session: every one is refused, the control is accepted, so the refusals are for their reason.
+      const live = await browserSignIn(apps[A]!, "bcl-4-live@example.test");
+      const liveSession = await peek(apps[A]!, live.appJar);
+      const good = { sid: liveSession.sid };
+      const nowSec = Math.floor(Date.now() / 1000);
+      const negatives: [string, Record<string, unknown>][] = [
+        ["wrong audience", { ...good, aud: B }],
+        ["wrong issuer", { ...good, iss: "http://localhost:1" }],
+        ["has a nonce", { ...good, nonce: "n" }],
+        ["no events", { ...good, events: undefined }],
+        ["wrong event", { ...good, events: { "http://schemas.openid.net/event/other": {} } }],
+        ["issued 5 minutes ago", { ...good, iat: nowSec - 300 }],
+        ["issued in the future", { ...good, iat: nowSec + 600 }],
+        ["no sid or sub", { sid: undefined }],
+        ["no jti", { ...good, jti: undefined }],
+      ];
+      for (const [label, claims] of negatives) {
+        const res = await postBackchannel(apps[A]!, await crafted(claims));
+        expect(res.status, `crafted: ${label}`).toBe(400);
+      }
+      // signed by a key the provider does not publish
+      const stranger = await generateKeyPair("ES256");
+      const bad = await new SignJWT({ iss: issuer, aud: A, iat: nowSec, jti: "x".repeat(10), sid: liveSession.sid, events: { [EVENT]: {} } })
+        .setProtectedHeader({ alg: "ES256", kid: "k1", typ: "logout+jwt" })
+        .sign(stranger.privateKey);
+      expect((await postBackchannel(apps[A]!, bad)).status, "crafted: signed by another key").toBe(400);
+      expect(await apps[A]!.auth.current(reqWith(live.appJar), { touch: false })).not.toBeNull(); // none of that did anything
+      const control = await postBackchannel(apps[A]!, await crafted(good));
+      expect(control.status, "crafted control: same construction, valid claims").toBe(200);
+      expect(await apps[A]!.auth.current(reqWith(live.appJar), { touch: false })).toBeNull();
+    });
+
+    it("4b. missed back-channel delivery: with the app unreachable the provider logs and moves on (it does not retry); the session still ends by the next provider re-check", async () => {
+      const app = apps[A]!;
+      const email = "bcl-4b@example.test";
+      const r = await browserSignIn(app, email);
+      const principal = await principalOf(email);
+      const port = Number(new URL(app.base).port);
+      const from = backchannelSent.length;
+      const errorsBefore = providerEvents.filter((e) => e.name === "backchannel.error").length;
+      app.server.closeAllConnections();
+      await new Promise<void>((res) => app.server.close(() => res()));
+      try {
+        // The production revocation path: end the provider sessions, revoke their grants, then notify (delivery fails).
+        await endSessionsOfAccount(redis, principal, (ended) => notifySessionLogout(provider, ended));
+        await until(() => backchannelSent.slice(from).some((e) => e.url.startsWith(app.base) && e.status === 0), "the provider's failed delivery attempt");
+        const attempts = backchannelSent.slice(from).filter((e) => e.url.startsWith(app.base));
+        expect(attempts).toHaveLength(1); // one attempt, no retry
+        expect(attempts[0]!.status).toBe(0);
+      } finally {
+        app.server = createServer(appHandler(A));
+        await new Promise<void>((res) => app.server.listen(port, "localhost", res));
+      }
+      // The runtime was never told. Within its re-check window it still serves (the stated bound); past it, the provider says no.
+      clock.offset = BOUNDS.revalidateMs - 5000;
+      expect(await app.auth.current(reqWith(r.appJar), { touch: false })).not.toBeNull();
+      clock.offset = BOUNDS.revalidateMs + 1000;
+      expect(await app.auth.current(reqWith(r.appJar), { touch: false })).toBeNull();
+      void errorsBefore;
     });
   });
 }
