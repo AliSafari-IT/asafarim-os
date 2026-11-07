@@ -247,7 +247,18 @@ export function createHeadless(d: HeadlessDeps): Headless {
       // "wrong": try again; "exhausted"/"missing": ask for a new code
       return json(ctx, 400, { error: result === "wrong" ? "wrong_code" : "expired" });
     }
-    const sub = await d.store.verifiedLogin("email", email);
+    const verified = await d.store.verifiedLogin("email", email);
+    if (verified.kind !== "ok") {
+      // A conflict on the identifier: say so generically and retryably, never reveal why.
+      await audit({
+        event: "login.not_authorized",
+        method: "email",
+        subjectHandle: subject,
+        detail: { clientId: client.id, via: "headless", reason: verified.reason },
+      });
+      return json(ctx, 409, { error: "try_again" });
+    }
+    const sub = verified.principalId;
     const principal = await d.store.principal(sub);
     const connection = principal?.connection ?? "none";
     await audit({

@@ -16,6 +16,8 @@
  *   }]
  * }
  */
+import { ADMISSION_POLICIES, type AdmissionPolicy } from "./admission.ts";
+
 export interface ClientEntry {
   client_id: string;
   primary_domain: string;
@@ -32,6 +34,12 @@ export interface ClientEntry {
    * account may use this app before an ASafariM admin connects it; the app runs its own approval.
    */
   headless?: { self_signup?: boolean };
+  /**
+   * Who may use this app (admission.ts). `restricted` (the default): an admin approves each person.
+   * `public`: a person who proves an email (or Google) identity at this app is admitted to this app alone,
+   * with no admin step. Read from this server-side file only; nothing in a request can set or change it.
+   */
+  admission?: AdmissionPolicy;
 }
 
 /** A client allowed to use the headless API. */
@@ -192,6 +200,21 @@ export function headlessClients(file: ClientConfigFile, clients: readonly OidcCl
       secret: loaded.client_secret,
       selfSignup: c.headless.self_signup === true,
     });
+  }
+  return map;
+}
+
+/**
+ * Each client's admission policy (default `restricted`), by client id. Call after loadClients. Anything but
+ * "public" or "restricted" is a configuration error, never a silent default.
+ */
+export function admissionPolicies(file: ClientConfigFile): Map<string, AdmissionPolicy> {
+  const map = new Map<string, AdmissionPolicy>();
+  for (const c of file.clients) {
+    const value = c.admission === undefined ? "restricted" : c.admission;
+    if (!ADMISSION_POLICIES.includes(value))
+      throw new ClientConfigError(`${c.client_id}: admission must be "public" or "restricted"`);
+    map.set(c.client_id, value);
   }
   return map;
 }

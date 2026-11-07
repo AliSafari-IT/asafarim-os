@@ -20,6 +20,7 @@ import {
 import type { SmsSender } from "../src/sms.ts";
 import type { MailMessage, Mailer } from "../src/mailer.ts";
 import type {
+  AdmitOutcome,
   AuditEntry,
   AuditRow,
   ConnectionRequestRow,
@@ -33,7 +34,15 @@ import type {
   Principal,
   RequestDetails,
   RequestOutcome,
+  VerifiedResult,
 } from "../src/store.ts";
+
+/** The principal id of a successful verifiedLogin / verifiedGoogleLogin; throws on a conflict. */
+export async function pid(result: Promise<VerifiedResult>): Promise<string> {
+  const r = await result;
+  if (r.kind !== "ok") throw new Error(`unexpected ${r.reason}`);
+  return r.principalId;
+}
 
 interface P {
   id: string;
@@ -44,6 +53,7 @@ interface P {
 }
 interface C {
   status: "active" | "revoked";
+  source?: "admin" | "bootstrap" | "suspension";
   grantedAt: Date;
   revokedAt: Date | null;
 }
@@ -61,6 +71,8 @@ export class MemoryStore implements IdentityStore {
   readonly principals = new Map<string, P>();
   readonly connectionsById = new Map<string, C>();
   readonly requests: R[] = [];
+  /** principalId → client ids (client_admissions). */
+  readonly admissions = new Map<string, Set<string>>();
   readonly auditLog: AuditEntry[] = [];
   readonly passkeys = new Map<string, PasskeyRow>();
 
@@ -106,7 +118,7 @@ export class MemoryStore implements IdentityStore {
     const p = this.ensure(method, identifier);
     p.verifiedAt ??= new Date();
     p.lastLoginAt = new Date();
-    return p.id;
+    return { kind: "ok" as const, principalId: p.id, created: false };
   }
 
   async verifiedGoogleLogin(subject: string, email: string | null, linkEmail: boolean) {
@@ -130,7 +142,20 @@ export class MemoryStore implements IdentityStore {
     g.email = email;
     p.verifiedAt ??= new Date();
     p.lastLoginAt = new Date();
-    return p.id;
+    return { kind: "ok" as const, principalId: p.id, created: false };
+  }
+
+  async admitPublic(principalId: string, clientId: string): Promise<AdmitOutcome> {
+    if (!this.principals.has(principalId)) return "unknown";
+    const status = this.connectionsById.get(principalId)?.status;
+    if (status === "revoked") return "suspended";
+    if (status === "active") return "global";
+    const set = this.admissions.get(principalId) ?? new Set<string>();
+    this.admissions.set(principalId, set);
+    if (set.has(clientId)) return "already";
+    set.add(clientId);
+    this.auditLog.push({ event: "connection.admitted", principalId, detail: { clientId, source: "public_signup" } });
+    return "admitted";
   }
 
   async principal(id: string): Promise<Principal | null> {
@@ -142,6 +167,8 @@ export class MemoryStore implements IdentityStore {
       label: this.labelOf(id),
       connection: this.connectionsById.get(id)?.status ?? "none",
       methods: this.methodsOf(id),
+      admittedClients: [...(this.admissions.get(id) ?? [])].sort(),
+      emailVerified: Boolean(p.verifiedAt && this.labelOf(id)?.includes("@")),
     };
   }
 
@@ -200,6 +227,8 @@ export class MemoryStore implements IdentityStore {
         principalId: id,
         label: this.labelOf(id),
         status: c.status,
+        clients: [...(this.admissions.get(id) ?? [])].sort(),
+        global: c.source !== "suspension",
         isAdmin: p.isAdmin,
         grantedAt: c.grantedAt,
         revokedAt: c.revokedAt,
@@ -223,6 +252,16 @@ export class MemoryStore implements IdentityStore {
 
   async revoke(principalId: string, actorId: string) {
     const c = this.connectionsById.get(principalId);
+    if (!c && this.admissions.get(principalId)?.size) {
+      this.connectionsById.set(principalId, {
+        status: "revoked",
+        source: "suspension",
+        grantedAt: new Date(),
+        revokedAt: new Date(),
+      });
+      this.auditLog.push({ event: "connection.revoked", principalId, actorId });
+      return true;
+    }
     if (c?.status !== "active") return false;
     c.status = "revoked";
     c.revokedAt = new Date();
@@ -231,9 +270,10 @@ export class MemoryStore implements IdentityStore {
   }
 
   async reconnect(principalId: string, actorId: string) {
-    if (this.connectionsById.get(principalId)?.status !== "revoked") return false;
+    const row = this.connectionsById.get(principalId);
+    if (row?.status !== "revoked") return false;
     this.connectionsById.delete(principalId);
-    this.grant(principalId);
+    if (row.source !== "suspension") this.grant(principalId);
     this.auditLog.push({ event: "connection.added", principalId, actorId, detail: { reconnect: true } });
     return true;
   }

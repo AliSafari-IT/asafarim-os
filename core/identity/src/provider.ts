@@ -19,7 +19,8 @@ import Provider, { type Configuration } from "oidc-provider";
 import type { CryptoKey, JWK, KeyObject } from "jose";
 import type { Headless } from "./headless.ts";
 import type { AuditApi } from "./audit-api.ts";
-import type { AccountStore } from "./accounts.ts";
+import { type AdmissionPolicy, type AdmissionSubject, currentAdmissions, decide } from "./admission.ts";
+import type { Account, AccountStore } from "./accounts.ts";
 import type { OidcClient } from "./clients.ts";
 import { HandoffError, issueTicket, verifyAssertion, type ReplayGuard } from "./handoff.ts";
 import { type HttpContext, readForm, sendHtml } from "./http.ts";
@@ -62,6 +63,8 @@ export interface ProviderDeps {
   // oidc-provider's adapter contract is a constructor taking the model name.
   adapter: Configuration["adapter"];
   accounts: AccountStore;
+  /** Each client's admission policy (default `restricted`), from the server-side clients file. `local` only. */
+  admission?: ReadonlyMap<string, AdmissionPolicy>;
   /** `hub` only. */
   replay?: ReplayGuard;
   /** `hub` only: verified logins waiting for /interaction/:uid/complete in the starting browser. */
@@ -113,6 +116,17 @@ const FRESH_LOGIN_SLACK_SECONDS = 120;
 export function createProvider(deps: ProviderDeps): Provider {
   const { log } = deps;
   const login = loginMethodOf(deps);
+  const policyOf = (clientId: string): AdmissionPolicy => deps.admission?.get(clientId) ?? "restricted";
+  if (login.method === "hub" && [...(deps.admission?.values() ?? [])].includes("public")) {
+    // Public admission writes to this service's own database; Hub mode has none. Fail loudly, never look public.
+    throw new Error('admission "public" needs the local login method');
+  }
+  /** What admission.ts needs to know about an account, for the clients' CURRENT policies. */
+  const subjectOf = (account: Account): AdmissionSubject => ({
+    suspended: account.suspended === true,
+    globalActive: account.isActive,
+    admittedClients: currentAdmissions(account.admittedClients ?? [], policyOf),
+  });
 
   const configuration: Configuration = {
     adapter: deps.adapter,
@@ -132,7 +146,8 @@ export function createProvider(deps: ProviderDeps): Provider {
     conformIdTokenClaims: false,
     claims: {
       openid: ["sub"],
-      email: ["email"],
+      // email_verified comes from stored verification evidence (store.ts), never from a request or a provider claim.
+      email: ["email", "email_verified"],
       profile: ["name", "picture"],
       roles: ["roles"],
     },
@@ -190,15 +205,19 @@ export function createProvider(deps: ProviderDeps): Provider {
       await grant.save();
       return grant;
     },
-    findAccount: async (_ctx, sub) => {
+    findAccount: async (ctx, sub) => {
       const account = await deps.accounts.find(sub);
-      // Inactive or unknown → no account → no tokens.
-      if (!account || !account.isActive) return undefined;
+      // The same decision as at sign-in (admission.ts), for the client this request is for: every code, token,
+      // refresh, ID token and userinfo goes through here. No client (cannot be told) fails closed for anyone
+      // whose access is per client. Suspended, unknown or out of scope → no account → no tokens.
+      const clientId = ctx.oidc?.client?.clientId ?? null;
+      if (!account || !decide(subjectOf(account), clientId).allow) return undefined;
       return {
         accountId: account.sub,
         claims: async () => ({
           sub: account.sub,
           email: account.email ?? undefined,
+          email_verified: account.email ? account.emailVerified : undefined,
           name: account.name ?? undefined,
           picture: account.picture ?? undefined,
           roles: account.roles,
@@ -332,7 +351,10 @@ export function createProvider(deps: ProviderDeps): Provider {
         const sms = login.signIn;
         const reasons: string[] = details.prompt.reasons ?? [];
         const maxAge = Number(details.params.max_age);
-        const authorized = await sms.authorizedPrincipal(ctx as unknown as HttpContext);
+        const authorized = await sms.authorizedPrincipal(
+          ctx as unknown as HttpContext,
+          String(details.params.client_id ?? "") || null,
+        );
         const age = authorized ? Math.floor(Date.now() / 1000) - authorized.authTime : Infinity;
         const fresh =
           (!reasons.includes("login_prompt") || age <= FRESH_LOGIN_SLACK_SECONDS) &&
@@ -399,7 +421,8 @@ export function createProvider(deps: ProviderDeps): Provider {
         return;
       }
       const account = await deps.accounts.find(sub);
-      if (!account || !account.isActive) {
+      // Hub mode has no per-client admission: only a platform-active account passes (admission.ts, no client).
+      if (!account || !decide(subjectOf(account), null).allow) {
         log.warn("interaction.account_refused", { uid, reason: account ? "inactive" : "unknown" });
         sendHtml(ctx, 403, errorPage({ message: msg().errors.inactive, code: "account_inactive" }));
         return;

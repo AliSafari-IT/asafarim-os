@@ -182,6 +182,7 @@ export function createAuditApi(d: AuditApiDeps): AuditApi {
       byEvent,
       pendingRequests: counts.pendingRequests,
       activeConnections: counts.activeConnections,
+      publicAdmissions: counts.publicAdmissions,
     };
   }
 

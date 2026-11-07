@@ -18,12 +18,39 @@ const REVOKED_ADMIN = "0190b6c4-0000-7000-8000-000000000003";
 class Reader implements AuditReader {
   readonly searches: AuditSearch[] = [];
   readonly audits: AuditEntry[] = [];
-  counts: AuditCounts = { perDay: [], pendingRequests: 0, activeConnections: 0 };
+  counts: AuditCounts = { perDay: [], pendingRequests: 0, activeConnections: 0, publicAdmissions: 0 };
   sinceAsked: Date | undefined;
   async principal(id: string): Promise<Principal | null> {
-    if (id === ADMIN) return { id, isAdmin: true, connection: "active", label: "ali@example.test", methods: [] };
-    if (id === MEMBER) return { id, isAdmin: false, connection: "active", label: "m@example.test", methods: [] };
-    if (id === REVOKED_ADMIN) return { id, isAdmin: true, connection: "revoked", label: "r@example.test", methods: [] };
+    if (id === ADMIN)
+      return {
+        id,
+        isAdmin: true,
+        connection: "active",
+        label: "ali@example.test",
+        methods: [],
+        admittedClients: [],
+        emailVerified: false,
+      };
+    if (id === MEMBER)
+      return {
+        id,
+        isAdmin: false,
+        connection: "active",
+        label: "m@example.test",
+        methods: [],
+        admittedClients: [],
+        emailVerified: false,
+      };
+    if (id === REVOKED_ADMIN)
+      return {
+        id,
+        isAdmin: true,
+        connection: "revoked",
+        label: "r@example.test",
+        methods: [],
+        admittedClients: [],
+        emailVerified: false,
+      };
     return null;
   }
   async searchAudit(f: AuditSearch): Promise<{ events: AuditSearchRow[]; next: number | null }> {
@@ -215,6 +242,7 @@ describe("summary", () => {
       ],
       pendingRequests: 2,
       activeConnections: 5,
+      publicAdmissions: 0,
     };
     const r = await get("/admin/v1/audit/summary?days=3", await adminToken());
     expect(store.sinceAsked).toEqual(new Date("2026-10-24T00:00:00Z"));
@@ -230,6 +258,7 @@ describe("summary", () => {
       byEvent: { "login.granted": 4, "otp.verify_failed": 2 },
       pendingRequests: 2,
       activeConnections: 5,
+      publicAdmissions: 0,
     });
     expect((await get("/admin/v1/audit/summary", await adminToken())).body.days).toBe(14);
     expect((await get("/admin/v1/audit/summary?days=91", await adminToken())).status).toBe(400);
