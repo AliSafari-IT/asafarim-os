@@ -1,5 +1,5 @@
-import { InvalidConfigError } from "./errors.ts";
-import type { ResolvedBounds, SessionBounds } from "./types.ts";
+import { InvalidConfigError } from "./errors.js";
+import type { ResolvedBounds, SessionBounds } from "./types.js";
 
 /**
  * An example that matches identity's own session (12 h absolute, 30 min idle, 5 min fresh, 60 s provider re-check). It is

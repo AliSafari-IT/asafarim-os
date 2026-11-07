@@ -1,4 +1,4 @@
-import { InvalidConfigError, InvalidReturnTargetError } from "./errors.ts";
+import { InvalidConfigError, InvalidReturnTargetError } from "./errors.js";
 
 export interface ReturnTargetOptions {
   /** The app's own origin, exactly (`https://app.example`). Relative targets resolve against it. */

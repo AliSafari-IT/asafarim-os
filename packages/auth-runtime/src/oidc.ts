@@ -16,9 +16,9 @@ import {
   ProviderRejectedError,
   TokenValidationError,
   type TokenValidationReason,
-} from "./errors.ts";
-import { endSessionUrl } from "./origin.ts";
-import type { IdentityKey, ValidatedIdentity } from "./types.ts";
+} from "./errors.js";
+import { endSessionUrl } from "./origin.js";
+import type { IdentityKey, ValidatedIdentity } from "./types.js";
 
 export const BACKCHANNEL_LOGOUT_EVENT = "http://schemas.openid.net/event/backchannel-logout";
 

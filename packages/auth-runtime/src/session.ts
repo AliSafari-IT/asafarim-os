@@ -6,8 +6,8 @@
  * Tokens live in the store and nowhere else. The browser holds only an opaque random id.
  */
 import { timingSafeEqual } from "node:crypto";
-import { isFresh, resolveBounds } from "./bounds.ts";
-import { ID_PATTERN, newId } from "./cookies.ts";
+import { isFresh, resolveBounds } from "./bounds.js";
+import { ID_PATTERN, newId } from "./cookies.js";
 import {
   AuthRuntimeError,
   AuthenticationRequiredError,
@@ -26,9 +26,9 @@ import {
   StoreUnavailableError,
   TokenValidationError,
   CsrfError,
-} from "./errors.ts";
-import type { OidcClient } from "./oidc.ts";
-import { normalizeOrigin, validateReturnTarget } from "./return-target.ts";
+} from "./errors.js";
+import type { OidcClient } from "./oidc.js";
+import { normalizeOrigin, validateReturnTarget } from "./return-target.js";
 import type {
   Flow,
   FlowStore,
@@ -44,7 +44,7 @@ import type {
   StoredSession,
   StoreReadResult,
   ValidatedClaims,
-} from "./types.ts";
+} from "./types.js";
 
 export interface SessionRuntimeOptions<A = unknown> {
   oidc: OidcClient;

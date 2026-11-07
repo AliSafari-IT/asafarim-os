@@ -11,7 +11,7 @@ import type {
   SessionStore,
   StoredSession,
   StoreReadResult,
-} from "../types.ts";
+} from "../types.js";
 
 interface Entry {
   s: StoredSession;

@@ -8,7 +8,7 @@
  * tokens. The client is injected and only needs `eval` (ioredis fits).
  */
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
-import { InvalidConfigError, StoreCorruptError } from "../errors.ts";
+import { InvalidConfigError, StoreCorruptError } from "../errors.js";
 import type {
   Flow,
   FlowStore,
@@ -17,7 +17,7 @@ import type {
   SessionStore,
   StoredSession,
   StoreReadResult,
-} from "../types.ts";
+} from "../types.js";
 
 export interface RedisLike {
   eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;

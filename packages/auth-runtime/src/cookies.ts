@@ -1,4 +1,4 @@
-import { InvalidConfigError } from "./errors.ts";
+import { InvalidConfigError } from "./errors.js";
 
 /** Opaque ids are 32 random bytes, base64url (43 characters). */
 export const ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;

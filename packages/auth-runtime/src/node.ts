@@ -6,7 +6,7 @@
  * and forwarded host headers are ignored.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { clearCookie, assertHostCookieName, readCookie, serializeCookie } from "./cookies.ts";
+import { clearCookie, assertHostCookieName, readCookie, serializeCookie } from "./cookies.js";
 import {
   AuthRuntimeError,
   CsrfError,
@@ -14,16 +14,16 @@ import {
   PayloadTooLargeError,
   StepUpRequiredError,
   type AuthRuntimeError as AuthRuntimeErrorType,
-} from "./errors.ts";
-import { createOidcClient, type OidcClient, type OidcClientOptions } from "./oidc.ts";
-import { normalizeOrigin } from "./return-target.ts";
+} from "./errors.js";
+import { createOidcClient, type OidcClient, type OidcClientOptions } from "./oidc.js";
+import { normalizeOrigin } from "./return-target.js";
 import {
   createSessionRuntime,
   type SessionHandle,
   type SessionRuntime,
   type SessionRuntimeOptions,
-} from "./session.ts";
-import type { SessionState } from "./types.ts";
+} from "./session.js";
+import type { SessionState } from "./types.js";
 
 export interface NodeAuthOptions<A = unknown>
   extends

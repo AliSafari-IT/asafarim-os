@@ -3,7 +3,8 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "rewriteRelativeImportExtensions": true,
+    "sourceMap": false,
+    "declarationMap": false,
     "types": ["node"]
   },
   "include": ["src"]

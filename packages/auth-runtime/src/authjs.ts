@@ -123,4 +123,4 @@ export function asafarimAuthConfig(opts: AuthConfigOptions) {
 
 // The forwarded-origin and end-session helpers live in the core (shared with the plain Node adapter) and are re-exported
 // here so this subpath keeps the exact export list `@asafarim/app-sdk` had.
-export { endSessionUrl, forwardedOrigin, visitorOrigin, withForwardedOrigin } from "./origin.ts";
+export { endSessionUrl, forwardedOrigin, visitorOrigin, withForwardedOrigin } from "./origin.js";
