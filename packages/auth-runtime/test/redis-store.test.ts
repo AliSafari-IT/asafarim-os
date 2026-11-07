@@ -12,6 +12,13 @@ import { describeStoreContract, session } from "./store-contract.ts";
 const URL_ = process.env.IDENTITY_TEST_REDIS_URL;
 if (process.env.CI && !URL_) throw new Error("IDENTITY_TEST_REDIS_URL must be set in CI");
 
+/** Logical Redis DB 10: identity's integration files use 11 to 15 (and flush theirs), and turbo runs both packages at once. */
+function redisDb10(url: string) {
+  const u = new URL(url);
+  u.pathname = "/10";
+  return u.href;
+}
+
 const secret = randomBytes(32).toString("base64url");
 const prefix = `auth-rt-test-${randomBytes(4).toString("hex")}`;
 
@@ -22,7 +29,7 @@ if (!URL_) {
     });
   });
 } else {
-  const redis = new Redis(URL_);
+  const redis = new Redis(redisDb10(URL_));
   beforeAll(async () => {
     await redis.ping();
   });
@@ -82,13 +89,15 @@ if (!URL_) {
     });
 
     it("a record copied under another key, a tampered record and a wrong secret all fail as corrupt, never as a session", async () => {
-      const store = make();
+      // Its own key prefix, so the only keys here are this test's.
+      const own = `${prefix}-corrupt`;
+      const store = createRedisStore({ redis, secret, prefix: own });
       const [a, b] = [newId(), newId()];
       const ra = session({}, Date.now());
       const rb = session({}, Date.now());
       await store.create(a, ra, { now: Date.now() });
       await store.create(b, rb, { now: Date.now() });
-      const keys = (await redis.keys(`${prefix}:s:*`)).sort();
+      const keys = (await redis.keys(`${own}:s:*`)).sort();
       const [k1, k2] = [(await redis.hget(keys[0]!, "rec"))!, (await redis.hget(keys[1]!, "rec"))!];
       // Swap the two encrypted records: each key now holds the other's record.
       await redis.hset(keys[0]!, "rec", k2);
@@ -100,7 +109,7 @@ if (!URL_) {
 
       const c = newId();
       await store.create(c, session({}, Date.now()), { now: Date.now() });
-      const ck = (await redis.keys(`${prefix}:s:*`)).find((k) => !keys.includes(k))!;
+      const ck = (await redis.keys(`${own}:s:*`)).find((k) => !keys.includes(k))!;
       const rec = (await redis.hget(ck, "rec"))!;
       await redis.hset(ck, "rec", rec.slice(0, -4) + (rec.endsWith("AAAA") ? "BBBB" : "AAAA"));
       await expect(store.get(c, { touch: false, idleMs: null, now: Date.now() })).rejects.toBeInstanceOf(
@@ -109,7 +118,7 @@ if (!URL_) {
 
       const d = newId();
       await store.create(d, session({}, Date.now()), { now: Date.now() });
-      const other = createRedisStore({ redis, secret: randomBytes(32).toString("base64url"), prefix });
+      const other = createRedisStore({ redis, secret: randomBytes(32).toString("base64url"), prefix: own });
       expect(await other.get(d, { touch: false, idleMs: null, now: Date.now() })).toEqual({ status: "missing" }); // different key digest: not even found
     });
 
