@@ -49,6 +49,8 @@ describe("the legal pages", () => {
       /var COOKIE = "([^"]+)"/.exec(source("packages/theme/theme.js"))?.[1],
       /LOCALE_COOKIE = "([^"]+)"/.exec(source("packages/locale/src/index.ts"))?.[1],
       /SESSION_COOKIE_NAME = "([^"]+)"/.exec(source("packages/auth-runtime/src/authjs.ts"))?.[1],
+      // The auth-runtime's plain Node adapter has default cookies of its own (__Host-asafarim.sid and .flow); no OS app uses
+      // that adapter yet, so nothing in the OS sets them. List them here, and in the policy, when the first OS app adopts it.
       /ACCESS_COOKIE_NAME = "([^"]+)"/.exec(source("packages/registry-protocol/src/access-token.ts"))?.[1],
       /AUTH_COOKIE = "([^"]+)"/.exec(source("core/identity/src/sign-in.ts"))?.[1],
       /FLOW_COOKIE = "([^"]+)"/.exec(source("core/identity/src/sign-in.ts"))?.[1],

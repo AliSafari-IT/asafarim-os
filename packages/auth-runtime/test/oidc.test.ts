@@ -194,15 +194,15 @@ describe("unit: code exchange and ID-token validation", () => {
   });
 
   it("refuses a wrong issuer, audience, nonce, expiry, signature and algorithm with a typed reason", async () => {
-    const cases: [string, Promise<unknown>, string][] = [
-      ["issuer", exchangeWith({ iss: "https://evil.example" }), "issuer"],
-      ["audience", exchangeWith({ aud: "someone-else" }), "audience"],
-      ["nonce", exchangeWith({ nonce: "other" }), "nonce"],
-      ["expired", exchangeWith({ exp: Math.floor(Date.now() / 1000) - 3600 }), "expired"],
-      ["signed by another key", exchangeWith({}, { key: "evil" }), "signature"],
+    const cases: [string, () => Promise<unknown>, string][] = [
+      ["issuer", () => exchangeWith({ iss: "https://evil.example" }), "issuer"],
+      ["audience", () => exchangeWith({ aud: "someone-else" }), "audience"],
+      ["nonce", () => exchangeWith({ nonce: "other" }), "nonce"],
+      ["expired", () => exchangeWith({ exp: Math.floor(Date.now() / 1000) - 3600 }), "expired"],
+      ["signed by another key", () => exchangeWith({}, { key: "evil" }), "signature"],
     ];
-    for (const [label, p, reason] of cases) {
-      const err = await p.catch((e: unknown) => e);
+    for (const [label, run, reason] of cases) {
+      const err = await run().catch((e: unknown) => e);
       expect(err, label).toBeInstanceOf(TokenValidationError);
       expect((err as TokenValidationError).reason, label).toBe(reason);
     }

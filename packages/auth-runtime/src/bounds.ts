@@ -12,6 +12,13 @@ export const defaultBounds: Readonly<SessionBounds> = Object.freeze({
   revalidateMs: 60_000,
 });
 
+/**
+ * The shortest step-up window the runtime accepts. core/identity answers `prompt=login` from its own session when that
+ * session is younger than 120 s (FRESH_LOGIN_SLACK_SECONDS in core/identity/src/provider.ts), so a shorter `freshMs` can
+ * loop: the provider reuses a login the app already finds too old. core/identity/test/fresh-window.test.ts keeps the two equal.
+ */
+export const MIN_FRESH_MS = 120_000;
+
 const positive = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0;
 
 /** Validate and fill in the optional numbers. Throws {@link InvalidConfigError} on nonsense (zero, negative, unordered). */
@@ -24,6 +31,8 @@ export function resolveBounds(b: SessionBounds | undefined): ResolvedBounds {
   if (!positive(absoluteMs)) throw new InvalidConfigError("bounds.absoluteMs must be positive");
   if (idleMs !== null && !positive(idleMs)) throw new InvalidConfigError("bounds.idleMs must be positive or null");
   if (!positive(freshMs)) throw new InvalidConfigError("bounds.freshMs must be positive");
+  if (freshMs < MIN_FRESH_MS)
+    throw new InvalidConfigError("bounds.freshMs must be at least 120000 (identity reuses a login younger than 120 s)");
   if (!positive(revalidateMs)) throw new InvalidConfigError("bounds.revalidateMs must be positive");
   if (typeof refreshSkewMs !== "number" || !Number.isFinite(refreshSkewMs) || refreshSkewMs < 0)
     throw new InvalidConfigError("bounds.refreshSkewMs must not be negative");

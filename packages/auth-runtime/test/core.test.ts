@@ -7,6 +7,7 @@ import {
   clearCookie,
   defaultBounds,
   isFresh,
+  MIN_FRESH_MS,
   newId,
   readCookie,
   resolveBounds,
@@ -29,17 +30,25 @@ describe("unit: bounds", () => {
       revalidateMs: 60_000,
     });
   });
+  it("accept exactly the minimum step-up window", () => {
+    expect(MIN_FRESH_MS).toBe(120_000);
+    expect(
+      resolveBounds({ absoluteMs: 1_000_000, idleMs: null, freshMs: MIN_FRESH_MS, revalidateMs: 60_000 }).freshMs,
+    ).toBe(120_000);
+  });
   it("refuse nonsense and unordered values", () => {
-    const ok = { absoluteMs: 1000, idleMs: 500, freshMs: 100, revalidateMs: 50 };
-    expect(resolveBounds(ok).idleMs).toBe(500);
+    const ok = { absoluteMs: 1_000_000, idleMs: 500_000, freshMs: 150_000, revalidateMs: 50_000 };
+    expect(resolveBounds(ok).idleMs).toBe(500_000);
     expect(resolveBounds({ ...ok, idleMs: null }).idleMs).toBeNull();
     for (const bad of [
       { ...ok, absoluteMs: 0 },
       { ...ok, absoluteMs: Number.NaN },
       { ...ok, idleMs: -1 },
-      { ...ok, idleMs: 2000 },
-      { ...ok, freshMs: 2000 },
-      { ...ok, revalidateMs: 2000 },
+      { ...ok, idleMs: 2_000_000 },
+      { ...ok, freshMs: 2_000_000 },
+      { ...ok, freshMs: 119_999 }, // below identity's 120 s login reuse window
+      { ...ok, freshMs: 1000 },
+      { ...ok, revalidateMs: 2_000_000 },
       { ...ok, revalidateMs: 0 },
       { ...ok, refreshSkewMs: -1 },
       { ...ok, refreshLeaseMs: 0 },

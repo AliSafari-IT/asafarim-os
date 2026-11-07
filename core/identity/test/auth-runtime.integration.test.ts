@@ -803,7 +803,7 @@ if (!CONFIGURED) {
 
       it("3b. step-up: a stale auth_time is refused with a restart URL; prompt=login at the real provider yields a fresh auth_time and replaces the session", async () => {
         const app = apps[A]!;
-        const stepAuth = makeAuth(A, app.base, { bounds: { ...BOUNDS, freshMs: 3000 }, prefix: "rt-step" });
+        const stepAuth = makeAuth(A, app.base, { bounds: { ...BOUNDS, freshMs: 120_000 }, prefix: "rt-step" });
         const original = app.auth;
         app.auth = stepAuth;
         try {
@@ -814,7 +814,7 @@ if (!CONFIGURED) {
           const oldSession = sessionOf(r.appJar)!;
           const oldAuthTime = (await stepAuth.current(reqWith(r.appJar), { touch: false }))!.view.authTime;
 
-          await sleep(3400);
+          clock.offset = 130_000; // by the runtime's clock the sign-in is now 130 s old: older than freshMs (the floor is 120 s)
           const err = await stepAuth
             .require(reqWith(r.appJar), { fresh: true, returnTo: "/billing" })
             .catch((e: unknown) => e);
@@ -826,6 +826,8 @@ if (!CONFIGURED) {
 
           // The provider also considers the sign-in old (identity answers prompt=login from its own session only within 120 s).
           await ageIdentitySessions(await principalOf(email), 600);
+          clock.offset = 0; // the re-login happens in real time
+          await sleep(1100); // auth_time has one-second resolution: make the new one strictly later
           // The browser follows the restart URL. The provider still has this browser's session, yet prompt=login makes it ask again.
           const again = await browserSignIn(app, email, {
             opJar: r.opJar,
@@ -849,15 +851,15 @@ if (!CONFIGURED) {
 
       it("3c. the browser's ?fresh=1 is a request, not evidence: when the provider answers from its own recent session, the runtime re-checks auth_time and refuses", async () => {
         const app = apps[A]!;
-        const stepAuth = makeAuth(A, app.base, { bounds: { ...BOUNDS, freshMs: 60_000 }, prefix: "rt-step" });
+        const stepAuth = makeAuth(A, app.base, { bounds: { ...BOUNDS, freshMs: 120_000 }, prefix: "rt-step" });
         const original = app.auth;
         app.auth = stepAuth;
         try {
           const email = "stepup-3c@example.test";
           const r = await browserSignIn(app, email);
           // identity answers prompt=login from a session younger than its own 120 s slack, so the ID token carries the SAME
-          // auth_time. By the runtime's clock that sign-in is now 100 s old: older than freshMs, so the step-up is not met.
-          clock.offset = 100_000;
+          // auth_time. By the runtime's clock that sign-in is now 130 s old: older than freshMs, so the step-up is not met.
+          clock.offset = 130_000;
           const again = await browserSignIn(app, email, { opJar: r.opJar, appJar: r.appJar, query: "?fresh=1" });
           expect(again.loginShown, "the provider reused its own session").toBe(false);
           expect(again.final!.status).toBe(401);
