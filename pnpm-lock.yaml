@@ -688,6 +688,9 @@ importers:
       '@asafarim/app-manifest':
         specifier: workspace:*
         version: link:../app-manifest
+      '@asafarim/auth-runtime':
+        specifier: workspace:*
+        version: link:../auth-runtime
       '@asafarim/events':
         specifier: workspace:*
         version: link:../events

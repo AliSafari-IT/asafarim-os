@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/flow",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Flow: ASafariM OS workflows across apps, through events only (ADR 0001). Its first workflow turns a #issue study note in Docs into a GitHub issue.",
   "scripts": {

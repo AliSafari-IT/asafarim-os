@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/notes",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Notes: the first ASafariM OS reference app (P3.2). Tiny on purpose: it proves the plug-and-play contract end to end.",
   "scripts": {
