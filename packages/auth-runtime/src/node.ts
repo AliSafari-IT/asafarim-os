@@ -112,6 +112,11 @@ export function createNodeAuth<A = unknown>(opts: NodeAuthOptions<A>): NodeAuth 
   assertHostCookieName(sessionCookie);
   assertHostCookieName(flowCookie);
   if (sessionCookie === flowCookie) throw new InvalidConfigError("session and flow cookies must differ");
+  // Without a requester every client would share one "unknown" bucket and one attacker could lock everyone out of sign-in.
+  if (opts.deps?.budget && !opts.requester)
+    throw new InvalidConfigError(
+      "requester(request) is required when deps.budget is set (the adapter cannot know the client address)",
+    );
   const postLogout = opts.postLogoutRedirectUri ?? `${origin}/`;
 
   const oidc =

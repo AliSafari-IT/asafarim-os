@@ -224,6 +224,7 @@ if (!CONFIGURED) {
           store: s,
           flows: s,
           bounds: over.bounds ?? BOUNDS,
+          ...(over.budget ? { requester: (r: Request) => r.headers.get("x-test-requester") ?? "test" } : {}),
           afterSignIn: ({ locale, intent }) => [
             ...(locale ? [`app-locale=${locale}; Path=/; Secure; HttpOnly; SameSite=Lax`] : []),
             ...(intent ? [`app-intent=${intent}; Path=/; Secure; HttpOnly; SameSite=Lax`] : []),

@@ -61,7 +61,7 @@ beforeAll(() => {
     ],
     { cwd: root, stdio: "pipe" },
   );
-});
+}, 120_000); // a cold tsc build on a loaded CI runner takes more than vitest's 10 s hook default
 afterAll(() => rmSync(out, { recursive: true, force: true }));
 
 describe("packaging: the built package", () => {

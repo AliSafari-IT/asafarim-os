@@ -267,8 +267,15 @@ describe("unit: sign-in start budget", () => {
     expect(refused.headers.get("location")).toBeNull();
     expect(puts).toBe(1); // nothing written for the refused request
     expect(asked).toEqual(["start:alice", "start-global:global", "start:flooder"]);
-    await t.auth.handleRequest(req("/auth/start")); // no requester supplied
+    await t.auth.handleRequest(req("/auth/start")); // requester() has no answer for this request
     expect(asked.at(-2)).toBe("start:unknown");
+  });
+
+  it("refuses at construction to use a budget without a requester (one shared bucket would let one client lock everyone out)", () => {
+    expect(() => setup({ deps: { now: () => Date.now(), budget: async () => true } })).toThrow(/requester/);
+    expect(() =>
+      setup({ requester: () => "r", deps: { now: () => Date.now(), budget: async () => true } }),
+    ).not.toThrow();
   });
 });
 
@@ -303,7 +310,10 @@ describe("unit: back-channel logout endpoint", () => {
 
   it("spends the per-session budget only after the token validated, and a flood of garbage only the raw cap", async () => {
     const asked: string[] = [];
-    const t = setup({ deps: { now: () => Date.now(), budget: async (n, k) => (asked.push(`${n}:${k}`), true) } });
+    const t = setup({
+      requester: () => "r",
+      deps: { now: () => Date.now(), budget: async (n, k) => (asked.push(`${n}:${k}`), true) },
+    });
     await t.auth.handleRequest(bc("logout_token=garbage"));
     await t.auth.handleRequest(bc("logout_token=garbage-2"));
     expect(asked).toEqual(["backchannel-logout-raw:global", "backchannel-logout-raw:global"]);
@@ -313,7 +323,7 @@ describe("unit: back-channel logout endpoint", () => {
   });
 
   it("answers 429 when the sender is over budget and 503 when the store is down", async () => {
-    const limited = setup({ deps: { budget: async () => false, now: () => Date.now() } });
+    const limited = setup({ requester: () => "r", deps: { budget: async () => false, now: () => Date.now() } });
     expect((await limited.auth.handleRequest(bc("logout_token=valid-logout-token")))!.status).toBe(429);
     const t = setup();
     t.store.recordLogout = async () => {
