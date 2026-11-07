@@ -557,8 +557,8 @@ importers:
         specifier: ^3.4.0
         version: 3.4.0
       jose:
-        specifier: ^6.2.12
-        version: 6.2.12
+        specifier: ^6.2.15
+        version: 6.2.15
       pg:
         specifier: ^8.23.1
         version: 8.23.1
@@ -600,8 +600,8 @@ importers:
         specifier: ^6.0.0
         version: 6.0.0(supports-color@7.2.0)
       jose:
-        specifier: ^6.2.12
-        version: 6.2.12
+        specifier: ^6.2.15
+        version: 6.2.15
       oidc-provider:
         specifier: ^9.12.2
         version: 9.12.2(supports-color@7.2.0)
@@ -948,8 +948,8 @@ importers:
   tools/dev-hub:
     dependencies:
       jose:
-        specifier: ^6.2.12
-        version: 6.2.12
+        specifier: ^6.2.15
+        version: 6.2.15
     devDependencies:
       '@asafarim/config':
         specifier: workspace:*
@@ -3161,8 +3161,8 @@ packages:
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
 
-  jose@6.2.12:
-    resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
+  jose@6.2.15:
+    resolution: {integrity: sha512-qdF6ewcZARtef63fJ9AKKZPgxw+t7USH6HLXYcD4CrdmSvDp79rpJSPFEKc90QBeGS63u1KQtN2MZQHC0yDIzA==}
 
   jpeg-js@0.4.4:
     resolution: {integrity: sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg==}
@@ -4291,7 +4291,7 @@ snapshots:
   '@auth/core@0.41.3':
     dependencies:
       '@panva/hkdf': 1.2.1
-      jose: 6.2.12
+      jose: 6.2.15
       oauth4webapi: 3.8.8
       preact: 10.24.3
       preact-render-to-string: 6.5.11(preact@10.24.3)
@@ -6256,7 +6256,7 @@ snapshots:
 
   isexe@2.0.0: {}
 
-  jose@6.2.12: {}
+  jose@6.2.15: {}
 
   jpeg-js@0.4.4: {}
 
@@ -6888,7 +6888,7 @@ snapshots:
   oidc-provider@9.12.2(supports-color@7.2.0):
     dependencies:
       debug: 4.4.3(supports-color@7.2.0)
-      jose: 6.2.12
+      jose: 6.2.15
       koa: 3.2.1
     transitivePeerDependencies:
       - supports-color
