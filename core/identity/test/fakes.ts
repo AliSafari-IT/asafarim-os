@@ -150,6 +150,7 @@ export class MemoryStore implements IdentityStore {
     const status = this.connectionsById.get(principalId)?.status;
     if (status === "revoked") return "suspended";
     if (status === "active") return "global";
+    if (!this.principals.get(principalId)!.verifiedAt) return "needs_verification";
     const set = this.admissions.get(principalId) ?? new Set<string>();
     this.admissions.set(principalId, set);
     if (set.has(clientId)) return "already";

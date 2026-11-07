@@ -28,10 +28,24 @@ if (process.env.CI && !REDIS_URL) throw new Error("IDENTITY_TEST_REDIS_URL must 
 const SECRET = randomBytes(32).toString("base64url");
 const CLIENT_ID = "demo";
 
+/** Hub-mode accounts as the platform's view gives them: only `isActive`, which means state active + global access. */
+type HubRow = Omit<Account, "state" | "globalAccess" | "emailVerified" | "admittedClients"> & { isActive: boolean };
+
 class MemoryAccounts implements AccountStore {
-  readonly rows = new Map<string, Account>();
+  private readonly accounts = new Map<string, Account>();
+  readonly rows = {
+    set: (sub: string, r: HubRow) => {
+      const { isActive, ...rest } = r;
+      this.accounts.set(sub, {
+        ...rest,
+        state: isActive ? "active" : "suspended",
+        globalAccess: isActive,
+        admittedClients: [],
+      });
+    },
+  };
   async find(sub: string) {
-    return this.rows.get(sub) ?? null;
+    return this.accounts.get(sub) ?? null;
   }
   async ping() {}
   async close() {}

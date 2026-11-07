@@ -34,6 +34,8 @@ export interface GoogleIdentity {
    * matches the address's domain). Only then may the sign-in join an existing email identity.
    */
   authoritative: boolean;
+  /** Authority came from the Workspace (`hd`) rule, not from a consumer Gmail address. */
+  workspace?: boolean;
 }
 
 export class GoogleError extends Error {
@@ -85,8 +87,10 @@ export function identityFromClaims(claims: Record<string, unknown>): GoogleIdent
   const email = verified && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw) && raw.length <= 254 ? raw : null;
   const domain = email ? email.slice(email.lastIndexOf("@") + 1) : "";
   const hd = typeof claims.hd === "string" ? claims.hd.toLowerCase() : "";
-  const authoritative = Boolean(email) && (CONSUMER_DOMAINS.has(domain) || (hd !== "" && hd === domain));
-  return { subject, email, authoritative };
+  const consumer = CONSUMER_DOMAINS.has(domain);
+  const workspace = Boolean(email) && !consumer && hd !== "" && hd === domain;
+  const authoritative = Boolean(email) && (consumer || workspace);
+  return { subject, email, authoritative, workspace };
 }
 
 export class GoogleOidc implements GoogleSignIn {

@@ -74,6 +74,7 @@ describe("Google sign-in", () => {
       subject: "1234567890",
       email: "ali@gmail.com",
       authoritative: true,
+      workspace: false,
     });
     expect(Object.fromEntries(sent[0]!)).toMatchObject({
       grant_type: "authorization_code",
@@ -107,15 +108,25 @@ describe("Google sign-in", () => {
       subject: "1",
       email: "ali@gmail.com",
       authoritative: true,
+      workspace: false,
     });
-    expect(identityFromClaims({ sub: "1", email: "a@co.be", email_verified: true, hd: "co.be" }).authoritative).toBe(
-      true,
-    );
+    // Workspace: authority comes from `hd` equal to the address's domain (the documented, owner-accepted exception).
+    expect(identityFromClaims({ sub: "1", email: "a@co.be", email_verified: true, hd: "co.be" })).toEqual({
+      subject: "1",
+      email: "a@co.be",
+      authoritative: true,
+      workspace: true,
+    });
+    // `hd` on a consumer address changes nothing: Gmail is already the authority, and it is not the Workspace rule.
+    expect(
+      identityFromClaims({ sub: "1", email: "a@gmail.com", email_verified: true, hd: "gmail.com" }).workspace,
+    ).toBe(false);
     // A non-Google address on a Google account: shown, but never used to join an existing account.
     expect(identityFromClaims({ sub: "1", email: "a@co.be", email_verified: true })).toEqual({
       subject: "1",
       email: "a@co.be",
       authoritative: false,
+      workspace: false,
     });
     expect(identityFromClaims({ sub: "1", email: "a@co.be", email_verified: true, hd: "other.be" }).authoritative).toBe(
       false,
@@ -124,6 +135,7 @@ describe("Google sign-in", () => {
       subject: "1",
       email: null,
       authoritative: false,
+      workspace: false,
     });
     expect(() => identityFromClaims({ sub: "../x" })).toThrow(GoogleError);
   });
