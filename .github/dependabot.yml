@@ -10,6 +10,14 @@ updates:
       dev-tooling:
         dependency-type: development
         update-types: [minor, patch]
+      # react and react-dom must have the exact same version (react-dom throws on a
+      # mismatch), so Dependabot moves them, and their types, in one PR.
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
     ignore:
       # No semver-major bumps from the bot, for any package. Toolchain majors
       # (TypeScript, ESLint + typescript-eslint, @types/node, Zod, Vitest) are a
