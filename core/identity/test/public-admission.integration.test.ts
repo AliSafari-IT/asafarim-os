@@ -22,7 +22,7 @@ import { createProvider, endBrowserSession } from "../src/provider.ts";
 import { KEY_PREFIX, endSessionsOfAccount, redisAdapterFactory } from "../src/redis-adapter.ts";
 import { createSignIn } from "../src/sign-in.ts";
 import { PgIdentityStore, PrincipalAccounts } from "../src/store.ts";
-import { CapturingMailer, FakeGoogle, pid } from "./fakes.ts";
+import { CapturingMailer, CapturingSender, FakeGoogle, pid } from "./fakes.ts";
 
 const REDIS_URL = process.env.IDENTITY_TEST_REDIS_URL;
 const DATABASE_URL = process.env.IDENTITY_TEST_DATABASE_URL;
@@ -58,6 +58,7 @@ describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + 
   let jwks: ReturnType<typeof createLocalJWKSet>;
   const mailer = new CapturingMailer();
   const google = new FakeGoogle();
+  const sms = new CapturingSender();
   /** Every findAccount call the real provider makes: which gate, and which client it carried. */
   const findAccountCalls: { clientId: string | null; gate: string }[] = [];
 
@@ -144,6 +145,7 @@ describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + 
       admission: policies,
       otpSecret: "o".repeat(40),
       email: { mailer, dailyLimit: 1000 },
+      sms: { sender: sms, allowedPrefixes: ["+32"], dailyLimit: 1000 },
       google,
       ephemeral: new RedisEphemeral(redis),
       store,
@@ -940,6 +942,39 @@ describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + 
     const sub = (await principalOf(email))!;
     expect((await store.principal(sub))!).toMatchObject({ isAdmin: false, connection: "none" });
     expect((await new PrincipalAccounts(store).find(sub))!.roles).toEqual([]);
+  });
+
+  it("a phone number proved by SMS is admitted to a public client too, with no email claim", async () => {
+    const phone = "+32470000123";
+    const jar = new Jar();
+    const a = await authorize(PUB, jar);
+    await resetLimits();
+    const page = await get(a.loginUrl!, jar);
+    const csrf = csrfOf(await page.text());
+    const sent = await post("/login/start", jar, { csrf, via: "sms", identifier: phone });
+    expect(sent.status).toBe(303);
+    const code = /(\d{6})/.exec(sms.sent.at(-1)!.body)![1]!;
+    const res = await post("/login/verify", jar, { csrf, code });
+    expect(res.status).toBe(200);
+    let location = refreshOf(await res.text())!;
+    let callback: URL | undefined;
+    for (let i = 0; i < 8 && !callback; i++) {
+      const step = await get(location, jar);
+      location = new URL(step.headers.get("location") ?? "/", issuer).href;
+      if (location.startsWith(`${rpBase}/cb`)) callback = new URL(location);
+    }
+    expect(callback).toBeDefined();
+    const t = await exchange(PUB, callback!, a.verifier);
+    expect(t.status).toBe(200);
+    const { payload } = await jwtVerify(t.json.id_token as string, jwks, { issuer, audience: PUB });
+    const sub = (
+      await db.query("SELECT principal_id FROM identities WHERE method = 'phone' AND identifier = $1", [phone])
+    ).rows[0].principal_id as string;
+    expect(payload.sub).toBe(sub);
+    expect(payload.email).toBeUndefined();
+    expect(payload.email_verified).toBeUndefined();
+    expect(payload.roles).toEqual([]);
+    expect(await admissionsOf(sub)).toEqual([PUB]);
   });
 
   // ---- no extra registration fields (addendum A7) ------------------------------------------------

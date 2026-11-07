@@ -405,6 +405,18 @@ describe("local sign-in", () => {
     return go(b, "GET", `/login/google/callback?${back.toString()}`);
   }
 
+  it("an identifier conflict while an admin connects someone is a generic retryable page, not a server error", async () => {
+    const admin = new Browser();
+    await emailSignIn(admin, ADMIN);
+    const csrf = csrfOf((await go(admin, "GET", "/admin")).body);
+    store.addConnection = async () => {
+      throw new Error("identifier_conflict");
+    };
+    const res = await go(admin, "POST", "/admin/connections", { csrf, identifier: "taken@example.test" });
+    expect(res.status).toBe(409);
+    expect(res.body).toContain("Please try again");
+  });
+
   describe("an identifier conflict (routing only: MemoryStore, not acceptance evidence)", () => {
     it("shows a generic retryable page, audits the typed reason and starts no session", async () => {
       store.verifiedLogin = async () => ({ kind: "conflict", reason: "identifier_taken" });

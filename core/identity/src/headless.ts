@@ -249,14 +249,15 @@ export function createHeadless(d: HeadlessDeps): Headless {
     }
     const verified = await d.store.verifiedLogin("email", email);
     if (verified.kind !== "ok") {
-      // A conflict on the identifier: say so generically and retryably, never reveal why.
+      // A conflict on the identifier: the SDK reads any 5xx as "unavailable" and the app shows its generic
+      // retry, so this adds no new answer for consumers and reveals nothing.
       await audit({
         event: "login.not_authorized",
         method: "email",
         subjectHandle: subject,
         detail: { clientId: client.id, via: "headless", reason: verified.reason },
       });
-      return json(ctx, 409, { error: "try_again" });
+      return json(ctx, 503, { error: "unavailable" });
     }
     const sub = verified.principalId;
     const principal = await d.store.principal(sub);

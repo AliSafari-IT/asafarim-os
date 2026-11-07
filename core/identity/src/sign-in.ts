@@ -1133,7 +1133,14 @@ export function createSignIn(d: SignInDeps): SignIn {
       await showAdmin(ctx, admin, 400, msg().admin.enterIdentifier);
       return true;
     }
-    await d.store.addConnection(email ? "email" : "phone", (email ?? phone)!, actor);
+    try {
+      await d.store.addConnection(email ? "email" : "phone", (email ?? phone)!, actor);
+    } catch (err) {
+      if (!(err instanceof Error) || err.message !== "identifier_conflict") throw err;
+      // The identifier changed hands under the admin: generic and retryable, nothing was created.
+      await showAdmin(ctx, admin, 409, msg().flow.tryAgain);
+      return true;
+    }
     seeOther(ctx, "/admin?done=added");
     return true;
   }

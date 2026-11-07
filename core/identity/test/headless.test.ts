@@ -91,6 +91,13 @@ describe("headless sign-in for trusted apps", () => {
     expect((await call("/headless/v1/principal", { sub: admin.data.sub })).data).toEqual({ active: false });
   });
 
+  it("an identifier conflict answers as unavailable (the SDK's generic retry), with no new error for consumers", async () => {
+    store.verifiedLogin = async () => ({ kind: "conflict", reason: "identifier_taken" });
+    const res = await signIn("conflict@example.test");
+    expect(res.status).toBe(503);
+    expect(res.data).toEqual({ error: "unavailable" });
+  });
+
   it("every language the platform supports, with English for anything else", () => {
     expect(codeEmail("fr", "Breinhap", "123456", false, "id.example.test").subject).toBe(
       "Votre code pour Breinhap : 123456",
