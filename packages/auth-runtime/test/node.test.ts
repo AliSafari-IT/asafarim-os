@@ -143,6 +143,25 @@ describe("unit: node adapter routes", () => {
     expect(replay.status).toBe(400);
   });
 
+  it("afterSignIn receives only what the server-side flow carried, and its cookies are added to the callback response", async () => {
+    const seen: unknown[] = [];
+    const t = setup({
+      locales: ["nl", "en"],
+      defaultLocale: "en",
+      intents: { register: {} },
+      afterSignIn: (info) => (seen.push(info), [`app-locale=${info.locale}; Path=/; Secure; HttpOnly; SameSite=Lax`]),
+    });
+    const start = (await t.auth.handleRequest(req("/auth/start?return=/x&locale=nl&intent=register")))!;
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    const cb = (await t.auth.handleRequest(
+      req(`/auth/callback?code=good-code&state=${state}&locale=en&intent=other&return=https://evil.example/`, {
+        cookie: `__Host-asafarim.flow=${cookieValue(start, "__Host-asafarim.flow")}`,
+      }),
+    ))!;
+    expect(seen).toEqual([{ returnTo: "/x", locale: "nl", intent: "register" }]);
+    expect(cookiesOf(cb).some((c) => c === "app-locale=nl; Path=/; Secure; HttpOnly; SameSite=Lax")).toBe(true);
+  });
+
   it("only GET reaches start and callback; only POST reaches logout and back-channel logout", async () => {
     const { auth } = setup();
     expect((await auth.handleRequest(req("/auth/start", { method: "POST", origin: ORIGIN })))!.status).toBe(405);

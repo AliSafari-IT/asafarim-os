@@ -8,6 +8,7 @@
  * Regenerate only to record an intended change: `UPDATE_GOLDEN=1 pnpm --filter @asafarim/app-sdk test`.
  */
 import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sdk from "../src/index.ts";
@@ -214,6 +215,38 @@ function capture() {
     endSession,
   };
 }
+
+describe("the golden file is tied to the consumers' real call sites", () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const source = (file: string) => readFileSync(path.join(root, file), "utf8");
+
+  it.each([
+    ["notes", "apps/notes/lib/auth.ts", /ASAFARIM_APP_ID \?\? "notes"/],
+    ["docs", "apps/docs/lib/auth.ts", /ASAFARIM_APP_ID \?\? "docs"/],
+    ["flow", "apps/flow/lib/auth.ts", /ASAFARIM_APP_ID \?\? "flow"/],
+    ["admin", "core/admin/lib/auth.ts", /ADMIN_OIDC_CLIENT_ID \?\? "core-admin"/],
+  ] as const)(
+    "%s: lib/auth.ts still calls asafarimAuthConfig from @asafarim/app-sdk with the options the fixtures use",
+    (name, file, clientId) => {
+      const src = source(file);
+      expect(src).toMatch(/from "@asafarim\/app-sdk"/);
+      expect(src).toMatch(/asafarimAuthConfig\(\{/);
+      expect(src).toMatch(clientId);
+      expect(src).toMatch(/issuer,|issuer:/);
+      expect(src).toMatch(/clientSecret: process\.env\.OIDC_CLIENT_SECRET \|\| undefined/);
+      expect(src).toMatch(/secret: process\.env\.AUTH_SECRET/);
+      expect(CONSUMERS[name].clientId).toBe(/"([a-z-]+)"/.exec(clientId.source.replace(/\\/g, ""))![1]);
+      // Only the Admin console keeps the ID token and caps the session; no other consumer passes these options.
+      expect(/keepIdToken: true/.test(src)).toBe(name === "admin");
+      expect(/sessionMaxAgeSeconds/.test(src)).toBe(name === "admin");
+    },
+  );
+
+  it("the Admin console's session cap is the 3600 the fixtures use", () => {
+    expect(source("core/admin/lib/auth.ts")).toMatch(/SESSION_SECONDS = 3600/);
+    expect(CONSUMERS.admin.sessionMaxAgeSeconds).toBe(3600);
+  });
+});
 
 describe("auth golden fixtures (captured from the pre-move implementation)", () => {
   beforeEach(() => {
