@@ -19,8 +19,8 @@ import Provider, { type Configuration } from "oidc-provider";
 import type { CryptoKey, JWK, KeyObject } from "jose";
 import type { Headless } from "./headless.ts";
 import type { AuditApi } from "./audit-api.ts";
-import { type AdmissionPolicy, type AdmissionSubject, currentAdmissions, decide } from "./admission.ts";
-import type { Account, AccountStore } from "./accounts.ts";
+import { type AdmissionPolicy, decide, underPolicies } from "./admission.ts";
+import type { AccountStore } from "./accounts.ts";
 import type { OidcClient } from "./clients.ts";
 import { HandoffError, issueTicket, verifyAssertion, type ReplayGuard } from "./handoff.ts";
 import { type HttpContext, readForm, sendHtml } from "./http.ts";
@@ -78,6 +78,8 @@ export interface ProviderDeps {
    * to loopback/private addresses are refused).
    */
   testOnlyFetch?: Configuration["fetch"];
+  /** Tests only: told which client each findAccount call carries, to prove every gate has one. */
+  onFindAccount?: (call: { clientId: string | null; gate: string }) => void;
 }
 
 /** The completion cookie, scoped to one interaction's /complete path. */
@@ -121,12 +123,6 @@ export function createProvider(deps: ProviderDeps): Provider {
     // Public admission writes to this service's own database; Hub mode has none. Fail loudly, never look public.
     throw new Error('admission "public" needs the local login method');
   }
-  /** What admission.ts needs to know about an account, for the clients' CURRENT policies. */
-  const subjectOf = (account: Account): AdmissionSubject => ({
-    suspended: account.suspended === true,
-    globalActive: account.isActive,
-    admittedClients: currentAdmissions(account.admittedClients ?? [], policyOf),
-  });
 
   const configuration: Configuration = {
     adapter: deps.adapter,
@@ -205,13 +201,17 @@ export function createProvider(deps: ProviderDeps): Provider {
       await grant.save();
       return grant;
     },
-    findAccount: async (ctx, sub) => {
+    // Every gate reaches here with the client oidc-provider has already validated: the grant's own client for a
+    // code, refresh token or access token (`token.clientId`), else the authorization request's (`ctx.oidc.client`).
+    // If both exist and differ, deny. If neither does, the client is null: only a global connection passes.
+    findAccount: async (ctx, sub, token) => {
+      const tokenClient = (token as { clientId?: string } | undefined)?.clientId ?? null;
+      const requestClient = ctx.oidc?.client?.clientId ?? null;
+      if (tokenClient !== null && requestClient !== null && tokenClient !== requestClient) return undefined;
+      const clientId = tokenClient ?? requestClient;
+      deps.onFindAccount?.({ clientId, gate: token ? ((token as { kind?: string }).kind ?? "token") : "session" });
       const account = await deps.accounts.find(sub);
-      // The same decision as at sign-in (admission.ts), for the client this request is for: every code, token,
-      // refresh, ID token and userinfo goes through here. No client (cannot be told) fails closed for anyone
-      // whose access is per client. Suspended, unknown or out of scope → no account → no tokens.
-      const clientId = ctx.oidc?.client?.clientId ?? null;
-      if (!account || !decide(subjectOf(account), clientId).allow) return undefined;
+      if (!account || !decide(underPolicies(account, policyOf), clientId).allow) return undefined;
       return {
         accountId: account.sub,
         claims: async () => ({
@@ -422,7 +422,7 @@ export function createProvider(deps: ProviderDeps): Provider {
       }
       const account = await deps.accounts.find(sub);
       // Hub mode has no per-client admission: only a platform-active account passes (admission.ts, no client).
-      if (!account || !decide(subjectOf(account), null).allow) {
+      if (!account || !decide(underPolicies(account, policyOf), null).allow) {
         log.warn("interaction.account_refused", { uid, reason: account ? "inactive" : "unknown" });
         sendHtml(ctx, 403, errorPage({ message: msg().errors.inactive, code: "account_inactive" }));
         return;

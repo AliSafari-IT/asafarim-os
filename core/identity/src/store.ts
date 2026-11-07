@@ -46,7 +46,7 @@ export type VerifiedResult =
   | { kind: "conflict"; reason: "identifier_taken" };
 
 /** `suspended`: a revoked connection stops it. `global`: an admin-granted connection already covers every client. */
-export type AdmitOutcome = "admitted" | "already" | "suspended" | "global" | "unknown";
+export type AdmitOutcome = "admitted" | "already" | "suspended" | "global" | "unknown" | "needs_verification";
 
 /** What a person asked for: the apps (client ids) and an optional note for the admin. */
 export interface RequestDetails {
@@ -670,6 +670,12 @@ export class PgIdentityStore implements IdentityStore {
       const status = conn.rows[0]?.status;
       if (status === "revoked") return "suspended";
       if (status === "active") return "global";
+      // Only an identifier somebody proved can earn an admission (never an admin-typed, never-proven one).
+      const proved = await c.query(
+        "SELECT 1 FROM identities WHERE principal_id = $1 AND verified_at IS NOT NULL LIMIT 1",
+        [principalId],
+      );
+      if (!proved.rowCount) return "needs_verification";
       const inserted = await c.query(
         `INSERT INTO client_admissions (principal_id, client_id, source) VALUES ($1, $2, 'public_signup')
          ON CONFLICT (principal_id, client_id) DO NOTHING`,
@@ -933,6 +939,23 @@ async function grant(
   );
 }
 
+/** A principal as the shared access contract (accounts.ts) sees it. Apps show the label instead of the bare id. */
+export function accessOfPrincipal(p: Principal): Account {
+  const email = p.label && p.label.includes("@") ? p.label : null;
+  return {
+    sub: p.id,
+    // A revoked connection is a suspension; no connection row at all is just "no global access".
+    state: p.connection === "revoked" ? "suspended" : "active",
+    email,
+    emailVerified: email ? p.emailVerified : undefined,
+    name: p.label,
+    picture: null,
+    roles: p.isAdmin ? ["identity.admin"] : [],
+    globalAccess: p.connection === "active",
+    admittedClients: p.admittedClients,
+  };
+}
+
 /**
  * Accounts for oidc-provider when the SMS method is on: a principal is an
  * account only while its connection is active, so a revoked person gets no
@@ -947,22 +970,7 @@ export class PrincipalAccounts implements AccountStore {
 
   async find(sub: string): Promise<Account | null> {
     const p = await this.store.principal(sub);
-    if (!p) return null;
-    // The label is the principal's email (else its phone number): apps show it instead of the bare id.
-    const email = p.label && p.label.includes("@") ? p.label : null;
-    return {
-      sub: p.id,
-      email,
-      name: p.label,
-      picture: null,
-      roles: p.isAdmin ? ["identity.admin"] : [],
-      // A global connection only. Per-client access and suspension travel separately: admission.ts decides.
-      isActive: p.connection === "active",
-      suspended: p.connection === "revoked",
-      admittedClients: p.admittedClients,
-      // Only with an email to speak of, and only from stored proof.
-      emailVerified: email ? p.emailVerified : undefined,
-    };
+    return p ? accessOfPrincipal(p) : null;
   }
 
   ping(): Promise<void> {

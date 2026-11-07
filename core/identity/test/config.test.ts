@@ -116,13 +116,19 @@ describe("accounts view mapping", () => {
       }),
     ).toEqual({
       sub: "u1",
+      state: "active",
       email: "a@b.c",
       name: "A",
       picture: "https://x/p.png",
       roles: ["admin"],
-      isActive: true,
+      globalAccess: true, // the view's isActive means global access: it has no per-client admission
+      admittedClients: [],
     });
-    expect(accountFromRow({ id: "u2", isActive: "true", roles: null })).toMatchObject({ isActive: false, roles: [] });
+    expect(accountFromRow({ id: "u2", isActive: "true", roles: null })).toMatchObject({
+      state: "suspended",
+      globalAccess: false,
+      roles: [],
+    });
   });
 });
 
