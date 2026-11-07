@@ -18,7 +18,7 @@ It runs [`oidc-provider`](https://github.com/panva/node-oidc-provider) (major ve
 | Refresh token     | only with `offline_access` (which needs `prompt=consent`), rotated on every use; reusing an old one fails                                                                                              |
 | Logout            | RP-initiated logout (which also ends the local sign-in session), plus back-channel logout to every client in the session; identity's own Sign out ends both sessions too                               |
 | Consent           | none shown: every client is a first-party ASafariM app; the grant covers exactly the scopes requested                                                                                                  |
-| Accounts          | `hub`: the platform's `identity_accounts_v` view, read-only. `sms`: a principal with an **active connection** in the service's own database. Either way, an inactive or unknown account gets no tokens |
+| Accounts          | `hub`: the platform's `identity_accounts_v` view, read-only. `local`: a principal with an **active connection**, or an **admission** to the client asking ([Admission policy](#admission-policy)), in the service's own database. Either way, an inactive, suspended or unknown account gets no tokens |
 | Outbound requests | oidc-provider's SSRF guard stays on: back-channel logout never calls loopback or private addresses                                                                                                     |
 
 Endpoints: discovery (`/.well-known/openid-configuration`), `/jwks`, `/auth`, `/token`, `/me` (userinfo), `/session/end`, `/token/revocation`, plus `/healthz` (live), `/readyz` (Redis and accounts DB) and `/favicon.svg`.
@@ -96,6 +96,23 @@ A trusted first-party app can show its own sign-in and registration pages, in it
 ```
 
 - **Requirements.** It works only with the local login method and e-mail codes configured. Passkeys and Google stay on `/login`: a passkey is bound to this domain, and Google needs its own redirect.
+
+### Admission policy
+
+Each client has an `admission` policy in the **server-side clients file** (`clients.example.json`). Nothing in a request, form or header can read or change it.
+
+- **`restricted`** (the default): proving who you are creates a principal and grants nothing. An admin approves a connection, which opens every app.
+- **`public`**: a person who proves an email (or Google) identity at **this** app is admitted to **this app only**, in the same transaction, with no admin step. Nothing else changes: no role is granted (`roles` stays empty, `/admin` stays closed), pending requests are not touched and nobody is bulk-activated. Local login method only: with `IDENTITY_LOGIN_METHOD=hub` a `public` client stops the service at startup.
+
+The admission is a row in `client_admissions` (migration `006`), not a column on `connections`: earlier versions read `connections` as "may use everything", so a scoped row there would, after a rollback, give every public sign-up every restricted app. Without a connection row the previous version simply refuses them.
+
+**One decision** (`src/admission.ts`, `decide`) answers every gate: sign-in completion, an existing session at `/interaction`, and `findAccount` (so authorization codes, tokens, refresh, ID token and userinfo, in Hub mode too). In this order: unknown → no; **suspended → no (beats everything)**; global connection → yes; admitted to this client (and the client is still `public`) → yes; otherwise no. A client that can't be told fails closed for people with per-client access only.
+
+- **Suspension:** revoking a person with admissions and no connection writes a `revoked` row marked `source = 'suspension'`; reconnecting deletes it, which restores their admissions and never makes them global. Signing in again at a public app while suspended is denied and creates nothing.
+- **`email_verified`** is emitted with `email`, from stored evidence only (`identities.verified_at` of the identity that holds that address). An address an admin typed in is not verified.
+- **Linking** never merges by email string. Google joins the principal that holds an address only where Google is the authority (`gmail.com`, `googlemail.com`, or the Workspace `hd`). That Workspace rule means a domain owner can mint an account for any address on their domain: a known risk, unchanged here. Linking never admits or reactivates anyone. An identifier conflict is a typed result (`conflict`) shown as a generic retryable page.
+- **Audit:** `connection.admitted` (`clientId`, `source`), written only by the call that really added the row; `login.granted` / `login.not_authorized` carry `clientId` and `reason`.
+- **Headless apps** keep their own `self_signup` rule; a revoked or suspended person is still refused everywhere.
 
 ### Access requests
 
