@@ -1,0 +1,151 @@
+/* @asafarim/locale: the selector as a compact pill in the @asafarim/theme tokens. Appended to the component's
+   own stylesheet by scripts/build-selector.ts, so it always travels with it (selector.css), and written with
+   `.cls-root` in front of every rule so it wins over the component's rules and a page's resets whatever the
+   order the bundler puts the files in.
+   Upstream (@asafarim/country-language-selector 0.5.3) should: ship these sizes itself (its SVG icons have no
+   width/height of their own, so without CSS they fill their container), hide a closed popover with `hidden`
+   instead of leaving it to its stylesheet, and take its colours from tokens a host can set. */
+
+/* The component's colours are the theme's: the pill and its panel fit the charcoal top bar (where the theme
+   remaps the tokens) and the light areas, in both themes. The fallbacks are the component's own values. */
+.cls-root {
+  --cls-bg: var(--card, #ffffff);
+  --cls-bg-muted: transparent;
+  --cls-bg-hover: var(--accent-soft, #eef1f6);
+  --cls-bg-active: var(--accent-soft, #e4e9f2);
+  --cls-fg: var(--ink, #111827);
+  --cls-fg-muted: var(--muted, #6b7280);
+  --cls-fg-subtle: var(--muted, #9ca3af);
+  --cls-border: var(--line, #e5e7eb);
+  --cls-border-strong: var(--muted, #d1d5db);
+  --cls-accent: var(--accent, #2563eb);
+  --cls-accent-fg: var(--accent-ink, #ffffff);
+  --cls-focus: 0 0 0 3px var(--accent, #2563eb);
+  flex: none;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+/* The wrapper the component portals the panel into on a narrow screen holds only fixed-position children and
+   must take no room in <body>. The component's own `.cls-portal` rule comes before `.cls-root` in its
+   stylesheet, so at equal weight `.cls-root` (inline-block, a line box of its own) wins and the page grows. */
+.cls-root.cls-portal {
+  position: static;
+  display: block;
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+}
+
+/* Every icon has a size of its own: an SVG without one is as big as the space it is given. */
+.cls-root svg {
+  display: block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  overflow: visible;
+}
+.cls-root .cls-trigger__chev {
+  width: 12px;
+  height: 12px;
+  margin-left: 0;
+}
+.cls-root .cls-search__icon,
+.cls-root .cls-check {
+  width: 14px;
+  height: 14px;
+}
+
+/* The trigger: one pill, as tall as the theme toggle, the app switcher and the avatar (2.25rem). */
+.cls-root .cls-trigger {
+  box-sizing: border-box;
+  height: 2.25rem;
+  min-height: 2.25rem;
+  margin: 0;
+  padding: 0 0.7rem 0 0.6rem;
+  gap: 0.4rem;
+  border: 1px solid var(--cls-border);
+  border-radius: 999px;
+  background: var(--cls-bg-muted);
+  color: var(--cls-fg);
+  font-size: 0.85rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+.cls-root .cls-trigger:hover:not(:disabled) {
+  background: var(--card, var(--cls-bg-hover));
+  border-color: var(--cls-border-strong);
+}
+.cls-root .cls-trigger:focus-visible {
+  outline: 3px solid var(--accent, #2563eb);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+.cls-root .cls-trigger__flag {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* A closed panel is not in the layout (the component does not render it until it is opened; `hidden` is the
+   belt to that braces), and an open one floats over the page under the trigger. On a narrow screen the
+   component portals it into <body> inside a `.cls-root.cls-portal` wrapper, so these rules hold there too. */
+.cls-root .cls-popover[hidden] {
+  display: none;
+}
+.cls-root .cls-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  z-index: 1000;
+  box-sizing: border-box;
+  background: var(--cls-bg);
+  color: var(--cls-fg);
+  border-color: var(--cls-border);
+  text-align: left;
+}
+.cls-root .cls-popover[data-align="end"] {
+  right: 0;
+  left: auto;
+}
+.cls-root .cls-popover[data-align="start"] {
+  left: 0;
+  right: auto;
+}
+.cls-root .cls-list,
+.cls-root .cls-list li {
+  margin: 0;
+  list-style: none;
+}
+.cls-root .cls-search__input {
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+}
+.cls-root .cls-search__input:focus-visible {
+  outline: none;
+}
+.cls-root .cls-option[data-active="true"] {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: -2px;
+}
+
+/* A narrow screen: the component fixes the panel under the trigger (inline style) over a backdrop. */
+@media (max-width: 768px) {
+  .cls-root .cls-popover {
+    min-width: 0;
+    width: min(320px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cls-root .cls-trigger,
+  .cls-root .cls-trigger__chev,
+  .cls-popover,
+  .cls-backdrop {
+    animation: none;
+    transition: none;
+  }
+}

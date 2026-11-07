@@ -8,6 +8,9 @@
  *   <LocaleSelector locale={locale} />
  */
 import { CountryLanguageSelector } from "@asafarim/country-language-selector";
+// The component's styles (and the pill's) travel with it: whoever renders <LocaleSelector /> gets them, in every
+// app, on the server and in the browser. Without them the component is unstyled and its SVG icons fill the page.
+import "../selector.css";
 import {
   cookieDomain,
   LOCALE_COOKIE,
@@ -54,6 +57,7 @@ export function LocaleSelector({ locale, onChosen }: LocaleSelectorProps) {
     <CountryLanguageSelector
       countries={COUNTRIES}
       value={{ country: "BE", language: locale }}
+      className="locale-pill"
       triggerVariant="compact"
       align="end"
       ariaLabel={SELECTOR_LABEL}

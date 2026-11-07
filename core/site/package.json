@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/site",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "The asafarim.site landing page (asafarim-os#70): what ASafariM OS is, what has shipped, Admin and Notes screenshots and the roadmap, rendered to static HTML from one progress file.",
   "type": "module",
