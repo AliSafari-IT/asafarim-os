@@ -1,5 +1,11 @@
 import type { OidcClient, TokenSet } from "../src/oidc.ts";
-import { IdentityUnavailableError, ProviderRejectedError, InvalidStateError } from "../src/errors.ts";
+import type { SessionRuntime } from "../src/session.ts";
+import {
+  IdentityUnavailableError,
+  InvalidStateError,
+  LogoutTokenInvalidError,
+  ProviderRejectedError,
+} from "../src/errors.ts";
 import type { SessionBounds, ValidatedIdentity } from "../src/types.ts";
 
 export const ORIGIN = "https://app.example";
@@ -119,8 +125,7 @@ export function fakeOidc(
         : state.endSession;
     },
     async validateLogoutToken(t) {
-      if (t !== "valid-logout-token" || !state.logoutToken)
-        throw new (await import("../src/errors.ts")).LogoutTokenInvalidError();
+      if (t !== "valid-logout-token" || !state.logoutToken) throw new LogoutTokenInvalidError();
       return state.logoutToken;
     },
   };
@@ -128,10 +133,7 @@ export function fakeOidc(
 }
 
 /** Sign someone in through start() + callback() against the fake client. */
-export async function signIn(
-  runtime: import("../src/session.ts").SessionRuntime,
-  o: Parameters<import("../src/session.ts").SessionRuntime["start"]>[0] = {},
-) {
+export async function signIn(runtime: SessionRuntime, o: Parameters<SessionRuntime["start"]>[0] = {}) {
   const started = await runtime.start(o);
   const state = new URL(started.redirect).searchParams.get("state")!;
   const result = await runtime.callback({

@@ -276,7 +276,7 @@ export function createNodeAuth<A = unknown>(opts: NodeAuthOptions<A>): NodeAuth 
     try {
       const form = await readForm(request, BACKCHANNEL_LIMIT);
       const token = single(form, "logout_token");
-      if (!token) return text(400, "Bad request.");
+      if (!token) return new Response(null, { status: 400, headers: NO_STORE });
       await runtime.backchannelLogout(token);
       return new Response(null, { status: 200, headers: NO_STORE });
     } catch (err) {

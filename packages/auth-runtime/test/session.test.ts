@@ -15,7 +15,6 @@ import {
   ProfileDeniedError,
   RateLimitedError,
   RefreshOwnershipLostError,
-  SessionExpiredError,
   StepUpRequiredError,
   StoreUnavailableError,
   newId,
