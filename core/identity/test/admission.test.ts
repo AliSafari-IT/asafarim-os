@@ -3,18 +3,38 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { exportJWK, generateKeyPair } from "jose";
 import { describe, expect, it } from "vitest";
-import { type AdmissionSubject, currentAdmissions, decide } from "../src/admission.ts";
+import { currentAdmissions, decide, outcomeOf, underPolicies } from "../src/admission.ts";
+import type { AccountAccess } from "../src/accounts.ts";
 import { ClientConfigError, admissionPolicies, loadClients } from "../src/clients.ts";
 import { ConfigError, loadConfig } from "../src/config.ts";
 import { createProvider } from "../src/provider.ts";
 import { createLogger } from "../src/log.ts";
 
-const none: AdmissionSubject = { suspended: false, globalActive: false, admittedClients: [] };
-const subject = (over: Partial<AdmissionSubject>): AdmissionSubject => ({ ...none, ...over });
+const none: AccountAccess = {
+  sub: "00000000-0000-4000-8000-000000000001",
+  state: "active",
+  email: null,
+  emailVerified: false,
+  name: null,
+  picture: null,
+  roles: [],
+  globalAccess: false,
+  admittedClients: [],
+};
+/** Terse fixtures: `suspended`/`globalActive` are the old names for state and globalAccess. */
+const subject = (over: Partial<AccountAccess> & { suspended?: boolean; globalActive?: boolean }): AccountAccess => {
+  const { suspended, globalActive, ...rest } = over;
+  return {
+    ...none,
+    ...(suspended ? { state: "suspended" as const } : {}),
+    ...(globalActive ? { globalAccess: true } : {}),
+    ...rest,
+  };
+};
 
 describe("decide: the one access decision", () => {
   // The order is the policy: unknown, suspended, global, this client's admission, then no.
-  const table: [string, AdmissionSubject | null, string | null, string][] = [
+  const table: [string, AccountAccess | null, string | null, string][] = [
     ["unknown person", null, "a", "deny:unknown"],
     ["unknown person, unknown client", null, null, "deny:unknown"],
     ["no access at all", none, "a", "deny:no_access"],
@@ -42,6 +62,39 @@ describe("decide: the one access decision", () => {
   it.each(table)("%s", (_name, s, client, expected) => {
     const d = decide(s, client);
     expect(d.allow ? `allow:${d.via}` : `deny:${d.reason}`).toBe(expected);
+  });
+
+  it("a deleted account is unknown, never merely suspended", () => {
+    expect(decide({ ...none, state: "deleted", globalAccess: true }, "a")).toEqual({ allow: false, reason: "unknown" });
+  });
+
+  it("maps to the typed outcomes of S0 §2", () => {
+    expect(outcomeOf(decide(subject({ globalActive: true }), "a"), false)).toEqual({
+      kind: "admitted",
+      subject: "existing",
+      via: "connection",
+    });
+    expect(outcomeOf(decide(subject({ admittedClients: ["a"] }), "a"), true)).toEqual({
+      kind: "admitted",
+      subject: "new",
+      via: "public_admission",
+    });
+    expect(outcomeOf(decide(subject({ suspended: true }), "a"), false)).toEqual({
+      kind: "denied",
+      reason: "suspended",
+    });
+    expect(outcomeOf(decide(null, "a"), false)).toEqual({ kind: "denied", reason: "unknown_account" });
+    for (const s of [none, subject({ admittedClients: ["b"] })])
+      expect(outcomeOf(decide(s, "a"), false)).toEqual({ kind: "denied", reason: "restricted_client_denied" });
+  });
+
+  it("the Hub shape (only isActive known) keeps today's meaning: active = global, nothing per client", () => {
+    const hubActive = subject({ globalActive: true });
+    expect(decide(hubActive, null).allow).toBe(true);
+    const hubInactive = subject({ suspended: true });
+    expect(decide(hubInactive, "a").allow).toBe(false);
+    // underPolicies leaves a Hub account (no admissions) untouched.
+    expect(underPolicies(hubActive, () => "restricted")).toEqual(hubActive);
   });
 
   it("an admission only counts while the client's current policy is public", () => {

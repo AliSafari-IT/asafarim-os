@@ -1,5 +1,5 @@
 /**
- * The one decision that says whether a person may use a client (#341).
+ * The one decision that says whether an account may use a client (#341), for local and Hub mode alike.
  *
  * Every gate that used to ask "is the connection active?" (sign-in completion, an existing session at
  * /interaction, findAccount for codes, tokens, refresh and userinfo) asks `decide` instead, so a rule
@@ -16,30 +16,42 @@
  * admissions only.
  */
 
+import type { AccountAccess } from "./accounts.ts";
+
 /** `restricted` (the default): an admin decides. `public`: proving an identifier at this client is enough. */
 export type AdmissionPolicy = "public" | "restricted";
 
 export const ADMISSION_POLICIES: readonly AdmissionPolicy[] = ["public", "restricted"];
 
-export interface AdmissionSubject {
-  /** connections.status = 'revoked'. */
-  suspended: boolean;
-  /** connections.status = 'active': access to every client, granted by an admin or the bootstrap. */
-  globalActive: boolean;
-  /** Clients this person was admitted to by a public policy (client_admissions). */
-  admittedClients: readonly string[];
-}
-
 export type Decision = { allow: true; via: "connection" | "public_admission" } | { allow: false; reason: DenyReason };
 
 export type DenyReason = "unknown" | "suspended" | "no_access" | "out_of_scope";
 
-export function decide(subject: AdmissionSubject | null, clientId: string | null): Decision {
-  if (subject === null) return { allow: false, reason: "unknown" };
-  if (subject.suspended) return { allow: false, reason: "suspended" };
-  if (subject.globalActive) return { allow: true, via: "connection" };
-  if (clientId !== null && subject.admittedClients.includes(clientId)) return { allow: true, via: "public_admission" };
-  return { allow: false, reason: subject.admittedClients.length > 0 ? "out_of_scope" : "no_access" };
+/** The decision on an account for one client. Pure. `null` for either input fails closed for per-client access. */
+export function decide(account: AccountAccess | null, clientId: string | null): Decision {
+  if (account === null || account.state === "deleted") return { allow: false, reason: "unknown" };
+  if (account.state !== "active") return { allow: false, reason: "suspended" };
+  if (account.globalAccess) return { allow: true, via: "connection" };
+  if (clientId !== null && account.admittedClients.includes(clientId)) return { allow: true, via: "public_admission" };
+  return { allow: false, reason: account.admittedClients.length > 0 ? "out_of_scope" : "no_access" };
+}
+
+/** What a sign-in came to, in the names S0 §2 fixed. `reason` is the typed outcome; the finer cause stays in the audit. */
+export type SignInOutcome =
+  | { kind: "admitted"; subject: "new" | "existing"; via: "connection" | "public_admission" }
+  | { kind: "denied"; reason: "suspended" | "restricted_client_denied" | "unknown_account" | "needs_verification" }
+  | { kind: "conflict"; reason: "identifier_conflict" };
+
+export function outcomeOf(decision: Decision, created: boolean): SignInOutcome {
+  if (decision.allow) return { kind: "admitted", subject: created ? "new" : "existing", via: decision.via };
+  switch (decision.reason) {
+    case "suspended":
+      return { kind: "denied", reason: "suspended" };
+    case "unknown":
+      return { kind: "denied", reason: "unknown_account" };
+    default:
+      return { kind: "denied", reason: "restricted_client_denied" };
+  }
 }
 
 /**
@@ -48,4 +60,9 @@ export function decide(subject: AdmissionSubject | null, clientId: string | null
  */
 export function currentAdmissions(admitted: readonly string[], policyOf: (clientId: string) => AdmissionPolicy) {
   return admitted.filter((id) => policyOf(id) === "public");
+}
+
+/** The account as the clients' current policies see it (see currentAdmissions). */
+export function underPolicies(account: AccountAccess, policyOf: (clientId: string) => AdmissionPolicy): AccountAccess {
+  return { ...account, admittedClients: currentAdmissions(account.admittedClients, policyOf) };
 }

@@ -25,7 +25,14 @@ import {
   newToken,
   sameToken,
 } from "./auth-session.ts";
-import { type AdmissionPolicy, type AdmissionSubject, type Decision, currentAdmissions, decide } from "./admission.ts";
+import {
+  type AdmissionPolicy,
+  type Decision,
+  type SignInOutcome,
+  decide,
+  outcomeOf,
+  underPolicies,
+} from "./admission.ts";
 import type { AppLink } from "./clients.ts";
 import { maskEmail, normalizeEmail } from "./email.ts";
 import { type GoogleSignIn, GoogleError, pkcePair } from "./google.ts";
@@ -60,7 +67,14 @@ import {
 } from "./sign-in-pages.ts";
 import { currentLocale, messagesFor, msg } from "./i18n.ts";
 import { CONTINUE_PAGE_CSP } from "./pages.ts";
-import type { AuditEntry, IdentityMethod, IdentityStore, Principal, RequestDetails } from "./store.ts";
+import {
+  type AuditEntry,
+  type IdentityMethod,
+  type IdentityStore,
+  type Principal,
+  type RequestDetails,
+  accessOfPrincipal,
+} from "./store.ts";
 import {
   type RelyingParty,
   WebAuthnError,
@@ -200,28 +214,31 @@ export function createSignIn(d: SignInDeps): SignIn {
   const apps = d.apps ?? [];
   const policyOf = (clientId: string): AdmissionPolicy => d.admission?.get(clientId) ?? "restricted";
   const knownClient = (clientId: string) => apps.some((a) => a.id === clientId) || Boolean(d.admission?.has(clientId));
-  /** Everything admission.ts needs to know about a person, for one client's policy. */
-  const subjectOf = (p: Principal): AdmissionSubject => ({
-    suspended: p.connection === "revoked",
-    globalActive: p.connection === "active",
-    admittedClients: currentAdmissions(p.admittedClients, policyOf),
-  });
   /**
    * May this person use this client, admitting them first when the client's policy is `public`? The policy
    * comes from the server-side config and the client id from the server-side interaction, never from a request.
-   * Returns the decision on the person as it stands after any admission.
+   * Takes the principal from the auth session or the verified login (it never creates one), and decides on the
+   * person as they stand after any admission. `outcome` is the typed result (S0 §2); `cause` the finer reason.
    */
   async function admit(
     principalId: string,
     clientId: string | null,
-  ): Promise<Decision & { principal: Principal | null }> {
+    created = false,
+  ): Promise<{ decision: Decision; principal: Principal | null; outcome: SignInOutcome; cause: string }> {
     let principal = await d.store.principal(principalId);
+    let unverified = false;
     if (principal && clientId !== null && policyOf(clientId) === "public" && principal.connection === "none") {
-      const outcome = await d.store.admitPublic(principalId, clientId);
-      if (outcome === "admitted" || outcome === "already") principal = await d.store.principal(principalId);
+      const result = await d.store.admitPublic(principalId, clientId);
+      if (result === "admitted" || result === "already") principal = await d.store.principal(principalId);
+      unverified = result === "needs_verification";
     }
-    return { ...decide(principal ? subjectOf(principal) : null, clientId), principal };
+    const decision = decide(principal ? underPolicies(accessOfPrincipal(principal), policyOf) : null, clientId);
+    const outcome: SignInOutcome = unverified
+      ? { kind: "denied", reason: "needs_verification" }
+      : outcomeOf(decision, created);
+    return { decision, principal, outcome, cause: decision.allow ? decision.via : decision.reason };
   }
+
   const appName = (id: string) => apps.find((a) => a.id === id)?.name ?? id;
   /** The named app this sign-in is for (only a configured client counts), shown on the login page. */
   const appOf = (target: LoginTarget) =>
@@ -530,27 +547,34 @@ export function createSignIn(d: SignInDeps): SignIn {
     flow: LoginFlow,
     principalId: string,
     method: "email" | "sms" | "passkey" | "google",
+    created = false,
   ): Promise<{ authorized: boolean; next: string }> {
     await d.flows.destroy(flowToken);
     setCookie(ctx, FLOW_COOKIE, null, FLOW_COOKIE_PATH, 0);
     const previous = await currentSession(ctx);
     if (previous) await d.sessions.destroy(previous.token);
-    const created = await d.sessions.create(principalId);
-    setCookie(ctx, AUTH_COOKIE, created.token, "/", AUTH_SESSION_TTL_SECONDS);
+    const session = await d.sessions.create(principalId);
+    setCookie(ctx, AUTH_COOKIE, session.token, "/", AUTH_SESSION_TTL_SECONDS);
 
     const ip = ipHandle(ctx);
     // The client is the one the provider recorded for this interaction (server-side), never a request value.
     const clientId = flow.target.kind === "interaction" ? (flow.target.clientId ?? null) : null;
-    const decision = await admit(principalId, clientId);
+    const result = await admit(principalId, clientId, created);
+    const decision = result.decision;
     if (!decision.allow) {
       await audit({
         event: "login.not_authorized",
         method,
         principalId,
         ipHandle: ip,
-        detail: { ...(clientId ? { clientId } : {}), reason: decision.reason },
+        // `reason` is the typed outcome (S0 §2); `cause` keeps the finer reason.
+        detail: {
+          ...(clientId ? { clientId } : {}),
+          reason: result.outcome.kind === "denied" ? result.outcome.reason : "restricted_client_denied",
+          cause: result.cause,
+        },
       });
-      d.log.info("login.not_authorized", { reason: decision.reason });
+      d.log.info("login.not_authorized", { reason: result.cause });
       return { authorized: false, next: "/login" };
     }
     await audit({
@@ -562,6 +586,7 @@ export function createSignIn(d: SignInDeps): SignIn {
         target: flow.target.kind,
         ...(clientId ? { clientId } : {}),
         via: decision.via,
+        subject: result.outcome.kind === "admitted" ? result.outcome.subject : "existing",
       },
     });
     d.log.info("login.granted", { reason: `${method}:${flow.target.kind}` });
@@ -636,7 +661,7 @@ export function createSignIn(d: SignInDeps): SignIn {
     }
     const principalId = verified.principalId;
     await audit({ event: "otp.verified", method: via, principalId, subjectHandle: subject, ipHandle: ip });
-    const outcome = await signedIn(ctx, token, flow, principalId, via);
+    const outcome = await signedIn(ctx, token, flow, principalId, via, verified.created);
     if (!outcome.authorized) return seeOther(ctx, outcome.next);
     render(ctx, 200, continueToPage(outcome.next), CONTINUE_PAGE_CSP);
   }
@@ -719,9 +744,15 @@ export function createSignIn(d: SignInDeps): SignIn {
       method: "google",
       principalId,
       ipHandle: ip,
-      detail: { linked: verified.linked === true },
+      // Booleans only, no address. `linked`: Google was the authority for the address, so linking applied.
+      // `joinedExisting`: it joined a principal that already held the address. `hd`: the Workspace rule applied.
+      detail: {
+        linked: who.authoritative,
+        joinedExisting: verified.linked === true,
+        hd: who.workspace === true,
+      },
     });
-    const outcome = await signedIn(ctx, current.token, current.flow, principalId, "google");
+    const outcome = await signedIn(ctx, current.token, current.flow, principalId, "google", verified.created);
     // A top-level GET (Google's redirect), not a form submission: a plain redirect may leave for the app's domain.
     seeOther(ctx, outcome.next);
   }
@@ -1102,7 +1133,14 @@ export function createSignIn(d: SignInDeps): SignIn {
       await showAdmin(ctx, admin, 400, msg().admin.enterIdentifier);
       return true;
     }
-    await d.store.addConnection(email ? "email" : "phone", (email ?? phone)!, actor);
+    try {
+      await d.store.addConnection(email ? "email" : "phone", (email ?? phone)!, actor);
+    } catch (err) {
+      if (!(err instanceof Error) || err.message !== "identifier_conflict") throw err;
+      // The identifier changed hands under the admin: generic and retryable, nothing was created.
+      await showAdmin(ctx, admin, 409, msg().flow.tryAgain);
+      return true;
+    }
     seeOther(ctx, "/admin?done=added");
     return true;
   }
@@ -1204,9 +1242,9 @@ export function createSignIn(d: SignInDeps): SignIn {
     if (!current) return null;
     // The same decision as at sign-in and in findAccount; a public client admits here too (a person signed in
     // from another app arrives with a session and no sign-in step of their own).
-    const decision = await admit(current.session.principalId, clientId);
-    if (!decision.allow || !decision.principal) return null;
-    return { principalId: decision.principal.id, authTime: current.session.authTime };
+    const result = await admit(current.session.principalId, clientId);
+    if (!result.decision.allow || !result.principal) return null;
+    return { principalId: result.principal.id, authTime: current.session.authTime };
   }
 
   async function auditInteractionLogin(ctx: HttpContext, principalId: string, clientId: string) {

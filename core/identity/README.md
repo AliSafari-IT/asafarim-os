@@ -106,13 +106,30 @@ Each client has an `admission` policy in the **server-side clients file** (`clie
 
 The admission is a row in `client_admissions` (migration `006`), not a column on `connections`: earlier versions read `connections` as "may use everything", so a scoped row there would, after a rollback, give every public sign-up every restricted app. Without a connection row the previous version simply refuses them.
 
-**One decision** (`src/admission.ts`, `decide`) answers every gate: sign-in completion, an existing session at `/interaction`, and `findAccount` (so authorization codes, tokens, refresh, ID token and userinfo, in Hub mode too). In this order: unknown → no; **suspended → no (beats everything)**; global connection → yes; admitted to this client (and the client is still `public`) → yes; otherwise no. A client that can't be told fails closed for people with per-client access only.
+**One account, per-client admission.** Admission is an access fact about one account, never a second account. Register at public app A, then open public app B in the same browser: the auth session is reused (no code, no second registration), only a B admission row is added, and both ID tokens carry the same `sub`. A restricted app C still refuses that account.
+
+**One decision** (`src/admission.ts`, `decide`, over the shared `AccountAccess` shape in `accounts.ts`) answers every gate: sign-in completion, an existing session at `/interaction`, and `findAccount` (so authorization codes, tokens, refresh, ID token and userinfo). The client is never read from a request at decision time: `findAccount(ctx, sub, token)` takes `token.clientId` (code, refresh token, access token) or else the validated authorization request's client, and denies if both exist and differ. A custom `client_access` login check turns "a session whose account can't use this client yet" into an interaction instead of oidc-provider's server error. The Hub implementation of the same shape is asafarim-platform#892; until it lands Hub mode keeps `isActive` = state active + global access, emits no `email_verified` (the view can't say), and refuses `public`. `prompt=none` for a browser session whose account has no access to the client now answers `login_required` (it used to be a server error). In this order: unknown → no; **suspended → no (beats everything)**; global connection → yes; admitted to this client (and the client is still `public`) → yes; otherwise no. A client that can't be told fails closed for people with per-client access only.
 
 - **Suspension:** revoking a person with admissions and no connection writes a `revoked` row marked `source = 'suspension'`; reconnecting deletes it, which restores their admissions and never makes them global. Signing in again at a public app while suspended is denied and creates nothing.
 - **`email_verified`** is emitted with `email`, from stored evidence only (`identities.verified_at` of the identity that holds that address). An address an admin typed in is not verified.
-- **Linking** never merges by email string. Google joins the principal that holds an address only where Google is the authority (`gmail.com`, `googlemail.com`, or the Workspace `hd`). That Workspace rule means a domain owner can mint an account for any address on their domain: a known risk, unchanged here. Linking never admits or reactivates anyone. An identifier conflict is a typed result (`conflict`) shown as a generic retryable page.
+- **Linking** never merges by email string, with one owner-approved exception (ADR 0003 Addendum A). Google joins the principal that holds an address only where Google is the authority (`gmail.com`, `googlemail.com`, or the Workspace `hd`). The audit row `google.verified` records `linked`, `joinedExisting` and `hd` (booleans, no address). That Workspace rule means a domain owner can mint an account for any address on their domain and so link into the principal that holds it, **including its `is_admin` flag (`identity.admin`), its global connection, its public admissions, and an address that has changed hands since it was proved**: a known, owner-accepted risk, unchanged here. Linking itself never admits, reactivates or promotes anyone. Linking never admits or reactivates anyone. An identifier conflict is a typed result (`conflict`) shown as a generic retryable page.
 - **Audit:** `connection.admitted` (`clientId`, `source`), written only by the call that really added the row; `login.granted` / `login.not_authorized` carry `clientId` and `reason`.
-- **Headless apps** keep their own `self_signup` rule; a revoked or suspended person is still refused everywhere.
+- **Approving a request reconnects globally.** Approving an access request, connecting an identifier, or reconnecting a revoked connection an admin made gives a **global** connection (every app), as before, even for someone who only held a public admission, and even for a person an admin had suspended: that is an explicit admin action, never a side effect of signing up. Lifting the suspension of a public-only person (the `suspension` row) restores only their admissions.
+- **`email_verified` and Google.** It is true when an identity holding the emitted address has stored `verified_at`. That includes a Google account whose address Google verified but is **not** the authority for (its own principal, no linking): it proves the same thing an email code does. Email-bound invitations (S4) should treat it as "this person controls the address now", not as proof of a domain relationship.
+- **A slow sign-in.** The app a sign-in is for is remembered server-side for the login-flow lifetime (10 minutes). If that has lapsed, sign-in fails closed and shows the request-access page even for a public app; starting again from the app fixes it.
+- **Headless apps** keep their own `self_signup` rule; a revoked or suspended person is still refused everywhere. An identifier conflict there answers `503 unavailable` (the SDK's generic retry), not a new error.
+
+**Dev/test only.** A `public` client belongs in a development or test clients file, never in production config (real enablement is tracked separately). Example for a local clients file:
+
+```json
+{
+  "client_id": "demo-public",
+  "primary_domain": "localhost",
+  "redirect_uris": ["http://localhost:3000/cb"],
+  "client_secret_env": "IDENTITY_CLIENT_SECRET_DEMO_PUBLIC",
+  "admission": "public"
+}
+```
 
 ### Access requests
 
