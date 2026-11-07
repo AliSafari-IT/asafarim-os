@@ -20,7 +20,7 @@
     "@asafarim/smtp": "workspace:*",
     "@asafarim/theme": "workspace:*",
     "ioredis": "^6.0.0",
-    "jose": "^6.2.12",
+    "jose": "^6.2.15",
     "oidc-provider": "^9.12.2",
     "pg": "^8.23.1"
   },

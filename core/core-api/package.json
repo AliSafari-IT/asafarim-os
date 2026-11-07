@@ -22,7 +22,7 @@
     "@nats-io/nats-core": "^3.4.0",
     "@nats-io/nkeys": "^2.0.3",
     "@nats-io/transport-node": "^3.4.0",
-    "jose": "^6.2.12",
+    "jose": "^6.2.15",
     "pg": "^8.23.1"
   },
   "devDependencies": {
