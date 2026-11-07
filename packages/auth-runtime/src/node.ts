@@ -243,9 +243,16 @@ export function createNodeAuth<A = unknown>(opts: NodeAuthOptions<A>): NodeAuth 
         previousSessionId: readCookie(cookieHeader, sessionCookie),
       });
       const target = r.returnTo.startsWith("/") ? `${origin}${r.returnTo}` : r.returnTo;
+      const extra =
+        opts.afterSignIn?.({
+          returnTo: r.returnTo,
+          ...(r.locale ? { locale: r.locale } : {}),
+          ...(r.intent ? { intent: r.intent } : {}),
+        }) ?? [];
       return redirect(target, [
         serializeCookie(sessionCookie, r.sessionId, { maxAgeSec: r.maxAgeSec }),
         clearCookie(flowCookie),
+        ...extra,
       ]);
     } catch (err) {
       // The flow is spent whatever happened; make the browser forget it too.

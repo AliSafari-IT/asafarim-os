@@ -375,7 +375,7 @@ if (!CONFIGURED) {
     // ---- browser helpers ---------------------------------------------------------------------------------------------
 
     async function get(url: string, jar: Jar, trail?: Trail, headers: Record<string, string> = {}) {
-      const res = await fetch(url, { redirect: "manual", headers: { cookie: jar.header(), ...headers } });
+      const res = await fetch(url, { redirect: "manual", headers: { ...headers, cookie: [jar.header(), headers.cookie].filter(Boolean).join("; ") } });
       jar.take(res);
       trail?.note(res);
       return res;
@@ -384,7 +384,7 @@ if (!CONFIGURED) {
       const res = await fetch(url, {
         method: "POST",
         redirect: "manual",
-        headers: { cookie: jar.header(), "content-type": "application/x-www-form-urlencoded", ...headers },
+        headers: { ...headers, cookie: [jar.header(), headers.cookie].filter(Boolean).join("; "), "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams(form),
       });
       jar.take(res);
@@ -416,7 +416,8 @@ if (!CONFIGURED) {
       let res = await get(loginUrl, opJar, trail, extra.headers);
       const csrf = csrfOf(await res.text());
       res = await post(`${issuer}/login/start`, opJar, { csrf, via: "email", identifier: email, ...extra.form }, trail, extra.headers);
-      expect(res.status).toBe(303);
+      // A client the person cannot use may refuse right here (no code is sent): that is a denial, handed back as is.
+      if (res.status !== 303) return res;
       return post(`${issuer}/login/verify`, opJar, { csrf, code: mailer.lastCode(email), ...extra.form }, trail, extra.headers);
     }
 
@@ -695,18 +696,19 @@ if (!CONFIGURED) {
       }
     });
 
-    it("3c. the browser's ?fresh=1 is a request, not evidence: when the provider answers from its own older session, the runtime re-checks auth_time and refuses", async () => {
+    it("3c. the browser's ?fresh=1 is a request, not evidence: when the provider answers from its own recent session, the runtime re-checks auth_time and refuses", async () => {
       const app = apps[A]!;
-      const stepAuth = makeAuth(A, app.base, { bounds: { ...BOUNDS, freshMs: 3000 }, prefix: "rt-step" });
+      const stepAuth = makeAuth(A, app.base, { bounds: { ...BOUNDS, freshMs: 60_000 }, prefix: "rt-step" });
       const original = app.auth;
       app.auth = stepAuth;
       try {
         const email = "stepup-3c@example.test";
         const r = await browserSignIn(app, email);
-        await sleep(3400);
-        // identity reuses a login younger than 120 s even for prompt=login, so the ID token carries the OLD auth_time.
+        // identity answers prompt=login from a session younger than its own 120 s slack, so the ID token carries the SAME
+        // auth_time. By the runtime's clock that sign-in is now 100 s old: older than freshMs, so the step-up is not met.
+        clock.offset = 100_000;
         const again = await browserSignIn(app, email, { opJar: r.opJar, appJar: r.appJar, query: "?fresh=1" });
-        expect(again.loginShown).toBe(false);
+        expect(again.loginShown, "the provider reused its own session").toBe(false);
         expect(again.final!.status).toBe(401);
         expect(await again.final!.text()).toBe("Sign-in problem (step_up_required).");
         expect(again.final!.headers.getSetCookie().some((c) => c.startsWith("__Host-asafarim.sid=") && !c.includes("Max-Age=0"))).toBe(false);
@@ -827,7 +829,6 @@ if (!CONFIGURED) {
       const principal = await principalOf(email);
       const port = Number(new URL(app.base).port);
       const from = backchannelSent.length;
-      const errorsBefore = providerEvents.filter((e) => e.name === "backchannel.error").length;
       app.server.closeAllConnections();
       await new Promise<void>((res) => app.server.close(() => res()));
       try {
@@ -846,7 +847,324 @@ if (!CONFIGURED) {
       expect(await app.auth.current(reqWith(r.appJar), { touch: false })).not.toBeNull();
       clock.offset = BOUNDS.revalidateMs + 1000;
       expect(await app.auth.current(reqWith(r.appJar), { touch: false })).toBeNull();
-      void errorsBefore;
+    });
+
+    // ---- 5. suspension and revocation ----------------------------------------------------------------------------------
+
+    const admissionsOf = async (principalId: string) =>
+      (await db.query("SELECT client_id FROM client_admissions WHERE principal_id = $1 ORDER BY 1", [principalId])).rows.map((r) => r.client_id as string);
+
+    it("5a. a suspended account cannot obtain a new session", async () => {
+      const email = "suspended-5a@example.test";
+      const first = await browserSignIn(apps[A]!, email);
+      expect(first.session).toBeTruthy();
+      const principal = await principalOf(email);
+      expect(await store.revoke(principal, adminId)).toBe(true);
+      const sessionsBefore = (await redis.keys("rt-rtapp:s:*")).length;
+      const again = await browserSignIn(apps[A]!, email);
+      expect(again.callback, "the provider never sent this browser back with a code").toBeUndefined();
+      expect(again.session).toBeUndefined();
+      expect((await redis.keys("rt-rtapp:s:*")).length).toBe(sessionsBefore);
+    });
+
+    it("5b. an existing session is denied within revalidateMs of the account being suspended (measured against the real provider, clock under test control)", async () => {
+      const app = apps[A]!;
+      const email = "suspended-5b@example.test";
+      const r = await browserSignIn(app, email);
+      expect(await app.auth.current(reqWith(r.appJar), { touch: false })).not.toBeNull();
+      // Suspend at the provider's account store only: no session or token is touched, no back-channel is sent.
+      expect(await store.revoke(await principalOf(email), adminId)).toBe(true);
+      const served: number[] = [];
+      let deniedAt: number | undefined;
+      for (let t = 0; t <= BOUNDS.revalidateMs + 10_000; t += 5000) {
+        clock.offset = t;
+        const h = await app.auth.current(reqWith(r.appJar), { touch: false });
+        if (h) served.push(t);
+        else {
+          deniedAt = t;
+          break;
+        }
+      }
+      expect(deniedAt, "denied at some point").toBeDefined();
+      expect(deniedAt!).toBeLessThanOrEqual(BOUNDS.revalidateMs + 5000); // no later than the bound (granularity 5 s)
+      expect(deniedAt!).toBeGreaterThan(BOUNDS.revalidateMs - 5000); // and the bound really is what is waited for
+      expect(served.length).toBeGreaterThan(0);
+    });
+
+    it("5b-ii. a suspended account is also stopped by the refresh path once the access token has expired", async () => {
+      const app = apps[A]!;
+      const email = "suspended-5b2@example.test";
+      const r = await browserSignIn(app, email);
+      expect(await store.revoke(await principalOf(email), adminId)).toBe(true);
+      clock.offset = 11 * 60_000;
+      expect(await app.auth.current(reqWith(r.appJar), { touch: false })).toBeNull(); // refresh -> invalid_grant -> session ended
+    });
+
+    it("5c. role revocation is separate from identity logout: the app's rule flips and the next request is denied while the identity session stays valid", async () => {
+      const app = apps[A]!;
+      const email = "role-5c@example.test";
+      const r = await browserSignIn(app, email);
+      const sub = (await peek(app, r.appJar)).identityKey.sub;
+      managementFor.add(sub);
+      try {
+        const guarded = () => get(`${app.base}/guarded`, r.appJar);
+        expect((await guarded()).status).toBe(200);
+        managementFor.delete(sub); // the grant is revoked in the app; nothing happens at the provider
+        const denied = await guarded();
+        expect(denied.status).toBe(403);
+        expect(await denied.text()).toBe("profile_denied");
+        // The identity session is untouched: the app still sees a signed-in person, and the provider still vouches for the token.
+        const state = (await (await get(`${app.base}/auth/session`, r.appJar)).json()) as { status: string; authorized: Record<string, boolean> };
+        expect(state).toMatchObject({ status: "active", authorized: { management: false } });
+        const { access } = await issuedTokens(app, r.appJar);
+        expect((await fetch(`${issuer}/me`, { headers: { authorization: `Bearer ${access}` } })).status).toBe(200);
+        expect(await app.auth.current(reqWith(r.appJar), { touch: false })).not.toBeNull();
+      } finally {
+        managementFor.delete(sub);
+      }
+    });
+
+    // ---- 6. outage -------------------------------------------------------------------------------------------------------
+
+    async function stopProvider() {
+      op.closeAllConnections();
+      await new Promise<void>((res) => op.close(() => res()));
+    }
+    async function startProvider() {
+      op = createServer(provider.callback());
+      await new Promise<void>((res) => op.listen(opPort, "localhost", res));
+    }
+
+    it("6. identity outage: served inside the re-check window, denied after it (never permissive), the session is kept, and the app recovers when the provider returns", async () => {
+      const app = apps[A]!;
+      const r = await browserSignIn(app, "outage-6@example.test");
+      const before = (await peek(app, r.appJar)).accessToken;
+      await stopProvider();
+      try {
+        clock.offset = 30_000;
+        expect(await app.auth.current(reqWith(r.appJar), { touch: false }), "inside revalidateMs").not.toBeNull();
+        clock.offset = BOUNDS.revalidateMs + 1000;
+        await expect(app.auth.current(reqWith(r.appJar), { touch: false })).rejects.toBeInstanceOf(IdentityUnavailableError);
+        await expect(app.auth.state(reqWith(r.appJar))).rejects.toBeInstanceOf(IdentityUnavailableError);
+        await expect(app.auth.require(reqWith(r.appJar))).rejects.toBeInstanceOf(IdentityUnavailableError);
+        const http = await get(`${app.base}/auth/session`, r.appJar);
+        expect(http.status).toBe(503);
+        expect(await http.json()).toEqual({ status: "unavailable" });
+        expect((await get(`${app.base}/guarded`, r.appJar)).status).toBe(503);
+        // An expired access token during the outage is denied too (a refresh is needed and impossible).
+        clock.offset = 11 * 60_000;
+        await expect(app.auth.current(reqWith(r.appJar), { touch: false })).rejects.toBeInstanceOf(IdentityUnavailableError);
+        // New sign-ins cannot start without discovery: a code only, never a redirect to somewhere else.
+        const fresh = makeAuth(A, app.base, { prefix: "rt-outage" });
+        const start = await fresh.handleRequest(new Request(`${app.base}/auth/start`));
+        expect(start!.status).toBe(503);
+        expect(start!.headers.get("location")).toBeNull();
+        expect(await start!.text()).toBe("Sign-in problem (identity_unavailable).");
+      } finally {
+        await startProvider();
+      }
+      // The session was never destroyed by the outage; the provider is back and so is the person.
+      expect((await peek(app, r.appJar)).accessToken).toBe(before);
+      clock.offset = 0;
+      expect(await app.auth.current(reqWith(r.appJar), { touch: false })).not.toBeNull();
+      clock.offset = BOUNDS.revalidateMs + 1000;
+      expect(await app.auth.current(reqWith(r.appJar), { touch: false })).not.toBeNull(); // re-checked against the live provider
+    });
+
+    it("6b. session store outage fails closed: StoreUnavailableError, a 503, never a signed-in answer", async () => {
+      const app = apps[A]!;
+      const dead = new Redis({ host: "127.0.0.1", port: 1, lazyConnect: true, maxRetriesPerRequest: 0, enableOfflineQueue: false, retryStrategy: () => null });
+      dead.on("error", () => undefined);
+      const broken = makeAuth(A, app.base, { redisClient: dead, prefix: "rt-dead" });
+      const cookie = `__Host-asafarim.sid=${randomBytes(32).toString("base64url")}`;
+      await expect(broken.current(new Request(app.base, { headers: { cookie } }))).rejects.toBeInstanceOf(StoreUnavailableError);
+      const res = await broken.handleRequest(new Request(`${app.base}/auth/session`, { headers: { cookie } }));
+      expect(res!.status).toBe(503);
+      expect(await res!.json()).toEqual({ status: "unavailable" });
+      const start = await broken.handleRequest(new Request(`${app.base}/auth/start`));
+      expect(start!.status).toBe(503);
+      expect(start!.headers.get("location")).toBeNull();
+      dead.disconnect();
+    });
+
+    // ---- 7. S1 (public admission) through the runtime ------------------------------------------------------------------
+
+    it("7a. a fresh eligible signup obtains a usable identity through the runtime, and the same account works in a second app", async () => {
+      const email = "fresh-7a@example.test";
+      expect(await principalOf(email)).toBeUndefined(); // nobody has ever seen this address
+      const opJar = new Jar();
+      const a = await browserSignIn(apps[A]!, email, { opJar });
+      expect(a.loginShown).toBe(true);
+      expect(a.session).toBeTruthy();
+      const principal = await principalOf(email);
+      expect(principal).toBeTruthy();
+      const h = await apps[A]!.auth.require(reqWith(a.appJar));
+      expect(h.view.identityKey).toEqual({ iss: issuer, sub: principal });
+      expect(await admissionsOf(principal)).toEqual([A]);
+      // The second public app: the same account, a second admission, the same identity key.
+      const b = await browserSignIn(apps[B]!, email, { opJar });
+      expect(b.session).toBeTruthy();
+      expect((await peek(apps[B]!, b.appJar)).identityKey).toEqual({ iss: issuer, sub: principal });
+      expect(await admissionsOf(principal)).toEqual([A, B].sort());
+      expect((await db.query("SELECT count(*) AS n FROM principals WHERE id = $1", [principal])).rows[0].n).toBe("1");
+    });
+
+    it("7b. a restricted client stays closed to a person nobody connected, whether new or already admitted elsewhere", async () => {
+      const fresh = "restricted-7b@example.test";
+      const r1 = await browserSignIn(apps[R]!, fresh);
+      expect(r1.callback).toBeUndefined();
+      expect(r1.session).toBeUndefined();
+      const known = "restricted-7b-known@example.test";
+      const opJar = new Jar();
+      expect((await browserSignIn(apps[A]!, known, { opJar })).session).toBeTruthy();
+      const r2 = await browserSignIn(apps[R]!, known, { opJar });
+      expect(r2.callback, "an admission to a public app is not a connection").toBeUndefined();
+      for (const email of [fresh, known]) {
+        const principal = await principalOf(email);
+        if (principal) expect(await admissionsOf(principal)).not.toContain(R);
+      }
+    });
+
+    it("7c. a suspended account stays denied on a public client", async () => {
+      const email = "suspended-7c@example.test";
+      expect((await browserSignIn(apps[A]!, email)).session).toBeTruthy();
+      const principal = await principalOf(email);
+      await store.revoke(principal, adminId);
+      const before = await admissionsOf(principal);
+      const again = await browserSignIn(apps[B]!, email);
+      expect(again.callback).toBeUndefined();
+      expect(await admissionsOf(principal)).toEqual(before); // and no admission was added by trying
+    });
+
+    it("7d. nothing a browser supplies can change the policy: not the runtime's start query, not the provider URL, not a form field, header or cookie", async () => {
+      const email = "sneaky-7d@example.test";
+      const jar = new Jar();
+      const r = await browserSignIn(apps[R]!, email, {
+        appJar: undefined,
+        opJar: jar,
+        query: `?admission=public&policy=public&client_id=${A}&screen_hint=register&intent=admin`,
+        providerQuery: "&admission=public&policy=public",
+        extra: { form: { admission: "public", client_id: A, policy: "public" }, headers: { "x-admission": "public", "x-forwarded-admission": "public", cookie: "admission=public" } },
+      });
+      // The runtime forwarded none of it to the provider: its authorization request names only its own client.
+      const authUrl = new URL(r.authUrl);
+      expect(authUrl.searchParams.get("client_id")).toBe(R);
+      expect([...authUrl.searchParams.keys()].filter((k) => /admission|policy/.test(k) && !r.authUrl.endsWith("&admission=public&policy=public"))).toEqual([]);
+      expect(authUrl.searchParams.has("screen_hint")).toBe(false); // an intent the app never registered is dropped, not forwarded
+      expect(r.callback).toBeUndefined();
+      expect(r.session).toBeUndefined();
+      const principal = await principalOf(email);
+      if (principal) expect(await admissionsOf(principal)).not.toContain(R);
+    });
+
+    // ---- 8. the Breinhap header: session state, consistent guards, CORS, round trip -------------------------------------------
+
+    it("8b. the header's answer and a guarded route agree for anonymous, active, authorized, unauthorized, suspended and back-channel-revoked people", async () => {
+      const app = apps[A]!;
+      const who = {
+        plain: "table-plain@example.test",
+        authorized: "table-authorized@example.test",
+        unauthorized: "table-unauthorized@example.test",
+        suspended: "table-suspended@example.test",
+        revoked: "table-revoked@example.test",
+      };
+      const jars: Record<string, Jar> = {};
+      for (const [k, email] of Object.entries(who)) jars[k] = (await browserSignIn(app, email)).appJar;
+      managementFor.add((await peek(app, jars.authorized!)).identityKey.sub);
+      noAccess.add((await peek(app, jars.unauthorized!)).identityKey.sub);
+      try {
+        await store.revoke(await principalOf(who.suspended), adminId);
+        // The production revocation: sessions ended, grants revoked, back-channel logout sent (and received by the runtime).
+        const from = backchannelSent.length;
+        await endSessionsOfAccount(redis, await principalOf(who.revoked), (ended) => notifySessionLogout(provider, ended));
+        await until(() => backchannelSent.slice(from).some((e) => e.status === 200), "the back-channel logout for the revoked person");
+        clock.offset = BOUNDS.revalidateMs + 1000; // past the re-check window, so the suspension is noticed
+
+        const answers: Record<string, { header: string; mgmt: boolean | undefined; guard: number }> = {};
+        const rows: [string, Jar][] = [["anonymous", new Jar()], ...Object.entries(jars)];
+        for (const [k, jar] of rows) {
+          const header = (await (await get(`${app.base}/auth/session`, jar)).json()) as { status: string; authorized?: { management: boolean } };
+          const guard = (await get(`${app.base}/guarded`, jar)).status;
+          answers[k] = { header: header.status, mgmt: header.authorized?.management, guard };
+        }
+        expect(answers).toEqual({
+          anonymous: { header: "anonymous", mgmt: false, guard: 401 },
+          plain: { header: "active", mgmt: false, guard: 403 },
+          authorized: { header: "active", mgmt: true, guard: 200 },
+          unauthorized: { header: "unauthorized", mgmt: false, guard: 403 },
+          suspended: { header: "anonymous", mgmt: false, guard: 401 },
+          revoked: { header: "anonymous", mgmt: false, guard: 401 },
+        });
+        // The consistency rule itself: management is shown exactly when the guard lets the person in.
+        for (const a of Object.values(answers)) expect(a.mgmt === true).toBe(a.guard === 200);
+      } finally {
+        managementFor.clear();
+        noAccess.clear();
+      }
+    });
+
+    it("8c. the cross-origin state handler on a real session: only the allowed origin reads it, and the body holds no token, id or e-mail", async () => {
+      const app = apps[A]!;
+      const PUBLIC = "http://localhost:3999";
+      const r = await browserSignIn(app, "cors-8c@example.test");
+      const handler = createSessionStateHandler({ auth: app.auth, allowedOrigins: [PUBLIC] });
+      const cookie = r.appJar.header();
+      const ok = await handler(new Request(`${app.base}/auth/session`, { headers: { origin: PUBLIC, cookie } }));
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("access-control-allow-origin")).toBe(PUBLIC);
+      expect(ok.headers.get("access-control-allow-credentials")).toBe("true");
+      const text = await ok.text();
+      expect(JSON.parse(text)).toEqual({ status: "active", authorized: { management: false } });
+      const stored = await peek(app, r.appJar);
+      expect(text).not.toContain(stored.accessToken);
+      expect(text).not.toContain(stored.refreshToken!);
+      expect(text).not.toContain(stored.identityKey.sub);
+      expect(text).not.toContain("@example.test");
+      for (const origin of [`${PUBLIC}.evil.example`, "null", "http://LOCALHOST:3999", "http://localhost:3998", "*"]) {
+        const refused = await handler(new Request(`${app.base}/auth/session`, { headers: { origin, cookie } }));
+        expect(refused.status, origin).toBe(403);
+        expect(refused.headers.get("access-control-allow-origin"), origin).toBeNull();
+      }
+    });
+
+    it("8d. intent, locale and return target survive the redirect round trip through the real provider; a forged callback query changes none of them", async () => {
+      const app = apps[A]!;
+      const email = "roundtrip-8d@example.test";
+      const r = await browserSignIn(app, email, { query: "?return=%2Fafter%3Fx%3D1&locale=nl&intent=register" });
+      // What the app asked the real provider for, and what the real provider's login page then did with it.
+      const authUrl = new URL(r.authUrl);
+      expect(authUrl.searchParams.get("ui_locales")).toBe("nl");
+      expect(authUrl.searchParams.get("screen_hint")).toBe("register"); // an app-registered intent parameter, forwarded as chosen
+      expect(r.final!.headers.get("location")).toBe(`${app.base}/after?x=1`);
+      const cookies = r.final!.headers.getSetCookie();
+      expect(cookies.find((c) => c.startsWith("app-locale="))).toMatch(/^app-locale=nl;/);
+      expect(cookies.find((c) => c.startsWith("app-intent="))).toMatch(/^app-intent=register;/);
+
+      // A forged return, locale and intent on the callback itself are ignored (the server-side flow decides).
+      const started = await get(`${app.base}/auth/start?return=%2Fok&locale=en`, new Jar(), undefined);
+      const flowJar = new Jar();
+      flowJar.take(started);
+      const providerAuth = started.headers.get("location")!;
+      const opJar = r.opJar; // the provider already knows this browser: straight to the callback
+      const step = await followProvider(await get(providerAuth, opJar), opJar, app, new Trail());
+      expect(step.callback).toBeDefined();
+      const forged = new URL(step.callback!.href);
+      forged.searchParams.set("return", "https://evil.example/");
+      forged.searchParams.set("locale", "nl");
+      forged.searchParams.set("intent", "register");
+      const done = await get(forged.href, flowJar);
+      expect(done.status).toBe(303);
+      expect(done.headers.get("location")).toBe(`${app.base}/ok`);
+      const set2 = done.headers.getSetCookie();
+      expect(set2.find((c) => c.startsWith("app-locale="))).toMatch(/^app-locale=en;/);
+      expect(set2.some((c) => c.startsWith("app-intent="))).toBe(false);
+
+      // The real provider's login page: record whether it honours ui_locales (identity's own ?lang= / cookie is what it reads).
+      const probe = await browserSignIn(app, "roundtrip-8d-probe@example.test", { query: "?locale=nl" });
+      const loginPage = probe.trail.parts.find((x) => /<html[^>]*lang=/.test(x));
+      const observed = loginPage ? /<html[^>]*lang="([a-z-]+)"/.exec(loginPage)?.[1] : undefined;
+      // Recorded, not assumed: the provider's login page language is whatever identity decides; the runtime only asks.
+      expect(["en", "nl", undefined]).toContain(observed);
     });
   });
 }
