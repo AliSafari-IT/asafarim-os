@@ -28,7 +28,7 @@ import * as oidcClient from "openid-client";
 import { Redis } from "ioredis";
 import { exportJWK, generateKeyPair, SignJWT, type KeyLike } from "jose";
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { RedisAuthSessions, RedisEphemeral, RedisLoginFlows } from "../src/auth-session.ts";
 import { admissionPolicies, appLinks, loadClients } from "../src/clients.ts";
 import { createLogger } from "../src/log.ts";
@@ -514,6 +514,188 @@ if (!CONFIGURED) {
       const res = await fetch(url, { redirect: "manual" });
       expect(res.status).toBe(303);
       expect(new URL(res.headers.get("location")!, issuer).pathname).toMatch(/^\/(interaction|auth)\//);
+    });
+
+    // ---- helpers for the scenarios below ---------------------------------------------------------------------------------
+
+    /** Read a session record straight from the runtime's Redis store (tests only: tokens never leave the server). */
+    const peekStore = (app: App) => createRedisStore({ redis, secret: STORE_SECRET, prefix: app.redisPrefix });
+    async function peek(app: App, appJar: Jar) {
+      const r = await peekStore(app).get(sessionOf(appJar)!, { touch: false, idleMs: null, now: clock.now() });
+      if (r.status !== "ok") throw new Error(`no session: ${r.status}`);
+      return r.session;
+    }
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const refreshGrants = () => providerEvents.filter((e) => e.name === "grant.success" && e.grantType === "refresh_token").length;
+    const principalOf = async (email: string) =>
+      (await db.query("SELECT principal_id FROM identities WHERE method = 'email' AND identifier = $1", [email])).rows[0]?.principal_id as string;
+
+    beforeEach(() => {
+      clock.offset = 0;
+      delayTokenMs = 0;
+      transport.down = false;
+    });
+
+    // ---- 2. refresh with a race ----------------------------------------------------------------------------------------------
+
+    it("2. refresh: ten concurrent requests after the access token expired cause exactly ONE refresh grant at the provider, and rotation stays valid", async () => {
+      const app = apps[A]!;
+      const r = await browserSignIn(app, "refresh-2@example.test");
+      const first = await peek(app, r.appJar);
+      expect(first.refreshToken).toBeTruthy();
+
+      clock.offset = 11 * 60_000; // the access token (10 min) has expired as far as the runtime can tell
+      delayTokenMs = 200; // hold the refresh open so the other nine really contend for the lock
+      const grantsBefore = refreshGrants();
+      const handles = await Promise.all(Array.from({ length: 10 }, () => app.auth.current(reqWith(r.appJar), { touch: false })));
+      expect(refreshGrants() - grantsBefore, "refresh grants counted from oidc-provider's own grant.success events").toBe(1);
+      expect(handles.every((h) => h !== null)).toBe(true);
+      const second = await peek(app, r.appJar);
+      expect(second.refreshToken).not.toBe(first.refreshToken); // rotated
+      expect(second.accessToken).not.toBe(first.accessToken);
+      expect(new Set(handles.map((h) => h!.accessToken())).size).toBe(1);
+      expect(handles[0]!.accessToken()).toBe(second.accessToken);
+
+      // The grant was not revoked by reuse detection: the new access token works and a second rotation succeeds.
+      expect((await fetch(`${issuer}/me`, { headers: { authorization: `Bearer ${second.accessToken}` } })).status).toBe(200);
+      delayTokenMs = 0;
+      clock.offset = 22 * 60_000;
+      expect(await app.auth.current(reqWith(r.appJar), { touch: false })).not.toBeNull();
+      expect(refreshGrants() - grantsBefore).toBe(2);
+    });
+
+    it("2b. refresh lease: a refresh result is NOT saved after the lock was lost, and the stale record is left untouched", async () => {
+      const app = apps[A]!;
+      const r = await browserSignIn(app, "refresh-2b@example.test");
+      const before = await peek(app, r.appJar);
+      clock.offset = 11 * 60_000;
+      delayTokenMs = 400; // longer than a lease renewal interval (5000/3 ms is too long for a test, so shorten the lease)
+      const shortLease = makeAuth(A, app.base, { bounds: { ...BOUNDS, refreshLeaseMs: 90 }, prefix: app.redisPrefix });
+      const pending = shortLease.current(reqWith(r.appJar), { touch: false }).then(
+        (h) => ({ ok: true as const, h }),
+        (e: unknown) => ({ ok: false as const, e }),
+      );
+      await sleep(120); // the first lease renewal has happened; now another process "takes over": the lock key vanishes
+      const lockKeys = await redis.keys(`${app.redisPrefix}:l:*`);
+      expect(lockKeys.length).toBe(1);
+      await redis.del(...lockKeys);
+      const out = await pending;
+      expect(out.ok).toBe(false);
+      expect((out as { e: AuthRuntimeError }).e).toMatchObject({ code: "refresh_ownership_lost" });
+      const after = await peek(app, r.appJar);
+      expect(after.accessToken).toBe(before.accessToken); // nothing was saved
+      expect(after.refreshToken).toBe(before.refreshToken);
+      // The provider DID rotate: the saved refresh token is now spent. The next refresh is rejected and ends the session:
+      // the documented hazard of losing a lock mid-grant, and why the lease is renewed.
+      delayTokenMs = 0;
+      clock.offset = 22 * 60_000;
+      expect(await app.auth.current(reqWith(r.appJar), { touch: false })).toBeNull();
+    });
+
+    // ---- 3. userinfo and freshness -----------------------------------------------------------------------------------
+
+    it("3a. userinfo: an access token that belongs to another person than the stored subject ends the session", async () => {
+      const app = apps[A]!;
+      const mine = await browserSignIn(app, "userinfo-3a@example.test");
+      const other = await browserSignIn(app, "userinfo-3a-other@example.test");
+      const s = await peek(app, mine.appJar);
+      const theirs = await peek(app, other.appJar);
+      const st = peekStore(app);
+      const id = sessionOf(mine.appJar)!;
+      const lock = (await st.acquireRefresh(id, 5000))!;
+      expect(await st.update(id, { ...s, accessToken: theirs.accessToken }, lock, { now: clock.now() })).toBe(true);
+      await st.releaseRefresh(id, lock);
+      // Inside the re-check window nothing is asked of the provider; after it, userinfo answers with the OTHER subject.
+      expect(await app.auth.current(reqWith(mine.appJar), { touch: false })).not.toBeNull();
+      clock.offset = BOUNDS.revalidateMs + 1000;
+      expect(await app.auth.current(reqWith(mine.appJar), { touch: false })).toBeNull();
+      expect((await st.get(id, { touch: false, idleMs: null, now: clock.now() })).status).toBe("missing"); // destroyed
+      expect(await app.auth.current(reqWith(other.appJar), { touch: false })).not.toBeNull(); // the other person is untouched
+    });
+
+    it("3a-ii. the Redis record fails closed when it was tampered with (metadata cross-check), never serving a changed identity", async () => {
+      const app = apps[A]!;
+      const r = await browserSignIn(app, "tamper-3a@example.test");
+      const s = await peek(app, r.appJar);
+      const st = peekStore(app);
+      const id = sessionOf(r.appJar)!;
+      const lock = (await st.acquireRefresh(id, 5000))!;
+      await st.update(id, { ...s, identityKey: { ...s.identityKey, sub: "someone-else" } }, lock, { now: clock.now() });
+      await st.releaseRefresh(id, lock);
+      await expect(app.auth.current(reqWith(r.appJar), { touch: false })).rejects.toMatchObject({ code: "store_corrupt" });
+    });
+
+    /** Stand in for the passage of time at the PROVIDER (which keeps real time): age every identity auth session of a person. */
+    async function ageIdentitySessions(principalId: string, seconds: number) {
+      const hashes = await redis.smembers(`${KEY_PREFIX}sms-sessions-of:${principalId}`);
+      expect(hashes.length).toBeGreaterThan(0);
+      for (const hash of hashes) {
+        const key = `${KEY_PREFIX}sms-session:${hash}`;
+        const raw = await redis.get(key);
+        if (!raw) continue;
+        const rec = JSON.parse(raw) as { authTime: number };
+        await redis.set(key, JSON.stringify({ ...rec, authTime: rec.authTime - seconds }), "KEEPTTL");
+      }
+    }
+
+    it("3b. step-up: a stale auth_time is refused with a restart URL; prompt=login at the real provider yields a fresh auth_time and replaces the session", async () => {
+      const app = apps[A]!;
+      const stepAuth = makeAuth(A, app.base, { bounds: { ...BOUNDS, freshMs: 3000 }, prefix: "rt-step" });
+      const original = app.auth;
+      app.auth = stepAuth;
+      try {
+        const email = "stepup-3b@example.test";
+        const r = await browserSignIn(app, email);
+        expect((await stepAuth.state(reqWith(r.appJar))).fresh).toBe(true);
+        await expect(stepAuth.require(reqWith(r.appJar), { fresh: true })).resolves.toBeTruthy();
+        const oldSession = sessionOf(r.appJar)!;
+        const oldAuthTime = (await stepAuth.current(reqWith(r.appJar), { touch: false }))!.view.authTime;
+
+        await sleep(3400);
+        const err = await stepAuth.require(reqWith(r.appJar), { fresh: true, returnTo: "/billing" }).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(StepUpRequiredError);
+        const restart = (err as StepUpRequiredError).restartUrl!;
+        expect(restart).toBe("/auth/start?return=%2Fbilling&fresh=1");
+        expect((await stepAuth.state(reqWith(r.appJar))).fresh).toBe(false);
+        await expect(stepAuth.require(reqWith(r.appJar))).resolves.toBeTruthy(); // non-fresh actions are unaffected
+
+        // The provider also considers the sign-in old (identity answers prompt=login from its own session only within 120 s).
+        await ageIdentitySessions(await principalOf(email), 600);
+        // The browser follows the restart URL. The provider still has this browser's session, yet prompt=login makes it ask again.
+        const again = await browserSignIn(app, email, { opJar: r.opJar, appJar: r.appJar, query: restart.replace("/auth/start", "") });
+        expect(again.loginShown, "the provider asked for credentials again (prompt=login)").toBe(true);
+        expect(again.final!.headers.get("location")).toBe(`${app.base}/billing`);
+        const fresh = await stepAuth.current(reqWith(again.appJar), { touch: false });
+        expect(fresh!.view.authTime).toBeGreaterThan(oldAuthTime);
+        expect(fresh!.fresh).toBe(true);
+        await expect(stepAuth.require(reqWith(again.appJar), { fresh: true })).resolves.toBeTruthy();
+        expect(sessionOf(again.appJar)).not.toBe(oldSession); // new id, no fixation
+        const oldJar = new Jar();
+        oldJar.take(new Response(null, { headers: { "set-cookie": `__Host-asafarim.sid=${oldSession}` } }));
+        expect(await stepAuth.current(reqWith(oldJar), { touch: false })).toBeNull(); // the previous session was ended
+      } finally {
+        app.auth = original;
+      }
+    });
+
+    it("3c. the browser's ?fresh=1 is a request, not evidence: when the provider answers from its own older session, the runtime re-checks auth_time and refuses", async () => {
+      const app = apps[A]!;
+      const stepAuth = makeAuth(A, app.base, { bounds: { ...BOUNDS, freshMs: 3000 }, prefix: "rt-step" });
+      const original = app.auth;
+      app.auth = stepAuth;
+      try {
+        const email = "stepup-3c@example.test";
+        const r = await browserSignIn(app, email);
+        await sleep(3400);
+        // identity reuses a login younger than 120 s even for prompt=login, so the ID token carries the OLD auth_time.
+        const again = await browserSignIn(app, email, { opJar: r.opJar, appJar: r.appJar, query: "?fresh=1" });
+        expect(again.loginShown).toBe(false);
+        expect(again.final!.status).toBe(401);
+        expect(await again.final!.text()).toBe("Sign-in problem (step_up_required).");
+        expect(again.final!.headers.getSetCookie().some((c) => c.startsWith("__Host-asafarim.sid=") && !c.includes("Max-Age=0"))).toBe(false);
+      } finally {
+        app.auth = original;
+      }
     });
   });
 }
