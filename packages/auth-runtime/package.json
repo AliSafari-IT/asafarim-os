@@ -1,0 +1,63 @@
+{
+  "name": "@asafarim/auth-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A small, framework-independent OIDC client and server-side session runtime for ASafariM apps: code flow with PKCE, signed back-channel logout validation, refresh locking, step-up checks, and app-owned storage and authorization hooks, with a plain Node adapter and the Auth.js adapter",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./oidc": {
+      "types": "./dist/oidc.d.ts",
+      "default": "./dist/oidc.js"
+    },
+    "./session": {
+      "types": "./dist/session.d.ts",
+      "default": "./dist/session.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    },
+    "./authjs": {
+      "types": "./dist/authjs.d.ts",
+      "default": "./dist/authjs.js"
+    },
+    "./stores/memory": {
+      "types": "./dist/stores/memory.d.ts",
+      "default": "./dist/stores/memory.js"
+    },
+    "./stores/redis": {
+      "types": "./dist/stores/redis.d.ts",
+      "default": "./dist/stores/redis.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "jose": "^6.2.15",
+    "openid-client": "^6.8.8"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.2",
+    "eslint": "^9.39.5",
+    "ioredis": "^6.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  }
+}
