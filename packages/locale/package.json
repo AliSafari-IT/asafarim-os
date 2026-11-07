@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/locale",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "The languages of ASafariM OS (en, nl, fr, de; English by default) and the country & language selector, shared by every site and app: one choice across *.asafarim.site, kept in a cookie. Server helpers, plus @asafarim/country-language-selector bundled once into a plain browser script and stylesheet, so upgrading it here upgrades every page.",
   "type": "module",
@@ -40,11 +40,12 @@
     "esbuild": "0.28.2",
     "eslint": "^9.39.5",
     "globals": "^17.12.0",
+    "jsdom": "^27.4.0",
+    "next": "^16.4.3",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "typescript": "^5.9.3",
-    "vitest": "^5.1.0",
-    "next": "^16.4.3"
+    "vitest": "^5.1.0"
   },
   "dependencies": {
     "@asafarim/country-language-selector": "0.5.3"
