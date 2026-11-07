@@ -114,14 +114,14 @@ export class MemoryStore implements IdentityStore {
     this.connectionsById.set(id, { status: "active", grantedAt: new Date(), revokedAt: null });
   }
 
-  async verifiedLogin(method: IdentityMethod, identifier: string) {
+  async verifiedLogin(method: IdentityMethod, identifier: string): Promise<VerifiedResult> {
     const p = this.ensure(method, identifier);
     p.verifiedAt ??= new Date();
     p.lastLoginAt = new Date();
     return { kind: "ok" as const, principalId: p.id, created: false };
   }
 
-  async verifiedGoogleLogin(subject: string, email: string | null, linkEmail: boolean) {
+  async verifiedGoogleLogin(subject: string, email: string | null, linkEmail: boolean): Promise<VerifiedResult> {
     let p = this.by("google", subject);
     if (!p) {
       if (linkEmail && email) {

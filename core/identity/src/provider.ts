@@ -15,7 +15,9 @@ import { notifySessionLogout } from "./logout.ts";
  * `offline_access` and rotated on every use, RP-initiated + back-channel logout.
  */
 import { randomBytes } from "node:crypto";
-import Provider, { type Configuration } from "oidc-provider";
+import Provider, { type Configuration, interactionPolicy as oidcPolicy } from "oidc-provider";
+
+const { Check, base: defaultPolicy } = oidcPolicy;
 import type { CryptoKey, JWK, KeyObject } from "jose";
 import type { Headless } from "./headless.ts";
 import type { AuditApi } from "./audit-api.ts";
@@ -124,6 +126,25 @@ export function createProvider(deps: ProviderDeps): Provider {
     throw new Error('admission "public" needs the local login method');
   }
 
+  /**
+   * A browser can hold a provider session whose account may NOT use the client now asking: admitted to another
+   * app only, suspended, or revoked since. findAccount rightly returns nothing for it, but oidc-provider's own
+   * checks only look at `session.accountId`, so it would carry on without an account and fail with a server
+   * error. This check turns that case into a login interaction, where `authorizedPrincipal` admits (public
+   * client) or refuses (restricted, suspended) with the same decision.
+   */
+  function interactionPolicy(): ReturnType<typeof defaultPolicy> {
+    const policy = defaultPolicy();
+    policy
+      .get("login")!
+      .checks.push(
+        new Check("client_access", "This account has no access to this client yet", "login_required", (ctx) =>
+          ctx.oidc.session?.accountId && !ctx.oidc.account ? Check.REQUEST_PROMPT : Check.NO_NEED_TO_PROMPT,
+        ),
+      );
+    return policy;
+  }
+
   const configuration: Configuration = {
     adapter: deps.adapter,
     ...(deps.testOnlyFetch ? { fetch: deps.testOnlyFetch } : {}),
@@ -180,6 +201,7 @@ export function createProvider(deps: ProviderDeps): Provider {
     },
     interactions: {
       url: (_ctx, interaction) => `/interaction/${interaction.uid}`,
+      policy: interactionPolicy(),
     },
     // Every client is a first-party ASafariM app: no consent screen. The grant
     // covers exactly the OIDC scopes the client asked for.
