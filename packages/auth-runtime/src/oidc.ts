@@ -123,8 +123,9 @@ interface OauthErrorShape {
 }
 
 function claimReason(e: OauthErrorShape): TokenValidationReason {
-  const cause = (e.cause ?? {}) as { claim?: string };
-  switch (cause.claim) {
+  // openid-client wraps oauth4webapi's OperationProcessingError, whose own `cause` carries the claim name.
+  const wrapped = (e.cause ?? {}) as { claim?: string; cause?: { claim?: string } };
+  switch (wrapped.cause?.claim ?? wrapped.claim) {
     case "iss":
       return "issuer";
     case "aud":
@@ -266,6 +267,40 @@ export function createOidcClient(opts: OidcClientOptions): OidcClient {
     return inflight;
   }
 
+  async function remoteKeys(): Promise<ReturnType<typeof jose.createRemoteJWKSet>> {
+    const config = await configuration();
+    const uri = config.serverMetadata().jwks_uri;
+    if (!uri) throw new TokenValidationError("signature");
+    jwks ??= jose.createRemoteJWKSet(new URL(uri), {
+      timeoutDuration: timeoutMs,
+      ...(customFetch ? { [jose.customFetch]: (url: string, o: RequestInit) => opts.fetch!(url, o) } : {}),
+    });
+    return jwks;
+  }
+
+  /**
+   * openid-client may rely on TLS for an ID token received straight from the token endpoint (OIDC Core 3.1.3.7). We also
+   * verify the signature against the provider's published keys, so a token is never trusted on transport alone.
+   */
+  async function verifyIdTokenSignature(idToken: string): Promise<void> {
+    try {
+      await jose.jwtVerify(idToken, await remoteKeys(), {
+        issuer,
+        audience: opts.clientId,
+        algorithms: [idTokenAlg],
+        clockTolerance: 5,
+      });
+    } catch (err) {
+      if (err instanceof IdentityUnavailableError || err instanceof TokenValidationError) throw err;
+      const code = (err as { code?: unknown } | null)?.code;
+      if (typeof code !== "string" || code === "ERR_JWKS_TIMEOUT") throw new IdentityUnavailableError();
+      if (code === "ERR_JOSE_ALG_NOT_ALLOWED") throw new TokenValidationError("alg");
+      if (code === "ERR_JWT_EXPIRED") throw new TokenValidationError("expired");
+      if (code === "ERR_JWT_CLAIM_VALIDATION_FAILED") throw new TokenValidationError("claims");
+      throw new TokenValidationError("signature");
+    }
+  }
+
   const stringClaim = (v: unknown, max = 256): string | undefined =>
     typeof v === "string" && v.length > 0 && v.length <= max ? v : undefined;
 
@@ -320,6 +355,8 @@ export function createOidcClient(opts: OidcClientOptions): OidcClient {
       } catch (err) {
         throw mapProviderError(err);
       }
+      if (typeof tokens.id_token !== "string") throw new TokenValidationError("claims");
+      await verifyIdTokenSignature(tokens.id_token);
       const claims = tokens.claims();
       const sub = stringClaim(claims?.sub);
       const iss = stringClaim(claims?.iss, 2048);
@@ -361,6 +398,7 @@ export function createOidcClient(opts: OidcClientOptions): OidcClient {
         const next = t.refresh_token === undefined ? undefined : stringClaim(t.refresh_token, MAX_TOKEN_LENGTH);
         if (!accessToken || (t.refresh_token !== undefined && !next)) throw new TokenValidationError("claims");
         if (typeof t.expires_in !== "number" || !(t.expires_in > 0)) throw new TokenValidationError("claims");
+        if (typeof t.id_token === "string") await verifyIdTokenSignature(t.id_token);
         const idClaims = t.claims();
         if (idClaims && idClaims.sub !== expectedSub) throw new ProviderRejectedError("subject_mismatch");
         return { accessToken, ...(next ? { refreshToken: next } : {}), expiresIn: t.expires_in };
@@ -385,7 +423,9 @@ export function createOidcClient(opts: OidcClientOptions): OidcClient {
     },
 
     async endSessionUrl(o) {
-      const post = o?.postLogoutRedirectUri ?? opts.postLogoutRedirectUri ?? null;
+      // An explicit null means "no return address"; leaving it out means the configured default.
+      const post =
+        o && "postLogoutRedirectUri" in o ? (o.postLogoutRedirectUri ?? null) : (opts.postLogoutRedirectUri ?? null);
       try {
         const config = await configuration();
         const params: Record<string, string> = { client_id: opts.clientId };
@@ -400,14 +440,8 @@ export function createOidcClient(opts: OidcClientOptions): OidcClient {
       if (typeof token !== "string" || token.length === 0 || token.length > MAX_TOKEN_LENGTH)
         throw new LogoutTokenInvalidError();
       try {
-        const config = await configuration();
-        const uri = config.serverMetadata().jwks_uri;
-        if (!uri) throw new LogoutTokenInvalidError();
-        jwks ??= jose.createRemoteJWKSet(new URL(uri), {
-          timeoutDuration: timeoutMs,
-          ...(customFetch ? { [jose.customFetch]: (url: string, o: RequestInit) => opts.fetch!(url, o) } : {}),
-        });
-        const { payload } = await jose.jwtVerify(token, jwks, {
+        const keys = await remoteKeys();
+        const { payload } = await jose.jwtVerify(token, keys, {
           issuer,
           audience: opts.clientId,
           algorithms: logoutAlgs,
