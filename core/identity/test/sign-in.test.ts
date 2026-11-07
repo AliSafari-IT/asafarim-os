@@ -405,6 +405,31 @@ describe("local sign-in", () => {
     return go(b, "GET", `/login/google/callback?${back.toString()}`);
   }
 
+  describe("an identifier conflict (routing only: MemoryStore, not acceptance evidence)", () => {
+    it("shows a generic retryable page, audits the typed reason and starts no session", async () => {
+      store.verifiedLogin = async () => ({ kind: "conflict", reason: "identifier_taken" });
+      const b = new Browser();
+      const res = await emailSignIn(b, "taken@example.test");
+      expect(res.status).toBe(409);
+      expect(res.body).toContain("Please try again");
+      expect(res.body).not.toContain("taken@example.test");
+      expect(b.cookies.get("identity_auth")).toBeUndefined();
+      expect(store.auditLog.some((e) => e.detail?.reason === "identifier_taken")).toBe(true);
+      expect(store.principals.size).toBe(1); // only the bootstrap admin
+    });
+
+    it("the same for Google", async () => {
+      store.verifiedGoogleLogin = async () => ({ kind: "conflict", reason: "identifier_taken" });
+      const b = new Browser();
+      const res = await googleSignIn(b);
+      expect(res.status).toBe(400);
+      expect(res.body).toContain("Please try again");
+      expect(
+        store.auditLog.some((e) => e.event === "google.failed" && e.detail?.reason === "identifier_conflict"),
+      ).toBe(true);
+    });
+  });
+
   describe("Continue with Google", () => {
     it("the login page offers Google first, then a passkey and codes", async () => {
       const page = (await go(new Browser(), "GET", "/login")).body;

@@ -41,6 +41,7 @@ const ADMIN = "admin@example.test";
 const NEWBIE = "newbie@example.test";
 const SECRET = randomBytes(32).toString("base64url");
 const PUB = "pubapp";
+const PUB2 = "pubtwo";
 const RES = "resapp";
 
 describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + Postgres + Redis", () => {
@@ -57,6 +58,8 @@ describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + 
   let jwks: ReturnType<typeof createLocalJWKSet>;
   const mailer = new CapturingMailer();
   const google = new FakeGoogle();
+  /** Every findAccount call the real provider makes: which gate, and which client it carried. */
+  const findAccountCalls: { clientId: string | null; gate: string }[] = [];
 
   class Jar {
     private readonly cookies = new Map<string, string>();
@@ -83,6 +86,7 @@ describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + 
     store = new PgIdentityStore(u.href);
     await store.migrate();
     db = new pg.Pool({ connectionString: u.href, max: 2 });
+    db.on("error", () => undefined); // the database is dropped with FORCE while idle clients close
     redis = new Redis(redisDb13(REDIS_URL!));
     await redis.flushdb();
     await store.bootstrapAdmin([{ method: "email", identifier: ADMIN }]);
@@ -110,6 +114,14 @@ describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + 
           primary_domain: "pub.example",
           redirect_uris: [`${rpBase}/cb`],
           client_secret_env: "PUB_SECRET",
+          admission: "public" as const,
+        },
+        {
+          client_id: PUB2,
+          name: "Second public app",
+          primary_domain: "pub2.example",
+          redirect_uris: [`${rpBase}/cb`],
+          client_secret_env: "PUB2_SECRET",
           admission: "public" as const,
         },
         {
@@ -149,7 +161,11 @@ describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + 
       issuer,
       jwks: { keys: [signing] },
       cookieKeys: [randomBytes(32).toString("hex")],
-      clients: loadClients(file, { PUB_SECRET: SECRET, RES_SECRET: SECRET }, { allowLocalhost: true }),
+      clients: loadClients(
+        file,
+        { PUB_SECRET: SECRET, PUB2_SECRET: SECRET, RES_SECRET: SECRET },
+        { allowLocalhost: true },
+      ),
       admission: policies,
       loginMethod: "local",
       signIn,
@@ -157,6 +173,7 @@ describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + 
       adapter: redisAdapterFactory(redis),
       accounts: new PrincipalAccounts(store),
       readiness: async () => ({ redis: true, database: true }),
+      onFindAccount: (call) => findAccountCalls.push(call),
       log,
     });
     late.provider = provider;
@@ -396,6 +413,7 @@ describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + 
     // A new authorization from the same browser (the provider session is still there): no code.
     const again = await authorize(client, jar);
     expect(again.callback).toBeUndefined();
+    expect(again.res.status, "a clean refusal, not a server error").not.toBe(500);
     // A cold sign-in with a fresh code: no code either, and signing in again creates nothing.
     const cold = await signInAt(client, email, new Jar());
     expect(cold.callback).toBeUndefined();
@@ -638,6 +656,303 @@ describe.skipIf(!REDIS_URL || !DATABASE_URL)("public admission, real provider + 
     expect(await store.principal(sub)).toMatchObject({ connection: "none", admittedClients: [PUB] });
   });
 
+  // ---- one account, per-client admission (addendum B, F13) --------------------------------------
+
+  it("one account across clients: A registers, B joins by SSO with no second registration, C stays denied", async () => {
+    const email = "one-account@example.test";
+    const jar = new Jar();
+    const a = await signInAt(PUB, email, jar);
+    const ta = await exchange(PUB, a.callback!, a.verifier);
+    expect(ta.status).toBe(200);
+    const sub = (await principalOf(email))!;
+    const principals = await count("principals");
+    const identities = await count("identities", `principal_id = '${sub}'`);
+    const mails = mailer.sent.length;
+
+    // B, same browser, still-valid auth session: no code is asked for, no email is sent.
+    const b = await authorize(PUB2, jar);
+    expect(b.loginUrl, "no credential challenge").toBeUndefined();
+    expect(b.callback).toBeDefined();
+    const tb = await exchange(PUB2, b.callback!, b.verifier);
+    expect(tb.status).toBe(200);
+    expect(mailer.sent.length).toBe(mails);
+
+    const idA = (await jwtVerify(ta.json.id_token as string, jwks, { issuer, audience: PUB })).payload;
+    const idB = (await jwtVerify(tb.json.id_token as string, jwks, { issuer, audience: PUB2 })).payload;
+    expect(idA.sub).toBe(sub);
+    expect(idB.sub).toBe(sub); // one canonical sub, never pairwise
+    expect(await count("principals")).toBe(principals);
+    expect(await count("identities", `principal_id = '${sub}'`)).toBe(identities);
+    expect(await admissionsOf(sub)).toEqual([PUB, PUB2].sort());
+    expect(await count("audit_log", `event = 'connection.admitted' AND principal_id = '${sub}'`)).toBe(2);
+    // A's tokens are untouched by B's admission.
+    expect((await userinfo(ta.json.access_token as string)).status).toBe(200);
+
+    // C (restricted), same browser: no code, no admission row, no connection row.
+    const c = await authorize(RES, jar);
+    expect(c.callback).toBeUndefined();
+    expect(c.res.status, "a clean refusal, not a server error").not.toBe(500);
+    expect(await admissionsOf(sub)).toEqual([PUB, PUB2].sort());
+    expect(await count("connections", `principal_id = '${sub}'`)).toBe(0);
+    expect(await count("principals")).toBe(principals);
+  });
+
+  it("the client reaches every OIDC gate, a code is bound to its client, and one client's admission can be dropped alone", async () => {
+    const email = "gates@example.test";
+    findAccountCalls.length = 0;
+    const jar = new Jar();
+    const a = await signInAt(PUB, email, jar);
+    const ta = await exchange(PUB, a.callback!, a.verifier);
+    expect(ta.status).toBe(200);
+    expect((await userinfo(ta.json.access_token as string)).status).toBe(200);
+    const ra = await refresh(PUB, ta.json.refresh_token as string);
+    expect(ra.status).toBe(200);
+    // The spy: never a null client at the gates the real provider uses.
+    const gates = new Set(findAccountCalls.map((c) => c.gate));
+    expect([...gates].sort()).toEqual(
+      expect.arrayContaining(["AccessToken", "AuthorizationCode", "RefreshToken", "session"]),
+    );
+    expect(findAccountCalls.length).toBeGreaterThan(4);
+    expect(findAccountCalls.filter((c) => c.clientId === null)).toEqual([]);
+    expect(new Set(findAccountCalls.map((c) => c.clientId))).toEqual(new Set([PUB]));
+
+    // A code issued to A cannot be redeemed by C (or B).
+    const second = await authorize(PUB, jar);
+    const stolen = await token(RES, {
+      grant_type: "authorization_code",
+      code: second.callback!.searchParams.get("code")!,
+      redirect_uri: `${rpBase}/cb`,
+      code_verifier: second.verifier,
+    });
+    expect(stolen.status).toBe(400);
+
+    // Join B, then drop only A's admission: A's refresh and userinfo fail, B keeps working.
+    const b = await authorize(PUB2, jar);
+    const tb = await exchange(PUB2, b.callback!, b.verifier);
+    expect(tb.status).toBe(200);
+    const sub = (await principalOf(email))!;
+    await db.query("DELETE FROM client_admissions WHERE principal_id = $1 AND client_id = $2", [sub, PUB]);
+    expect((await refresh(PUB, ra.json.refresh_token as string)).status).toBe(400);
+    expect((await userinfo(ra.json.access_token as string)).status).toBe(401);
+    expect((await refresh(PUB2, tb.json.refresh_token as string)).status).toBe(200);
+    expect((await userinfo(tb.json.access_token as string)).status).toBe(200);
+  });
+
+  it("a client switched back to restricted stops honouring the admissions it handed out", async () => {
+    // Same data, a provider that reads PUB as restricted: simulated by the policy filter every gate applies.
+    const { underPolicies, decide } = await import("../src/admission.ts");
+    const sub = (await principalOf(NEWBIE))!;
+    const account = (await new PrincipalAccounts(store).find(sub))!;
+    expect(
+      decide(
+        underPolicies(account, () => "public"),
+        PUB,
+      ).allow,
+    ).toBe(true);
+    expect(
+      decide(
+        underPolicies(account, () => "restricted"),
+        PUB,
+      ).allow,
+    ).toBe(false);
+  });
+
+  // ---- typed outcomes in the audit (F15) ----------------------------------------------------------
+
+  it("sign-in outcomes are audited with the typed reason, and the finer cause beside it", async () => {
+    const email = "outcomes@example.test";
+    const denied = await signInAt(RES, email, new Jar());
+    expect(denied.callback).toBeUndefined();
+    const sub = (await principalOf(email))!;
+    const last = async (event: string, where = "true") =>
+      (
+        await db.query(
+          `SELECT detail FROM audit_log WHERE principal_id = $1 AND event = $2 AND ${where} ORDER BY id DESC LIMIT 1`,
+          [sub, event],
+        )
+      ).rows[0].detail as Record<string, unknown>;
+    expect(await last("login.not_authorized")).toMatchObject({
+      clientId: RES,
+      reason: "restricted_client_denied",
+      cause: "no_access",
+    });
+
+    const granted = await signInAt(PUB, email, new Jar());
+    expect(granted.callback).toBeDefined();
+    expect(await last("login.granted", "detail ? 'target'")).toMatchObject({
+      clientId: PUB,
+      via: "public_admission",
+      subject: "existing",
+    });
+
+    await store.revoke(sub, adminId);
+    expect((await signInAt(PUB, email, new Jar())).callback).toBeUndefined();
+    expect(await last("login.not_authorized")).toMatchObject({
+      clientId: PUB,
+      reason: "suspended",
+      cause: "suspended",
+    });
+
+    // A brand-new person is `new`.
+    const fresh = "outcomes-new@example.test";
+    expect((await signInAt(PUB, fresh, new Jar())).callback).toBeDefined();
+    const row = await db.query("SELECT detail FROM audit_log WHERE event = 'login.granted' AND principal_id = $1", [
+      (await principalOf(fresh))!,
+    ]);
+    expect(row.rows[0].detail).toMatchObject({ subject: "new" });
+  });
+
+  it("an identifier nobody proved can't earn a public admission (needs_verification)", async () => {
+    const p = await db.query("INSERT INTO principals DEFAULT VALUES RETURNING id");
+    const id = p.rows[0].id as string;
+    await db.query(
+      "INSERT INTO identities (method, identifier, principal_id) VALUES ('email', 'unproved@example.test', $1)",
+      [id],
+    );
+    expect(await store.admitPublic(id, PUB)).toBe("needs_verification");
+    expect(await admissionsOf(id)).toEqual([]);
+    await store.verifiedLogin("email", "unproved@example.test");
+    expect(await store.admitPublic(id, PUB)).toBe("admitted");
+  });
+
+  // ---- Google exception to the linking rule, pinned (addendum E, F17) --------------------------
+
+  async function googleFinish(identity: {
+    subject: string;
+    email: string | null;
+    authoritative: boolean;
+    workspace?: boolean;
+  }) {
+    google.next = identity;
+    const jar = new Jar();
+    const { state } = await googleStart(jar);
+    const res = await get(`/login/google/callback?${new URLSearchParams({ code: "abc", state })}`, jar);
+    expect(res.status).toBe(303);
+    return identity.subject;
+  }
+  const lastGoogleAudit = async (principalId: string) =>
+    (
+      await db.query(
+        "SELECT detail FROM audit_log WHERE event = 'google.verified' AND principal_id = $1 ORDER BY id DESC LIMIT 1",
+        [principalId],
+      )
+    ).rows[0].detail as Record<string, unknown>;
+
+  it("Google links by verified address only where Google is the authority, and says so in the audit", async () => {
+    // Gmail: joins the principal that holds the address (proved earlier by a code).
+    const gm = await pid(store.verifiedLogin("email", "pinned@gmail.com"));
+    await googleFinish({
+      subject: "950000000000000000001",
+      email: "pinned@gmail.com",
+      authoritative: true,
+      workspace: false,
+    });
+    expect(await lastGoogleAudit(gm)).toEqual({ linked: true, joinedExisting: true, hd: false });
+    expect((await store.principal(gm))!.methods).toEqual(["email", "google"]);
+
+    // Workspace (`hd`): same exception, flagged.
+    const ws = await pid(store.verifiedLogin("email", "pinned@workspace.test"));
+    await googleFinish({
+      subject: "950000000000000000002",
+      email: "pinned@workspace.test",
+      authoritative: true,
+      workspace: true,
+    });
+    expect(await lastGoogleAudit(ws)).toEqual({ linked: true, joinedExisting: true, hd: true });
+
+    // Not the authority (no hd, not Gmail): its own principal; the address-holder is untouched.
+    const holder = await pid(store.verifiedLogin("email", "pinned@elsewhere.test"));
+    await googleFinish({
+      subject: "950000000000000000003",
+      email: "pinned@elsewhere.test",
+      authoritative: false,
+      workspace: false,
+    });
+    const own = (
+      await db.query(
+        "SELECT principal_id FROM identities WHERE method = 'google' AND identifier = '950000000000000000003'",
+      )
+    ).rows[0].principal_id as string;
+    expect(own).not.toBe(holder);
+    expect(await lastGoogleAudit(own)).toEqual({ linked: false, joinedExisting: false, hd: false });
+    expect((await store.principal(holder))!.methods).toEqual(["email"]);
+
+    // Authority but nobody held the address: a new principal, address now a verified email identity.
+    await googleFinish({
+      subject: "950000000000000000004",
+      email: "brand-new@gmail.com",
+      authoritative: true,
+      workspace: false,
+    });
+    const fresh = (
+      await db.query(
+        "SELECT principal_id FROM identities WHERE identifier = 'brand-new@gmail.com' AND method = 'email'",
+      )
+    ).rows[0].principal_id as string;
+    expect(await lastGoogleAudit(fresh)).toEqual({ linked: true, joinedExisting: false, hd: false });
+    expect((await store.principal(fresh))!.emailVerified).toBe(true);
+  });
+
+  it("linking never lifts a suspension, grants a role or an admission by itself", async () => {
+    const email = "link-susp2@gmail.com";
+    const sub = await pid(store.verifiedLogin("email", email));
+    await store.admitPublic(sub, PUB);
+    await store.revoke(sub, adminId);
+    await googleFinish({ subject: "950000000000000000005", email, authoritative: true, workspace: false });
+    expect((await store.principal(sub))!).toMatchObject({
+      connection: "revoked",
+      isAdmin: false,
+      admittedClients: [PUB],
+    });
+    // A person linked in by Google gets no admission to a client they never reached.
+    const other = await pid(store.verifiedLogin("email", "link-plain@gmail.com"));
+    await googleFinish({
+      subject: "950000000000000000006",
+      email: "link-plain@gmail.com",
+      authoritative: true,
+      workspace: false,
+    });
+    expect(await admissionsOf(other)).toEqual([PUB]); // only the client the sign-in was for (googleStart uses PUB)
+    expect(await admissionsOf(other)).not.toContain(PUB2);
+  });
+
+  it("a role chosen in a form is not a role: the account gets none", async () => {
+    const email = "role-form@example.test";
+    const jar = new Jar();
+    const a = await authorize(PUB, jar);
+    await resetLimits();
+    const page = await get(a.loginUrl!, jar);
+    const csrf = csrfOf(await page.text());
+    await post("/login/start", jar, {
+      csrf,
+      via: "email",
+      identifier: email,
+      role: "identity.admin",
+      is_admin: "true",
+    });
+    const res = await post("/login/verify", jar, {
+      csrf,
+      code: mailer.lastCode(email),
+      role: "identity.admin",
+      is_admin: "true",
+    });
+    expect(res.status).toBe(200);
+    const sub = (await principalOf(email))!;
+    expect((await store.principal(sub))!).toMatchObject({ isAdmin: false, connection: "none" });
+    expect((await new PrincipalAccounts(store).find(sub))!.roles).toEqual([]);
+  });
+
+  // ---- no extra registration fields (addendum A7) ------------------------------------------------
+
+  it("the sign-in forms collect no app fields", async () => {
+    const jar = new Jar();
+    const a = await authorize(PUB, jar);
+    const html = await (await get(a.loginUrl!, jar)).text();
+    const names = [...html.matchAll(/<(?:input|select|textarea)[^>]*\bname="([^"]+)"/g)].map((m) => m[1]);
+    expect(names.length).toBeGreaterThan(0);
+    for (const n of names) expect(["csrf", "via", "identifier", "code"], n).toContain(n);
+  });
+
   // ---- counts -------------------------------------------------------------------------------------
 
   it("the summary counts public admissions apart from admin connections", async () => {
@@ -664,6 +979,7 @@ describe.skipIf(!DATABASE_URL)("migration 006 on a database from before it", () 
     const u = new URL(DATABASE_URL!);
     u.pathname = `/${dbName}`;
     pool = new pg.Pool({ connectionString: u.href, max: 2 });
+    pool.on("error", () => undefined); // the database is dropped with FORCE while idle clients close
   });
 
   afterAll(async () => {
