@@ -398,7 +398,15 @@ export function createOidcClient(opts: OidcClientOptions): OidcClient {
         const next = t.refresh_token === undefined ? undefined : stringClaim(t.refresh_token, MAX_TOKEN_LENGTH);
         if (!accessToken || (t.refresh_token !== undefined && !next)) throw new TokenValidationError("claims");
         if (typeof t.expires_in !== "number" || !(t.expires_in > 0)) throw new TokenValidationError("claims");
-        if (typeof t.id_token === "string") await verifyIdTokenSignature(t.id_token);
+        // The provider has already rotated the refresh token. A key-set OUTAGE while checking the optional ID token must not
+        // throw those tokens away (the next refresh would be invalid_grant and end the session); a bad signature still does.
+        if (typeof t.id_token === "string") {
+          try {
+            await verifyIdTokenSignature(t.id_token);
+          } catch (err) {
+            if (!(err instanceof IdentityUnavailableError)) throw err;
+          }
+        }
         const idClaims = t.claims();
         if (idClaims && idClaims.sub !== expectedSub) throw new ProviderRejectedError("subject_mismatch");
         return { accessToken, ...(next ? { refreshToken: next } : {}), expiresIn: t.expires_in };

@@ -293,6 +293,30 @@ describe("unit: refresh and userinfo", () => {
     await expect(client.refresh("old", "sub-1")).rejects.toBeInstanceOf(IdentityUnavailableError);
   });
 
+  it("a key-set outage while checking the refresh response's ID token does not throw away the rotated tokens; a bad signature does", async () => {
+    const { client, p } = await setup();
+    const now = p.now();
+    const body = (idToken: string) => ({
+      access_token: "rotated-access-token",
+      token_type: "Bearer",
+      expires_in: 60,
+      refresh_token: "rotated-refresh-token",
+      id_token: idToken,
+    });
+    const good = await p.sign({ sub: "sub-1", exp: now + 300 });
+    p.state.token = () => ({ status: 200, body: body(good) });
+    p.state.jwksDown = true;
+    expect(await client.refresh("old", "sub-1")).toEqual({
+      accessToken: "rotated-access-token",
+      refreshToken: "rotated-refresh-token",
+      expiresIn: 60,
+    });
+    p.state.jwksDown = false;
+    const forged = await p.sign({ sub: "sub-1", exp: now + 300 }, { key: "evil" });
+    p.state.token = () => ({ status: 200, body: body(forged) });
+    await expect(client.refresh("old", "sub-1")).rejects.toBeInstanceOf(TokenValidationError);
+  });
+
   it("refresh refuses a different subject in a returned ID token", async () => {
     const { client, p } = await setup();
     const now = p.now();

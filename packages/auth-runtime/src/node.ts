@@ -12,6 +12,7 @@ import {
   CsrfError,
   InvalidConfigError,
   PayloadTooLargeError,
+  RateLimitedError,
   StepUpRequiredError,
   type AuthRuntimeError as AuthRuntimeErrorType,
 } from "./errors.js";
@@ -48,6 +49,12 @@ export interface NodeAuthOptions<A = unknown>
   postLogoutRedirectUri?: string;
   /** Include a display hint (the e-mail the provider vouched for) in `/session`. Default false: the body is `status`, `authorized`, `fresh`. */
   exposeDisplayHint?: boolean;
+  /**
+   * Who is asking, for the sign-in start budget (`deps.budget("start", requester)` and `("start-global", "global")`). The
+   * adapter ignores forwarded headers, so it does not know the client address; an internet-facing app supplies it here from
+   * its trusted proxy. Without `deps.budget`, nothing limits `/auth/start`, which writes a flow record per call.
+   */
+  requester?(request: Request): string | undefined;
   /** Use a prebuilt OIDC client instead of building one from the issuer options. */
   oidc?: OidcClient;
   /**
@@ -222,6 +229,11 @@ export function createNodeAuth<A = unknown>(opts: NodeAuthOptions<A>): NodeAuth 
   async function onStart(request: Request, url: URL): Promise<Response> {
     const q = url.searchParams;
     try {
+      if (deps.budget) {
+        const who = opts.requester?.(request) ?? "unknown";
+        if (!(await deps.budget("start", who)) || !(await deps.budget("start-global", "global")))
+          throw new RateLimitedError();
+      }
       const r = await runtime.start({
         ...(q.get("return") ? { returnTo: q.get("return")! } : {}),
         ...(q.get("locale") ? { locale: q.get("locale")! } : {}),

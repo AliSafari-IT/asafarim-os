@@ -248,6 +248,30 @@ describe("unit: sign-out (labelled local vs everywhere), CSRF and origin checks"
   });
 });
 
+describe("unit: sign-in start budget", () => {
+  it("refuses with 429 and writes no flow when the budget says no; asks per requester and globally", async () => {
+    const asked: string[] = [];
+    const t = setup({
+      requester: (r) => r.headers.get("x-test-requester") ?? undefined,
+      deps: { now: () => Date.now(), budget: async (name, key) => (asked.push(`${name}:${key}`), key !== "flooder") },
+    });
+    let puts = 0;
+    const put = t.store.put.bind(t.store);
+    t.store.put = async (...a) => ((puts += 1), put(...a));
+    const ok = (await t.auth.handleRequest(req("/auth/start", { headers: { "x-test-requester": "alice" } })))!;
+    expect(ok.status).toBe(303);
+    expect(puts).toBe(1);
+    const refused = (await t.auth.handleRequest(req("/auth/start", { headers: { "x-test-requester": "flooder" } })))!;
+    expect(refused.status).toBe(429);
+    expect(await refused.text()).toBe("Sign-in problem (rate_limited).");
+    expect(refused.headers.get("location")).toBeNull();
+    expect(puts).toBe(1); // nothing written for the refused request
+    expect(asked).toEqual(["start:alice", "start-global:global", "start:flooder"]);
+    await t.auth.handleRequest(req("/auth/start")); // no requester supplied
+    expect(asked.at(-2)).toBe("start:unknown");
+  });
+});
+
 describe("unit: back-channel logout endpoint", () => {
   const bc = (body: string | undefined) =>
     req("/auth/backchannel-logout", {
@@ -275,6 +299,17 @@ describe("unit: back-channel logout endpoint", () => {
       expect(r.status, label).toBe(status);
       expect(await r.text(), label).toBe("");
     }
+  });
+
+  it("spends the per-session budget only after the token validated, and a flood of garbage only the raw cap", async () => {
+    const asked: string[] = [];
+    const t = setup({ deps: { now: () => Date.now(), budget: async (n, k) => (asked.push(`${n}:${k}`), true) } });
+    await t.auth.handleRequest(bc("logout_token=garbage"));
+    await t.auth.handleRequest(bc("logout_token=garbage-2"));
+    expect(asked).toEqual(["backchannel-logout-raw:global", "backchannel-logout-raw:global"]);
+    t.fake.state.logoutToken = { jti: "j-budget", iat: Math.floor(Date.now() / 1000), sid: "sid-1" };
+    expect((await t.auth.handleRequest(bc("logout_token=valid-logout-token")))!.status).toBe(200);
+    expect(asked.slice(2)).toEqual(["backchannel-logout-raw:global", "backchannel-logout:sid-1"]);
   });
 
   it("answers 429 when the sender is over budget and 503 when the store is down", async () => {

@@ -76,6 +76,11 @@ describe("packaging: the built package", () => {
 
   it("has what a publish needs: license, files, engines, type, exports with types for every subpath", () => {
     expect(manifest.license).toBeTruthy();
+    // "SEE LICENSE IN LICENSE" needs the file next to package.json (npm ships it automatically).
+    expect(existsSync(path.join(root, "LICENSE"))).toBe(true);
+    expect(readFileSync(path.join(root, "LICENSE"), "utf8")).toBe(
+      readFileSync(path.join(root, "..", "..", "LICENSE"), "utf8"),
+    );
     expect(manifest.files).toEqual(["dist"]);
     expect(manifest.engines?.node).toMatch(/24/);
     expect(manifest.type).toBe("module");

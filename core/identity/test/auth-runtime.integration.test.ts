@@ -100,6 +100,7 @@ if (!CONFIGURED) {
       const auditLines: string[] = [];
       const logLines: string[] = [];
       let delayTokenMs = 0;
+      let delayUserinfoMs = 0;
       const transport = { tokenRequests: 0, down: false };
 
       interface App {
@@ -184,6 +185,7 @@ if (!CONFIGURED) {
       const delayedFetch: typeof fetch = async (input, init) => {
         if (transport.down) throw new TypeError("fetch failed");
         const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.endsWith("/me") && delayUserinfoMs) await new Promise((r) => setTimeout(r, delayUserinfoMs));
         if (url.endsWith("/token")) {
           transport.tokenRequests++;
           if (delayTokenMs) await new Promise((r) => setTimeout(r, delayTokenMs));
@@ -202,7 +204,12 @@ if (!CONFIGURED) {
       function makeAuth(
         id: string,
         base: string,
-        over: { bounds?: typeof BOUNDS; redisClient?: Redis; prefix?: string } = {},
+        over: {
+          bounds?: typeof BOUNDS;
+          redisClient?: Redis;
+          prefix?: string;
+          budget?: (name: string, key: string) => Promise<boolean>;
+        } = {},
       ): NodeAuth {
         const prefix = over.prefix ?? `rt-${id}`;
         const s = createRedisStore({ redis: over.redisClient ?? redis, secret: STORE_SECRET, prefix });
@@ -234,6 +241,7 @@ if (!CONFIGURED) {
           },
           deps: {
             now: clock.now,
+            ...(over.budget ? { budget: over.budget } : {}),
             log: (l) => logLines.push(JSON.stringify(l)),
             audit: (e, d) => auditLines.push(JSON.stringify([e, d])),
           },
@@ -686,6 +694,32 @@ if (!CONFIGURED) {
         expect(refreshGrants() - grantsBefore).toBe(2);
       });
 
+      it("2c. a slow provider re-check cannot overwrite the tokens a concurrent refresh rotated (stale whole-record write)", async () => {
+        const app = apps[A]!;
+        const r = await browserSignIn(app, "refresh-2c@example.test");
+        const first = await peek(app, r.appJar);
+        // Request A: token still valid, re-check due -> it goes to userinfo, which is held open.
+        clock.offset = BOUNDS.revalidateMs + 1000;
+        delayUserinfoMs = 400;
+        const pendingA = app.auth.current(reqWith(r.appJar), { touch: false });
+        await sleep(80); // A is inside userinfo, holding the record it read
+        // Request B: the access token is now expired for the runtime -> it takes the lock, refreshes and saves rotated tokens.
+        clock.offset = 11 * 60_000;
+        delayUserinfoMs = 0;
+        expect(await app.auth.current(reqWith(r.appJar), { touch: false })).not.toBeNull();
+        const rotated = await peek(app, r.appJar);
+        expect(rotated.refreshToken).not.toBe(first.refreshToken);
+        // A finishes and tries to remember its positive check.
+        await pendingA;
+        await sleep(50);
+        const after = await peek(app, r.appJar);
+        expect(after.refreshToken, "the rotated refresh token survived A's late write").toBe(rotated.refreshToken);
+        expect(after.accessToken).toBe(rotated.accessToken);
+        // And the next refresh still works (the stored refresh token is the live one).
+        clock.offset = 22 * 60_000;
+        expect(await app.auth.current(reqWith(r.appJar), { touch: false })).not.toBeNull();
+      });
+
       it("2b. refresh lease: a refresh result is NOT saved after the lock was lost, and the stale record is left untouched", async () => {
         const app = apps[A]!;
         const r = await browserSignIn(app, "refresh-2b@example.test");
@@ -1002,6 +1036,23 @@ if (!CONFIGURED) {
         expect(await app.auth.current(reqWith(r.appJar), { touch: false })).not.toBeNull();
         clock.offset = BOUNDS.revalidateMs + 1000;
         expect(await app.auth.current(reqWith(r.appJar), { touch: false })).toBeNull();
+      });
+
+      it("4c. a flood of sign-in starts cannot grow the flow keyspace without bound: the start budget refuses with 429 and writes nothing", async () => {
+        const app = apps[A]!;
+        let allowed = 5;
+        const limited = makeAuth(A, app.base, {
+          prefix: "rt-flood",
+          budget: async (name) => (name === "start" ? allowed-- > 0 : true),
+        });
+        const flowKeys = async () => (await redis.keys("rt-flood:f:*")).length;
+        expect(await flowKeys()).toBe(0);
+        const answers = await Promise.all(
+          Array.from({ length: 40 }, () => limited.handleRequest(new Request(`${app.base}/auth/start`))),
+        );
+        expect(answers.filter((r) => r!.status === 303)).toHaveLength(5);
+        expect(answers.filter((r) => r!.status === 429)).toHaveLength(35);
+        expect(await flowKeys()).toBe(5);
       });
 
       // ---- 5. suspension and revocation ----------------------------------------------------------------------------------

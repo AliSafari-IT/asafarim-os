@@ -402,12 +402,26 @@ export function createSessionRuntime<A = unknown>(opts: SessionRuntimeOptions<A>
     return { kind: "active", session: s };
   }
 
-  /** Record a successful provider check. Best effort: when another request holds the lock, it is saving something newer. */
-  async function saveChecked(id: string, s: StoredSession): Promise<void> {
+  /**
+   * Record a successful provider check. Best effort. Under the lock it re-reads the CURRENT record and writes that back with
+   * only `lastCheckedAt` moved: the record this request read may be older than what a concurrent refresh has saved since, and
+   * writing it back would put a spent refresh token over the rotated one. If the access token changed, a refresh has happened
+   * (and recorded its own check), so there is nothing to add.
+   */
+  async function saveChecked(id: string, checked: StoredSession): Promise<void> {
     let lock: LockToken | null = null;
     try {
       lock = await store.acquireRefresh(id, bounds.refreshLeaseMs);
-      if (lock) await store.update(id, s, lock, { now: now() });
+      if (!lock) return;
+      const t = now();
+      const r = await store.get(id, { touch: false, idleMs: bounds.idleMs, now: t });
+      if (r.status !== "ok" || r.session.accessToken !== checked.accessToken) return;
+      await store.update(
+        id,
+        { ...r.session, lastCheckedAt: Math.max(r.session.lastCheckedAt, checked.lastCheckedAt) },
+        lock,
+        { now: t },
+      );
     } catch {
       /* the check itself passed; failing to remember it only costs one more check */
     } finally {
@@ -546,8 +560,11 @@ export function createSessionRuntime<A = unknown>(opts: SessionRuntimeOptions<A>
   }
 
   async function backchannelLogout(token: string): Promise<void> {
-    if (deps.budget && !(await deps.budget("backchannel-logout", "global"))) throw new RateLimitedError();
+    // A cheap cap on unauthenticated garbage first (give it a generous limit), so it cannot starve real notifications ...
+    if (deps.budget && !(await deps.budget("backchannel-logout-raw", "global"))) throw new RateLimitedError();
     const c = await oidc.validateLogoutToken(token);
+    // ... then a budget per session or subject, spent only by tokens the provider really signed.
+    if (deps.budget && !(await deps.budget("backchannel-logout", (c.sid ?? c.sub)!))) throw new RateLimitedError();
     const fresh = await store.recordLogout({
       jti: c.jti,
       iat: c.iat,
