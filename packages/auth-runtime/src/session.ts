@@ -432,19 +432,18 @@ export function createSessionRuntime<A = unknown>(opts: SessionRuntimeOptions<A>
       if (!lock) throw new RefreshBusyError();
     }
     const held = lock;
-    let lost = false;
+    const lease = { lost: false, stopped: false };
     const every = Math.max(10, Math.floor(bounds.refreshLeaseMs / 3));
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let stopped = false;
     const renew = () => {
       timer = setTimeout(async () => {
-        if (stopped) return;
+        if (lease.stopped) return;
         try {
-          if (!(await store.renewRefresh(id, held, bounds.refreshLeaseMs))) lost = true;
+          if (!(await store.renewRefresh(id, held, bounds.refreshLeaseMs))) lease.lost = true;
         } catch {
-          lost = true;
+          lease.lost = true;
         }
-        if (!stopped && !lost) renew();
+        if (!lease.stopped && !lease.lost) renew();
       }, every);
       timer.unref?.();
     };
@@ -471,7 +470,7 @@ export function createSessionRuntime<A = unknown>(opts: SessionRuntimeOptions<A>
         throw err; // outage: the session stays, the request is denied
       }
       // Never save a result without the lock: the refresh token was rotated, and whoever holds the lock now owns the session.
-      if (lost) throw new RefreshOwnershipLostError();
+      if (lease.lost) throw new RefreshOwnershipLostError();
       const t = now();
       const next: StoredSession = {
         ...s,
@@ -483,7 +482,7 @@ export function createSessionRuntime<A = unknown>(opts: SessionRuntimeOptions<A>
       if (!(await store.update(id, next, held, { now: t }))) throw new RefreshOwnershipLostError();
       return { kind: "active", session: next };
     } finally {
-      stopped = true;
+      lease.stopped = true;
       if (timer) clearTimeout(timer);
       await store.releaseRefresh(id, held).catch(() => undefined);
     }
