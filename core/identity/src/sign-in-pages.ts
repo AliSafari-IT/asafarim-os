@@ -557,7 +557,15 @@ export function adminPage(opts: {
                   : self
                     ? `<span class="small">${escapeHtml(t.you)}</span>`
                     : "";
-            return `<tr>${cell(t.who, `${labelCell(c.label)}${c.isAdmin ? ` <span class="small">${escapeHtml(t.adminSuffix)}</span>` : ""}`)}${cell(
+            return `<tr>${cell(
+              t.who,
+              `${labelCell(c.label)}${c.isAdmin ? ` <span class="small">${escapeHtml(t.adminSuffix)}</span>` : ""}${
+                // Public admission: access to these apps only (client ids from the server-side config, not text).
+                c.clients.length && !c.global
+                  ? ` <span class="small">${c.clients.map(escapeHtml).join(", ")}</span>`
+                  : ""
+              }`,
+            )}${cell(
               t.status,
               `<span class="pill ${c.status === "active" ? "ok" : "off"}">${escapeHtml(t.statuses[c.status as "active" | "revoked"] ?? c.status)}</span>${c.revokedAt ? ` <span class="small">${when(c.revokedAt)}</span>` : ""}`,
             )}${cell(t.granted, when(c.grantedAt))}${cell(t.lastSignIn, when(c.lastLoginAt))}${cell("", action)}</tr>`;

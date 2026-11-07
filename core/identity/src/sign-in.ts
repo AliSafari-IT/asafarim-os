@@ -25,6 +25,7 @@ import {
   newToken,
   sameToken,
 } from "./auth-session.ts";
+import { type AdmissionPolicy, type AdmissionSubject, type Decision, currentAdmissions, decide } from "./admission.ts";
 import type { AppLink } from "./clients.ts";
 import { maskEmail, normalizeEmail } from "./email.ts";
 import { type GoogleSignIn, GoogleError, pkcePair } from "./google.ts";
@@ -83,6 +84,11 @@ export interface SignInDeps {
   adminConsoleUrl?: string;
   /** The apps the account page offers (the named clients). Default: none. */
   apps?: readonly AppLink[];
+  /**
+   * Each client's admission policy, from the server-side clients file (default `restricted` for a client not
+   * listed). Nothing in a request can reach it. Also tells which client ids are real.
+   */
+  admission?: ReadonlyMap<string, AdmissionPolicy>;
   /** HMAC key for codes, rate-limit keys and audit handles (IDENTITY_OTP_SECRET). */
   otpSecret: string;
   /** Email codes, when on: the mailer and the most emails per 24 h, all addresses together. */
@@ -109,7 +115,7 @@ export interface SignInDeps {
   log: Logger;
 }
 
-/** A browser whose auth session belongs to a principal with an active connection. */
+/** A browser whose auth session belongs to a principal admission.ts allows for the client asked about. */
 export interface AuthorizedPrincipal {
   principalId: string;
   /** When the code was proved (epoch seconds). */
@@ -120,7 +126,7 @@ export interface SignIn {
   /** Handles /connect, /login*, /logout, /account*, /passkeys*, /static/passkey.js and /admin*; false otherwise. */
   handle(ctx: HttpContext): Promise<boolean>;
   /** The authorized principal of this browser, if any (read fresh from the database). */
-  authorizedPrincipal(ctx: HttpContext): Promise<AuthorizedPrincipal | null>;
+  authorizedPrincipal(ctx: HttpContext, clientId: string | null): Promise<AuthorizedPrincipal | null>;
   /** Records that an OIDC sign-in was completed from an existing auth session. */
   auditInteractionLogin(ctx: HttpContext, principalId: string, clientId: string): Promise<void>;
   loginUrl(uid: string, fresh: boolean): string;
@@ -192,6 +198,30 @@ export function createSignIn(d: SignInDeps): SignIn {
     };
   }
   const apps = d.apps ?? [];
+  const policyOf = (clientId: string): AdmissionPolicy => d.admission?.get(clientId) ?? "restricted";
+  const knownClient = (clientId: string) => apps.some((a) => a.id === clientId) || Boolean(d.admission?.has(clientId));
+  /** Everything admission.ts needs to know about a person, for one client's policy. */
+  const subjectOf = (p: Principal): AdmissionSubject => ({
+    suspended: p.connection === "revoked",
+    globalActive: p.connection === "active",
+    admittedClients: currentAdmissions(p.admittedClients, policyOf),
+  });
+  /**
+   * May this person use this client, admitting them first when the client's policy is `public`? The policy
+   * comes from the server-side config and the client id from the server-side interaction, never from a request.
+   * Returns the decision on the person as it stands after any admission.
+   */
+  async function admit(
+    principalId: string,
+    clientId: string | null,
+  ): Promise<Decision & { principal: Principal | null }> {
+    let principal = await d.store.principal(principalId);
+    if (principal && clientId !== null && policyOf(clientId) === "public" && principal.connection === "none") {
+      const outcome = await d.store.admitPublic(principalId, clientId);
+      if (outcome === "admitted" || outcome === "already") principal = await d.store.principal(principalId);
+    }
+    return { ...decide(principal ? subjectOf(principal) : null, clientId), principal };
+  }
   const appName = (id: string) => apps.find((a) => a.id === id)?.name ?? id;
   /** The named app this sign-in is for (only a configured client counts), shown on the login page. */
   const appOf = (target: LoginTarget) =>
@@ -345,7 +375,7 @@ export function createSignIn(d: SignInDeps): SignIn {
           ? existing.flow.target.clientId
           : undefined;
       const clientId = remembered ?? kept;
-      if (clientId && apps.some((a) => a.id === clientId)) target = { ...target, clientId };
+      if (clientId && knownClient(clientId)) target = { ...target, clientId };
     }
     if (existing) {
       const flow: LoginFlow = { csrf: existing.flow.csrf, target };
@@ -509,13 +539,31 @@ export function createSignIn(d: SignInDeps): SignIn {
     setCookie(ctx, AUTH_COOKIE, created.token, "/", AUTH_SESSION_TTL_SECONDS);
 
     const ip = ipHandle(ctx);
-    const principal = await d.store.principal(principalId);
-    if (principal?.connection !== "active") {
-      await audit({ event: "login.not_authorized", method, principalId, ipHandle: ip });
-      d.log.info("login.not_authorized", { reason: principal?.connection ?? "unknown" });
+    // The client is the one the provider recorded for this interaction (server-side), never a request value.
+    const clientId = flow.target.kind === "interaction" ? (flow.target.clientId ?? null) : null;
+    const decision = await admit(principalId, clientId);
+    if (!decision.allow) {
+      await audit({
+        event: "login.not_authorized",
+        method,
+        principalId,
+        ipHandle: ip,
+        detail: { ...(clientId ? { clientId } : {}), reason: decision.reason },
+      });
+      d.log.info("login.not_authorized", { reason: decision.reason });
       return { authorized: false, next: "/login" };
     }
-    await audit({ event: "login.granted", method, principalId, ipHandle: ip, detail: { target: flow.target.kind } });
+    await audit({
+      event: "login.granted",
+      method,
+      principalId,
+      ipHandle: ip,
+      detail: {
+        target: flow.target.kind,
+        ...(clientId ? { clientId } : {}),
+        via: decision.via,
+      },
+    });
     d.log.info("login.granted", { reason: `${method}:${flow.target.kind}` });
     return { authorized: true, next: targetHref(flow.target) };
   }
@@ -574,7 +622,19 @@ export function createSignIn(d: SignInDeps): SignIn {
       return page(400, msg().flow.codeExpired);
     }
 
-    const principalId = await d.store.verifiedLogin(channel.method, identifier);
+    const verified = await d.store.verifiedLogin(channel.method, identifier);
+    if (verified.kind !== "ok") {
+      // The identifier changed hands under us. Generic and retryable; nothing was created or changed.
+      await audit({
+        event: "otp.verify_failed",
+        method: via,
+        subjectHandle: subject,
+        ipHandle: ip,
+        detail: { reason: verified.reason },
+      });
+      return page(409, msg().flow.tryAgain);
+    }
+    const principalId = verified.principalId;
     await audit({ event: "otp.verified", method: via, principalId, subjectHandle: subject, ipHandle: ip });
     const outcome = await signedIn(ctx, token, flow, principalId, via);
     if (!outcome.authorized) return seeOther(ctx, outcome.next);
@@ -651,13 +711,15 @@ export function createSignIn(d: SignInDeps): SignIn {
       const reason = err instanceof GoogleError ? err.reason : "error";
       return fail(reason, msg().flow.googleFailed);
     }
-    const principalId = await d.store.verifiedGoogleLogin(who.subject, who.email, who.authoritative);
+    const verified = await d.store.verifiedGoogleLogin(who.subject, who.email, who.authoritative);
+    if (verified.kind !== "ok") return fail("identifier_conflict", msg().flow.tryAgain);
+    const principalId = verified.principalId;
     await audit({
       event: "google.verified",
       method: "google",
       principalId,
       ipHandle: ip,
-      detail: { linked: who.authoritative },
+      detail: { linked: verified.linked === true },
     });
     const outcome = await signedIn(ctx, current.token, current.flow, principalId, "google");
     // A top-level GET (Google's redirect), not a form submission: a plain redirect may leave for the app's domain.
@@ -1137,12 +1199,14 @@ export function createSignIn(d: SignInDeps): SignIn {
     return false;
   }
 
-  async function authorizedPrincipal(ctx: HttpContext): Promise<AuthorizedPrincipal | null> {
+  async function authorizedPrincipal(ctx: HttpContext, clientId: string | null): Promise<AuthorizedPrincipal | null> {
     const current = await currentSession(ctx);
     if (!current) return null;
-    const principal = await d.store.principal(current.session.principalId);
-    if (principal?.connection !== "active") return null;
-    return { principalId: principal.id, authTime: current.session.authTime };
+    // The same decision as at sign-in and in findAccount; a public client admits here too (a person signed in
+    // from another app arrives with a session and no sign-in step of their own).
+    const decision = await admit(current.session.principalId, clientId);
+    if (!decision.allow || !decision.principal) return null;
+    return { principalId: decision.principal.id, authTime: current.session.authTime };
   }
 
   async function auditInteractionLogin(ctx: HttpContext, principalId: string, clientId: string) {

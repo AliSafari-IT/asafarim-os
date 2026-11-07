@@ -25,7 +25,7 @@ import { createProvider, endBrowserSession } from "../src/provider.ts";
 import { KEY_PREFIX, endSessionsOfAccount, redisAdapterFactory } from "../src/redis-adapter.ts";
 import { createSignIn } from "../src/sign-in.ts";
 import { PgIdentityStore, PrincipalAccounts } from "../src/store.ts";
-import { CapturingMailer, MemoryStore } from "./fakes.ts";
+import { CapturingMailer, MemoryStore, pid } from "./fakes.ts";
 
 const REDIS_URL = process.env.IDENTITY_TEST_REDIS_URL;
 const DATABASE_URL = process.env.IDENTITY_TEST_DATABASE_URL;
@@ -144,6 +144,7 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
       "003_passkey_id_check.sql",
       "004_google_access_requests.sql",
       "005_request_locale.sql",
+      "006_public_admission.sql",
     ]);
     expect(await store.migrate()).toEqual([]);
   });
@@ -167,24 +168,28 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
   });
 
   it("a proved number gets one principal and nothing else", async () => {
-    const id = await store.verifiedLogin("email", OTHER);
-    expect(await store.verifiedLogin("email", OTHER)).toBe(id);
+    const id = await pid(store.verifiedLogin("email", OTHER));
+    expect(await pid(store.verifiedLogin("email", OTHER))).toBe(id);
     expect(await store.principal(id)).toEqual({
       id,
       isAdmin: false,
       connection: "none",
       label: OTHER,
       methods: ["email"],
+      admittedClients: [],
+      emailVerified: true, // proved by a code: verified_at is stored
     });
-    expect(await store.verifiedLogin("phone", PHONE)).not.toBe(id);
-    const parallel = await Promise.all(Array.from({ length: 5 }, () => store.verifiedLogin("email", "p@example.test")));
+    expect(await pid(store.verifiedLogin("phone", PHONE))).not.toBe(id);
+    const parallel = await Promise.all(
+      Array.from({ length: 5 }, () => pid(store.verifiedLogin("email", "p@example.test"))),
+    );
     expect(new Set(parallel).size).toBe(1);
     expect(await store.principal("not-a-uuid")).toBeNull();
   });
 
   it("requests: one pending at a time, decided once; revoke and reconnect", async () => {
     const adminId = (await store.connections())[0]!.principalId;
-    const id = await store.verifiedLogin("email", OTHER);
+    const id = await pid(store.verifiedLogin("email", OTHER));
     expect(await store.requestConnection(id)).toBe("created");
     expect(await store.requestConnection(id)).toBe("already_pending");
     const [r] = await store.pendingRequests();
@@ -209,21 +214,23 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
   it("Google: one principal per Google account; joins an address only when Google is its authority", async () => {
     const adminId = (await store.connections())[0]!.principalId;
     // Gmail: joins the principal that already holds the address, and keeps it as the label.
-    const holder = await store.verifiedLogin("email", "g@gmail.com");
-    expect(await store.verifiedGoogleLogin("111", "g@gmail.com", true)).toBe(holder);
-    expect(await store.verifiedGoogleLogin("111", "g@gmail.com", true)).toBe(holder);
+    const holder = await pid(store.verifiedLogin("email", "g@gmail.com"));
+    expect(await pid(store.verifiedGoogleLogin("111", "g@gmail.com", true))).toBe(holder);
+    expect(await pid(store.verifiedGoogleLogin("111", "g@gmail.com", true))).toBe(holder);
     expect((await store.principal(holder))!.methods).toEqual(["email", "google"]);
     // Not the authority: a principal of its own, labelled by the address, which proves nothing.
-    const other = await store.verifiedGoogleLogin("222", OTHER, false);
-    expect(other).not.toBe(await store.verifiedLogin("email", OTHER));
+    const other = await pid(store.verifiedGoogleLogin("222", OTHER, false));
+    expect(other).not.toBe(await pid(store.verifiedLogin("email", OTHER)));
     expect(await store.principal(other)).toMatchObject({ label: OTHER, methods: ["google"], connection: "none" });
     // No address at all: no label, still a principal.
-    const bare = await store.verifiedGoogleLogin("333", null, false);
+    const bare = await pid(store.verifiedGoogleLogin("333", null, false));
     expect((await store.principal(bare))!.label).toBeNull();
     // A new Gmail address becomes a verified email identity of the new principal.
-    const fresh = await store.verifiedGoogleLogin("444", "fresh@gmail.com", true);
+    const fresh = await pid(store.verifiedGoogleLogin("444", "fresh@gmail.com", true));
     expect((await store.principal(fresh))!.methods).toEqual(["email", "google"]);
-    const parallel = await Promise.all(Array.from({ length: 5 }, () => store.verifiedGoogleLogin("555", null, false)));
+    const parallel = await Promise.all(
+      Array.from({ length: 5 }, () => pid(store.verifiedGoogleLogin("555", null, false))),
+    );
     expect(new Set(parallel).size).toBe(1);
     await expect(store.verifiedGoogleLogin("../bad", null, false)).rejects.toThrow();
 
@@ -253,7 +260,7 @@ describe.skipIf(!DATABASE_URL)("SMS sign-in store in Postgres", () => {
   });
 
   it("stores passkeys per principal: look up, count forward, remove", async () => {
-    const id = await store.verifiedLogin("email", "keys@example.test");
+    const id = await pid(store.verifiedLogin("email", "keys@example.test"));
     const credentialId = "A".repeat(43);
     await store.addPasskey(id, {
       credentialId,
@@ -346,6 +353,7 @@ describe.skipIf(!REDIS_URL)("OIDC sign-in with the SMS method (Redis, in-memory 
     const late: { provider?: ReturnType<typeof createProvider> } = {};
     const signIn = createSignIn({
       issuer,
+      admission: new Map([[CLIENT_ID, "restricted"]]),
       homeUrl: `${rpBase}/`,
       otpSecret: "o".repeat(40),
       email: { mailer, dailyLimit: 100 },

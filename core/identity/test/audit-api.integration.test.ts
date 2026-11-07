@@ -4,6 +4,7 @@
  */
 import { randomBytes } from "node:crypto";
 import pg from "pg";
+import { pid } from "./fakes.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PgIdentityStore } from "../src/store.ts";
 
@@ -25,8 +26,8 @@ describe.skipIf(!DATABASE_URL)("the sign-in trail's queries (Postgres)", () => {
     store = new PgIdentityStore(u.href);
     await store.migrate();
     await store.bootstrapAdmin([{ method: "email", identifier: "ali@example.test" }]);
-    ali = await store.verifiedLogin("email", "ali@example.test");
-    sam = await store.verifiedLogin("email", "sam@example.test");
+    ali = await pid(store.verifiedLogin("email", "ali@example.test"));
+    sam = await pid(store.verifiedLogin("email", "sam@example.test"));
     await store.requestConnection(sam);
     await store.audit({
       event: "otp.verify_failed",

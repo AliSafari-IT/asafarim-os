@@ -23,7 +23,30 @@ export interface Principal {
   label: string | null;
   /** How this principal can sign in (besides passkeys): its identity methods. */
   methods: IdentityMethod[];
+  /** Clients a public admission (client_admissions) lets this person use. Says nothing about suspension: see admission.ts. */
+  admittedClients: string[];
+  /**
+   * Is the email shown as `label` (when it is one) backed by stored proof? True only when an identity holding that
+   * same address has `verified_at`: an email identity proved by a code, or a Google account Google verified it for.
+   * An address an admin typed in is not verified.
+   */
+  emailVerified: boolean;
 }
+
+/** What `verifiedLogin` and `verifiedGoogleLogin` say. A conflict never leaves a second principal for one identifier. */
+export type VerifiedResult =
+  | {
+      kind: "ok";
+      principalId: string;
+      /** A principal was made by this call. */
+      created: boolean;
+      /** Google only: the identity joined a principal that already held the address (Google being its authority). */
+      linked?: boolean;
+    }
+  | { kind: "conflict"; reason: "identifier_taken" };
+
+/** `suspended`: a revoked connection stops it. `global`: an admin-granted connection already covers every client. */
+export type AdmitOutcome = "admitted" | "already" | "suspended" | "global" | "unknown";
 
 /** What a person asked for: the apps (client ids) and an optional note for the admin. */
 export interface RequestDetails {
@@ -52,7 +75,12 @@ export interface ConnectionRequestRow extends RequestDetails {
 export interface ConnectionRow {
   principalId: string;
   label: string | null;
+  /** `active` with no connection row: admitted to `clients` only (a public policy), not to everything. */
   status: "active" | "revoked";
+  /** The clients a public admission covers (empty for an admin-granted connection with none). */
+  clients: string[];
+  /** True when this person's access is a global connection (admin-granted); false when only `clients`. */
+  global: boolean;
   isAdmin: boolean;
   grantedAt: Date;
   revokedAt: Date | null;
@@ -79,6 +107,7 @@ export type AuditEvent =
   | "connection.added"
   | "connection.revoked"
   | "connection.bootstrapped"
+  | "connection.admitted"
   | "admin.denied"
   | "passkey.registered"
   | "passkey.removed"
@@ -137,7 +166,10 @@ export interface AuditSearchRow {
 export interface AuditCounts {
   perDay: { day: string; event: string; n: number }[];
   pendingRequests: number;
+  /** Admin-granted (global) connections only: a public admission is not one. */
   activeConnections: number;
+  /** People admitted to at least one client by a public policy. */
+  publicAdmissions: number;
 }
 
 /** `updated`: a pending request's apps or note changed. `already_connected`: connected, and no apps asked for. */
@@ -145,13 +177,20 @@ export type RequestOutcome = "created" | "updated" | "already_pending" | "alread
 
 export interface IdentityStore {
   /** Someone proved this identity (a phone in E.164, a lower-case email): their principal, created on first proof. Grants nothing. */
-  verifiedLogin(method: IdentityMethod, identifier: string): Promise<string>;
+  verifiedLogin(method: IdentityMethod, identifier: string): Promise<VerifiedResult>;
   /**
    * Google proved this account (its `sub`). Its principal, created on first proof. With `linkEmail` (Google is the
    * authority for that address), a first Google sign-in joins the principal that already holds the address, and
    * an address nobody holds yet becomes a verified email identity of the new principal. Grants nothing.
    */
-  verifiedGoogleLogin(subject: string, email: string | null, linkEmail: boolean): Promise<string>;
+  verifiedGoogleLogin(subject: string, email: string | null, linkEmail: boolean): Promise<VerifiedResult>;
+  /**
+   * The person proved an identifier at a client whose policy is `public`: admit them to THAT client, in one
+   * transaction that locks the principal and re-reads its connection. A suspended person is never admitted; a
+   * person with a global connection needs no row. Writes `connection.admitted` only when a row was really added.
+   * Callers decide the policy from the server-side client config, never from the request.
+   */
+  admitPublic(principalId: string, clientId: string): Promise<AdmitOutcome>;
   principal(id: string): Promise<Principal | null>;
   /**
    * Ask for access: opens a pending request, or updates the open one (apps are added, a note replaces the old
@@ -246,13 +285,20 @@ async function inTransaction<T>(pool: pg.Pool, fn: (c: pg.PoolClient) => Promise
   }
 }
 
-/** The principal for an identity, created (unverified) if there is none. Call inside a transaction. */
-async function principalFor(c: Queryable, method: IdentityMethod, identifier: string): Promise<string> {
+/**
+ * The principal for an identity, created (unverified) if there is none; null if a concurrent change left the
+ * identifier in no state we can use (a conflict, reported as such). Call inside a transaction.
+ */
+async function principalFor(
+  c: Queryable,
+  method: IdentityMethod,
+  identifier: string,
+): Promise<{ id: string; created: boolean } | null> {
   const found = await c.query<{ principal_id: string }>(
     "SELECT principal_id FROM identities WHERE method = $1 AND identifier = $2 FOR UPDATE",
     [method, identifier],
   );
-  if (found.rows[0]) return found.rows[0].principal_id;
+  if (found.rows[0]) return { id: found.rows[0].principal_id, created: false };
   const created = await c.query<{ id: string }>("INSERT INTO principals DEFAULT VALUES RETURNING id");
   const id = created.rows[0]!.id;
   const inserted = await c.query(
@@ -260,15 +306,17 @@ async function principalFor(c: Queryable, method: IdentityMethod, identifier: st
      ON CONFLICT (method, identifier) DO NOTHING`,
     [method, identifier, id],
   );
-  if (inserted.rowCount === 1) return id;
+  if (inserted.rowCount === 1) return { id, created: true };
   // A concurrent first sign-in for the same number won the race: use its principal.
   await c.query("DELETE FROM principals WHERE id = $1", [id]);
   const again = await c.query<{ principal_id: string }>(
     "SELECT principal_id FROM identities WHERE method = $1 AND identifier = $2",
     [method, identifier],
   );
-  return again.rows[0]!.principal_id;
+  return again.rows[0] ? { id: again.rows[0].principal_id, created: false } : null;
 }
+
+const CONFLICT: VerifiedResult = { kind: "conflict", reason: "identifier_taken" };
 
 async function writeAudit(c: Queryable, e: AuditEntry): Promise<void> {
   await c.query(
@@ -303,31 +351,43 @@ export class PgIdentityStore implements IdentityStore {
     return migrate(this.pool);
   }
 
-  async verifiedLogin(method: IdentityMethod, identifier: string): Promise<string> {
+  async verifiedLogin(method: IdentityMethod, identifier: string): Promise<VerifiedResult> {
     return inTransaction(this.pool, async (c) => {
-      const id = await principalFor(c, method, identifier);
+      const found = await principalFor(c, method, identifier);
+      if (!found) return CONFLICT;
       await c.query(
         `UPDATE identities SET verified_at = coalesce(verified_at, now()), last_login_at = now()
          WHERE method = $1 AND identifier = $2`,
         [method, identifier],
       );
-      return id;
+      return { kind: "ok", principalId: found.id, created: found.created };
     });
   }
 
-  async verifiedGoogleLogin(subject: string, email: string | null, linkEmail: boolean): Promise<string> {
+  async verifiedGoogleLogin(subject: string, email: string | null, linkEmail: boolean): Promise<VerifiedResult> {
     return inTransaction(this.pool, async (c) => {
       const found = await c.query<{ principal_id: string }>(
         "SELECT principal_id FROM identities WHERE method = 'google' AND identifier = $1 FOR UPDATE",
         [subject],
       );
       let principalId = found.rows[0]?.principal_id;
+      let created = false;
+      let linked = false;
+      let bare = false; // a principal made here with no identity yet
       if (!principalId) {
         // First Google sign-in for this account. Join the address's principal only when Google is its authority.
-        principalId =
-          linkEmail && email
-            ? await principalFor(c, "email", email)
-            : (await c.query<{ id: string }>("INSERT INTO principals DEFAULT VALUES RETURNING id")).rows[0]!.id;
+        if (linkEmail && email) {
+          const joined = await principalFor(c, "email", email);
+          if (!joined) return CONFLICT;
+          principalId = joined.id;
+          created = joined.created;
+          linked = !joined.created;
+        } else {
+          principalId = (await c.query<{ id: string }>("INSERT INTO principals DEFAULT VALUES RETURNING id")).rows[0]!
+            .id;
+          created = true;
+          bare = true;
+        }
         const inserted = await c.query(
           `INSERT INTO identities (method, identifier, principal_id, email) VALUES ('google', $1, $2, $3)
            ON CONFLICT (method, identifier) DO NOTHING`,
@@ -335,12 +395,18 @@ export class PgIdentityStore implements IdentityStore {
         );
         if (inserted.rowCount !== 1) {
           // A concurrent first sign-in with the same Google account won the race: use its principal.
-          principalId = (
+          const winner = (
             await c.query<{ principal_id: string }>(
               "SELECT principal_id FROM identities WHERE method = 'google' AND identifier = $1",
               [subject],
             )
-          ).rows[0]!.principal_id;
+          ).rows[0]?.principal_id;
+          if (!winner) return CONFLICT;
+          // A principal made above with no identity is unused: drop it so the race leaves exactly one.
+          if (bare) await c.query("DELETE FROM principals WHERE id = $1", [principalId]);
+          principalId = winner;
+          created = false;
+          linked = false;
         }
         if (linkEmail && email) {
           await c.query(
@@ -355,7 +421,7 @@ export class PgIdentityStore implements IdentityStore {
          WHERE method = 'google' AND identifier = $1`,
         [subject, email],
       );
-      return principalId;
+      return { kind: "ok", principalId, created, ...(linked ? { linked: true } : {}) };
     });
   }
 
@@ -367,15 +433,35 @@ export class PgIdentityStore implements IdentityStore {
       status: "active" | "revoked" | null;
       label: string | null;
       methods: IdentityMethod[];
+      admitted: string[];
+      email_verified: boolean;
     }>(
-      `SELECT p.id, p.is_admin, c.status, ${labelOf("p.id")} AS label, ${methodsOf("p.id")} AS methods
-       FROM principals p LEFT JOIN connections c ON c.principal_id = p.id
+      `SELECT p.id, p.is_admin, c.status, l.label, ${methodsOf("p.id")} AS methods,
+              (SELECT coalesce(array_agg(a.client_id ORDER BY a.client_id), '{}') FROM client_admissions a
+                WHERE a.principal_id = p.id) AS admitted,
+              -- Verified only by stored proof, for the very address shown as the label.
+              (position('@' in coalesce(l.label, '')) > 0 AND EXISTS (
+                 SELECT 1 FROM identities i
+                  WHERE i.principal_id = p.id AND i.verified_at IS NOT NULL
+                    AND ((i.method = 'email' AND i.identifier = l.label) OR (i.method = 'google' AND i.email = l.label))
+               )) AS email_verified
+       FROM principals p
+       LEFT JOIN connections c ON c.principal_id = p.id
+       CROSS JOIN LATERAL (SELECT ${labelOf("p.id")} AS label) l
        WHERE p.id = $1`,
       [id],
     );
     const r = rows[0];
     return r
-      ? { id: r.id, isAdmin: r.is_admin, connection: r.status ?? "none", label: r.label, methods: r.methods }
+      ? {
+          id: r.id,
+          isAdmin: r.is_admin,
+          connection: r.status ?? "none",
+          label: r.label,
+          methods: r.methods,
+          admittedClients: r.admitted,
+          emailVerified: r.email_verified,
+        }
       : null;
   }
 
@@ -450,6 +536,8 @@ export class PgIdentityStore implements IdentityStore {
   }
 
   async connections(): Promise<ConnectionRow[]> {
+    // Everyone with a connection row, plus people who only hold a public admission (no row): the admin must be
+    // able to find them to suspend them.
     const { rows } = await this.pool.query<{
       principal_id: string;
       label: string | null;
@@ -458,23 +546,34 @@ export class PgIdentityStore implements IdentityStore {
       granted_at: Date;
       revoked_at: Date | null;
       last_login_at: Date | null;
+      clients: string[];
+      is_global: boolean;
     }>(
-      `SELECT c.principal_id, c.status, c.granted_at, c.revoked_at, p.is_admin, i.identifier AS label, i.last_login_at
-       FROM connections c
-       JOIN principals p ON p.id = c.principal_id
+      `SELECT p.id AS principal_id, p.is_admin,
+              coalesce(c.status, 'active') AS status,
+              coalesce(c.granted_at, (SELECT min(a.granted_at) FROM client_admissions a WHERE a.principal_id = p.id)) AS granted_at,
+              c.revoked_at, i.identifier AS label, i.last_login_at,
+              (SELECT coalesce(array_agg(a.client_id ORDER BY a.client_id), '{}') FROM client_admissions a
+                WHERE a.principal_id = p.id) AS clients,
+              (c.status = 'active' OR (c.status = 'revoked' AND c.source IS DISTINCT FROM 'suspension')) AS is_global
+       FROM principals p
+       LEFT JOIN connections c ON c.principal_id = p.id
        LEFT JOIN LATERAL (
          SELECT CASE WHEN method = 'google' THEN email ELSE identifier END AS identifier,
-                (SELECT max(last_login_at) FROM identities WHERE principal_id = c.principal_id) AS last_login_at
+                (SELECT max(last_login_at) FROM identities WHERE principal_id = p.id) AS last_login_at
          FROM identities
-         WHERE principal_id = c.principal_id AND (method <> 'google' OR email IS NOT NULL)
+         WHERE principal_id = p.id AND (method <> 'google' OR email IS NOT NULL)
          ORDER BY ${LABEL_ORDER} LIMIT 1
        ) i ON true
-       ORDER BY c.status, c.granted_at`,
+       WHERE c.principal_id IS NOT NULL OR EXISTS (SELECT 1 FROM client_admissions a WHERE a.principal_id = p.id)
+       ORDER BY coalesce(c.status, 'active'), 4`,
     );
     return rows.map((r) => ({
       principalId: r.principal_id,
       label: r.label,
       status: r.status,
+      clients: r.clients,
+      global: r.is_global === true,
       isAdmin: r.is_admin,
       grantedAt: r.granted_at,
       revokedAt: r.revoked_at,
@@ -492,7 +591,7 @@ export class PgIdentityStore implements IdentityStore {
       );
       const principalId = decided.rows[0]?.principal_id;
       if (!principalId) return null;
-      if (decision === "approved") await grant(c, principalId, actorId);
+      if (decision === "approved") await grant(c, principalId, actorId, "admin");
       await writeAudit(c, {
         event: decision === "approved" ? "request.approved" : "request.rejected",
         principalId,
@@ -506,13 +605,28 @@ export class PgIdentityStore implements IdentityStore {
   async revoke(principalId: string, actorId: string): Promise<boolean> {
     if (!isUuid(principalId)) return false;
     return inTransaction(this.pool, async (c) => {
+      // Serialise with admitPublic and reconnect: suspension and admission can't interleave.
+      await c.query("SELECT id FROM principals WHERE id = $1 FOR UPDATE", [principalId]);
       const { rowCount } = await c.query(
         `UPDATE connections SET status = 'revoked', revoked_at = now(), revoked_by = $2
          WHERE principal_id = $1 AND status = 'active'`,
         [principalId, actorId],
       );
-      if (!rowCount) return false;
-      await writeAudit(c, { event: "connection.revoked", principalId, actorId });
+      if (rowCount) {
+        await writeAudit(c, { event: "connection.revoked", principalId, actorId });
+        return true;
+      }
+      // No active connection. A person who holds public admissions and no connection row is suspended by a
+      // revoked row of their own, marked so that reconnecting it restores their admissions and nothing more.
+      const suspended = await c.query(
+        `INSERT INTO connections (principal_id, status, revoked_at, revoked_by, source)
+         SELECT $1, 'revoked', now(), $2, 'suspension'
+          WHERE EXISTS (SELECT 1 FROM client_admissions WHERE principal_id = $1)
+         ON CONFLICT (principal_id) DO NOTHING`,
+        [principalId, actorId],
+      );
+      if (!suspended.rowCount) return false;
+      await writeAudit(c, { event: "connection.revoked", principalId, actorId, detail: { admissionsOnly: true } });
       return true;
     });
   }
@@ -520,14 +634,54 @@ export class PgIdentityStore implements IdentityStore {
   async reconnect(principalId: string, actorId: string): Promise<boolean> {
     if (!isUuid(principalId)) return false;
     return inTransaction(this.pool, async (c) => {
-      const { rowCount } = await c.query(
-        "SELECT 1 FROM connections WHERE principal_id = $1 AND status = 'revoked' FOR UPDATE",
+      await c.query("SELECT id FROM principals WHERE id = $1 FOR UPDATE", [principalId]);
+      const row = await c.query<{ source: string | null }>(
+        "SELECT source FROM connections WHERE principal_id = $1 AND status = 'revoked' FOR UPDATE",
         [principalId],
       );
-      if (!rowCount) return false;
-      await grant(c, principalId, actorId);
+      if (!row.rowCount) return false;
+      if (row.rows[0]!.source === "suspension") {
+        // Lift the suspension: their admissions apply again. Never a global connection.
+        await c.query("DELETE FROM connections WHERE principal_id = $1 AND status = 'revoked'", [principalId]);
+        await writeAudit(c, {
+          event: "connection.added",
+          principalId,
+          actorId,
+          detail: { reconnect: true, admissionsOnly: true },
+        });
+        return true;
+      }
+      await grant(c, principalId, actorId, "admin");
       await writeAudit(c, { event: "connection.added", principalId, actorId, detail: { reconnect: true } });
       return true;
+    });
+  }
+
+  async admitPublic(principalId: string, clientId: string): Promise<AdmitOutcome> {
+    if (!isUuid(principalId)) return "unknown";
+    return inTransaction(this.pool, async (c) => {
+      // The same lock revoke() and reconnect() take: whoever comes second sees the first's result.
+      const locked = await c.query("SELECT id FROM principals WHERE id = $1 FOR UPDATE", [principalId]);
+      if (!locked.rowCount) return "unknown";
+      const conn = await c.query<{ status: "active" | "revoked" }>(
+        "SELECT status FROM connections WHERE principal_id = $1",
+        [principalId],
+      );
+      const status = conn.rows[0]?.status;
+      if (status === "revoked") return "suspended";
+      if (status === "active") return "global";
+      const inserted = await c.query(
+        `INSERT INTO client_admissions (principal_id, client_id, source) VALUES ($1, $2, 'public_signup')
+         ON CONFLICT (principal_id, client_id) DO NOTHING`,
+        [principalId, clientId],
+      );
+      if (!inserted.rowCount) return "already";
+      await writeAudit(c, {
+        event: "connection.admitted",
+        principalId,
+        detail: { clientId, source: "public_signup" },
+      });
+      return "admitted";
     });
   }
 
@@ -544,8 +698,10 @@ export class PgIdentityStore implements IdentityStore {
 
   async addConnection(method: IdentityMethod, identifier: string, actorId: string): Promise<string> {
     return inTransaction(this.pool, async (c) => {
-      const principalId = await principalFor(c, method, identifier);
-      await grant(c, principalId, actorId);
+      const found = await principalFor(c, method, identifier);
+      if (!found) throw new Error("identifier_conflict");
+      const principalId = found.id;
+      await grant(c, principalId, actorId, "admin");
       await c.query(
         `UPDATE connection_requests SET status = 'approved', decided_at = now(), decided_by = $2
          WHERE principal_id = $1 AND status = 'pending'`,
@@ -567,7 +723,9 @@ export class PgIdentityStore implements IdentityStore {
          WHERE p.is_admin AND c.status = 'active' LIMIT 1`,
       );
       if (admins.rowCount) return "unchanged";
-      const principalId = await principalFor(c, first.method, first.identifier);
+      const firstFound = await principalFor(c, first.method, first.identifier);
+      if (!firstFound) throw new Error("identifier_conflict");
+      const principalId = firstFound.id;
       // Further identities join the same principal, unless they already belong to someone else.
       for (const extra of more) {
         await c.query(
@@ -577,7 +735,7 @@ export class PgIdentityStore implements IdentityStore {
         );
       }
       await c.query("UPDATE principals SET is_admin = true WHERE id = $1", [principalId]);
-      await grant(c, principalId, null);
+      await grant(c, principalId, null, "bootstrap");
       await writeAudit(c, { event: "connection.bootstrapped", principalId, detail: { admin: true } });
       return "bootstrapped";
     });
@@ -732,7 +890,7 @@ export class PgIdentityStore implements IdentityStore {
 
   /** Counts for the Admin console's overview: per UTC day and event since `since`, and the open requests. */
   async auditCounts(since: Date): Promise<AuditCounts> {
-    const [perDay, pending, active] = await Promise.all([
+    const [perDay, pending, active, admitted] = await Promise.all([
       this.pool.query<{ day: string; event: string; n: number }>(
         `SELECT to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, event, count(*)::int AS n
            FROM audit_log WHERE at >= $1 GROUP BY 1, 2`,
@@ -740,11 +898,13 @@ export class PgIdentityStore implements IdentityStore {
       ),
       this.pool.query<{ n: number }>("SELECT count(*)::int AS n FROM connection_requests WHERE status = 'pending'"),
       this.pool.query<{ n: number }>("SELECT count(*)::int AS n FROM connections WHERE status = 'active'"),
+      this.pool.query<{ n: number }>("SELECT count(DISTINCT principal_id)::int AS n FROM client_admissions"),
     ]);
     return {
       perDay: perDay.rows,
       pendingRequests: pending.rows[0]?.n ?? 0,
       activeConnections: active.rows[0]?.n ?? 0,
+      publicAdmissions: admitted.rows[0]?.n ?? 0,
     };
   }
 
@@ -757,14 +917,19 @@ export class PgIdentityStore implements IdentityStore {
   }
 }
 
-/** Make the connection active (new, or re-granted after a revocation). */
-async function grant(c: Queryable, principalId: string, actorId: string | null): Promise<void> {
+/** Make the connection active (new, or re-granted after a revocation). `source`: who granted it (connections.source). */
+async function grant(
+  c: Queryable,
+  principalId: string,
+  actorId: string | null,
+  source: "admin" | "bootstrap",
+): Promise<void> {
   await c.query(
-    `INSERT INTO connections (principal_id, status, granted_by) VALUES ($1, 'active', $2)
+    `INSERT INTO connections (principal_id, status, granted_by, source) VALUES ($1, 'active', $2, $3)
      ON CONFLICT (principal_id) DO UPDATE
-       SET status = 'active', granted_at = now(), granted_by = $2, revoked_at = NULL, revoked_by = NULL
+       SET status = 'active', granted_at = now(), granted_by = $2, source = $3, revoked_at = NULL, revoked_by = NULL
        WHERE connections.status <> 'active'`,
-    [principalId, actorId],
+    [principalId, actorId, source],
   );
 }
 
@@ -791,7 +956,12 @@ export class PrincipalAccounts implements AccountStore {
       name: p.label,
       picture: null,
       roles: p.isAdmin ? ["identity.admin"] : [],
+      // A global connection only. Per-client access and suspension travel separately: admission.ts decides.
       isActive: p.connection === "active",
+      suspended: p.connection === "revoked",
+      admittedClients: p.admittedClients,
+      // Only with an email to speak of, and only from stored proof.
+      emailVerified: email ? p.emailVerified : undefined,
     };
   }
 

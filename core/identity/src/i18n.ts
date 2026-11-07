@@ -227,6 +227,7 @@ export interface Messages {
     codeExpired: string;
     googleCancelled: string;
     googleFailed: string;
+    tryAgain: string;
     tooManyTries: string;
     reload: string;
     passkeyUnusable: string;
@@ -456,6 +457,7 @@ const EN: Messages = {
     codeExpired: "This code has expired or had too many wrong tries. Send a new code.",
     googleCancelled: "Google sign-in was cancelled. Try again, or use another way.",
     googleFailed: "Google couldn't sign you in. Try again, or use another way.",
+    tryAgain: "Something went wrong while signing you in. Please try again.",
     tooManyTries: "Too many tries. Wait a while and try again.",
     reload: "This page has expired. Reload it.",
     passkeyUnusable: "That passkey couldn't be used here. Try again, or use a code.",
@@ -701,6 +703,7 @@ const NL: Messages = {
     codeExpired: "Deze code is verlopen of te vaak fout ingevuld. Stuur een nieuwe code.",
     googleCancelled: "Aanmelden met Google is geannuleerd. Probeer opnieuw, of op een andere manier.",
     googleFailed: "Google kon je niet aanmelden. Probeer opnieuw, of op een andere manier.",
+    tryAgain: "Er ging iets mis bij het aanmelden. Probeer het opnieuw.",
     tooManyTries: "Te veel pogingen. Wacht even en probeer opnieuw.",
     reload: "Deze pagina is verlopen. Laad ze opnieuw.",
     passkeyUnusable: "Die passkey kan hier niet gebruikt worden. Probeer opnieuw, of gebruik een code.",
@@ -959,6 +962,7 @@ const FR: Messages = {
     codeExpired: "Ce code a expiré ou a reçu trop de tentatives erronées. Envoyez un nouveau code.",
     googleCancelled: "La connexion avec Google a été annulée. Réessayez, ou utilisez un autre moyen.",
     googleFailed: "Google n’a pas pu vous connecter. Réessayez, ou utilisez un autre moyen.",
+    tryAgain: "Un problème est survenu lors de la connexion. Veuillez réessayer.",
     tooManyTries: "Trop de tentatives. Patientez un peu et réessayez.",
     reload: "Cette page a expiré. Rechargez-la.",
     passkeyUnusable: "Cette clé d’accès ne peut pas être utilisée ici. Réessayez, ou utilisez un code.",
@@ -1211,6 +1215,7 @@ const DE: Messages = {
     googleCancelled:
       "Die Anmeldung mit Google wurde abgebrochen. Versuchen Sie es erneut oder wählen Sie einen anderen Weg.",
     googleFailed: "Google konnte Sie nicht anmelden. Versuchen Sie es erneut oder wählen Sie einen anderen Weg.",
+    tryAgain: "Bei der Anmeldung ist etwas schiefgelaufen. Bitte versuchen Sie es erneut.",
     tooManyTries: "Zu viele Versuche. Warten Sie eine Weile und versuchen Sie es erneut.",
     reload: "Diese Seite ist abgelaufen. Laden Sie sie neu.",
     passkeyUnusable:

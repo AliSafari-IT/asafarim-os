@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { Redis } from "ioredis";
 import type { JWK } from "jose";
 import type Provider from "oidc-provider";
+import type { AdmissionPolicy } from "./admission.ts";
 import { PgAccountStore, type AccountStore } from "./accounts.ts";
 import { createAuditApi } from "./audit-api.ts";
 import { RedisAuthSessions, RedisEphemeral, RedisLoginFlows } from "./auth-session.ts";
@@ -36,6 +37,7 @@ async function localSignIn(
   issuer: string,
   jwks: { keys: JWK[] },
   apps: AppLink[],
+  admission: ReadonlyMap<string, AdmissionPolicy>,
   redis: Redis,
   logger: Logger,
   headlessApps: Map<string, HeadlessClient> = new Map(),
@@ -62,6 +64,7 @@ async function localSignIn(
     homeUrl: config.homeUrl,
     ...(config.adminConsoleUrl ? { adminConsoleUrl: config.adminConsoleUrl } : {}),
     apps,
+    admission,
     otpSecret: config.otpSecret,
     ...(config.email
       ? {
@@ -147,6 +150,7 @@ async function main() {
       config.issuer,
       config.jwks,
       config.apps,
+      config.admission,
       redis,
       log,
       config.headless,
@@ -177,6 +181,7 @@ async function main() {
     ...method,
     adapter: redisAdapterFactory(redis),
     accounts,
+    admission: config.admission,
     log,
     readiness: async () => {
       const [r, d] = await Promise.allSettled([redis.ping(), accounts.ping()]);

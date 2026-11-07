@@ -358,6 +358,8 @@ describe("pages", () => {
           principalId: "11111111-1111-1111-1111-111111111111",
           label: "ali@example.test",
           status: "active",
+          clients: [],
+          global: true,
           isAdmin: true,
           grantedAt: new Date(0),
           revokedAt: null,

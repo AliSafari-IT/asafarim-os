@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import type { SmtpConfig, SmtpSecurity } from "@asafarim/smtp";
 import { importJWK, type CryptoKey, type JWK, type KeyObject } from "jose";
 import {
+  admissionPolicies,
   appLinks,
   headlessClients,
   loadClients,
@@ -17,6 +18,7 @@ import {
 } from "./clients.ts";
 import { normalizeEmail } from "./email.ts";
 import type { GoogleConfig } from "./google.ts";
+import type { AdmissionPolicy } from "./admission.ts";
 import { isE164, normalizePhone, parsePrefixes } from "./phone.ts";
 import type { TwilioConfig } from "./sms.ts";
 import type { Identity } from "./store.ts";
@@ -66,6 +68,8 @@ export interface IdentityConfig {
   clients: OidcClient[];
   /** The named clients, offered on the account page. */
   apps: AppLink[];
+  /** Each client's admission policy (default `restricted`), from the server-side clients file only. */
+  admission: Map<string, AdmissionPolicy>;
   /** The clients that may use the headless API (headless.ts), by id. */
   headless: Map<string, HeadlessClient>;
   trustProxy: boolean;
@@ -182,6 +186,16 @@ export async function loadConfig(env: Env = process.env): Promise<IdentityConfig
   }
 
   const clients = loadClients(clientConfig, env, { allowLocalhost: local });
+  const admission = admissionPolicies(clientConfig);
+  // Public admission creates access in this service's own database, which Hub mode doesn't have. Refuse it
+  // loudly rather than let a client look public while nobody is ever admitted.
+  if (login.method === "hub") {
+    const pub = [...admission].filter(([, policy]) => policy === "public").map(([id]) => id);
+    if (pub.length)
+      throw new ConfigError(
+        `admission "public" needs IDENTITY_LOGIN_METHOD=local (set on: ${pub.join(", ")}); Hub mode has no per-client admission`,
+      );
+  }
   return {
     issuer,
     port: Number(env.PORT ?? 3000),
@@ -190,6 +204,7 @@ export async function loadConfig(env: Env = process.env): Promise<IdentityConfig
     cookieKeys,
     clients,
     apps: appLinks(clientConfig),
+    admission,
     headless: headlessClients(clientConfig, clients),
     trustProxy: env.IDENTITY_TRUST_PROXY !== "false",
     login,

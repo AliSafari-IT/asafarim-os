@@ -13,7 +13,14 @@ export interface Account {
   name: string | null;
   picture: string | null;
   roles: string[];
+  /** Access to every client (an admin-granted connection; in Hub mode, the platform's flag). */
   isActive: boolean;
+  /** Local mode: the connection is revoked. Suspension beats every other kind of access (admission.ts). */
+  suspended?: boolean;
+  /** Local mode: clients a public admission covers. */
+  admittedClients?: readonly string[];
+  /** From stored verification evidence only; undefined when unknown (Hub mode) or when there is no email. */
+  emailVerified?: boolean | undefined;
 }
 
 export interface AccountStore {
