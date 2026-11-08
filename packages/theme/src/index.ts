@@ -41,6 +41,7 @@ export const LEGAL_LINKS = [
  * footer and "Where to next", and in @asafarim/app-sdk's MORE_FROM_ASAFARIM.
  */
 export const PRODUCT_LINKS = [
+  { label: "Observatory", href: "https://observatory.asafarim.site/" },
   { label: "Breinhap", href: "https://breinhap.asafarim.site/en/" },
   { label: "IGS-Pharma", href: "https://igs.asafarim.site/en/" },
 ] as const;

@@ -106,6 +106,10 @@ test("the top bar groups OS apps and products in accessible launchers", async ({
     "https://management.breinhap.com/login",
   );
   await nav.getByText("Products", { exact: true }).click();
+  await expect(nav.getByRole("link", { name: "Observatory", exact: true })).toHaveAttribute(
+    "href",
+    "https://observatory.asafarim.site/",
+  );
   await expect(nav.getByRole("link", { name: "Breinhap" })).toHaveAttribute(
     "href",
     "https://breinhap.asafarim.site/en/",
@@ -123,6 +127,9 @@ test("the Apps section introduces every app and product with its addresses and s
   }
   await expect(os.getByRole("link", { name: /admin\.asafarim\.site/ })).toHaveCount(0);
 
+  await expect(
+    apps.locator("#app-observatory").getByRole("link", { name: "observatory.asafarim.site" }),
+  ).toHaveAttribute("href", "https://observatory.asafarim.site/");
   const igs = apps.getByRole("list", { name: "Where to find IGS-Pharma" });
   await expect(igs.getByRole("link", { name: "igs.asafarim.site" })).toHaveAttribute(
     "href",
@@ -141,6 +148,10 @@ test("the Apps section introduces every app and product with its addresses and s
   // the Products launcher leads here
   const nav = page.getByRole("navigation", { name: "Main" });
   await nav.getByText("Products", { exact: true }).click();
+  await expect(nav.getByRole("link", { name: "Observatory", exact: true })).toHaveAttribute(
+    "href",
+    "https://observatory.asafarim.site/",
+  );
   await nav.getByRole("link", { name: "Webshop, Android app and status" }).click();
   await expect(page).toHaveURL(/#apps-products$/);
 });
@@ -222,6 +233,10 @@ test("one menu open at a time: Apps, Products and the account menu close each ot
   await nav.getByText("Apps", { exact: true }).click();
   await expect(apps).toHaveAttribute("open", "");
   await nav.getByText("Products", { exact: true }).click();
+  await expect(nav.getByRole("link", { name: "Observatory", exact: true })).toHaveAttribute(
+    "href",
+    "https://observatory.asafarim.site/",
+  );
   await expect(products).toHaveAttribute("open", "");
   await expect(apps).not.toHaveAttribute("open", "");
 

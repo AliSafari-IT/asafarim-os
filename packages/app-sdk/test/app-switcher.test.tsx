@@ -1,3 +1,5 @@
+import { moreFromAsafarim } from "../src/app-switcher.tsx";
+import { shellText } from "../src/shell-text.ts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LauncherTile } from "../src/index.ts";
@@ -111,10 +113,11 @@ describe("AppSwitcher: the way home and the single-app note", () => {
     expect(OS_HOME.href).toBe("https://asafarim.site/");
   });
 
-  it("lists ASafariM's other products after the apps, in English: Breinhap and IGS-Pharma", () => {
+  it("lists ASafariM's other products after the apps, including Observatory", () => {
     expect(MORE_FROM_ASAFARIM.map((m) => m.href)).toEqual([
       "https://breinhap.asafarim.site/en/",
       "https://igs.asafarim.site/en/",
+      "https://observatory.asafarim.site/",
     ]);
     for (const m of MORE_FROM_ASAFARIM) expect(m.glyph).toMatch(/^[A-Z]{2}$/);
   });
@@ -211,4 +214,13 @@ describe("app icons: an OS app's or product's tile shows a drawn icon, others th
     expect(other).toContain(">TK</span>");
     expect(other).not.toContain('class="asafarim-switcher__mark"');
   });
+});
+
+it("provides Observatory in every localized switcher without granting protected app tiles", () => {
+  for (const locale of ["en", "nl", "fr", "de"] as const) {
+    const observatory = moreFromAsafarim(locale).find((link) => link.key === "observatory");
+    expect(observatory?.href).toBe("https://observatory.asafarim.site/");
+    expect(observatory?.description).toBe(shellText(locale).observatory);
+    expect(switcherTiles([])).toEqual([]);
+  }
 });

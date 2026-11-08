@@ -95,6 +95,14 @@ export const MORE_FROM_ASAFARIM: readonly MoreLink[] = [
     href: "https://igs.asafarim.site/en/",
     color: "#059669",
   },
+  {
+    key: "observatory",
+    name: "Observatory",
+    glyph: "OB",
+    description: "Workspace observations and AI summaries",
+    href: "https://observatory.asafarim.site/",
+    color: "#7fd5ba",
+  },
 ];
 
 /** Tiles per row in the panel's app grid. */
@@ -265,6 +273,7 @@ export const moreFromAsafarim = (locale: ShellLocale = "en"): readonly MoreLink[
   return [
     { ...MORE_FROM_ASAFARIM[0]!, description: t.breinhap, href: productHref("breinhap", locale) },
     { ...MORE_FROM_ASAFARIM[1]!, description: t.igs, href: productHref("igs", locale) },
+    { ...MORE_FROM_ASAFARIM[2]!, description: t.observatory, href: productHref("observatory", locale) },
   ];
 };
 
@@ -350,6 +359,7 @@ const ICON_PATHS: Record<string, readonly string[]> = {
     "M12 3.5a5.5 5.5 0 0 0-3.3 9.9c.7.5 1.1 1.3 1.1 2.1v.5h4.4v-.5c0-.8.4-1.6 1.1-2.1A5.5 5.5 0 0 0 12 3.5z",
     "M9.8 18.5h4.4M10.6 21h2.8",
   ],
+  observatory: ["M12 3a9 9 0 1 0 0 18 9 9 0 1 0 0-18", "M12 8a4 4 0 1 0 0 8 4 4 0 1 0 0-8"],
   // A capsule and a pharmacy cross.
   "igs-pharma": [
     "M4.6 13.4a3.6 3.6 0 0 1 0-5.1l3.7-3.7a3.6 3.6 0 0 1 5.1 5.1l-3.7 3.7a3.6 3.6 0 0 1-5.1 0z",

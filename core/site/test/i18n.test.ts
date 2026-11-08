@@ -140,3 +140,24 @@ describe("asafarim.site in four languages", () => {
     expect(read("cookies.html")).toContain("<code>asafarim-locale</code>");
   });
 });
+
+it("makes Observatory discoverable in both navigation menus, product cards and footer in every language", () => {
+  for (const locale of SITE_LOCALES) {
+    const html = read(`${dirOf(locale)}index.html`);
+    const target = 'href="https://observatory.asafarim.site/"';
+    const nav = html.slice(
+      html.indexOf('<nav class="topbar"'),
+      html.indexOf("</nav>", html.indexOf('<nav class="topbar"')),
+    );
+    expect(nav.split(target).length - 1).toBe(2);
+    expect(html).toContain('id="app-observatory"');
+    expect(html.slice(html.indexOf("<footer>"))).toContain(target);
+    const card = html.slice(
+      html.indexOf('id="app-observatory"'),
+      html.indexOf("</li>", html.indexOf('id="app-observatory"')),
+    );
+    expect(card).toContain(target);
+    expect(card).toContain("status-live");
+    expect(card).not.toContain("coming-soon");
+  }
+});

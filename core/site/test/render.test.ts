@@ -94,7 +94,7 @@ describe("renderPage", () => {
     );
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
       expect(url).toMatch(
-        /^https:\/\/(github\.com|asafarim\.com|igs-pharma\.be|(?:management\.)?breinhap\.com|((docs|flow|id|breinhap|igs)\.)?asafarim\.site)\//,
+        /^https:\/\/(github\.com|asafarim\.com|igs-pharma\.be|(?:management\.)?breinhap\.com|((docs|flow|id|breinhap|igs|observatory)\.)?asafarim\.site)\//,
       );
     }
     // Stylesheets and icon are this origin's own; only the canonical and language links name a full URL.

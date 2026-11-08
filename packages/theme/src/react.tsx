@@ -109,7 +109,9 @@ export function LegalFooter({ app, locale = "en" }: { app?: string; locale?: The
   const products = PRODUCT_LINKS.map((l) =>
     l.label === "Breinhap"
       ? { ...l, href: locale === "nl" ? "https://breinhap.asafarim.site/" : l.href }
-      : { ...l, href: `https://igs.asafarim.site/${locale}/` },
+      : l.label === "IGS-Pharma"
+        ? { ...l, href: `https://igs.asafarim.site/${locale}/` }
+        : l,
   );
   return (
     <footer className="os-legal" data-testid="legal-footer">

@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-01",
+  "updated": "2026-11-08",
   "repo": "https://github.com/AliSafari-IT/asafarim-os",
   "apps": [
     {
@@ -148,6 +148,22 @@
           "address": "Google Play",
           "status": "testing",
           "note": "In a closed test before it opens to everyone."
+        }
+      ]
+    },
+    {
+      "id": "observatory",
+      "name": "Observatory",
+      "group": "product",
+      "tagline": "Your development workspace, in perspective",
+      "summary": "Explore saved Git workspace observations, repository changes and history. Evidence-linked AI summaries help explain the metrics. Every registered ASafariM account can view; approved admins can refresh the view and generate summaries.",
+      "surfaces": [
+        {
+          "kind": "Web app",
+          "address": "observatory.asafarim.site",
+          "href": "https://observatory.asafarim.site/",
+          "status": "live",
+          "note": "Sign in with ASafariM. Viewer access is included; admin tools require approval."
         }
       ]
     }
