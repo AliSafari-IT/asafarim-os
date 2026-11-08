@@ -25,6 +25,8 @@ describe("shell text in four languages", () => {
 
   it("links follow the language", () => {
     expect(osHomeHref("fr")).toBe("https://asafarim.site/fr/");
+    for (const locale of ["en", "nl", "fr", "de"] as const)
+      expect(productHref("observatory", locale)).toBe("https://observatory.asafarim.site/");
     expect(productHref("igs", "de")).toBe("https://igs.asafarim.site/de/");
     expect(productHref("breinhap", "nl")).toBe("https://breinhap.asafarim.site/");
     expect(productHref("breinhap", "fr")).toBe("https://breinhap.asafarim.site/en/");

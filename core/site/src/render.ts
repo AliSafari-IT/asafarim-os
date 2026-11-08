@@ -118,6 +118,7 @@ const anchor = (href: string, label: string, extra = "") =>
 export const IDENTITY_ORIGIN = "https://id.asafarim.site";
 
 export const APP_LINKS = {
+  observatory: { label: "Observatory", href: "https://observatory.asafarim.site/" },
   breinhap: { label: "Breinhap", href: "https://breinhap.asafarim.site/en/" },
   breinhapWeb: { label: "Breinhap web", href: "https://breinhap.com/en/" },
   breinhapManagement: { label: "Breinhap management", href: "https://management.breinhap.com/login" },
@@ -179,6 +180,10 @@ function renderTopbar(t: SiteText, locale: Locale, themeToggle: string, page = "
             <div class="nav-panel">
               <div class="nav-panel-heading"><strong>${t.nav.workspace}</strong><span>${t.nav.workspaceLead}</span></div>
               <div class="nav-card-grid">
+                <a class="nav-card" href="${APP_LINKS.observatory.href}" aria-label="Observatory">
+                  <span class="nav-card-icon nav-card-flow" aria-hidden="true">OB</span>
+                  <span class="nav-card-copy"><strong>Observatory</strong><small>${t.nav.observatory}</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
+                </a>
                 <a class="nav-card" href="${APP_LINKS.docs.href}" aria-label="Docs">
                   <span class="nav-card-icon nav-card-docs" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4.5h4M9 12h6M9 15.5h6" /></svg></span>
                   <span class="nav-card-copy"><strong>Docs</strong><small>${t.nav.docs}</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
@@ -206,6 +211,7 @@ function renderTopbar(t: SiteText, locale: Locale, themeToggle: string, page = "
             <div class="nav-panel nav-panel-compact">
               <div class="nav-panel-heading"><strong>${t.nav.moreFrom}</strong><span>${t.nav.explore}</span></div>
               <a class="nav-product-link" href="${products("breinhap")}" aria-label="Breinhap"><strong>Breinhap</strong><span>${t.nav.breinhap}</span><span aria-hidden="true">↗</span></a>
+              <a class="nav-product-link" href="${products("observatory")}" aria-label="Observatory"><strong>Observatory</strong><span>${t.nav.observatory}</span><span aria-hidden="true">↗</span></a>
               <a class="nav-product-link" href="${products("igs")}" aria-label="IGS-Pharma"><strong>IGS-Pharma</strong><span>${t.nav.igs}</span><span aria-hidden="true">↗</span></a>
               <p class="nav-panel-foot"><a href="${home}#apps-products">${t.nav.productsFoot}</a></p>
             </div>
@@ -399,7 +405,7 @@ function renderFooter(repo: string, locale: Locale): string {
   const t = TEXT[locale];
   const legal = LEGAL_DOCS.map((d) => anchor(localePath(locale, d.slug), t.legal.labels[d.slug])).join(" · ");
   return `    <footer>
-      <p>ASafariM OS · ${escapeHtml(t.footer.website)} v${siteVersion} · ${anchor(repo, t.footer.source)} · ${anchor(APP_LINKS.docs.href, "Docs")} · ${anchor(APP_LINKS.flow.href, "Flow")} · ${anchor(PRODUCT_HREFS.breinhap[locale], "Breinhap")} · ${anchor(PRODUCT_HREFS.igs[locale], "IGS-Pharma")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
+      <p>ASafariM OS · ${escapeHtml(t.footer.website)} v${siteVersion} · ${anchor(repo, t.footer.source)} · ${anchor(APP_LINKS.observatory.href, "Observatory")} · ${anchor(APP_LINKS.docs.href, "Docs")} · ${anchor(APP_LINKS.flow.href, "Flow")} · ${anchor(PRODUCT_HREFS.breinhap[locale], "Breinhap")} · ${anchor(PRODUCT_HREFS.igs[locale], "IGS-Pharma")} · ${anchor("https://asafarim.com/", "asafarim.com")}</p>
       <p class="legal-links">${legal} · ${anchor("mailto:privacy@asafarim.site", "privacy@asafarim.site")}</p>
     </footer>`;
 }

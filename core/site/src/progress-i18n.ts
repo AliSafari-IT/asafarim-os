@@ -26,6 +26,14 @@ type Translated = Exclude<Locale, "en">;
 export const PROGRESS_TEXT: Readonly<Record<Translated, ProgressText>> = {
   nl: {
     apps: {
+      observatory: {
+        tagline: "Je ontwikkelwerkruimte in beeld",
+        summary:
+          "Bekijk opgeslagen Git-observaties, wijzigingen en geschiedenis van repositories. AI-samenvattingen met bronverwijzingen helpen de cijfers te begrijpen. Elk geregistreerd ASafariM-account kan meekijken; goedgekeurde beheerders kunnen de weergave vernieuwen en samenvattingen maken.",
+        surfaces: [
+          { kind: "Webapp", note: "Meld je aan met ASafariM. Kijken kan meteen; beheerfuncties vereisen goedkeuring." },
+        ],
+      },
       identity: {
         tagline: "Eén keer aanmelden voor elke app",
         summary:
@@ -163,6 +171,17 @@ export const PROGRESS_TEXT: Readonly<Record<Translated, ProgressText>> = {
   },
   fr: {
     apps: {
+      observatory: {
+        tagline: "Votre espace de développement en perspective",
+        summary:
+          "Explorez les observations Git enregistrées, les changements et l’historique des dépôts. Les résumés IA avec références expliquent les mesures. Tout compte ASafariM inscrit peut consulter ; les administrateurs approuvés peuvent actualiser la vue et générer des résumés.",
+        surfaces: [
+          {
+            kind: "Application web",
+            note: "Connectez-vous avec ASafariM. La consultation est incluse ; les outils d’administration nécessitent une approbation.",
+          },
+        ],
+      },
       identity: {
         tagline: "Une seule connexion pour chaque application",
         summary:
@@ -305,6 +324,17 @@ export const PROGRESS_TEXT: Readonly<Record<Translated, ProgressText>> = {
   },
   de: {
     apps: {
+      observatory: {
+        tagline: "Ihr Entwicklungsarbeitsbereich im Überblick",
+        summary:
+          "Gespeicherte Git-Beobachtungen, Repository-Änderungen und Verlauf erkunden. KI-Zusammenfassungen mit Quellenverweisen erklären die Kennzahlen. Jedes registrierte ASafariM-Konto kann lesen; genehmigte Administratoren können die Ansicht aktualisieren und Zusammenfassungen erstellen.",
+        surfaces: [
+          {
+            kind: "Web-App",
+            note: "Mit ASafariM anmelden. Lesezugriff ist enthalten; Administratorwerkzeuge benötigen eine Genehmigung.",
+          },
+        ],
+      },
       identity: {
         tagline: "Eine Anmeldung für jede App",
         summary:

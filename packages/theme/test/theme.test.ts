@@ -182,8 +182,9 @@ describe("the legal footer", () => {
     expect(html).toContain(`href="mailto:${PRIVACY_EMAIL}"`);
   });
 
-  it("links ASafariM's other products, Breinhap and IGS-Pharma, in English", () => {
+  it("links ASafariM's other products, including Observatory, in English", () => {
     expect(PRODUCT_LINKS.map((l) => l.href)).toEqual([
+      "https://observatory.asafarim.site/",
       "https://breinhap.asafarim.site/en/",
       "https://igs.asafarim.site/en/",
     ]);
@@ -191,4 +192,12 @@ describe("the legal footer", () => {
     expect(html).toContain('<nav aria-label="More from ASafariM">');
     for (const { href, label } of PRODUCT_LINKS) expect(html).toContain(`<a href="${href}">${label}</a>`);
   });
+});
+
+it("preserves the standalone Observatory destination in every localized product footer", () => {
+  for (const locale of ["en", "nl", "fr", "de"] as const) {
+    const html = renderToStaticMarkup(createElement(LegalFooter, { locale }));
+    expect(html).toContain('<a href="https://observatory.asafarim.site/">Observatory</a>');
+    expect(html).toContain(`href="https://igs.asafarim.site/${locale}/"`);
+  }
 });

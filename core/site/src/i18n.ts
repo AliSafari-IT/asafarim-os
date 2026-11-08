@@ -17,7 +17,9 @@ export function localePath(locale: Locale, page = ""): string {
 }
 
 /** Where ASafariM's products are in each language (their sites don't all have four). */
-export const PRODUCT_HREFS: Readonly<Record<"breinhap" | "breinhapWeb" | "igs", Record<Locale, string>>> = {
+export const PRODUCT_HREFS: Readonly<
+  Record<"breinhap" | "breinhapWeb" | "igs" | "observatory", Record<Locale, string>>
+> = {
   breinhap: {
     en: "https://breinhap.asafarim.site/en/",
     nl: "https://breinhap.asafarim.site/",
@@ -29,6 +31,12 @@ export const PRODUCT_HREFS: Readonly<Record<"breinhap" | "breinhapWeb" | "igs", 
     nl: "https://breinhap.com/",
     fr: "https://breinhap.com/en/",
     de: "https://breinhap.com/en/",
+  },
+  observatory: {
+    en: "https://observatory.asafarim.site/",
+    nl: "https://observatory.asafarim.site/",
+    fr: "https://observatory.asafarim.site/",
+    de: "https://observatory.asafarim.site/",
   },
   igs: {
     en: "https://igs.asafarim.site/en/",
@@ -59,6 +67,7 @@ export interface SiteText {
     explore: string;
     breinhap: string;
     igs: string;
+    observatory: string;
     productsFoot: string;
     platform: string;
     signIn: string;
@@ -117,6 +126,7 @@ const EN: SiteText = {
     explore: "Explore our products",
     breinhap: "Short study missions for secondary school",
     igs: "Belgian online pharmacy with a pharmacist",
+    observatory: "Workspace observations and AI summaries",
     productsFoot: "Webshop, Android app and status",
     platform: "Platform",
     signIn: "Sign in",
@@ -190,6 +200,7 @@ const NL: SiteText = {
     explore: "Ontdek onze producten",
     breinhap: "Korte studiemissies voor het secundair onderwijs",
     igs: "Belgische onlineapotheek met een apotheker",
+    observatory: "Werkruimteobservaties en AI-samenvattingen",
     productsFoot: "Webshop, Android-app en status",
     platform: "Platform",
     signIn: "Aanmelden",
@@ -264,6 +275,7 @@ const FR: SiteText = {
     explore: "Découvrez nos produits",
     breinhap: "De courtes missions d’étude pour le secondaire",
     igs: "Pharmacie en ligne belge, avec un pharmacien",
+    observatory: "Observations de travail et résumés IA",
     productsFoot: "Webshop, application Android et statut",
     platform: "Plateforme",
     signIn: "Se connecter",
@@ -342,6 +354,7 @@ const DE: SiteText = {
     explore: "Entdecken Sie unsere Produkte",
     breinhap: "Kurze Lernmissionen für die Sekundarschule",
     igs: "Belgische Online-Apotheke mit Apotheker",
+    observatory: "Arbeitsbereichsbeobachtungen und KI-Zusammenfassungen",
     productsFoot: "Webshop, Android-App und Status",
     platform: "Plattform",
     signIn: "Anmelden",

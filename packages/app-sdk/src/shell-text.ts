@@ -18,6 +18,7 @@ export interface ShellText {
   osHome: string;
   breinhap: string;
   igs: string;
+  observatory: string;
   accountMenu: string;
   signedIn: string;
   yourAccount: string;
@@ -36,6 +37,7 @@ const EN: ShellText = {
   osHome: "ASafariM OS home",
   breinhap: "Study app for Flemish students (Android)",
   igs: "Online pharmacy for Belgium, and its Android app",
+  observatory: "Workspace observations and AI summaries",
   accountMenu: "Your account menu",
   signedIn: "Signed in",
   yourAccount: "Your account",
@@ -54,6 +56,7 @@ const NL: ShellText = {
   osHome: "Startpagina van ASafariM OS",
   breinhap: "Studie-app voor Vlaamse leerlingen (Android)",
   igs: "Onlineapotheek voor België, en de Android-app",
+  observatory: "Werkruimteobservaties en AI-samenvattingen",
   accountMenu: "Je accountmenu",
   signedIn: "Aangemeld",
   yourAccount: "Je account",
@@ -72,6 +75,7 @@ const FR: ShellText = {
   osHome: "Accueil d’ASafariM OS",
   breinhap: "Application d’étude pour les élèves flamands (Android)",
   igs: "Pharmacie en ligne pour la Belgique, et son application Android",
+  observatory: "Observations de travail et résumés IA",
   accountMenu: "Menu de votre compte",
   signedIn: "Connecté",
   yourAccount: "Votre compte",
@@ -90,6 +94,7 @@ const DE: ShellText = {
   osHome: "Startseite von ASafariM OS",
   breinhap: "Lern-App für flämische Schülerinnen und Schüler (Android)",
   igs: "Online-Apotheke für Belgien, und ihre Android-App",
+  observatory: "Arbeitsbereichsbeobachtungen und KI-Zusammenfassungen",
   accountMenu: "Ihr Kontomenü",
   signedIn: "Angemeldet",
   yourAccount: "Ihr Konto",
@@ -104,9 +109,11 @@ export const osHomeHref = (locale: ShellLocale = "en") =>
   `https://asafarim.site/${locale === "en" ? "" : `${locale}/`}`;
 
 /** The products' pages in a language, where their sites have it (Breinhap: Dutch or English only). */
-export const productHref = (product: "breinhap" | "igs", locale: ShellLocale = "en") =>
-  product === "igs"
-    ? `https://igs.asafarim.site/${locale}/`
-    : locale === "nl"
-      ? "https://breinhap.asafarim.site/"
-      : "https://breinhap.asafarim.site/en/";
+export const productHref = (product: "breinhap" | "igs" | "observatory", locale: ShellLocale = "en") =>
+  product === "observatory"
+    ? "https://observatory.asafarim.site/"
+    : product === "igs"
+      ? `https://igs.asafarim.site/${locale}/`
+      : locale === "nl"
+        ? "https://breinhap.asafarim.site/"
+        : "https://breinhap.asafarim.site/en/";
