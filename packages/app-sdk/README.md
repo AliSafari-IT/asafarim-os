@@ -132,7 +132,7 @@ Reads the manifest's `config` block: each key has a type and a default. `getStri
 
 ## Sign-in (`asafarimAuthConfig`)
 
-An [Auth.js](https://authjs.dev) (next-auth v5) config for `core/identity`; the SDK doesn't depend on next-auth:
+An [Auth.js](https://authjs.dev) (next-auth v5) config for `core/identity`; the SDK doesn't depend on next-auth. The implementation lives in [`@asafarim/auth-runtime/authjs`](../auth-runtime/README.md) (S2, #344), where it is shared with the plain Node adapter; this package re-exports it under the same names with identical output (`test/auth-golden.test.ts` pins that). An app that is not an Auth.js app uses `@asafarim/auth-runtime/node` instead.
 
 ```ts
 export const { handlers, auth, signIn, signOut } = NextAuth(

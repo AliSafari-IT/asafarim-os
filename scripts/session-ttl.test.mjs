@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const IDENTITY = { file: "core/identity/src/auth-session.ts", name: "AUTH_SESSION_TTL_SECONDS" };
-const APP_SDK = { file: "packages/app-sdk/src/auth.ts", name: "IDENTITY_SESSION_SECONDS" };
+const APP_SDK = { file: "packages/auth-runtime/src/authjs.ts", name: "IDENTITY_SESSION_SECONDS" };
 
 /**
  * The value of `export const <name> = <a> * <b> …;` in `source`: integer
