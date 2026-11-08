@@ -377,3 +377,25 @@ test("without JavaScript the language links still work", async ({ browser, baseU
   await expect(page.getByRole("link", { name: "Aanmelden" }).first()).toBeVisible();
   await context.close();
 });
+
+for (const lang of ["en", "nl", "fr", "de"]) {
+  test(`signed-in Breinhap web launch uses SSO in ${lang}; anonymous visits stay public`, async ({ page }) => {
+    const path = lang === "en" ? "/" : `/${lang}/`;
+    const web = page.locator('a[aria-label="Breinhap web"]');
+    await page.goto(path);
+    await expect(web).toHaveAttribute("href", lang === "nl" ? "https://breinhap.com/" : "https://breinhap.com/en/");
+    await page.unroute("https://id.asafarim.site/whoami");
+    await whoami(page, { signedIn: true, label: "person@example.test", initials: "PE", connected: true });
+    await page.reload();
+    await expect(web).toHaveAttribute("href", `https://management.breinhap.com/auth/start?web=1&lang=${lang}`);
+    // Only a constant intent/locale crosses domains: no email, identity assertion or tokens.
+    const target = new URL((await web.getAttribute("href"))!);
+    expect([...target.searchParams.keys()]).toEqual(["web", "lang"]);
+    await web.locator("xpath=ancestor::details").locator("summary").click();
+    await page.route("https://management.breinhap.com/auth/start?**", (route) =>
+      route.fulfill({ body: "SSO handoff" }),
+    );
+    await web.click();
+    await expect(page).toHaveURL(target.href);
+  });
+}
