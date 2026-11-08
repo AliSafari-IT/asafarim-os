@@ -205,6 +205,14 @@
   }
 
   function render(me) {
+    // The web page is public. Signed-in visitors first use the existing OIDC code flow so
+    // Breinhap can establish its own host-only session; app membership remains a separate check.
+    const web = primaryNav && primaryNav.querySelector('a[aria-label="Breinhap web"]');
+    if (web) {
+      const lang = Object.hasOwn(WORDS, document.documentElement.lang) ? document.documentElement.lang : "en";
+      web.setAttribute("href", "https://management.breinhap.com/auth/start?web=1&lang=" + lang);
+    }
+
     const label = typeof me.label === "string" && me.label ? me.label : T.signedIn;
     const initials = typeof me.initials === "string" && me.initials ? me.initials.slice(0, 2) : "?";
     const hue = String(hueOf(label));
