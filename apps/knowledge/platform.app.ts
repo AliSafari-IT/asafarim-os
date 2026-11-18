@@ -9,7 +9,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.1.4",
+  version: "0.1.5",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   // Proposed, not allocated: only the dev gateway is generated from this. No production route yet.
@@ -44,11 +44,20 @@ export default defineApp({
     { key: "knowledge.content.edit.any", description: "Edit and save drafts of any article" },
     { key: "knowledge.content.publish.own", description: "Publish and withdraw your own articles" },
     { key: "knowledge.content.publish.any", description: "Publish and withdraw any article" },
+    {
+      key: "knowledge.ai.use",
+      description: "Ask the AI for proposals (outline, rewrite, summary, diagram) on articles you may edit",
+    },
   ],
   roles: [
     {
       key: "knowledge.author",
-      grants: ["knowledge.content.create", "knowledge.content.edit.own", "knowledge.content.publish.own"],
+      grants: [
+        "knowledge.content.create",
+        "knowledge.content.edit.own",
+        "knowledge.content.publish.own",
+        "knowledge.ai.use",
+      ],
       description: "Writes, publishes and withdraws their own articles",
     },
     {
@@ -59,6 +68,7 @@ export default defineApp({
         "knowledge.content.edit.any",
         "knowledge.content.publish.own",
         "knowledge.content.publish.any",
+        "knowledge.ai.use",
       ],
       description: "Edits, publishes and withdraws any article",
     },
@@ -72,6 +82,8 @@ export default defineApp({
     // as Flow and Docs do for all their pages and actions.
     { path: "/studio/**", methods: ["GET", "HEAD"], permission: "knowledge.content.create" },
   ],
+  // Names only: values never appear in a manifest. Optional: without it the AI assistance is off (#360).
+  secrets: ["KNOWLEDGE_AI_API_KEY"],
   ui: {
     glyph: "KN",
     color: "#0e7490",

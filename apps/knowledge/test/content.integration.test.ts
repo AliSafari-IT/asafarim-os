@@ -75,7 +75,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
     pool.on("error", () => undefined);
     const c = await pool.connect();
     try {
-      expect(await migrate(c)).toEqual([1, 2]);
+      expect(await migrate(c)).toEqual([1, 2, 3]);
       expect(await migrate(c)).toEqual([]); // idempotent
     } finally {
       c.release();
@@ -297,6 +297,107 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
         [md.id],
       ),
     ).rejects.toThrow(/content_revisions_doc_matches_format/);
+  });
+
+  it("runs AI operations as proposals within the budgets, logging no text (#360)", async () => {
+    const { runAiOperation } = await import("../lib/ai/service");
+    const { AiError } = await import("../lib/ai/provider");
+    const writer: Actor = { subject: "ai-writer", permissions: [...grants("knowledge.author")] };
+    const a = ok(await createArticle(pool, writer, { slug: "ai-article", draft: draft("AI", "SECRET DRAFT TEXT") }));
+    let calls = 0;
+    const provider = {
+      provider: "fake",
+      model: "fake-model",
+      async generate() {
+        calls++;
+        return {
+          answer: { text: "Improved SECRET ANSWER" },
+          usage: { inputTokens: 300, outputTokens: 100 },
+          model: "fake-model",
+        };
+      },
+    };
+    const caps = { monthlyTokenCap: 1_000_000, authorMonthlyTokenCap: 20_000 };
+    const input = { op: "improve" as const, selection: "SECRET DRAFT TEXT", instruction: "shorter" };
+    const r = await runAiOperation(pool, { provider, caps }, writer, {
+      itemId: a.id,
+      baseRevisionId: a.revisionId,
+      input,
+    });
+    expect(r).toEqual({ ok: true, proposal: { kind: "text", text: "Improved SECRET ANSWER" }, model: "fake-model" });
+    // The draft is unchanged: a proposal is not a save.
+    expect((await getStudioItem(pool, writer, a.id))?.revisions).toHaveLength(1);
+    // The reservation settled to the 400 tokens used, for the publication and the author.
+    const usage = await pool.query("SELECT subject, reserved::int, used::int FROM ai_usage ORDER BY subject");
+    expect(usage.rows).toEqual([
+      { subject: "*", reserved: 0, used: 400 },
+      { subject: "ai-writer", reserved: 0, used: 400 },
+    ]);
+    const jobs = await pool.query("SELECT * FROM ai_jobs");
+    expect(jobs.rows).toHaveLength(1);
+    expect(jobs.rows[0]).toMatchObject({
+      actor: "user:ai-writer",
+      operation: "improve",
+      status: "succeeded",
+      input_tokens: 300,
+    });
+    expect(JSON.stringify(jobs.rows)).not.toMatch(/SECRET/);
+
+    // Another author's article, or no AI permission: refused before any call.
+    const other = ok(await createArticle(pool, bob, { slug: "bob-ai", draft: draft("Bob") }));
+    expect(
+      await runAiOperation(pool, { provider, caps }, writer, {
+        itemId: other.id,
+        baseRevisionId: other.revisionId,
+        input,
+      }),
+    ).toEqual({
+      ok: false,
+      error: "not_found",
+    });
+    const noAi: Actor = {
+      subject: "ai-writer",
+      permissions: writer.permissions.filter((x) => x !== "knowledge.ai.use"),
+    };
+    expect(
+      await runAiOperation(pool, { provider, caps }, noAi, { itemId: a.id, baseRevisionId: a.revisionId, input }),
+    ).toEqual({
+      ok: false,
+      error: "forbidden",
+    });
+    expect(calls).toBe(1);
+
+    // The author's cap: concurrent requests can't reserve past it (each reserves ~6 000 tokens; 20 000 allows 3).
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        runAiOperation(pool, { provider, caps }, writer, { itemId: a.id, baseRevisionId: a.revisionId, input }),
+      ),
+    );
+    const okCount = results.filter((x) => x.ok).length;
+    expect(okCount).toBeGreaterThan(0);
+    expect(results.filter((x) => !x.ok).every((x) => !x.ok && x.error === "ai_author_budget")).toBe(true);
+    const after = await pool.query("SELECT (reserved + used)::int AS spent FROM ai_usage WHERE subject = 'ai-writer'");
+    expect(after.rows[0].spent).toBeLessThanOrEqual(caps.authorMonthlyTokenCap);
+
+    // A failing provider costs only what the API reported, and the draft is untouched.
+    const failing = {
+      ...provider,
+      async generate(): Promise<never> {
+        throw new AiError("refused", { inputTokens: 50, outputTokens: 0 });
+      },
+    };
+    const before = (await pool.query("SELECT used::int FROM ai_usage WHERE subject = '*'")).rows[0].used;
+    expect(
+      await runAiOperation(pool, { provider: failing, caps: { ...caps, authorMonthlyTokenCap: 1_000_000 } }, writer, {
+        itemId: a.id,
+        baseRevisionId: a.revisionId,
+        input,
+      }),
+    ).toEqual({ ok: false, error: "ai_refused" });
+    expect((await pool.query("SELECT used::int, reserved::int FROM ai_usage WHERE subject = '*'")).rows[0]).toEqual({
+      used: before + 50,
+      reserved: 0,
+    });
   });
 
   it("records who did what, without the text", async () => {
