@@ -19,6 +19,8 @@ ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 COPY --from=build --chown=root:root /repo/apps/knowledge/.next/standalone ./
 COPY --from=build --chown=root:root /repo/apps/knowledge/.next/static ./apps/knowledge/.next/static
+# The standalone server serves public/ (the web app manifest's icons) but doesn't include it in its output.
+COPY --from=build --chown=root:root /repo/apps/knowledge/public ./apps/knowledge/public
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s \
