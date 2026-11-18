@@ -16,4 +16,12 @@ describe("AppBrand", () => {
     expect(html).toMatch(/^<h1 class="asafarim-brand"/);
     expect(html).toContain('href="/notes"');
   });
+
+  it("shows the app's own symbol in place of the glyph text when given one", () => {
+    const html = renderToStaticMarkup(<AppBrand name="Knowledge" glyph="KN" icon={<svg data-testid="mark" />} />);
+    expect(html).toContain(
+      '<span class="asafarim-brand__icon" aria-hidden="true"><svg data-testid="mark"></svg></span><span>Knowledge</span>',
+    );
+    expect(html).not.toContain(">KN<");
+  });
 });

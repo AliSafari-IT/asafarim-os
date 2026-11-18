@@ -11,6 +11,7 @@ import { auth } from "@/lib/auth";
 import { describeAccess } from "@/lib/gate";
 import { getPlatform } from "@/lib/platform";
 import { PERMISSIONS } from "@/lib/policy";
+import { KnowledgeMark } from "./KnowledgeMark";
 import { SignOutIcon } from "./SignOutIcon";
 
 export const APP_NAME = "ASafariM Knowledge";
@@ -31,7 +32,7 @@ export async function TopBar({ next = "/" }: { next?: string }) {
   return (
     <header className="topbar os-topbar">
       <div className="topbar-inner">
-        <AppBrand name={APP_NAME} glyph="KN" />
+        <AppBrand name={APP_NAME} glyph="KN" icon={<KnowledgeMark />} />
         <nav className="tools" aria-label="Account" data-testid="who">
           {isAuthor ? (
             <Link href="/studio" className="nav-link" data-testid="studio-link">
