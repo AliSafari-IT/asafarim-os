@@ -4,9 +4,11 @@
  */
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { DocView } from "@/components/DocView";
 import { Markdown } from "@/components/Markdown";
 import { TopBar } from "@/components/TopBar";
 import { getPublishedArticle } from "@/lib/content";
+import { parseDoc } from "@/lib/doc";
 import { db } from "@/lib/db";
 import { isSlug } from "@/lib/validation";
 
@@ -27,6 +29,9 @@ export default async function ArticlePage({ params }: Props) {
   const { slug } = await params;
   const article = await load(slug);
   if (!article) notFound();
+  // Validated again on the way out: the page renders only what lib/doc.ts accepts, whatever is in the database.
+  const parsed = article.doc ? parseDoc(article.doc) : null;
+  const doc = parsed?.ok ? parsed.doc : null;
   return (
     <>
       <TopBar next={`/articles/${slug}`} />
@@ -35,7 +40,7 @@ export default async function ArticlePage({ params }: Props) {
           <h1>{article.title}</h1>
           <p className="muted">Published {article.publishedAt.toISOString().slice(0, 10)}</p>
           {article.summary ? <p className="lead">{article.summary}</p> : null}
-          <Markdown markdown={article.body} />
+          {article.format === "tiptap" && doc ? <DocView doc={doc} /> : <Markdown markdown={article.body} />}
         </article>
       </main>
     </>

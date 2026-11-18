@@ -1,3 +1,5 @@
+import type { Doc } from "./doc";
+
 /** What a draft may contain. The database checks the same limits; this gives a useful message first. */
 
 export const LIMITS = { title: 200, summary: 500, body: 200_000, slug: 96 } as const;
@@ -5,7 +7,10 @@ export const LIMITS = { title: 200, summary: 500, body: 200_000, slug: 96 } as c
 export interface DraftInput {
   title: string;
   summary: string;
+  /** The Markdown (Phase 0 revisions), or the document's plain text when `doc` is set. */
   body: string;
+  /** A parsed structured document (lib/doc.ts); new revisions always have one. */
+  doc?: Doc;
 }
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };

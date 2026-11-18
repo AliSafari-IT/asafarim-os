@@ -18,6 +18,7 @@ import {
 } from "@/lib/content";
 import { db } from "@/lib/db";
 import { studioGate } from "@/lib/studio";
+import { EMPTY_DOC, parseDoc } from "@/lib/doc";
 import { parseDraft, parseSlug } from "@/lib/validation";
 
 const field = (f: FormData, name: string) => {
@@ -52,7 +53,8 @@ export async function createArticleAction(formData: FormData) {
   if (!draft.ok) redirect(`/studio?error=${draft.error}`);
   const slug = parseSlug(field(formData, "slug"), draft.value.title);
   if (!slug.ok) redirect(`/studio?error=${slug.error}`);
-  const r = await createArticle(await db(), actor, { slug: slug.value, draft: draft.value });
+  // New articles are structured documents from their first revision (#356).
+  const r = await createArticle(await db(), actor, { slug: slug.value, draft: { ...draft.value, doc: EMPTY_DOC } });
   if (!r.ok) fail("/studio", r);
   revalidatePath("/studio");
   redirect(`/studio/content/${r.id}?done=created`);
@@ -75,12 +77,12 @@ export async function saveDraftAction(_prev: SaveState, formData: FormData): Pro
   const back = `/studio/content/${id}`;
   const g = await studioGate();
   if (!g.ok) return { error: g.status === 401 ? "unauthenticated" : g.error };
-  const draft = parseDraft({
-    title: field(formData, "title"),
-    summary: field(formData, "summary"),
-    body: field(formData, "body"),
-  });
+  // The editor sends the document as JSON; it is validated and normalised here, never trusted (lib/doc.ts).
+  const doc = parseDoc(field(formData, "doc"));
+  if (!doc.ok) return { error: doc.error };
+  const draft = parseDraft({ title: field(formData, "title"), summary: field(formData, "summary"), body: doc.text });
   if (!draft.ok) return { error: draft.error };
+  draft.value.doc = doc.doc;
   const r = await saveDraft(await db(), g.actor, {
     id,
     expectedRevisionId: field(formData, "expectedRevisionId"),
