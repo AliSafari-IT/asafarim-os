@@ -5,6 +5,7 @@
 import Link from "next/link";
 import { createArticleAction } from "./actions";
 import { Notices } from "@/components/Notices";
+import { Pager } from "@/components/Pager";
 import { TopBar } from "@/components/TopBar";
 import { listStudioItems } from "@/lib/content";
 import { db } from "@/lib/db";
@@ -16,7 +17,7 @@ type Props = { searchParams: Promise<Record<string, string | undefined>> };
 
 export default async function Studio({ searchParams }: Props) {
   const g = await requireStudio();
-  const { error, done } = await searchParams;
+  const { error, done, after } = await searchParams;
   if (!g.ok) {
     return (
       <>
@@ -27,7 +28,8 @@ export default async function Studio({ searchParams }: Props) {
       </>
     );
   }
-  const items = await listStudioItems(await db(), g.actor);
+  const page = await listStudioItems(await db(), g.actor, { after });
+  const items = page.items;
 
   return (
     <>
@@ -55,7 +57,7 @@ export default async function Studio({ searchParams }: Props) {
           </button>
         </form>
 
-        {items.length === 0 ? (
+        {items.length === 0 && !after ? (
           <p className="muted" data-testid="studio-empty">
             No articles yet.
           </p>
@@ -83,6 +85,7 @@ export default async function Studio({ searchParams }: Props) {
             </tbody>
           </table>
         )}
+        <Pager after={after} next={page.next} base="/studio" label="Older articles" />
       </main>
     </>
   );

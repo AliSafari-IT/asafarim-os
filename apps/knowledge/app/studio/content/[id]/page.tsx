@@ -11,6 +11,7 @@ import { Notices } from "@/components/Notices";
 import { TopBar } from "@/components/TopBar";
 import { getStudioItem } from "@/lib/content";
 import { db } from "@/lib/db";
+import { parseBefore } from "@/lib/cursor";
 import { canEdit, canPublish } from "@/lib/policy";
 import { requireStudio } from "@/lib/studio";
 
@@ -25,7 +26,7 @@ const stamp = (d: Date) => d.toISOString().slice(0, 16).replace("T", " ");
 
 export default async function StudioItemPage({ params, searchParams }: Props) {
   const { id } = await params;
-  const { error, done } = await searchParams;
+  const { error, done, before } = await searchParams;
   const g = await requireStudio();
   if (!g.ok) {
     return (
@@ -37,9 +38,9 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
       </>
     );
   }
-  const found = await getStudioItem(await db(), g.actor, id);
+  const found = await getStudioItem(await db(), g.actor, id, { before: parseBefore(before) });
   if (!found) notFound();
-  const { item, revisions } = found;
+  const { item, revisions, olderBefore, published } = found;
   const editable = canEdit(g.actor, item);
   const publishable = canPublish(g.actor, item);
 
@@ -63,11 +64,8 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
             {item.status === "published" ? (
               <>
                 {" "}
-                · revision{" "}
-                <strong data-testid="published-number">
-                  {revisions.find((r) => r.id === item.publishedRevisionId)?.number ?? "?"}
-                </strong>{" "}
-                at <Link href={`/articles/${item.slug}`}>/articles/{item.slug}</Link>
+                · revision <strong data-testid="published-number">{published?.number ?? "?"}</strong> at{" "}
+                <Link href={`/articles/${item.slug}`}>/articles/{item.slug}</Link>
               </>
             ) : null}
           </p>
@@ -113,6 +111,16 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
               </li>
             ))}
           </ol>
+          {before || olderBefore ? (
+            <nav className="pager" aria-label="Revision pages" data-testid="revision-pager">
+              {before ? <Link href={`/studio/content/${item.id}`}>← Newest revisions</Link> : <span />}
+              {olderBefore ? (
+                <Link href={`/studio/content/${item.id}?before=${olderBefore}`} data-testid="revisions-older">
+                  Older revisions →
+                </Link>
+              ) : null}
+            </nav>
+          ) : null}
         </section>
       </main>
     </>
