@@ -3,21 +3,26 @@
  * listPublished can only read the revision each item's published pointer names.
  */
 import Link from "next/link";
+import { Pager } from "@/components/Pager";
 import { TopBar } from "@/components/TopBar";
-import { listPublished, type PublishedArticle } from "@/lib/content";
+import { listPublished, type Page, type PublishedArticle } from "@/lib/content";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 const date = (d: Date) => d.toISOString().slice(0, 10);
 
-export default async function Home() {
-  let articles: PublishedArticle[] | null;
+type Props = { searchParams: Promise<Record<string, string | undefined>> };
+
+export default async function Home({ searchParams }: Props) {
+  const { after } = await searchParams;
+  let page: Page<PublishedArticle> | null;
   try {
-    articles = await listPublished(await db());
+    page = await listPublished(await db(), { after });
   } catch {
-    articles = null;
+    page = null;
   }
+  const articles = page?.items ?? null;
 
   return (
     <>
@@ -46,6 +51,7 @@ export default async function Home() {
             ))}
           </ul>
         )}
+        <Pager after={after} next={page?.next ?? null} base="/" label="Older articles" />
       </main>
     </>
   );

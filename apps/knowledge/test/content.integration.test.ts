@@ -31,6 +31,28 @@ const member: Actor = { subject: "mallory", permissions: [] };
 
 const draft = (title: string, body = "", summary = "") => ({ title, summary, body });
 
+/** Every page of a list, following its cursors (what a reader paging to the end sees). */
+async function allPublished(pool: pg.Pool) {
+  const out = [];
+  let after: string | null = null;
+  do {
+    const page = await listPublished(pool, { after, limit: 7 });
+    out.push(...page.items);
+    after = page.next;
+  } while (after);
+  return out;
+}
+async function allStudio(pool: pg.Pool, actor: Actor) {
+  const out = [];
+  let after: string | null = null;
+  do {
+    const page = await listStudioItems(pool, actor, { after, limit: 7 });
+    out.push(...page.items);
+    after = page.next;
+  } while (after);
+  return out;
+}
+
 function ok<T extends { ok: boolean }>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) throw new Error(`expected ok, got ${JSON.stringify(r)}`);
   return r as Extract<T, { ok: true }>;
@@ -71,7 +93,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
       await createArticle(pool, alice, { slug: "secret-draft", draft: draft("Secret draft", "DRAFT-ONLY") }),
     );
     expect(await getPublishedArticle(pool, "secret-draft")).toBeNull();
-    expect((await listPublished(pool)).map((a) => a.slug)).not.toContain("secret-draft");
+    expect((await allPublished(pool)).map((a) => a.slug)).not.toContain("secret-draft");
     const seen = await getStudioItem(pool, alice, created.id);
     expect(seen?.item.status).toBe("draft");
     expect(seen?.item.draft.body).toBe("DRAFT-ONLY");
@@ -115,7 +137,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
 
     const pub = await getPublishedArticle(pool, "use-effect");
     expect(pub).toMatchObject({ title: "useEffect", body: "first body", summary: "About hooks", revisionNumber: 1 });
-    expect(JSON.stringify(await listPublished(pool))).not.toContain("UNPUBLISHED");
+    expect(JSON.stringify(await allPublished(pool))).not.toContain("UNPUBLISHED");
 
     ok(await publishRevision(pool, alice, { id: a.id, revisionId: v2.revisionId }));
     expect((await getPublishedArticle(pool, "use-effect"))?.body).toBe("UNPUBLISHED");
@@ -141,7 +163,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
 
     ok(await withdrawArticle(pool, alice, { id: a.id }));
     expect(await getPublishedArticle(pool, "withdraw-me")).toBeNull();
-    expect((await listPublished(pool)).map((x) => x.slug)).not.toContain("withdraw-me");
+    expect((await allPublished(pool)).map((x) => x.slug)).not.toContain("withdraw-me");
     expect((await getStudioItem(pool, alice, a.id))?.item.status).toBe("withdrawn");
     expect(await withdrawArticle(pool, alice, { id: a.id })).toEqual({ ok: false, error: "not_published" });
 
@@ -152,7 +174,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
   it("hides one author's articles from another, and lets an editor act on any", async () => {
     const a = ok(await createArticle(pool, alice, { slug: "alice-only", draft: draft("Alice only") }));
     expect(await getStudioItem(pool, bob, a.id)).toBeNull();
-    expect((await listStudioItems(pool, bob)).map((i) => i.id)).not.toContain(a.id);
+    expect((await allStudio(pool, bob)).map((i) => i.id)).not.toContain(a.id);
     expect(
       await saveDraft(pool, bob, { id: a.id, expectedRevisionId: a.revisionId, draft: draft("Bob was here") }),
     ).toEqual({ ok: false, error: "not_found" });
@@ -162,7 +184,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
     });
     expect(await withdrawArticle(pool, member, { id: a.id })).toEqual({ ok: false, error: "not_found" });
 
-    expect((await listStudioItems(pool, erin)).map((i) => i.id)).toContain(a.id);
+    expect((await allStudio(pool, erin)).map((i) => i.id)).toContain(a.id);
     const edited = ok(
       await saveDraft(pool, erin, { id: a.id, expectedRevisionId: a.revisionId, draft: draft("Edited by Erin") }),
     );
@@ -187,6 +209,61 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
         b.revisionId,
       ]),
     ).rejects.toThrow(/foreign key/);
+  });
+
+  it("pages through 51 revisions: revision 1 stays reachable and publishable; the published one is always known", async () => {
+    const a = ok(await createArticle(pool, alice, { slug: "many-revisions", draft: draft("r1", "first") }));
+    const first = a.revisionId;
+    ok(await publishRevision(pool, alice, { id: a.id, revisionId: first }));
+    let head = first;
+    for (let n = 2; n <= 51; n++) {
+      head = ok(await saveDraft(pool, alice, { id: a.id, expectedRevisionId: head, draft: draft(`r${n}`) })).revisionId;
+    }
+    const page1 = await getStudioItem(pool, alice, a.id);
+    expect(page1?.revisions.map((r) => r.number)).toEqual(Array.from({ length: 30 }, (_, i) => 51 - i));
+    expect(page1?.published?.number).toBe(1); // not on this page, still identified
+    expect(page1?.olderBefore).toBe(22);
+    const page2 = await getStudioItem(pool, alice, a.id, { before: page1!.olderBefore });
+    expect(page2?.revisions.map((r) => r.number)).toEqual(Array.from({ length: 21 }, (_, i) => 21 - i));
+    expect(page2?.olderBefore).toBeNull();
+    const r1 = page2!.revisions.at(-1)!;
+    expect(r1.id).toBe(first);
+    ok(await publishRevision(pool, alice, { id: a.id, revisionId: page1!.revisions[0]!.id }));
+    ok(await publishRevision(pool, alice, { id: a.id, revisionId: r1.id }));
+    expect((await getPublishedArticle(pool, "many-revisions"))?.revisionNumber).toBe(1);
+  });
+
+  it("pages through 55 published articles: every one is listed once, newest first, with no repeats", async () => {
+    const before = new Set((await allPublished(pool)).map((x) => x.slug));
+    for (let n = 0; n < 55; n++) {
+      const c = ok(await createArticle(pool, bob, { slug: `bulk-${n}`, draft: draft(`Bulk ${n}`) }));
+      ok(await publishRevision(pool, bob, { id: c.id, revisionId: c.revisionId }));
+    }
+    const all = await allPublished(pool);
+    const slugs = all.map((x) => x.slug);
+    expect(new Set(slugs).size).toBe(slugs.length);
+    for (let n = 0; n < 55; n++) expect(slugs).toContain(`bulk-${n}`);
+    expect(slugs.length).toBe(before.size + 55);
+    const times = all.map((x) => x.publishedAt.getTime());
+    expect([...times].sort((x, y) => y - x)).toEqual(times);
+    const first = await listPublished(pool);
+    expect(first.items).toHaveLength(20);
+    expect(first.next).not.toBeNull();
+    // The studio pages too: bob sees all 55 of his, once each.
+    const mine = (await allStudio(pool, bob)).map((i) => i.slug).filter((x) => x.startsWith("bulk-"));
+    expect(new Set(mine).size).toBe(55);
+  });
+
+  it("ignores a cursor that doesn't decode (first page), and never treats it as SQL", async () => {
+    for (const bad of [
+      "",
+      "%%%",
+      "bm90LWEtY3Vyc29y",
+      Buffer.from("x'; DROP TABLE content_items; --|y").toString("base64url"),
+    ]) {
+      const page = await listPublished(pool, { after: bad, limit: 3 });
+      expect(page.items).toHaveLength(3);
+    }
   });
 
   it("records who did what, without the text", async () => {

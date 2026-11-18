@@ -6,6 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { decodeCursor, encodeCursor } from "./cursor";
 import { canCreate, canEdit, canPublish, canView, seesAll, type Actor } from "./policy";
 import type { DraftInput } from "./validation";
 
@@ -50,6 +51,14 @@ export interface PublishedArticle {
   publishedAt: Date;
   revisionNumber: number;
 }
+
+/** One page of a list, newest first, and the cursor of the next (older) page, or null on the last one. */
+export interface Page<T> {
+  items: T[];
+  next: string | null;
+}
+
+export const PAGE_SIZE = { studio: 50, public: 20, revisions: 30 } as const;
 
 export type Failure =
   | { ok: false; error: "forbidden" }
@@ -247,39 +256,108 @@ const toStudioItem = (r: StudioRow): StudioItem => ({
   draft: toRevision({ ...r, id: r.r_id, created_at: r.r_created_at }),
 });
 
-/** The studio's list: the person's own articles, or every article for an editor. */
-export async function listStudioItems(pool: Pool, actor: Actor, limit = 100): Promise<StudioItem[]> {
-  const all = seesAll(actor);
-  const { rows } = await pool.query<StudioRow>(
-    `${STUDIO_SELECT} WHERE ($1::boolean OR i.owner_subject = $2) ORDER BY i.updated_at DESC LIMIT $3`,
-    [all, actor.subject, limit],
+/**
+ * The studio's list, one page at a time: the person's own articles, or every article for an editor, most recently
+ * changed first. Keyset pagination on (updated_at, id), so a page never repeats or skips a row while others write.
+ */
+export async function listStudioItems(
+  pool: Pool,
+  actor: Actor,
+  opts: { after?: string | null; limit?: number } = {},
+): Promise<Page<StudioItem>> {
+  const limit = opts.limit ?? PAGE_SIZE.studio;
+  const after = decodeCursor(opts.after);
+  const { rows } = await pool.query<StudioRow & { at_key: string }>(
+    `SELECT * FROM (
+       SELECT i.*, i.updated_at::text AS at_key, r.id AS r_id, r.number, r.title, r.summary, r.body, r.author,
+              r.created_at AS r_created_at
+       FROM content_items i JOIN content_revisions r ON r.id = i.draft_revision_id
+       WHERE ($1::boolean OR i.owner_subject = $2)
+         AND ($3::timestamptz IS NULL OR (i.updated_at, i.id) < ($3::timestamptz, $4::text))
+     ) x ORDER BY x.updated_at DESC, x.id DESC LIMIT $5`,
+    [seesAll(actor), actor.subject, after?.at ?? null, after?.id ?? null, limit + 1],
   );
-  return rows.filter((r) => canView(actor, ownerOf(r))).map(toStudioItem);
+  return pageOf(
+    rows,
+    limit,
+    (r) => r.at_key,
+    (r) => toStudioItem(r),
+    (r) => canView(actor, ownerOf(r)),
+  );
 }
 
-/** One article for the editor, with its revision history (newest first); null when the person may not see it. */
+function pageOf<R extends { id: string }, T>(
+  rows: R[],
+  limit: number,
+  key: (r: R) => string,
+  map: (r: R) => T,
+  keep: (r: R) => boolean = () => true,
+): Page<T> {
+  const more = rows.length > limit;
+  const shown = rows.slice(0, limit);
+  const last = shown.at(-1);
+  return {
+    items: shown.filter(keep).map(map),
+    next: more && last ? encodeCursor({ at: key(last), id: last.id }) : null,
+  };
+}
+
+export interface StudioItemView {
+  item: StudioItem;
+  /** One page of the revision history, newest first. */
+  revisions: Revision[];
+  /** Show older revisions with `before=<this>`; null when this page reaches revision 1. */
+  olderBefore: number | null;
+  /** The public revision, wherever it is in the history (it may be on another page). */
+  published: Revision | null;
+}
+
+/**
+ * One article for the editor: the draft head, a page of its revision history (newest first, `before` a revision
+ * number for older pages) and the published revision. Null when the person may not see it.
+ */
 export async function getStudioItem(
   pool: Pool,
   actor: Actor,
   id: string,
-): Promise<{ item: StudioItem; revisions: Revision[] } | null> {
+  opts: { before?: number | null; limit?: number } = {},
+): Promise<StudioItemView | null> {
   if (!UUID.test(id)) return null;
   const row = (await pool.query<StudioRow>(`${STUDIO_SELECT} WHERE i.id = $1`, [id])).rows[0];
   if (!row || !canView(actor, ownerOf(row))) return null;
+  const limit = opts.limit ?? PAGE_SIZE.revisions;
   const { rows } = await pool.query<RevisionRow>(
-    "SELECT * FROM content_revisions WHERE item_id = $1 ORDER BY number DESC LIMIT 50",
-    [id],
+    `SELECT * FROM content_revisions WHERE item_id = $1 AND ($2::int IS NULL OR number < $2::int)
+     ORDER BY number DESC LIMIT $3`,
+    [id, opts.before ?? null, limit + 1],
   );
-  return { item: toStudioItem(row), revisions: rows.map(toRevision) };
+  const page = rows.slice(0, limit);
+  const published = row.published_revision_id
+    ? (page.find((r) => r.id === row.published_revision_id) ??
+      (
+        await pool.query<RevisionRow>("SELECT * FROM content_revisions WHERE id = $1 AND item_id = $2", [
+          row.published_revision_id,
+          id,
+        ])
+      ).rows[0])
+    : undefined;
+  return {
+    item: toStudioItem(row),
+    revisions: page.map(toRevision),
+    olderBefore: rows.length > limit ? (page.at(-1)?.number ?? null) : null,
+    published: published ? toRevision(published) : null,
+  };
 }
 
 // The public side. Each query joins on published_revision_id, the one pointer publish/withdraw change.
 const PUBLIC_SELECT = `
-  SELECT i.slug, i.language, i.published_at, r.title, r.summary, r.body, r.number
+  SELECT i.id, i.slug, i.language, i.published_at, i.published_at::text AS at_key, r.title, r.summary, r.body, r.number
   FROM content_items i JOIN content_revisions r ON r.id = i.published_revision_id AND r.item_id = i.id
   WHERE i.published_revision_id IS NOT NULL`;
 
 interface PublicRow {
+  id: string;
+  at_key: string;
   slug: string;
   language: string;
   published_at: Date;
@@ -299,10 +377,19 @@ const toPublished = (r: PublicRow): PublishedArticle => ({
   revisionNumber: r.number,
 });
 
-/** Published articles, newest first: what a guest may list. */
-export async function listPublished(pool: Pick<Pool, "query">, limit = 50): Promise<PublishedArticle[]> {
-  const { rows } = await pool.query<PublicRow>(`${PUBLIC_SELECT} ORDER BY i.published_at DESC LIMIT $1`, [limit]);
-  return rows.map(toPublished);
+/** Published articles, newest first, one page at a time (keyset on published_at, id): what a guest may list. */
+export async function listPublished(
+  pool: Pick<Pool, "query">,
+  opts: { after?: string | null; limit?: number } = {},
+): Promise<Page<PublishedArticle>> {
+  const limit = opts.limit ?? PAGE_SIZE.public;
+  const after = decodeCursor(opts.after);
+  const { rows } = await pool.query<PublicRow>(
+    `${PUBLIC_SELECT} AND ($1::timestamptz IS NULL OR (i.published_at, i.id) < ($1::timestamptz, $2::text))
+     ORDER BY i.published_at DESC, i.id DESC LIMIT $3`,
+    [after?.at ?? null, after?.id ?? null, limit + 1],
+  );
+  return pageOf(rows, limit, (r) => r.at_key, toPublished);
 }
 
 /** The published revision of the article at `slug`, or null (never published, withdrawn, or no such slug). */
