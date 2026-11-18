@@ -1176,7 +1176,10 @@ test("a Knowledge env with a variable missing stops the deploy before pulling, n
     knowledgeEnvEmpty: true,
   });
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /missing or empty in \.env\.knowledge: AUTH_SECRET OIDC_CLIENT_SECRET$/m);
+  assert.match(
+    r.stderr,
+    /missing or empty in \.env\.knowledge: AUTH_SECRET OIDC_CLIENT_SECRET DATABASE_URL ASAFARIM_REGISTRY_CREDENTIAL$/m,
+  );
   assert.match(r.stderr, /node deploy\/knowledge\/new-env\.mjs/);
   assert.ok(!r.calls.some((c) => / (pull|up) /.test(c) || c.startsWith("edge-deploy-site.sh")), r.calls.join("\n"));
 });
@@ -1206,11 +1209,14 @@ test("<knowledge-image-commit> is an eighth, optional sha, checked like the othe
   assert.ok(code.indexOf("export KNOWLEDGE_IMAGE_TAG") < code.indexOf('"${compose[@]}" config -q'));
 });
 
-test("the Knowledge example requires AUTH_SECRET and OIDC_CLIENT_SECRET; the install's two are listed commented out", () => {
+test("the Knowledge example requires AUTH_SECRET, OIDC_CLIENT_SECRET and the install's DATABASE_URL and ASAFARIM_REGISTRY_CREDENTIAL", () => {
   const text = readFileSync(knowledgeExample, "utf8");
-  assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), ["AUTH_SECRET", "OIDC_CLIENT_SECRET"]);
-  assert.match(text, /^# DATABASE_URL=$/m);
-  assert.match(text, /^# ASAFARIM_REGISTRY_CREDENTIAL=$/m);
+  assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), [
+    "AUTH_SECRET",
+    "OIDC_CLIENT_SECRET",
+    "DATABASE_URL",
+    "ASAFARIM_REGISTRY_CREDENTIAL",
+  ]);
 });
 
 test("deploy/knowledge/new-env.mjs fills the Knowledge example, gives identity the same client secret, and overwrites nothing", async () => {
@@ -1224,7 +1230,9 @@ test("deploy/knowledge/new-env.mjs fills the Knowledge example, gives identity t
         .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
     );
   const generated = newEnv();
-  assert.equal(check(generated.knowledge, readFileSync(knowledgeExample, "utf8")).status, 0);
+  // new-env.mjs writes the secrets; the install's two lines are appended to the same file (deploy/README.md).
+  const withInstall = `${generated.knowledge}DATABASE_URL=stand-in\nASAFARIM_REGISTRY_CREDENTIAL=stand-in\n`;
+  assert.equal(check(withInstall, readFileSync(knowledgeExample, "utf8")).status, 0);
   assert.equal(parse(generated.identity)[IDENTITY_SECRET_NAME], parse(generated.knowledge).OIDC_CLIENT_SECRET);
   assert.ok(parse(generated.knowledge).AUTH_SECRET.length >= 32);
 
