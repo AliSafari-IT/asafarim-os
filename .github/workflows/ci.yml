@@ -191,7 +191,7 @@ jobs:
           : > .env.identity
           : > .env.docs
           # Every image tag is required (no default), also for a service whose profile is off.
-          export IMAGE_TAG=ci SITE_IMAGE_TAG=ci DOCS_IMAGE_TAG=ci CORE_API_IMAGE_TAG=ci ADMIN_IMAGE_TAG=ci FLOW_IMAGE_TAG=ci
+          export IMAGE_TAG=ci SITE_IMAGE_TAG=ci DOCS_IMAGE_TAG=ci CORE_API_IMAGE_TAG=ci ADMIN_IMAGE_TAG=ci FLOW_IMAGE_TAG=ci KNOWLEDGE_IMAGE_TAG=ci
           docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
           # And with the core profile (os-postgres, os-core-api), as a deploy with core-api's env runs it.
           : > .env.core-api
@@ -205,6 +205,10 @@ jobs:
           COMPOSE_PROFILES=core,flow docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
           COMPOSE_PROFILES=core,nats docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
           COMPOSE_PROFILES=core,admin,flow,nats docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+          # And with ASafariM Knowledge (os-knowledge, #361), alone and with every other profile.
+          : > .env.knowledge
+          COMPOSE_PROFILES=core,knowledge docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
+          COMPOSE_PROFILES=core,admin,flow,nats,knowledge docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
           # With the bus's address, as a deploy that runs os-nats hands it to core-api, Docs and Flow.
           OS_NATS_URL=nats://os-nats:4222 COMPOSE_PROFILES=core,admin,flow,nats docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
 
@@ -214,7 +218,9 @@ jobs:
       # The same pinned image the edge's own edge-deploy-site.sh validates with.
       - name: The site files validate in the edge's Caddy
         run: |
-          for site in sites/asafarim-os.caddy sites/asafarim-os-site.caddy deploy/rollback.caddy; do
+          # Also the file a deploy with Flow and Knowledge publishes: the full file with both blocks appended.
+          cat sites/asafarim-os.caddy sites/asafarim-os-flow.caddy sites/asafarim-os-knowledge.caddy > "$RUNNER_TEMP/with-apps.caddy"
+          for site in sites/asafarim-os.caddy sites/asafarim-os-site.caddy deploy/rollback.caddy "$RUNNER_TEMP/with-apps.caddy"; do
             dir="$(mktemp -d)"
             mkdir "$dir/sites"
             echo 'import sites/*.caddy' > "$dir/Caddyfile"
