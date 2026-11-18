@@ -21,9 +21,23 @@ describe("knowledge manifest", () => {
   });
 
   it("puts the studio behind knowledge.content.create at the gateway and leaves reading public", () => {
-    expect(manifest.routes).toContainEqual({ path: "/studio/**", permission: "knowledge.content.create" });
+    expect(manifest.routes).toContainEqual({
+      path: "/studio/**",
+      methods: ["GET", "HEAD"],
+      permission: "knowledge.content.create",
+    });
     expect(manifest.auth.publicPaths).toEqual(expect.arrayContaining(["/", "/articles/**"]));
     expect(manifest.auth.publicPaths.some((p) => p.startsWith("/studio"))).toBe(false);
+  });
+
+  it("never puts a gateway permission on a studio POST, so an expired access token can't drop a save (#363)", () => {
+    // The gateway answers a POST with an expired token with 401 (no redirect to renew it). Studio actions
+    // are POSTs to /studio/**, so a route there must be limited to pages; the app authorises the actions.
+    for (const r of manifest.routes ?? []) {
+      if (!r.permission || !r.path.startsWith("/studio")) continue;
+      expect(r.methods, r.path).toBeDefined();
+      for (const m of r.methods ?? []) expect(["GET", "HEAD"]).toContain(m);
+    }
   });
 
   it("gives authors their own articles only, and keeps any-article rights for editors", () => {
