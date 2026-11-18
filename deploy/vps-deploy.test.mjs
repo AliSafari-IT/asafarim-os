@@ -33,6 +33,7 @@ const docsExample = path.join(root, "apps", "docs", ".env.production.example");
 const coreApiExample = path.join(root, "core", "core-api", ".env.production.example");
 const adminExample = path.join(root, "core", "admin", ".env.production.example");
 const flowExample = path.join(root, "apps", "flow", ".env.production.example");
+const knowledgeExample = path.join(root, "apps", "knowledge", ".env.production.example");
 const natsExample = path.join(root, "core", "nats", ".env.production.example");
 
 /** Run require_env_vars on two fixture files; returns { status, output } with stdout and stderr together. */
@@ -344,6 +345,8 @@ function runDeploy(
     adminEnvEmpty = false,
     flowEnv = false,
     flowEnvEmpty = false,
+    knowledgeEnv = false,
+    knowledgeEnvEmpty = false,
     natsEnv = false,
     natsEnvEmpty = false,
     coreApiNatsMissing = false,
@@ -367,11 +370,13 @@ function runDeploy(
       "sites/asafarim-os.caddy",
       "sites/asafarim-os-site.caddy",
       "sites/asafarim-os-flow.caddy",
+      "sites/asafarim-os-knowledge.caddy",
       "core/identity/.env.production.example",
       "apps/docs/.env.production.example",
       "core/core-api/.env.production.example",
       "core/admin/.env.production.example",
       "apps/flow/.env.production.example",
+      "apps/knowledge/.env.production.example",
       "core/nats/.env.production.example",
     ]) {
       cpSync(path.join(root, file), path.join(repo, file), { recursive: true });
@@ -388,6 +393,7 @@ function runDeploy(
     if (coreApiEnv) writeFileSync(path.join(repo, "core/core-api/.env.production.age"), "stand-in ciphertext\n");
     if (adminEnv) writeFileSync(path.join(repo, "core/admin/.env.production.age"), "stand-in ciphertext\n");
     if (flowEnv) writeFileSync(path.join(repo, "apps/flow/.env.production.age"), "stand-in ciphertext\n");
+    if (knowledgeEnv) writeFileSync(path.join(repo, "apps/knowledge/.env.production.age"), "stand-in ciphertext\n");
     if (natsEnv) writeFileSync(path.join(repo, "core/nats/.env.production.age"), "stand-in ciphertext\n");
     const fill = (example) =>
       readFileSync(example, "utf8")
@@ -412,6 +418,9 @@ function runDeploy(
       `elif [[ "$*" == *apps/flow/* ]]; then`,
       `  [[ -n "$FLOW_ENV_EMPTY" ]] && exit 0`,
       fill(flowExample),
+      `elif [[ "$*" == *apps/knowledge/* ]]; then`,
+      `  [[ -n "$KNOWLEDGE_ENV_EMPTY" ]] && exit 0`,
+      fill(knowledgeExample),
       `elif [[ "$*" == *core/nats/* ]]; then`,
       `  [[ -n "$NATS_ENV_EMPTY" ]] && exit 0`,
       fill(natsExample),
@@ -473,6 +482,7 @@ function runDeploy(
         CORE_API_ENV_EMPTY: coreApiEnvEmpty ? "1" : "",
         ADMIN_ENV_EMPTY: adminEnvEmpty ? "1" : "",
         FLOW_ENV_EMPTY: flowEnvEmpty ? "1" : "",
+        KNOWLEDGE_ENV_EMPTY: knowledgeEnvEmpty ? "1" : "",
         NATS_ENV_EMPTY: natsEnvEmpty ? "1" : "",
         CORE_API_NATS_MISSING: coreApiNatsMissing ? "1" : "",
         PULL_FAILS: String(pullFails),
@@ -491,6 +501,7 @@ function runDeploy(
       envCoreApiWritten: existsSync(path.join(repo, ".env.core-api")),
       envAdminWritten: existsSync(path.join(repo, ".env.admin")),
       envFlowWritten: existsSync(path.join(repo, ".env.flow")),
+      envKnowledgeWritten: existsSync(path.join(repo, ".env.knowledge")),
       envNatsWritten: existsSync(path.join(repo, ".env.nats")),
       generatedSite: existsSync(path.join(repo, ".vps-deploy-site.caddy"))
         ? readFileSync(path.join(repo, ".vps-deploy-site.caddy"), "utf8")
@@ -561,7 +572,7 @@ test("--site-only takes at most three shas, each a full sha", () => {
     runDeploy(["--site-only", SHA, SITE_SHA, "abc"]).stderr,
     /<docs-image-commit> must be a full 40-character sha/,
   );
-  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, SHA, SHA], { full: true }).stderr, /usage:/);
+  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, SHA, SHA, SHA], { full: true }).stderr, /usage:/);
   assert.match(
     runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, "abc"], { full: true }).stderr,
     /<core-api-image-commit> must be a full 40-character sha/,
@@ -1003,12 +1014,11 @@ test("--site-only never touches Flow, even when its env is committed", () => {
   assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/sites/asafarim-os-site.caddy`));
 });
 
-test("<flow-image-commit> is a seventh, optional sha, checked like the others; an eighth is refused", () => {
+test("<flow-image-commit> is a seventh, optional sha, checked like the others", () => {
   assert.match(
     runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, "abc"], { full: true }).stderr,
     /<flow-image-commit> must be a full 40-character sha/,
   );
-  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, SHA, SHA], { full: true }).stderr, /usage:/);
   assert.match(code, /export FLOW_IMAGE_TAG="\$flow_image_commit"/);
   assert.ok(code.indexOf("export FLOW_IMAGE_TAG") < code.indexOf('"${compose[@]}" config -q'));
 });
@@ -1077,6 +1087,171 @@ test("deploy/flow/new-env.mjs prints file names, never a value", () => {
   const source = readFileSync(path.join(root, "deploy", "flow", "new-env.mjs"), "utf8");
   for (const m of source.matchAll(/console\.(log|error)\(([\s\S]*?)\);/g)) {
     assert.doesNotMatch(m[2], /\benv\.(flow|identity)\b|secret\(|clientSecret/, `it must not print a value: ${m[2]}`);
+  }
+});
+
+// ASafariM Knowledge (learn.asafarim.site, #361): part of the full deploy next to core-api, once
+// apps/knowledge/.env.production.age is committed. Without it, a deploy must be EXACTLY what it was.
+const KNOWLEDGE_SHA = "a1".repeat(20);
+const knowledgeSite = readFileSync(path.join(root, "sites", "asafarim-os-knowledge.caddy"), "utf8");
+
+test("without apps/knowledge/.env.production.age: no Knowledge env, no knowledge profile, os-knowledge never touched, the site file unchanged", () => {
+  for (const [args, opts, site] of [
+    [[SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA], { full: true, coreApiEnv: true }, fullSite],
+    [[SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, SHA, KNOWLEDGE_SHA], { full: true, coreApiEnv: true }, fullSite],
+    [
+      [SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, FLOW_SHA],
+      { full: true, coreApiEnv: true, flowEnv: true },
+      fullSite + flowSite,
+    ],
+  ]) {
+    const r = runDeploy(args, opts);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!r.calls.some((c) => c.includes("apps/knowledge") || c.includes("os-knowledge")), r.calls.join("\n"));
+    assert.ok(!r.calls.some((c) => /^profiles=\S*knowledge/.test(c)), "the knowledge profile is off");
+    assert.equal(r.envKnowledgeWritten, false);
+    assert.equal(r.liveSite, site);
+    assert.doesNotMatch(r.liveSite ?? "", /learn\.asafarim\.site/);
+  }
+});
+
+test("with apps/knowledge/.env.production.age: decrypts and checks it, starts the knowledge profile, waits for os-knowledge, then publishes learn.asafarim.site", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, SHA, KNOWLEDGE_SHA], {
+    full: true,
+    coreApiEnv: true,
+    knowledgeEnv: true,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.calls.includes("age -d -i .age/key.txt apps/knowledge/.env.production.age"));
+  assert.equal(r.envKnowledgeWritten, true, ".env.knowledge is os-knowledge's env_file");
+  const profiled = r.calls
+    .filter((c) => c.startsWith("profiles=core,knowledge "))
+    .map((c) => c.slice("profiles=core,knowledge ".length).replace(`${compose.slice("docker ".length)} `, ""));
+  assert.deepEqual(profiled, [
+    "config -q",
+    "pull",
+    "up -d --remove-orphans",
+    "exec -T identity wget -qO- http://127.0.0.1:3000/readyz",
+    "exec -T os-core-api wget -qO- http://127.0.0.1:4020/readyz",
+    "exec -T os-knowledge wget -qO- http://127.0.0.1:3000/health/ready",
+    "exec -T os-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T breinhap-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T igs-site wget -qO- http://127.0.0.1:8080/healthz",
+    "exec -T os-docs wget -qO- http://127.0.0.1:3000/api/health",
+  ]);
+  assert.match(r.stdout, new RegExp(`:knowledge-${KNOWLEDGE_SHA}`), "the pull names the knowledge image");
+  const readyAt = r.calls.findIndex((c) =>
+    c.endsWith("exec -T os-knowledge wget -qO- http://127.0.0.1:3000/health/ready"),
+  );
+  const edgeAt = r.calls.findIndex((c) => c.startsWith("edge-deploy-site.sh"));
+  assert.ok(readyAt >= 0 && edgeAt > readyAt, r.calls.join("\n"));
+  assert.ok(r.calls.includes(`edge-deploy-site.sh asafarim-os ${r.repo}/.vps-deploy-site.caddy`), r.calls.join("\n"));
+  assert.equal(r.generatedSite, fullSite + knowledgeSite);
+  assert.equal(r.liveSite, fullSite + knowledgeSite, "the live Caddy gets the same file");
+  assert.match(r.stdout, /curl -fsS https:\/\/learn\.asafarim\.site\/health\/live/);
+});
+
+test("with Flow and Knowledge: both profiles, and the site file has Flow's block, then Knowledge's", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, FLOW_SHA, KNOWLEDGE_SHA], {
+    full: true,
+    coreApiEnv: true,
+    adminEnv: true,
+    flowEnv: true,
+    knowledgeEnv: true,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(
+    r.calls.some((c) => c.startsWith("profiles=core,admin,flow,knowledge ")),
+    r.calls.join("\n"),
+  );
+  assert.equal(r.generatedSite, fullSite + flowSite + knowledgeSite);
+  assert.equal(r.liveSite, fullSite + flowSite + knowledgeSite);
+});
+
+test("a Knowledge env with a variable missing stops the deploy before pulling, naming it and never a value", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, SHA, KNOWLEDGE_SHA], {
+    full: true,
+    coreApiEnv: true,
+    knowledgeEnv: true,
+    knowledgeEnvEmpty: true,
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /missing or empty in \.env\.knowledge: AUTH_SECRET OIDC_CLIENT_SECRET$/m);
+  assert.match(r.stderr, /node deploy\/knowledge\/new-env\.mjs/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c) || c.startsWith("edge-deploy-site.sh")), r.calls.join("\n"));
+});
+
+test("the Knowledge env without core-api's is refused before anything is pulled; --site-only never touches it", () => {
+  const r = runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, CORE_SHA, SHA, SHA, KNOWLEDGE_SHA], {
+    full: true,
+    knowledgeEnv: true,
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Knowledge needs core-api/);
+  assert.ok(!r.calls.some((c) => / (pull|up) /.test(c)));
+  assert.equal(r.envKnowledgeWritten, false);
+  const site = runDeploy(["--site-only", SHA], { coreApiEnv: true, knowledgeEnv: true });
+  assert.equal(site.status, 0, site.stderr);
+  assert.ok(!site.calls.some((c) => c.includes("apps/knowledge") || c.includes("os-knowledge")), site.calls.join("\n"));
+  assert.equal(site.envKnowledgeWritten, false);
+});
+
+test("<knowledge-image-commit> is an eighth, optional sha, checked like the others; a ninth is refused", () => {
+  assert.match(
+    runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, SHA, "abc"], { full: true }).stderr,
+    /<knowledge-image-commit> must be a full 40-character sha/,
+  );
+  assert.match(runDeploy([SHA, SHA, SITE_SHA, DOCS_SHA, SHA, SHA, SHA, SHA, SHA], { full: true }).stderr, /usage:/);
+  assert.match(code, /export KNOWLEDGE_IMAGE_TAG="\$knowledge_image_commit"/);
+  assert.ok(code.indexOf("export KNOWLEDGE_IMAGE_TAG") < code.indexOf('"${compose[@]}" config -q'));
+});
+
+test("the Knowledge example requires AUTH_SECRET and OIDC_CLIENT_SECRET; the install's two are listed commented out", () => {
+  const text = readFileSync(knowledgeExample, "utf8");
+  assert.deepEqual(text.match(/^[A-Z][A-Z0-9_]*(?==)/gm), ["AUTH_SECRET", "OIDC_CLIENT_SECRET"]);
+  assert.match(text, /^# DATABASE_URL=$/m);
+  assert.match(text, /^# ASAFARIM_REGISTRY_CREDENTIAL=$/m);
+});
+
+test("deploy/knowledge/new-env.mjs fills the Knowledge example, gives identity the same client secret, and overwrites nothing", async () => {
+  const { newEnv, writeEnv, IDENTITY_SECRET_NAME } = await import("./knowledge/new-env.mjs");
+  assert.equal(IDENTITY_SECRET_NAME, "IDENTITY_CLIENT_SECRET_KNOWLEDGE");
+  const parse = (text) =>
+    Object.fromEntries(
+      text
+        .split("\n")
+        .filter((l) => /^[A-Z]/.test(l))
+        .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
+    );
+  const generated = newEnv();
+  assert.equal(check(generated.knowledge, readFileSync(knowledgeExample, "utf8")).status, 0);
+  assert.equal(parse(generated.identity)[IDENTITY_SECRET_NAME], parse(generated.knowledge).OIDC_CLIENT_SECRET);
+  assert.ok(parse(generated.knowledge).AUTH_SECRET.length >= 32);
+
+  const dir = mkdtempSync(path.join(tmpdir(), "knowledge-new-env-"));
+  try {
+    const knowledgeFile = path.join(dir, "knowledge.env");
+    const identityFile = path.join(dir, "identity.env");
+    assert.match(writeEnv({ knowledgeFile, identityFile }), /pnpm env:decrypt:production/);
+    assert.equal(existsSync(knowledgeFile), false);
+    writeFileSync(identityFile, "IDENTITY_OIDC_JWKS=stand-in");
+    assert.equal(writeEnv({ knowledgeFile, identityFile }), undefined);
+    const env = parse(readFileSync(knowledgeFile, "utf8"));
+    const identityEnv = parse(readFileSync(identityFile, "utf8"));
+    assert.equal(identityEnv.IDENTITY_OIDC_JWKS, "stand-in", "identity's own lines are kept");
+    assert.equal(identityEnv[IDENTITY_SECRET_NAME], env.OIDC_CLIENT_SECRET);
+    assert.equal(statSync(knowledgeFile).mode & 0o777, 0o600);
+    assert.match(writeEnv({ knowledgeFile, identityFile }), new RegExp(`already has ${IDENTITY_SECRET_NAME}`));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const source = readFileSync(path.join(root, "deploy", "knowledge", "new-env.mjs"), "utf8");
+  for (const m of source.matchAll(/console\.(log|error)\(([\s\S]*?)\);/g)) {
+    assert.doesNotMatch(
+      m[2],
+      /\benv\.(knowledge|identity)\b|secret\(|clientSecret/,
+      `it must not print a value: ${m[2]}`,
+    );
   }
 });
 

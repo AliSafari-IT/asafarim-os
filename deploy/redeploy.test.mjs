@@ -427,6 +427,69 @@ test("site-only (identity not running): Flow is never looked up, even with its e
     assert.ok(!r.calls.some((c) => c.includes(":flow-")));
   }));
 
+/** ASafariM Knowledge (#361): c11 adds its encrypted env and c12 changes it, on top of core-api (and Flow if asked). */
+function withKnowledge(env, { flow = false } = {}) {
+  const base = flow ? withFlow(env) : withCoreApi(env);
+  const c11 = commit(env.src, "knowledge env", { "apps/knowledge/.env.production.age": "stand-in ciphertext" });
+  const c12 = commit(env.src, "knowledge", { "apps/knowledge/app/x.ts": "k1" });
+  git(env.src, "push", "-q", "--force", env.origin, `${c12}:refs/heads/main`);
+  return { ...base, c11, c12, published: `${base.published} knowledge-${c12}` };
+}
+
+test("Knowledge's env committed next to core-api: its newest image is the eighth sha (the sixth and seventh placeholders)", () =>
+  withSetup((env) => {
+    const e = { ...withKnowledge(env), identityRunning: "abc123" };
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.match(r.output, new RegExp(`Newest knowledge image from: ${e.c12}`));
+    assert.ok(r.calls.includes(`docker manifest inspect ghcr.io/alisafari-it/asafarim-os:knowledge-${e.c12}`));
+    assert.ok(!r.calls.some((c) => c.includes(":flow-") || c.includes(":admin-")));
+    assert.equal(
+      r.calls.at(-1),
+      `vps-deploy ${e.c12} ${env.c4} ${env.c1} ${env.c2} ${e.c6} ${e.c12} ${e.c12} ${e.c12} (HEAD ${e.c12})`,
+    );
+  }));
+
+test("Flow and Knowledge: Flow's image is the seventh sha, Knowledge's the eighth", () =>
+  withSetup((env) => {
+    const e = { ...withKnowledge(env, { flow: true }), identityRunning: "abc123" };
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.equal(
+      r.calls.at(-1),
+      `vps-deploy ${e.c12} ${env.c4} ${env.c1} ${env.c2} ${e.c6} ${e.c12} ${e.c10} ${e.c12} (HEAD ${e.c12})`,
+    );
+  }));
+
+test("Knowledge's newest image not published yet: exit code 3, naming the 'Knowledge image' workflow, nothing changed", () =>
+  withSetup((env) => {
+    const base = withKnowledge(env);
+    const r = run({
+      ...base,
+      identityRunning: "abc123",
+      published: base.published.replace(` knowledge-${base.c12}`, ""),
+    });
+    assert.equal(r.status, 3, r.output);
+    assert.match(r.output, /'Knowledge image' workflow/);
+    assert.ok(!r.calls.some((c) => c.startsWith("vps-deploy")));
+  }));
+
+test("without apps/knowledge/.env.production.age: no knowledge image is looked up", () =>
+  withSetup((env) => {
+    const e = { ...withFlow(env), identityRunning: "abc123" };
+    const r = run(e);
+    assert.equal(r.status, 0, r.output);
+    assert.ok(!r.calls.some((c) => c.includes(":knowledge-")));
+  }));
+
+test("site-only (identity not running): Knowledge is never looked up, even with its env committed", () =>
+  withSetup((env) => {
+    const site = run(withKnowledge(env));
+    assert.equal(site.status, 0, site.output);
+    assert.match(site.calls.at(-1), /^vps-deploy --site-only /);
+    assert.ok(!site.calls.some((c) => c.includes(":knowledge-")));
+  }));
+
 test("it is valid bash, runs main() on one last line, and never prints a secret", () => {
   const r = spawnSync("bash", ["-n", path.join(root, "deploy", "redeploy.sh")], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
@@ -442,6 +505,7 @@ for (const [name, variable] of [
   ["core-api", "CORE_API_IMAGE_PATHS"],
   ["admin", "ADMIN_IMAGE_PATHS"],
   ["flow", "FLOW_IMAGE_PATHS"],
+  ["knowledge", "KNOWLEDGE_IMAGE_PATHS"],
 ]) {
   test(`its list of the ${name} image's inputs is the one in .github/workflows/${name}-image.yml`, () => {
     const workflow = readFileSync(path.join(root, ".github", "workflows", `${name}-image.yml`), "utf8");

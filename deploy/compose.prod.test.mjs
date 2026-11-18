@@ -53,6 +53,7 @@ function render(
     writeFileSync(path.join(dir, ".env.core-api"), "");
     writeFileSync(path.join(dir, ".env.admin"), "");
     writeFileSync(path.join(dir, ".env.flow"), "");
+    writeFileSync(path.join(dir, ".env.knowledge"), "");
     writeFileSync(path.join(dir, ".env.nats"), "");
     mkdirSync(path.join(dir, "deploy", "core-api", "initdb"), { recursive: true });
     const run = spawnSync("docker", ["compose", "-f", "compose.prod.yml", "config", "--format", "json"], {
@@ -65,6 +66,7 @@ function render(
         CORE_API_IMAGE_TAG: "coresha",
         ADMIN_IMAGE_TAG: "adminsha",
         FLOW_IMAGE_TAG: "flowsha",
+        KNOWLEDGE_IMAGE_TAG: "knowledgesha",
         COMPOSE_PROFILES: "",
         ...env,
       },
@@ -765,6 +767,105 @@ test("flow.asafarim.site is in neither the full nor the site-only file: only a d
   // Appended to the full file, the two still define each host once.
   const both = `${activeSite}\n${activeFlowSite}`;
   const hosts = [...both.matchAll(/^([a-z0-9.*-]+)\s*\{/gm)].map((m) => m[1]);
+  assert.equal(new Set(hosts).size, hosts.length, hosts.join());
+});
+
+// ---- ASafariM Knowledge (learn.asafarim.site, #361): its own "knowledge" profile, on top of "core", turned on once
+// apps/knowledge/.env.production.age is committed. Its site block is a separate file the deploy appends only then.
+const knowledgeManifest = JSON.parse(readFileSync(path.join(root, "apps", "knowledge", "platform.app.json"), "utf8"));
+const activeKnowledgeSite = readFileSync(path.join(root, "sites", "asafarim-os-knowledge.caddy"), "utf8")
+  .split("\n")
+  .filter((l) => !l.trim().startsWith("#"))
+  .join("\n");
+const knowledgeRendered = render({
+  IMAGE_TAG: "testsha",
+  SITE_IMAGE_TAG: "sitesha",
+  DOCS_IMAGE_TAG: "docssha",
+  CORE_API_IMAGE_TAG: "coresha",
+  KNOWLEDGE_IMAGE_TAG: "knowledgesha",
+  COMPOSE_PROFILES: "core,knowledge",
+});
+assert.equal(knowledgeRendered.status, 0, knowledgeRendered.stderr);
+const knowledgeConfig = JSON.parse(knowledgeRendered.stdout);
+const knowledge = knowledgeConfig.services["os-knowledge"];
+
+test("os-knowledge is only in the knowledge profile, and the profile adds nothing else", () => {
+  assert.deepEqual(knowledge.profiles, ["knowledge"]);
+  for (const c of [config, coreConfig, adminConfig, flowConfig]) assert.ok(!("os-knowledge" in c.services));
+  assert.deepEqual(
+    Object.keys(knowledgeConfig.services).sort(),
+    [...Object.keys(coreConfig.services), "os-knowledge"].sort(),
+  );
+});
+
+test("os-knowledge's image tag comes from KNOWLEDGE_IMAGE_TAG, and there is no default", () => {
+  assert.equal(knowledge.image, "ghcr.io/alisafari-it/asafarim-os:knowledge-knowledgesha");
+  assert.equal(knowledgeManifest.runtime.image, "knowledge");
+  const unset = render({
+    IMAGE_TAG: "t",
+    SITE_IMAGE_TAG: "s",
+    DOCS_IMAGE_TAG: "d",
+    CORE_API_IMAGE_TAG: "c",
+    KNOWLEDGE_IMAGE_TAG: "",
+    COMPOSE_PROFILES: "core,knowledge",
+  });
+  assert.notEqual(unset.status, 0, "a deploy without KNOWLEDGE_IMAGE_TAG must fail, not pull knowledge-");
+  assert.match(unset.stderr, /KNOWLEDGE_IMAGE_TAG/);
+});
+
+test("os-knowledge is hardened like os-flow: read_only, no capabilities, non-root tmpfs, the manifest's limits, a healthcheck", () => {
+  assert.equal(knowledge.read_only, true);
+  assert.deepEqual(knowledge.cap_drop, ["ALL"]);
+  assert.ok(knowledge.security_opt.includes("no-new-privileges:true"));
+  assert.equal(knowledgeManifest.runtime.resources.memory, "256m");
+  assert.equal(knowledge.mem_limit, String(256 * 1024 * 1024));
+  assert.equal(knowledge.cpus, knowledgeManifest.runtime.resources.cpus);
+  assert.ok(knowledge.tmpfs?.some((t) => t.startsWith("/app/apps/knowledge/.next/cache:") && t.includes("uid=1000")));
+  assert.ok(
+    knowledge.healthcheck?.test?.some((a) =>
+      a.endsWith(`:${knowledgeManifest.runtime.port}${knowledgeManifest.runtime.health.live}`),
+    ),
+  );
+  assert.ok(!knowledge.ports || knowledge.ports.length === 0, "os-knowledge publishes no port");
+});
+
+test("os-knowledge reads its secrets from ../.env.knowledge only; client knowledge, identity and core-api in the environment", () => {
+  assert.match(composeText, /os-knowledge:[\s\S]*?env_file:\n\s+- \.\.\/\.env\.knowledge\n/);
+  assert.equal(knowledge.environment.ASAFARIM_APP_ID, knowledgeManifest.id);
+  assert.equal(knowledge.environment.OIDC_ISSUER, knowledgeConfig.services.identity.environment.IDENTITY_ISSUER);
+  assert.equal(knowledge.environment.CORE_API_URL, "http://os-core-api:4020");
+  for (const name of ["AUTH_SECRET", "OIDC_CLIENT_SECRET", "DATABASE_URL", "ASAFARIM_REGISTRY_CREDENTIAL"]) {
+    assert.ok(!(name in knowledge.environment), `${name} is a secret: it belongs in .env.knowledge`);
+  }
+});
+
+test("os-knowledge is on edge_net as os-knowledge and on os_core, never os_net; core-api polls it there", () => {
+  assert.deepEqual(networkNames(knowledge), ["edge_net", "os_core"]);
+  assert.deepEqual(knowledge.networks.edge_net.aliases, ["os-knowledge"]);
+  assert.ok("os-core-api" in knowledge.depends_on);
+  assert.equal(coreApi.environment.OS_APP_KNOWLEDGE_UPSTREAM, `os-knowledge:${knowledgeManifest.runtime.port}`);
+});
+
+test("the Knowledge site file is ONE block: the manifest's host → os-knowledge on the manifest's port, public (indexable)", () => {
+  const sites = [...activeKnowledgeSite.matchAll(/^([a-z0-9.*-]+)(?:, [a-z0-9.*-]+)*\s*\{/gm)].map((m) => m[1]);
+  assert.deepEqual(sites, [knowledgeManifest.domains.primary]);
+  assert.equal(knowledgeManifest.domains.primary, "learn.asafarim.site");
+  const block = siteBlock("learn.asafarim.site", activeKnowledgeSite);
+  const upstream = /reverse_proxy ([\w-]+):(\d+)/.exec(block);
+  assert.ok(upstream);
+  assert.ok(knowledge.networks.edge_net.aliases.includes(upstream[1]));
+  assert.equal(Number(upstream[2]), knowledgeManifest.runtime.port);
+  assert.match(block, /Strict-Transport-Security/);
+  assert.match(block, /X-Frame-Options DENY/);
+  assert.doesNotMatch(block, /X-Robots-Tag/, "public articles may be indexed; the studio sends its own noindex");
+  assert.doesNotMatch(block, /Content-Security-Policy/);
+});
+
+test("learn.asafarim.site is in neither the full nor the site-only file, and the appended files define each host once", () => {
+  assert.doesNotMatch(activeSite, /learn\.asafarim\.site|os-knowledge/);
+  assert.doesNotMatch(activeSiteOnly, /learn\.asafarim\.site|os-knowledge/);
+  const all = `${activeSite}\n${activeFlowSite}\n${activeKnowledgeSite}`;
+  const hosts = [...all.matchAll(/^([a-z0-9.*-]+)\s*\{/gm)].map((m) => m[1]);
   assert.equal(new Set(hosts).size, hosts.length, hosts.join());
 });
 

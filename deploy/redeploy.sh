@@ -46,6 +46,12 @@
 # way (the paths of .github/workflows/flow-image.yml), its image must be published too, and it is passed as
 # vps-deploy.sh's seventh sha (which then starts os-flow and publishes flow.asafarim.site). Without the Admin console
 # the sixth sha is <commit> then, a placeholder vps-deploy.sh never uses. Without that file nothing changes.
+#
+# ASafariM Knowledge: next to core-api, once the commit also has apps/knowledge/.env.production.age,
+# <knowledge-image-commit> is found the same way (the paths of .github/workflows/knowledge-image.yml), its image must be
+# published too, and it is passed as vps-deploy.sh's eighth sha (which then starts os-knowledge and publishes
+# learn.asafarim.site). A missing Admin console or Flow sha before it is <commit>, a placeholder vps-deploy.sh never
+# uses. Without that file nothing changes.
 # It holds no secret and prints none. Rollback: deploy/README.md.
 set -euo pipefail
 
@@ -61,6 +67,8 @@ CORE_API_IMAGE_PATHS=("core/core-api/**" "packages/**" "package.json" "pnpm-lock
 ADMIN_IMAGE_PATHS=("core/admin/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/admin-image.yml")
 # The inputs of the flow image: the same list as `on.push.paths` in .github/workflows/flow-image.yml.
 FLOW_IMAGE_PATHS=("apps/flow/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/flow-image.yml")
+# The inputs of the knowledge image: the same list as `on.push.paths` in .github/workflows/knowledge-image.yml.
+KNOWLEDGE_IMAGE_PATHS=("apps/knowledge/**" "packages/**" "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" ".github/workflows/knowledge-image.yml")
 IMAGE_REPO="${REDEPLOY_IMAGE_REPO:-ghcr.io/alisafari-it/asafarim-os}"
 
 # Everything lives in main(), called on ONE line at the very end: the reset in step 4 can replace this very file
@@ -159,6 +167,15 @@ main() {
     log "Flow is part of this deploy. Newest flow image from: ${flow_commit}"
   fi
 
+  # ASafariM Knowledge: part of the deploy next to core-api, once its encrypted env is committed (vps-deploy.sh decides
+  # the same way).
+  local knowledge_commit=""
+  if [[ -n "$core_api_commit" ]] && git cat-file -e "${commit}:apps/knowledge/.env.production.age" 2>/dev/null; then
+    knowledge_commit="$(git log -1 --format=%H "$commit" -- "${KNOWLEDGE_IMAGE_PATHS[@]}")"
+    [[ "$knowledge_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "no commit on origin/main changed the knowledge image's inputs."
+    log "ASafariM Knowledge is part of this deploy. Newest knowledge image from: ${knowledge_commit}"
+  fi
+
   # 3. Never deploy an older image than the newest one, quietly.
   local image workflow sha
   local -a images=("${IMAGE_REPO}:site-${site_commit}" "${IMAGE_REPO}:docs-${docs_commit}")
@@ -166,6 +183,7 @@ main() {
   [[ -n "$core_api_commit" ]] && images+=("${IMAGE_REPO}:core-api-${core_api_commit}")
   [[ -n "$admin_commit" ]] && images+=("${IMAGE_REPO}:admin-${admin_commit}")
   [[ -n "$flow_commit" ]] && images+=("${IMAGE_REPO}:flow-${flow_commit}")
+  [[ -n "$knowledge_commit" ]] && images+=("${IMAGE_REPO}:knowledge-${knowledge_commit}")
   for image in "${images[@]}"; do
     sha="${image##*-}"
     workflow="Site image"
@@ -174,6 +192,7 @@ main() {
     [[ "${image##*:}" == core-api-* ]] && workflow="Core API image"
     [[ "${image##*:}" == admin-* ]] && workflow="Admin image"
     [[ "${image##*:}" == flow-* ]] && workflow="Flow image"
+    [[ "${image##*:}" == knowledge-* ]] && workflow="Knowledge image"
     if ! docker manifest inspect "$image" >/dev/null 2>&1; then
       # Exit code 3, not 1: "not published (yet)" is the one failure the Deploy workflow waits out.
       echo "FATAL: ${image} is not published (yet). The '${workflow}' workflow may still be building it: check its run for ${sha:0:12} on GitHub, then run this again. If it failed there, fix that first. (If the build is done, the VPS may not be able to reach ghcr.io: run 'docker login ghcr.io' if the package is private.) Nothing changed." >&2
@@ -190,6 +209,14 @@ main() {
   if [[ -n "$flow_commit" ]]; then
     [[ -n "$admin_commit" ]] || deploy_args+=("$commit")
     deploy_args+=("$flow_commit")
+  fi
+  # Knowledge's sha is the eighth: a missing Admin console or Flow sha before it is a placeholder (<commit>).
+  if [[ -n "$knowledge_commit" ]]; then
+    if [[ -z "$flow_commit" ]]; then
+      [[ -n "$admin_commit" ]] || deploy_args+=("$commit")
+      deploy_args+=("$commit")
+    fi
+    deploy_args+=("$knowledge_commit")
   fi
   if [[ "$dry_run" == true ]]; then
     log "Dry run. It would run: deploy/vps-deploy.sh ${deploy_args[*]}"

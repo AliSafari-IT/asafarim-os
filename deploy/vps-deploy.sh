@@ -6,7 +6,7 @@
 # images are pinned in deploy/compose.prod.yml, not passed here.
 # Run by the OWNER, from the repository folder (normally /var/repos/asafarim-os). Nothing else runs it.
 #
-#   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>] [<flow-image-commit>]
+#   deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>] [<flow-image-commit>] [<knowledge-image-commit>]
 #   deploy/vps-deploy.sh --site-only <commit> [<site-image-commit>] [<docs-image-commit>]
 #
 #   <commit>        the repository state to deploy, as a full 40-character sha: this script, the
@@ -24,6 +24,8 @@
 #                   workflow (#175). Used only when the console is part of the deploy (below).
 #   <flow-image-commit>  the commit whose Flow image to run (default: <commit>), with the "Flow image" workflow. Used
 #                   only when Flow is part of the deploy (below).
+#   <knowledge-image-commit>  the commit whose ASafariM Knowledge image to run (default: <commit>), with the "Knowledge
+#                   image" workflow. Used only when Knowledge is part of the deploy (below).
 #   --site-only     the landing pages and docs, without identity (#97, #83): steps 1, 2 and 3 for the docs env
 #                   only, 4 (edge_net and the edge script only), 5 and 6 for os-site, os-docs, breinhap-site and igs-site
 #                   only, then
@@ -62,6 +64,12 @@
 # sites/asafarim-os.caddy with sites/asafarim-os-flow.caddy appended (written to .vps-deploy-site.caddy). Without that
 # file the deploy is exactly what it was before: no os-flow, and sites/asafarim-os.caddy unchanged. Production has no
 # event bus yet, so Flow runs without one (no ASAFARIM_NATS_URL).
+#
+# ASafariM Knowledge (learn.asafarim.site, os-knowledge; full mode only): the same, gated on
+# apps/knowledge/.env.production.age: decrypted into .env.knowledge, apps/knowledge/.env.production.example's names
+# checked, os-knowledge started (profile "knowledge") and its /health/ready awaited; step 7 then appends
+# sites/asafarim-os-knowledge.caddy to the published file (after Flow's block when Flow is deployed too). Without that
+# file nothing about Knowledge changes.
 # The event bus (os-nats, asafarim-os#259; full mode only): when core-api is part of the deploy and the commit has
 # core/nats/.env.production.age, the same steps decrypt it into .env.nats, check core/nats/.env.production.example's
 # names, start os-nats (profile "nats", on top of "core"; on os_core only, no published port) and wait for its health.
@@ -79,8 +87,8 @@ set -euo pipefail
 # Everything lives in main(), called on ONE line at the very end. Step 1 resets this checkout, which can
 # replace this very file while bash is still reading it; bash has parsed all of main() by then.
 main() {
-  local usage="usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>] [<flow-image-commit>] | --site-only <commit> [<site-image-commit>] [<docs-image-commit>]"
-  local site_only=false with_core_api=false with_admin=false with_flow=false with_nats=false
+  local usage="usage: deploy/vps-deploy.sh <commit> [<image-commit>] [<site-image-commit>] [<docs-image-commit>] [<core-api-image-commit>] [<admin-image-commit>] [<flow-image-commit>] [<knowledge-image-commit>] | --site-only <commit> [<site-image-commit>] [<docs-image-commit>]"
+  local site_only=false with_core_api=false with_admin=false with_flow=false with_knowledge=false with_nats=false
   if [[ "${1:-}" == "--site-only" ]]; then
     site_only=true
     shift
@@ -89,7 +97,7 @@ main() {
     # (it defaults to <commit> and is never pulled).
     set -- "${1:-}" "" "${2:-}" "${3:-}"
   fi
-  (($# <= 7)) || { echo "FATAL: ${usage}" >&2; exit 1; }
+  (($# <= 8)) || { echo "FATAL: ${usage}" >&2; exit 1; }
   local commit="${1:?$usage}"
   local image_commit="${2:-$commit}"
   local site_image_commit="${3:-$commit}"
@@ -97,6 +105,7 @@ main() {
   local core_api_image_commit="${5:-$commit}"
   local admin_image_commit="${6:-$commit}"
   local flow_image_commit="${7:-$commit}"
+  local knowledge_image_commit="${8:-$commit}"
 
   local repo_dir
   repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -134,6 +143,7 @@ main() {
   [[ "$core_api_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<core-api-image-commit> must be a full 40-character sha, got '${core_api_image_commit}'."
   [[ "$admin_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<admin-image-commit> must be a full 40-character sha, got '${admin_image_commit}'."
   [[ "$flow_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<flow-image-commit> must be a full 40-character sha, got '${flow_image_commit}'."
+  [[ "$knowledge_image_commit" =~ ^[0-9a-f]{40}$ ]] || fatal "<knowledge-image-commit> must be a full 40-character sha, got '${knowledge_image_commit}'."
   # age in both modes: os-docs's env (AUTH_SECRET) is decrypted by a site-only deploy too.
   for tool in git age docker flock; do
     command -v "$tool" >/dev/null 2>&1 || fatal "'${tool}' is not installed on this host."
@@ -238,6 +248,24 @@ main() {
       log "No apps/flow/.env.production.age in this commit: Flow is not part of this deploy."
     fi
 
+    # ASafariM Knowledge joins once its encrypted env is committed, and only next to core-api (its permissions and its
+    # database).
+    if [[ -f apps/knowledge/.env.production.age ]]; then
+      [[ "$with_core_api" == true ]] \
+        || fatal "apps/knowledge/.env.production.age is in this commit but core/core-api/.env.production.age is not: Knowledge needs core-api."
+      with_knowledge=true
+      log "Decrypting apps/knowledge/.env.production.age..."
+      ( umask 077 && age -d -i .age/key.txt apps/knowledge/.env.production.age > .env.knowledge.tmp ) \
+        || { rm -f .env.knowledge.tmp; fatal "age could not decrypt apps/knowledge/.env.production.age."; }
+      mv -f .env.knowledge.tmp .env.knowledge
+      chmod 600 .env.knowledge
+      log "Checking the Knowledge environment (names only)..."
+      require_env_vars .env.knowledge apps/knowledge/.env.production.example \
+        || fatal "fill the variables named above in apps/knowledge/.env.production (node deploy/knowledge/new-env.mjs writes the first ones), re-encrypt it, commit the .age file, and deploy that commit."
+    else
+      log "No apps/knowledge/.env.production.age in this commit: ASafariM Knowledge is not part of this deploy."
+    fi
+
     # The event bus joins once its encrypted env is committed, and only next to core-api (it answers the bus's auth callout).
     if [[ -f core/nats/.env.production.age ]]; then
       [[ "$with_core_api" == true ]] \
@@ -271,10 +299,12 @@ main() {
   export CORE_API_IMAGE_TAG="$core_api_image_commit"
   export ADMIN_IMAGE_TAG="$admin_image_commit"
   export FLOW_IMAGE_TAG="$flow_image_commit"
+  export KNOWLEDGE_IMAGE_TAG="$knowledge_image_commit"
   if [[ "$with_core_api" == true ]]; then
     local profiles=core
     [[ "$with_admin" == true ]] && profiles+=",admin"
     [[ "$with_flow" == true ]] && profiles+=",flow"
+    [[ "$with_knowledge" == true ]] && profiles+=",knowledge"
     [[ "$with_nats" == true ]] && profiles+=",nats"
     export COMPOSE_PROFILES="$profiles"
   else
@@ -305,9 +335,9 @@ main() {
   else
     log "Checking the compose file..."
     "${compose[@]}" config -q
-    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")$([[ "$with_admin" == true ]] && echo ", :admin-${ADMIN_IMAGE_TAG}")$([[ "$with_flow" == true ]] && echo ", :flow-${FLOW_IMAGE_TAG}")$([[ "$with_nats" == true ]] && echo " and nats:2.11-alpine")..."
+    log "Pulling ghcr.io/alisafari-it/asafarim-os:identity-${IMAGE_TAG}, :site-${SITE_IMAGE_TAG} and :docs-${DOCS_IMAGE_TAG}$([[ "$with_core_api" == true ]] && echo ", :core-api-${CORE_API_IMAGE_TAG} and postgres:16-alpine")$([[ "$with_admin" == true ]] && echo ", :admin-${ADMIN_IMAGE_TAG}")$([[ "$with_flow" == true ]] && echo ", :flow-${FLOW_IMAGE_TAG}")$([[ "$with_knowledge" == true ]] && echo ", :knowledge-${KNOWLEDGE_IMAGE_TAG}")$([[ "$with_nats" == true ]] && echo " and nats:2.11-alpine")..."
     if ! pull_with_retry "${compose[@]}" pull; then
-      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image, ${ADMIN_IMAGE_TAG} no admin image or ${FLOW_IMAGE_TAG} no flow image (see the 'Identity image', 'Site image', 'Docs image', 'Core API image', 'Admin image' and 'Flow image' workflow runs), or a landing page image pinned in deploy/compose.prod.yml is not published (the 'Site image' run in AliSafari-IT/breinhap, or the 'Landing page image' run in AliSafari-IT/igs-pharma)."
+      fatal "the pull failed. If the package is private, run 'docker login ghcr.io' on this host first; if an image does not exist, ${IMAGE_TAG} has no identity image, ${SITE_IMAGE_TAG} no site image, ${DOCS_IMAGE_TAG} no docs image or ${CORE_API_IMAGE_TAG} no core-api image, ${ADMIN_IMAGE_TAG} no admin image, ${FLOW_IMAGE_TAG} no flow image or ${KNOWLEDGE_IMAGE_TAG} no knowledge image (see the 'Identity image', 'Site image', 'Docs image', 'Core API image', 'Admin image', 'Flow image' and 'Knowledge image' workflow runs), or a landing page image pinned in deploy/compose.prod.yml is not published (the 'Site image' run in AliSafari-IT/breinhap, or the 'Landing page image' run in AliSafari-IT/igs-pharma)."
     fi
     log "Starting the stack..."
     "${compose[@]}" up -d --remove-orphans
@@ -394,6 +424,22 @@ main() {
       fi
       log "os-flow is ready."
     fi
+
+    if [[ "$with_knowledge" == true ]]; then
+      log "Waiting for os-knowledge's /health/ready..."
+      local knowledge_ready=false
+      for _ in $(seq 1 30); do
+        if "${compose[@]}" exec -T os-knowledge wget -qO- http://127.0.0.1:3000/health/ready >/dev/null 2>&1; then
+          knowledge_ready=true
+          break
+        fi
+        sleep 2
+      done
+      if [[ "$knowledge_ready" != true ]]; then
+        fatal "os-knowledge did not become ready within 60s. The site was NOT published. Look at: ${compose[*]} logs --tail 50 os-knowledge"
+      fi
+      log "os-knowledge is ready."
+    fi
   fi
 
   # os-site (asafarim.site) is static files: ready as soon as nginx answers /healthz.
@@ -461,9 +507,13 @@ main() {
   local site_file=sites/asafarim-os.caddy
   if [[ "$site_only" == true ]]; then
     site_file=sites/asafarim-os-site.caddy
-  elif [[ "$with_flow" == true ]]; then
-    # flow.asafarim.site only now that os-flow runs and is ready: the full file with the Flow block appended.
-    cat sites/asafarim-os.caddy sites/asafarim-os-flow.caddy > .vps-deploy-site.caddy.tmp
+  elif [[ "$with_flow" == true || "$with_knowledge" == true ]]; then
+    # flow.asafarim.site and learn.asafarim.site only now that their containers run and are ready: the full file with
+    # each one's block appended, Flow's first.
+    local -a site_parts=(sites/asafarim-os.caddy)
+    [[ "$with_flow" == true ]] && site_parts+=(sites/asafarim-os-flow.caddy)
+    [[ "$with_knowledge" == true ]] && site_parts+=(sites/asafarim-os-knowledge.caddy)
+    cat "${site_parts[@]}" > .vps-deploy-site.caddy.tmp
     mv -f .vps-deploy-site.caddy.tmp .vps-deploy-site.caddy
     site_file=.vps-deploy-site.caddy
   fi
@@ -480,7 +530,7 @@ main() {
   if [[ "$site_only" == true ]]; then
     log "Done. Check: curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health && curl -fsSI https://breinhap.asafarim.site/ && curl -fsSI https://igs.asafarim.site/"
   else
-    log "Done. Check: curl -fsS https://id.asafarim.site/.well-known/openid-configuration && curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health && curl -fsSI https://breinhap.asafarim.site/ && curl -fsSI https://igs.asafarim.site/$([[ "$with_flow" == true ]] && echo " && curl -fsS https://flow.asafarim.site/health/live")"
+    log "Done. Check: curl -fsS https://id.asafarim.site/.well-known/openid-configuration && curl -fsSI https://asafarim.site/ && curl -fsS https://docs.asafarim.site/api/health && curl -fsSI https://breinhap.asafarim.site/ && curl -fsSI https://igs.asafarim.site/$([[ "$with_flow" == true ]] && echo " && curl -fsS https://flow.asafarim.site/health/live")$([[ "$with_knowledge" == true ]] && echo " && curl -fsS https://learn.asafarim.site/health/live")"
   fi
 }
 

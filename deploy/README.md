@@ -8,26 +8,29 @@ The production stack of ASafariM OS: the identity service and its own Redis, sin
 every green push to main ([Automatic deploy](#automatic-deploy)); identity's full deploy stays **by hand**. Nothing here
 holds a plaintext secret.
 
-| File                            | What it is                                                                                                                                |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `deploy/compose.prod.yml`       | `identity`, `os-redis`, `os-site`, `os-docs`, `breinhap-site` and `igs-site`, compose project `asafarim-os`.                              |
-| `deploy/vps-deploy.sh`          | The deploy. Run it from the repository folder on the VPS.                                                                                 |
-| `deploy/redeploy.sh`            | `pnpm redeploy`: redeploy the landing page and docs with the newest builds, with no shas to look up.                                      |
-| `deploy/ci-deploy.sh`           | The one command the Deploy workflow's SSH key may run (`deploy <sha>`), as a forced command. It hands over to `redeploy.sh <sha>`.        |
-| `.github/workflows/deploy.yml`  | The Deploy workflow: after CI passes on main, wait for the images, then `deploy <sha>` over SSH.                                          |
-| `deploy/lib/live-caddy.sh`      | `--site-only` before the edge cutover: install the site file for the Caddy that serves 443 today.                                         |
-| `deploy/lib/env-check.sh`       | The check that every variable is filled, by name, never by value.                                                                         |
-| `deploy/rollback.caddy`         | An empty site file: publishing it takes this stack's hosts off the edge.                                                                  |
-| `sites/asafarim-os.caddy`       | This stack's site file: `id.asafarim.site` → `os-identity:3000`, `asafarim.site` → `os-site:8080`, `docs.asafarim.site` → `os-docs:3000`. |
-| `sites/asafarim-os-site.caddy`  | The site-only file (`--site-only`): `asafarim.site` → `os-site:8080`, `docs.asafarim.site` → `os-docs:3000`, no `id.asafarim.site`.       |
-| `apps/docs/.env.production.age` | `os-docs`'s secrets, encrypted (today `AUTH_SECRET` only). Decrypted on the VPS into `.env.docs` (mode 600, git-ignored).                 |
-| `sites/asafarim-os-flow.caddy`  | `flow.asafarim.site` → `os-flow:3000`. Appended to the full site file **only** by a deploy with Flow ([below](#flowasafarimsite)).        |
-| `apps/flow/.env.production.age` | **Not committed yet.** `os-flow`'s secrets; committing it is what turns Flow on. Decrypted on the VPS into `.env.flow`.                   |
-| `deploy/flow/new-env.mjs`       | Writes `apps/flow/.env.production` (and identity's `IDENTITY_CLIENT_SECRET_FLOW`) with generated secrets.                                 |
-| `deploy/nats/nats.conf`         | `os-nats`'s config: the auth callout and core-api's one login, no anonymous way in ([below](#the-event-bus-os-nats)).                     |
-| `core/nats/.env.production.age` | **Not committed yet.** `os-nats`'s two values; committing it is what turns the bus on. Decrypted on the VPS into `.env.nats`.             |
-| `deploy/nats/new-env.mjs`       | Writes `core/nats/.env.production` and core-api's side of the same login, with a generated key and password.                              |
-| `deploy/identity/clients.json`  | **Not in git.** The client config you put there (below).                                                                                  |
+| File                                 | What it is                                                                                                                                |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy/compose.prod.yml`            | `identity`, `os-redis`, `os-site`, `os-docs`, `breinhap-site` and `igs-site`, compose project `asafarim-os`.                              |
+| `deploy/vps-deploy.sh`               | The deploy. Run it from the repository folder on the VPS.                                                                                 |
+| `deploy/redeploy.sh`                 | `pnpm redeploy`: redeploy the landing page and docs with the newest builds, with no shas to look up.                                      |
+| `deploy/ci-deploy.sh`                | The one command the Deploy workflow's SSH key may run (`deploy <sha>`), as a forced command. It hands over to `redeploy.sh <sha>`.        |
+| `.github/workflows/deploy.yml`       | The Deploy workflow: after CI passes on main, wait for the images, then `deploy <sha>` over SSH.                                          |
+| `deploy/lib/live-caddy.sh`           | `--site-only` before the edge cutover: install the site file for the Caddy that serves 443 today.                                         |
+| `deploy/lib/env-check.sh`            | The check that every variable is filled, by name, never by value.                                                                         |
+| `deploy/rollback.caddy`              | An empty site file: publishing it takes this stack's hosts off the edge.                                                                  |
+| `sites/asafarim-os.caddy`            | This stack's site file: `id.asafarim.site` → `os-identity:3000`, `asafarim.site` → `os-site:8080`, `docs.asafarim.site` → `os-docs:3000`. |
+| `sites/asafarim-os-site.caddy`       | The site-only file (`--site-only`): `asafarim.site` → `os-site:8080`, `docs.asafarim.site` → `os-docs:3000`, no `id.asafarim.site`.       |
+| `apps/docs/.env.production.age`      | `os-docs`'s secrets, encrypted (today `AUTH_SECRET` only). Decrypted on the VPS into `.env.docs` (mode 600, git-ignored).                 |
+| `sites/asafarim-os-flow.caddy`       | `flow.asafarim.site` → `os-flow:3000`. Appended to the full site file **only** by a deploy with Flow ([below](#flowasafarimsite)).        |
+| `apps/flow/.env.production.age`      | **Not committed yet.** `os-flow`'s secrets; committing it is what turns Flow on. Decrypted on the VPS into `.env.flow`.                   |
+| `sites/asafarim-os-knowledge.caddy`  | `learn.asafarim.site` → `os-knowledge:3000`. Appended **only** by a deploy with Knowledge ([below](#learnasafarimsite)).                  |
+| `apps/knowledge/.env.production.age` | **Not committed yet.** `os-knowledge`'s secrets; committing it is what turns Knowledge on. Decrypted into `.env.knowledge`.               |
+| `deploy/knowledge/new-env.mjs`       | Writes `apps/knowledge/.env.production` (and identity's `IDENTITY_CLIENT_SECRET_KNOWLEDGE`) with generated secrets.                       |
+| `deploy/flow/new-env.mjs`            | Writes `apps/flow/.env.production` (and identity's `IDENTITY_CLIENT_SECRET_FLOW`) with generated secrets.                                 |
+| `deploy/nats/nats.conf`              | `os-nats`'s config: the auth callout and core-api's one login, no anonymous way in ([below](#the-event-bus-os-nats)).                     |
+| `core/nats/.env.production.age`      | **Not committed yet.** `os-nats`'s two values; committing it is what turns the bus on. Decrypted on the VPS into `.env.nats`.             |
+| `deploy/nats/new-env.mjs`            | Writes `core/nats/.env.production` and core-api's side of the same login, with a generated key and password.                              |
+| `deploy/identity/clients.json`       | **Not in git.** The client config you put there (below).                                                                                  |
 
 ## docs.asafarim.site
 
@@ -126,6 +129,55 @@ image" workflow (`apps/flow/Dockerfile`), which smoke-tests it before publishing
    `COMPOSE_PROFILES=core,flow IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback CORE_API_IMAGE_TAG=rollback ADMIN_IMAGE_TAG=rollback FLOW_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml rm -sf os-flow`.
    Flow's database on `os-postgres` stays. To run an **earlier Flow image** instead, deploy by hand with that image's
    commit as `vps-deploy.sh`'s seventh sha.
+
+## learn.asafarim.site
+
+`os-knowledge` runs ASafariM Knowledge (`apps/knowledge`, #354): published articles for everyone, and the studio for
+holders of `knowledge.author` / `knowledge.editor`. It is **off until `apps/knowledge/.env.production.age` is
+committed**, the same gate as Flow's: without that file a deploy has no `os-knowledge`, no `knowledge` profile, and the
+published site file is what it was before. With it, the full deploy decrypts it into `.env.knowledge`, checks the
+names `apps/knowledge/.env.production.example` lists, turns the `knowledge` profile on next to `core`, waits up to 60
+seconds for `os-knowledge`'s `/health/ready`, and only then appends `sites/asafarim-os-knowledge.caddy` (after Flow's
+block) to the published site file. `deploy/redeploy.sh` then also picks the newest "Knowledge image" (`knowledge-<sha>`)
+and passes it as `vps-deploy.sh`'s eighth sha.
+
+`os-knowledge` is hardened like `os-flow` (read-only root, no capabilities, the `node` user, the manifest's 256 MB and
+0.5 CPU, a healthcheck on `/health/live`), on `edge_net` as `os-knowledge` and on `os_core`. Its database is on
+`os-postgres`, created by core-api's install. The site block sends HSTS and the usual headers but no `X-Robots-Tag`:
+public articles may be indexed; the studio sends its own `noindex` and `no-store`.
+
+**For the owner, in order** (unlike Flow, the install comes first, so one env pull request carries every value):
+
+1. **DNS.** `dig +short learn.asafarim.site` answers the same address as `dig +short asafarim.site`.
+2. **The identity client.** Add the `knowledge` client to the VPS's `deploy/identity/clients.json` (not in git):
+   ```json
+   {
+     "client_id": "knowledge",
+     "primary_domain": "learn.asafarim.site",
+     "redirect_uris": ["https://learn.asafarim.site/api/auth/callback/asafarim"],
+     "post_logout_redirect_uris": ["https://learn.asafarim.site/"],
+     "client_secret_env": "IDENTITY_CLIENT_SECRET_KNOWLEDGE"
+   }
+   ```
+3. **The install**, on the VPS in `/var/repos/asafarim-os` once this commit is there: `deploy/core-api/admin.sh install
+knowledge`. It writes the one-time credential and database URL to `.env.core-api-install-knowledge` (mode 600),
+   never to the screen.
+4. **The env file.** On your PC: `pnpm env:decrypt:production`, then `node deploy/knowledge/new-env.mjs` (writes
+   `apps/knowledge/.env.production` with `AUTH_SECRET` and `OIDC_CLIENT_SECRET`, and adds the same client secret to
+   `core/identity/.env.production` as `IDENTITY_CLIENT_SECRET_KNOWLEDGE`; it refuses to overwrite either). Append the
+   install file's two lines (`DATABASE_URL`, `ASAFARIM_REGISTRY_CREDENTIAL`), uncomment both names in
+   `apps/knowledge/.env.production.example`, `pnpm env:encrypt:production`, and merge **only**
+   `apps/knowledge/.env.production.age`, `core/identity/.env.production.age` and the example with a pull request.
+5. **After the automatic deploy:** `deploy/core-api/admin.sh activate knowledge`; Knowledge registers on its next start
+   (it retries), which creates its roles. Then grant authors explicitly, every `core.admin` holder
+   (`deploy/core-api/admin.sh grant knowledge.author <account id>`, or the Admin console). There is no automatic
+   mapping yet (#355).
+6. **Check:** `curl -fsS https://learn.asafarim.site/health/live` answers `{"ok":true,"app":"knowledge",...}`;
+   <https://learn.asafarim.site> lists published articles; `/studio` asks for a sign-in.
+7. **Rollback.** Revert the commit that added `apps/knowledge/.env.production.age` and let it deploy (the site file loses
+   `learn.asafarim.site`), then
+   `COMPOSE_PROFILES=core,knowledge IMAGE_TAG=rollback SITE_IMAGE_TAG=rollback DOCS_IMAGE_TAG=rollback CORE_API_IMAGE_TAG=rollback ADMIN_IMAGE_TAG=rollback FLOW_IMAGE_TAG=rollback KNOWLEDGE_IMAGE_TAG=rollback docker compose -p asafarim-os -f deploy/compose.prod.yml rm -sf os-knowledge`.
+   The database on `os-postgres` stays.
 
 ## The event bus (os-nats)
 
