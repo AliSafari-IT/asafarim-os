@@ -9,10 +9,11 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.1.4",
+  version: "0.1.5",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
-  // Proposed, not allocated: only the dev gateway is generated from this. No production route yet.
+  // Live since #361. The dev gateway is generated from this; production routes it through
+  // sites/asafarim-os-knowledge.caddy.
   domains: {
     primary: "learn.asafarim.site",
   },
@@ -80,6 +81,14 @@ export default defineApp({
       { label: "Studio", href: "/studio" },
     ],
     status: "active",
-    // No launcher tile until the app is deployed at its own address (a later issue).
+    launcher: {
+      description: "Technical articles and learning from ASafariM: read what has been published, write in the studio.",
+      meta: "learn.asafarim.site",
+      // Public: published articles are for everyone, so every signed-in person sees the tile. The studio
+      // still needs knowledge.author or knowledge.editor.
+      access: "public",
+      requiresAccountToUse: true,
+      order: 40,
+    },
   },
 });

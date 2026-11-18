@@ -1,7 +1,7 @@
 {
   "id": "knowledge",
   "name": "ASafariM Knowledge",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "platform": ">=0.1 <1",
   "owner": "ASafariM Digital",
   "domains": {
@@ -87,6 +87,13 @@
         "href": "/studio"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "launcher": {
+      "description": "Technical articles and learning from ASafariM: read what has been published, write in the studio.",
+      "meta": "learn.asafarim.site",
+      "access": "public",
+      "requiresAccountToUse": true,
+      "order": 40
+    }
   }
 }

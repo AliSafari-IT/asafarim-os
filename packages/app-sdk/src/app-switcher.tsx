@@ -352,6 +352,14 @@ const ICON_PATHS: Record<string, readonly string[]> = {
     "M10 18.5a2 2 0 1 0 4 0 2 2 0 1 0-4 0",
     "M8 5.5h8M18 7.5v2.5a3 3 0 0 1-3 3h-3v3.5",
   ],
+  // Knowledge's "Linked K" (#370): a K whose arms end in two nodes, the same drawing as its favicon and
+  // top-bar mark (apps/knowledge/components/KnowledgeMark.tsx), in its 24-unit box.
+  knowledge: [
+    "M7.5 4v16",
+    "M7.5 13 15.3 6.7M10.6 10.7l4.7 6.6",
+    "FM14.2 5.6a2.6 2.6 0 1 0 5.2 0 2.6 2.6 0 1 0-5.2 0",
+    "FM14.2 18.6a2.6 2.6 0 1 0 5.2 0 2.6 2.6 0 1 0-5.2 0",
+  ],
   // A note with a pencil writing on it.
   notes: ["M5 4.5h10v15H5z", "M7.5 8.5h5M7.5 11.5h3", "M19.5 9 13 15.5l-1 3 3-1L21.5 11z"],
   // A lightbulb: studying, an idea at a time.
