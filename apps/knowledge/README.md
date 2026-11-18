@@ -53,6 +53,17 @@ pnpm --filter @asafarim/knowledge test     # unit tests; with KNOWLEDGE_TEST_DAT
 
 Through the dev gateway: <http://knowledge.localhost:8080>. The address `learn.asafarim.site` in the manifest is proposed only: there is no production route, image or launcher tile yet.
 
+## AI assistance (#360)
+
+Studio authors with `knowledge.ai.use` (in `knowledge.author` and `knowledge.editor`) can ask for four **proposals**: an outline from a brief, a rewrite of the selection, a summary with title and tag ideas, and a Mermaid diagram from a description. A proposal is previewed first; the author applies it to the editor (or discards it) and saves as usual, so the AI never saves, overwrites or publishes, and an AI failure leaves the draft as it was.
+
+- `lib/ai/provider.ts`: Anthropic's Messages API through the official SDK, `claude-opus-5-5` at effort `medium` by default, JSON answers constrained to a schema, server-side refusal fallback. Off (the panel is hidden) without `KNOWLEDGE_AI_API_KEY`.
+- `lib/ai/operations.ts`: the four operations, bounded inputs, author text marked as data in the prompt, answers validated into proposals (outlines through `lib/doc.ts`, diagrams through `checkMermaid`).
+- `lib/ai/budget.ts`: monthly token caps for the publication (default 2 000 000) and per author (500 000), reserved before the call under row locks and settled to the reported usage.
+- `ai_jobs` logs who, which operation, article, revision, outcome and tokens: never a prompt, selection or answer.
+
+**Diagrams.** A `mermaid` node (source + text description) is edited in place with a live preview. Sources are checked (known diagram types, size limits, no `%%{init}` directives or front matter, no click/href, no HTML) and drawn in the browser with `securityLevel: "strict"`.
+
 ## Not in Phase 0
 
 Structured (Tiptap) editing, taxonomy and search, courses, media and video, AI drafting and Mermaid proposals, events, slug redirects, scheduling, author profiles, SEO/RSS/LinkedIn, translations, production deployment. Each has its own issue.
