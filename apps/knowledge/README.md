@@ -33,7 +33,7 @@ A revoked role takes effect within the permission cache / access-token lifetime 
 ## Content model
 
 - `content_items`: owner, slug, a **draft head** (newest saved revision) and a **published revision** pointer (NULL = not public).
-- `content_revisions`: immutable (a trigger refuses UPDATE and DELETE). Each save adds one; a save carries the revision the editor opened and is refused with a conflict if someone saved since, with the author's text kept in the form.
+- `content_revisions`: immutable. Since #356 a revision is a **structured document** (`format = 'tiptap'`: Tiptap JSON in `doc`, validated and normalised by `lib/doc.ts`, with `schema_version`; `body` holds its plain text) or a Phase 0 **Markdown** body (`format = 'markdown'`). New articles start structured; a Markdown draft converts in the editor, which lists what the conversion drops (`lib/markdown-check.ts`). Structured bodies render on the server from the parsed document (`components/DocView.tsx`, Shiki for code), never from editor HTML. A trigger refuses UPDATE and DELETE. Each save adds one; a save carries the revision the editor opened and is refused with a conflict if someone saved since, with the author's text kept in the form.
 - Publishing points the public pointer at one named revision of the same article (a composite foreign key keeps it inside the article). Later saves stay private until that revision is published. Withdrawing clears the pointer in the same transaction.
 - `audit_events`: who created, saved, published and withdrew what; ids only, never text.
 

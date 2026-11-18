@@ -247,3 +247,149 @@ button.danger {
   gap: 12px;
   margin: 12px 0;
 }
+/* The structured editor (#356). */
+.field-label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 4px;
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--card-2);
+}
+.toolbar .tool {
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 4px 8px;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+main .toolbar .tool:hover {
+  background: var(--card);
+}
+.toolbar .tool.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.toolbar .sep {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  margin: 0 4px;
+}
+.toolbar select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+}
+.editor-frame {
+  border: 1px solid var(--line);
+  border-radius: 0 0 8px 8px;
+  background: var(--card);
+  margin-bottom: 12px;
+}
+.editor-area {
+  min-height: 320px;
+  padding: 12px 14px;
+  outline: none;
+}
+.editor-area:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.prose table td,
+.prose table th,
+.editor-area td,
+.editor-area th {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  min-width: 60px;
+  vertical-align: top;
+}
+.editor-area table {
+  border-collapse: collapse;
+}
+.callout {
+  border-left: 4px solid var(--accent);
+  background: var(--card-2);
+  padding: 8px 12px;
+  margin: 12px 0;
+  border-radius: 0 8px 8px 0;
+}
+.callout.warning,
+.callout[data-kind="warning"] {
+  border-color: var(--bad);
+}
+.callout-label {
+  display: block;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.prose figure.code {
+  margin: 12px 0;
+}
+.prose figure.code figcaption {
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.prose .shiki {
+  overflow-x: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background-color: var(--shiki-light-bg);
+  color: var(--shiki-light);
+}
+.prose .shiki span {
+  color: var(--shiki-light);
+}
+:root[data-theme="dark"] .prose .shiki,
+:root[data-theme="dark"] .prose .shiki span {
+  background-color: var(--shiki-dark-bg);
+  color: var(--shiki-dark);
+}
+:root[data-theme="dark"] .prose .shiki span {
+  background-color: transparent;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .prose .shiki {
+    background-color: var(--shiki-dark-bg);
+    color: var(--shiki-dark);
+  }
+  :root:not([data-theme="light"]) .prose .shiki span {
+    color: var(--shiki-dark);
+  }
+}
+.prose h2 .anchor,
+.prose h3 .anchor,
+.prose h4 .anchor,
+.prose h5 .anchor {
+  opacity: 0;
+  text-decoration: none;
+  font-weight: 400;
+}
+.prose h2:hover .anchor,
+.prose h3:hover .anchor,
+.prose h4:hover .anchor,
+.prose h5:hover .anchor,
+.prose .anchor:focus-visible {
+  opacity: 0.6;
+}
+.table-wrap {
+  overflow-x: auto;
+}

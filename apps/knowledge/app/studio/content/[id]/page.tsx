@@ -11,6 +11,7 @@ import { Notices } from "@/components/Notices";
 import { TopBar } from "@/components/TopBar";
 import { getStudioItem } from "@/lib/content";
 import { db } from "@/lib/db";
+import { markdownLosses } from "@/lib/markdown-check";
 import { parseBefore } from "@/lib/cursor";
 import { canEdit, canPublish } from "@/lib/policy";
 import { requireStudio } from "@/lib/studio";
@@ -43,6 +44,7 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
   const { item, revisions, olderBefore, published } = found;
   const editable = canEdit(g.actor, item);
   const publishable = canPublish(g.actor, item);
+  const losses = item.draft.format === "markdown" ? markdownLosses(item.draft.body) : [];
 
   return (
     <>
@@ -79,13 +81,26 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
           ) : null}
         </section>
 
+        {item.draft.format === "markdown" ? (
+          <div className="notice" data-testid="markdown-import">
+            This draft was written in Markdown. It opens in the structured editor and becomes a structured revision when
+            you save; the Markdown revision itself is kept unchanged.
+            {losses.length ? (
+              <>
+                {" "}
+                <strong>Not carried over:</strong> {losses.join(", ")}. Check the text before saving.
+              </>
+            ) : null}
+          </div>
+        ) : null}
         <EditorForm
           key={item.id}
           id={item.id}
           revisionId={item.draftRevisionId}
           title={item.draft.title}
           summary={item.draft.summary}
-          body={item.draft.body}
+          doc={item.draft.format === "tiptap" ? item.draft.doc : null}
+          markdown={item.draft.format === "markdown" ? item.draft.body : ""}
           canEdit={editable}
         />
 

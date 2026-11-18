@@ -70,6 +70,22 @@ CREATE TABLE audit_events (
 );
 CREATE INDEX audit_events_item ON audit_events (item_id, at);`,
   },
+  {
+    version: 2,
+    name: "structured revisions: Tiptap JSON documents next to Phase 0 Markdown (#356)",
+    sql: `
+-- A revision is either Phase 0 Markdown (body) or a validated Tiptap document (doc, with its schema version; body is
+-- then the document's plain text, for search and summaries). Existing rows stay Markdown.
+ALTER TABLE content_revisions DROP CONSTRAINT content_revisions_format_check;
+ALTER TABLE content_revisions
+  ADD COLUMN doc jsonb,
+  ADD COLUMN schema_version integer,
+  ADD CONSTRAINT content_revisions_format_check CHECK (format IN ('markdown', 'tiptap')),
+  ADD CONSTRAINT content_revisions_doc_matches_format CHECK (
+    (format = 'tiptap' AND doc IS NOT NULL AND schema_version IS NOT NULL AND jsonb_typeof(doc) = 'object')
+    OR (format = 'markdown' AND doc IS NULL AND schema_version IS NULL)
+  );`,
+  },
 ];
 
 interface Queryable {

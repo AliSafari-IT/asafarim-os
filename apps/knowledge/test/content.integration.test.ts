@@ -75,7 +75,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
     pool.on("error", () => undefined);
     const c = await pool.connect();
     try {
-      expect(await migrate(c)).toEqual([1]);
+      expect(await migrate(c)).toEqual([1, 2]);
       expect(await migrate(c)).toEqual([]); // idempotent
     } finally {
       c.release();
@@ -264,6 +264,39 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
       const page = await listPublished(pool, { after: bad, limit: 3 });
       expect(page.items).toHaveLength(3);
     }
+  });
+
+  it("stores structured revisions next to Markdown ones, and publishes either (#356)", async () => {
+    const { parseDoc } = await import("../lib/doc");
+    const md = ok(await createArticle(pool, alice, { slug: "markdown-first", draft: draft("Old", "# Markdown body") }));
+    const parsed = parseDoc({
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "Structured body" }] }],
+    });
+    if (!parsed.ok) throw new Error(parsed.error);
+    const v2 = ok(
+      await saveDraft(pool, alice, {
+        id: md.id,
+        expectedRevisionId: md.revisionId,
+        draft: { title: "New", summary: "", body: parsed.text, doc: parsed.doc },
+      }),
+    );
+    const seen = await getStudioItem(pool, alice, md.id);
+    expect(seen?.item.draft).toMatchObject({ format: "tiptap", body: "Structured body", doc: parsed.doc });
+    expect(seen?.revisions.at(-1)).toMatchObject({ format: "markdown", doc: null, body: "# Markdown body" });
+
+    ok(await publishRevision(pool, alice, { id: md.id, revisionId: md.revisionId }));
+    expect(await getPublishedArticle(pool, "markdown-first")).toMatchObject({ format: "markdown", doc: null });
+    ok(await publishRevision(pool, alice, { id: md.id, revisionId: v2.revisionId }));
+    expect(await getPublishedArticle(pool, "markdown-first")).toMatchObject({ format: "tiptap", doc: parsed.doc });
+
+    // The database refuses a structured revision without its document, or a Markdown one with one.
+    await expect(
+      pool.query(
+        `INSERT INTO content_revisions (id, item_id, number, format, title, author) VALUES (gen_random_uuid()::text, $1, 99, 'tiptap', 't', 'alice')`,
+        [md.id],
+      ),
+    ).rejects.toThrow(/content_revisions_doc_matches_format/);
   });
 
   it("records who did what, without the text", async () => {

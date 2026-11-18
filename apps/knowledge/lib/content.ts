@@ -8,6 +8,8 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { decodeCursor, encodeCursor } from "./cursor";
 import { canCreate, canEdit, canPublish, canView, seesAll, type Actor } from "./policy";
+import type { Doc } from "./doc";
+import { SCHEMA_VERSION } from "./doc";
 import type { DraftInput } from "./validation";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -16,9 +18,14 @@ export const isUuid = (s: string) => UUID.test(s);
 type Pool = Pick<pg.Pool, "connect" | "query">;
 type Client = Pick<pg.PoolClient, "query">;
 
+export type RevisionFormat = "markdown" | "tiptap";
+
 export interface Revision {
   id: string;
   number: number;
+  /** "tiptap": `doc` is the document and `body` its plain text; "markdown" (Phase 0): `body` is the Markdown. */
+  format: RevisionFormat;
+  doc: Doc | null;
   title: string;
   summary: string;
   body: string;
@@ -45,6 +52,8 @@ export interface StudioItem {
 export interface PublishedArticle {
   slug: string;
   language: string;
+  format: RevisionFormat;
+  doc: Doc | null;
   title: string;
   summary: string;
   body: string;
@@ -84,6 +93,8 @@ interface ItemRow {
 interface RevisionRow {
   id: string;
   number: number;
+  format: RevisionFormat;
+  doc: Doc | null;
   title: string;
   summary: string;
   body: string;
@@ -94,6 +105,8 @@ interface RevisionRow {
 const toRevision = (r: RevisionRow): Revision => ({
   id: r.id,
   number: r.number,
+  format: r.format,
+  doc: r.doc,
   title: r.title,
   summary: r.summary,
   body: r.body,
@@ -133,9 +146,20 @@ async function audit(c: Client, actor: Actor, action: string, itemId: string, re
 async function insertRevision(c: Client, itemId: string, number: number, draft: DraftInput, author: string) {
   const id = randomUUID();
   await c.query(
-    `INSERT INTO content_revisions (id, item_id, number, title, summary, body, author)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [id, itemId, number, draft.title, draft.summary, draft.body, author],
+    `INSERT INTO content_revisions (id, item_id, number, format, doc, schema_version, title, summary, body, author)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      id,
+      itemId,
+      number,
+      draft.doc ? "tiptap" : "markdown",
+      draft.doc ? JSON.stringify(draft.doc) : null,
+      draft.doc ? SCHEMA_VERSION : null,
+      draft.title,
+      draft.summary,
+      draft.body,
+      author,
+    ],
   );
   return id;
 }
@@ -238,7 +262,7 @@ export async function withdrawArticle(pool: Pool, actor: Actor, input: { id: str
 }
 
 const STUDIO_SELECT = `
-  SELECT i.*, r.id AS r_id, r.number, r.title, r.summary, r.body, r.author, r.created_at AS r_created_at
+  SELECT i.*, r.id AS r_id, r.number, r.format, r.doc, r.title, r.summary, r.body, r.author, r.created_at AS r_created_at
   FROM content_items i JOIN content_revisions r ON r.id = i.draft_revision_id`;
 
 type StudioRow = ItemRow & Omit<RevisionRow, "id" | "created_at"> & { r_id: string; r_created_at: Date };
@@ -269,7 +293,7 @@ export async function listStudioItems(
   const after = decodeCursor(opts.after);
   const { rows } = await pool.query<StudioRow & { at_key: string }>(
     `SELECT * FROM (
-       SELECT i.*, i.updated_at::text AS at_key, r.id AS r_id, r.number, r.title, r.summary, r.body, r.author,
+       SELECT i.*, i.updated_at::text AS at_key, r.id AS r_id, r.number, r.format, r.doc, r.title, r.summary, r.body, r.author,
               r.created_at AS r_created_at
        FROM content_items i JOIN content_revisions r ON r.id = i.draft_revision_id
        WHERE ($1::boolean OR i.owner_subject = $2)
@@ -351,7 +375,8 @@ export async function getStudioItem(
 
 // The public side. Each query joins on published_revision_id, the one pointer publish/withdraw change.
 const PUBLIC_SELECT = `
-  SELECT i.id, i.slug, i.language, i.published_at, i.published_at::text AS at_key, r.title, r.summary, r.body, r.number
+  SELECT i.id, i.slug, i.language, i.published_at, i.published_at::text AS at_key, r.format, r.doc, r.title, r.summary,
+         r.body, r.number
   FROM content_items i JOIN content_revisions r ON r.id = i.published_revision_id AND r.item_id = i.id
   WHERE i.published_revision_id IS NOT NULL`;
 
@@ -360,6 +385,8 @@ interface PublicRow {
   at_key: string;
   slug: string;
   language: string;
+  format: RevisionFormat;
+  doc: Doc | null;
   published_at: Date;
   title: string;
   summary: string;
@@ -370,6 +397,8 @@ interface PublicRow {
 const toPublished = (r: PublicRow): PublishedArticle => ({
   slug: r.slug,
   language: r.language,
+  format: r.format,
+  doc: r.doc,
   title: r.title,
   summary: r.summary,
   body: r.body,
