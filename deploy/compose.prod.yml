@@ -257,6 +257,8 @@ services:
       OS_APP_DOCS_UPSTREAM: os-docs:3000
       # Polled only while flow is active, which needs os-flow deployed (the "flow" profile).
       OS_APP_FLOW_UPSTREAM: os-flow:3000
+      # Polled only while knowledge is active, which needs os-knowledge deployed (the "knowledge" profile).
+      OS_APP_KNOWLEDGE_UPSTREAM: os-knowledge:3000
     volumes:
       # Remove's database backups (CORE_API_BACKUP_DIR in the image), kept across restarts.
       - os_core_api_backups:/var/lib/core-api/backups
@@ -408,6 +410,55 @@ services:
       # core-api and the app's own database (os-postgres). Not os_net: Flow never reaches identity's Redis.
       os_core:
 
+  os-knowledge:
+    # learn.asafarim.site: ASafariM Knowledge's Next.js server (apps/knowledge/Dockerfile), published by
+    # .github/workflows/knowledge-image.yml. KNOWLEDGE_IMAGE_TAG is the full commit sha of that build;
+    # deploy/vps-deploy.sh always sets it. Its own "knowledge" profile, which deploy/vps-deploy.sh turns on (next to
+    # "core") once apps/knowledge/.env.production.age is committed: without it the env_file below would not exist, and
+    # a deploy is what it was before.
+    image: ghcr.io/alisafari-it/asafarim-os:knowledge-${KNOWLEDGE_IMAGE_TAG:?set KNOWLEDGE_IMAGE_TAG to the knowledge image's commit sha}
+    profiles: [knowledge]
+    restart: unless-stopped
+    read_only: true
+    # uid/gid 1000 is the image's `node` user, the only writer.
+    tmpfs:
+      - /tmp:size=16m
+      - /app/apps/knowledge/.next/cache:size=32m,uid=1000,gid=1000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # The manifest's resources (apps/knowledge/platform.app.json).
+    mem_limit: 256m
+    cpus: 0.5
+    # Decrypted from apps/knowledge/.env.production.age by deploy/vps-deploy.sh, at the repository root: AUTH_SECRET and
+    # OIDC_CLIENT_SECRET, then DATABASE_URL and ASAFARIM_REGISTRY_CREDENTIAL once `deploy/core-api/admin.sh install
+    # knowledge` gave them (apps/knowledge/.env.production.example).
+    env_file:
+      - ../.env.knowledge
+    environment:
+      HOSTNAME: 0.0.0.0
+      ASAFARIM_APP_ID: knowledge
+      # Sign-in goes through this stack's identity, at its public URL (client `knowledge` in deploy/identity/clients.json).
+      OIDC_ISSUER: https://id.asafarim.site
+      # Permission checks and self-registration: this stack's core-api, on os_core. Knowledge's database is on
+      # os-postgres (core-api's install creates it), never the platform's Postgres.
+      CORE_API_URL: http://os-core-api:4020
+    depends_on:
+      - os-core-api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health/live"]
+      interval: 30s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    networks:
+      edge_net:
+        # Unique on the shared edge_net; sites/asafarim-os-knowledge.caddy proxies learn.asafarim.site to it.
+        aliases:
+          - os-knowledge
+      # core-api and the app's own database (os-postgres). Not os_net: Knowledge never reaches identity's Redis.
+      os_core:
+
 networks:
   # The shared edge's network, created with the edge. identity joins it to be reachable by the edge's Caddy.
   edge_net:
@@ -419,7 +470,8 @@ networks:
     external: true
     name: identity_db
   os_net:
-  # core-api, its Postgres, the event bus (os-nats), the Admin console and the apps it serves (os-docs, os-flow).
+  # core-api, its Postgres, the event bus (os-nats), the Admin console and the apps it serves (os-docs, os-flow,
+  # os-knowledge).
   # identity and os-redis are not on it.
   os_core:
 

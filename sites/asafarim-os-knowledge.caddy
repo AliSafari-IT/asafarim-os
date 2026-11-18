@@ -1,0 +1,22 @@
+# ASafariM Knowledge (learn.asafarim.site): a Next.js server at os-knowledge:3000 (apps/knowledge). NOT a site file of
+# its own: the full deploy (deploy/vps-deploy.sh) appends this block to sites/asafarim-os.caddy (after Flow's, when
+# Flow is deployed too), and publishes the result under the same edge site name (asafarim-os), ONLY when the commit
+# has apps/knowledge/.env.production.age and os-knowledge is running and ready. Without that file the published site
+# file is what it was before: a Caddy site for a host with no container would only turn a TLS error into a 502.
+#
+# Public: published articles are for everyone and may be indexed. The studio sends its own X-Robots-Tag (noindex) and
+# Cache-Control (private, no-store) from the app (apps/knowledge/next.config.ts), so they are not set here. No
+# Content-Security-Policy here for the same reason as docs: Next's pages need their inline scripts. `defer` makes the
+# edge's values replace the upstream's instead of sending each header twice.
+learn.asafarim.site {
+  header {
+    defer
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options nosniff
+    Referrer-Policy strict-origin-when-cross-origin
+    X-Frame-Options DENY
+    -Server
+    -X-Powered-By
+  }
+  reverse_proxy os-knowledge:3000
+}
