@@ -1,0 +1,40 @@
+{
+  "name": "@asafarim/knowledge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ASafariM Knowledge: technical publishing and learning on ASafariM OS (#354). Phase 0: drafts, revisions, publish, public read and withdraw.",
+  "scripts": {
+    "dev:telemetry": "pnpm --filter @asafarim/telemetry dev",
+    "dev": "next dev --port 4140",
+    "build": "next build",
+    "start": "next start --port 4140",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@asafarim/app-manifest": "workspace:*",
+    "@asafarim/app-sdk": "workspace:*",
+    "@asafarim/telemetry": "workspace:*",
+    "@asafarim/theme": "workspace:*",
+    "next": "^16.4.3",
+    "next-auth": "5.0.0-beta.32",
+    "pg": "8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.2",
+    "@types/pg": "8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  }
+}

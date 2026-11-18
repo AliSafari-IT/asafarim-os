@@ -1,0 +1,243 @@
+/* ASafariM Knowledge's own styles. The tokens (--bg, --ink, --card, --accent…), the top bar and the theme
+   toggle are @asafarim/theme's (theme.css, loaded first by app/layout.tsx), so light and dark follow the OS. */
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    16px/1.6 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 16px 40px;
+}
+main.wide {
+  max-width: 960px;
+}
+a {
+  color: var(--accent);
+}
+.topbar-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 10px 16px;
+}
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.nav-link {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.nav-link:hover,
+.nav-link:focus-visible {
+  background: var(--card-2);
+}
+h1 {
+  font-size: 1.6rem;
+  line-height: 1.25;
+  margin: 0 0 8px;
+}
+h2 {
+  font-size: 1.1rem;
+  margin: 0 0 8px;
+}
+.muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.lead {
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 12px 0;
+  box-shadow: var(--shadow);
+}
+.article-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0;
+}
+.article-list h2 a {
+  color: inherit;
+}
+.article-list p {
+  margin: 4px 0;
+}
+label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+input,
+textarea {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-weight: 400;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-2);
+  color: var(--ink);
+  margin: 4px 0 12px;
+}
+textarea.mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+button {
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+main button:hover {
+  background: var(--accent-hover);
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+button.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+main button.secondary:hover {
+  background: var(--card-2);
+}
+button.danger {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+.notice {
+  border-left: 4px solid var(--accent);
+  padding: 8px 12px;
+  margin: 12px 0;
+  background: var(--card);
+  border-radius: 0 8px 8px 0;
+}
+.notice.bad {
+  border-color: var(--bad);
+}
+.notice.good {
+  border-color: var(--good, var(--accent));
+}
+.perm {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+}
+.badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 8px;
+  margin-left: 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.badge.published {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.badge.withdrawn {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+.studio-list {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+.studio-list th,
+.studio-list td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.revisions {
+  padding-left: 0;
+  list-style: none;
+  margin: 0;
+}
+.revisions li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.revisions li:last-child {
+  border-bottom: 0;
+}
+.revisions form {
+  margin: 0;
+}
+.prose {
+  overflow-wrap: anywhere;
+}
+.prose pre {
+  overflow-x: auto;
+  background: var(--card-2);
+  padding: 12px;
+  border-radius: 8px;
+}
+.prose code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+}
+.prose table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+}
+.prose img {
+  max-width: 100%;
+}
+.signin {
+  max-width: 460px;
+  margin: 10vh auto;
+}
+.version {
+  text-align: center;
+  margin: 0;
+  padding: 8px 16px;
+}

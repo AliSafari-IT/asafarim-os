@@ -37,7 +37,7 @@ export const DEV = {
   devClientCallback: "http://localhost:4199/callback",
   // Dev ports of the apps under apps/*; each gets an OIDC client in .dev/clients.json.
   // 4120 is the external-app fixture's (tools/platform-cli/fixtures/external-app), which `pnpm e2e` runs.
-  apps: { notes: 4100, docs: 4110, flow: 4130 },
+  apps: { notes: 4100, docs: 4110, flow: 4130, knowledge: 4140 },
   postgres: { host: "127.0.0.1", port: 55440, adminUser: "postgres", adminPassword: "postgres-dev-only" },
   redisUrl: "redis://127.0.0.1:56380/3",
   // P4.1: the event bus (NATS JetStream, compose.dev.yml).
