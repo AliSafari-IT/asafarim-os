@@ -48,6 +48,9 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
     const url = new URL(ADMIN_URL!);
     url.pathname = `/${dbName}`;
     pool = new pg.Pool({ connectionString: url.toString(), max: 4 });
+    // DROP DATABASE … WITH (FORCE) in afterAll terminates connections the pool may still be closing;
+    // that FATAL 57P01 arrives as an idle-client error, which is expected here and must not crash the run.
+    pool.on("error", () => undefined);
     const c = await pool.connect();
     try {
       expect(await migrate(c)).toEqual([1]);
