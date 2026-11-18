@@ -10,6 +10,8 @@ import { EditorForm } from "@/components/EditorForm";
 import { Notices } from "@/components/Notices";
 import { TopBar } from "@/components/TopBar";
 import { getStudioItem } from "@/lib/content";
+import { aiConfigFromEnv } from "@/lib/ai/provider";
+import { AI_PERMISSION } from "@/lib/ai/service";
 import { db } from "@/lib/db";
 import { markdownLosses } from "@/lib/markdown-check";
 import { parseBefore } from "@/lib/cursor";
@@ -44,6 +46,7 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
   const { item, revisions, olderBefore, published } = found;
   const editable = canEdit(g.actor, item);
   const publishable = canPublish(g.actor, item);
+  const aiEnabled = aiConfigFromEnv() !== null && g.actor.permissions.includes(AI_PERMISSION);
   const losses = item.draft.format === "markdown" ? markdownLosses(item.draft.body) : [];
 
   return (
@@ -102,6 +105,7 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
           doc={item.draft.format === "tiptap" ? item.draft.doc : null}
           markdown={item.draft.format === "markdown" ? item.draft.body : ""}
           canEdit={editable}
+          aiEnabled={aiEnabled}
         />
 
         <section className="card" data-testid="revisions">

@@ -8,7 +8,61 @@
 
 export const SCHEMA_VERSION = 1;
 
-export const LIMITS = { nodes: 20_000, depth: 24, text: 200_000, language: 32 } as const;
+export const LIMITS = {
+  nodes: 20_000,
+  depth: 24,
+  text: 200_000,
+  language: 32,
+  mermaid: 5_000,
+  mermaidLines: 200,
+  mermaidDescription: 500,
+} as const;
+
+/** The diagram types a Mermaid block may start with (its first non-comment word). */
+export const MERMAID_TYPES = [
+  "flowchart",
+  "graph",
+  "sequenceDiagram",
+  "classDiagram",
+  "stateDiagram",
+  "stateDiagram-v2",
+  "erDiagram",
+  "gantt",
+  "pie",
+  "journey",
+  "mindmap",
+  "timeline",
+  "gitGraph",
+  "quadrantChart",
+] as const;
+
+export type MermaidCheck = { ok: true; source: string } | { ok: false; error: string };
+
+/**
+ * A Mermaid source the page may draw (#360): one of the known diagram types, bounded in size, and without the
+ * parts that would let a diagram change how it is drawn or act: no `%%{init}` directives (configuration, which
+ * could lower the security level or load fonts), no `click` / `callback` / `href` interactions, no HTML or script.
+ * The page also draws with `securityLevel: "strict"`; this check is the first of the two.
+ */
+export function checkMermaid(raw: unknown): MermaidCheck {
+  if (typeof raw !== "string") return { ok: false, error: "mermaid_invalid" };
+  const source = raw.replace(/\r\n?/g, "\n").trim();
+  if (!source || source.length > LIMITS.mermaid || source.split("\n").length > LIMITS.mermaidLines) {
+    return { ok: false, error: "mermaid_too_large" };
+  }
+  if (/%%\s*\{/.test(source) || /^\s*---\s*$/m.test(source)) return { ok: false, error: "mermaid_config" };
+  if (/^\s*(click|callback|href)\b/m.test(source) || /\b(click|callback)\s+\w+\s+(call|href)\b/.test(source)) {
+    return { ok: false, error: "mermaid_interaction" };
+  }
+  if (/<\s*\/?\s*[a-z!]/i.test(source) || /javascript:/i.test(source)) return { ok: false, error: "mermaid_html" };
+  const first = source
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith("%%"));
+  const type = first?.split(/\s+/)[0] ?? "";
+  if (!(MERMAID_TYPES as readonly string[]).includes(type)) return { ok: false, error: "mermaid_type" };
+  return { ok: true, source };
+}
 
 export const CALLOUT_KINDS = ["note", "tip", "warning"] as const;
 export type CalloutKind = (typeof CALLOUT_KINDS)[number];
@@ -45,6 +99,7 @@ const NODES: Record<string, { children: "block" | "inline" | "none" | string[]; 
   listItem: { children: "block" },
   codeBlock: { children: "inline" },
   horizontalRule: { children: "none" },
+  mermaid: { children: "none" },
   table: { children: ["tableRow"] },
   tableRow: { children: ["tableHeader", "tableCell"] },
   tableHeader: { children: "block" },
@@ -62,6 +117,7 @@ const BLOCK = new Set([
   "codeBlock",
   "horizontalRule",
   "table",
+  "mermaid",
 ]);
 const INLINE = new Set(["text", "hardBreak"]);
 const MARKS = new Set(["bold", "italic", "strike", "underline", "code", "link"]);
@@ -134,6 +190,13 @@ export function parseDoc(input: unknown): DocResult {
         return { language: safeLanguage(raw.language) };
       case "callout":
         return { kind: CALLOUT_KINDS.includes(raw.kind as CalloutKind) ? (raw.kind as string) : "note" };
+      case "mermaid": {
+        const m = checkMermaid(raw.source);
+        if (!m.ok) throw new Invalid(m.error);
+        const description = typeof raw.description === "string" ? raw.description.trim() : "";
+        if (description.length > LIMITS.mermaidDescription) throw new Invalid("mermaid_description_too_long");
+        return { source: m.source, description };
+      }
       case "tableCell":
       case "tableHeader":
         return { colspan: int(raw.colspan, 1, 20) ?? 1, rowspan: int(raw.rowspan, 1, 100) ?? 1 };
@@ -197,7 +260,9 @@ export function parseDoc(input: unknown): DocResult {
     const content = kids.map((k) => walk(k, 1, (t) => BLOCK.has(t)));
     const doc: Doc = { type: "doc", content: content.length ? content : [{ type: "paragraph" }] };
     const blocks = (n: DocNode): void => {
-      if (["paragraph", "heading", "codeBlock"].includes(n.type)) {
+      if (n.type === "mermaid") {
+        if (n.attrs?.description) lines.push(String(n.attrs.description));
+      } else if (["paragraph", "heading", "codeBlock"].includes(n.type)) {
         const acc: string[] = [];
         collect(n, acc);
         lines.push(acc.join(""));

@@ -6,6 +6,7 @@ import "server-only";
  */
 import type { ReactNode } from "react";
 import { bundledLanguages, getSingletonHighlighter } from "shiki";
+import { MermaidDiagram } from "@/components/MermaidDiagram";
 import { headingIds, type Doc, type DocMark, type DocNode } from "@/lib/doc";
 
 const THEMES = { light: "github-light-default", dark: "github-dark-default" } as const;
@@ -116,6 +117,14 @@ export async function DocView({ doc }: { doc: Doc }) {
       }
       case "horizontalRule":
         return <hr key={key} />;
+      case "mermaid":
+        return (
+          <MermaidDiagram
+            key={key}
+            source={String(n.attrs?.source ?? "")}
+            description={String(n.attrs?.description ?? "")}
+          />
+        );
       case "table":
         return (
           <div key={key} className="table-wrap" tabIndex={0} role="region" aria-label="Table">
