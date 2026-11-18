@@ -9,7 +9,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.1.0",
+  version: "0.1.1",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   // Proposed, not allocated: only the dev gateway is generated from this. No production route yet.
@@ -64,9 +64,13 @@ export default defineApp({
     },
   ],
   routes: [
-    // The studio (pages and their server actions) is for authors: the gateway asks for the permission
-    // before the app sees the request, and the app checks it again with ownership per article.
-    { path: "/studio/**", permission: "knowledge.content.create" },
+    // Studio PAGES are for authors: the gateway asks for the permission before the app renders one, and
+    // an expired access token is renewed by redirecting through /api/asafarim/session. Only GET/HEAD:
+    // the studio's server actions are POSTs, and for a POST the gateway can only answer 401 once the
+    // 60 s token has expired, which would lose a save (#363). The app authorises every action itself
+    // (lib/studio.ts: signed in, app active, the permission from core-api, then ownership per article),
+    // as Flow and Docs do for all their pages and actions.
+    { path: "/studio/**", methods: ["GET", "HEAD"], permission: "knowledge.content.create" },
   ],
   ui: {
     glyph: "KN",
