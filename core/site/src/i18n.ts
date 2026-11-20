@@ -58,6 +58,7 @@ export interface SiteText {
     workspaceLead: string;
     docs: string;
     flow: string;
+    knowledge: string;
     breinhapWeb: string;
     breinhapManagement: string;
     appsFoot: string;
@@ -117,6 +118,7 @@ const EN: SiteText = {
     workspaceLead: "Tools connected to ASafariM OS",
     docs: "Guides and your workspace",
     flow: "Automate work with workflows",
+    knowledge: "Technical articles and learning",
     breinhapWeb: "Website; browser missions are coming later",
     breinhapManagement: "Workspace for invited adults",
     appsFoot: "One sign-in. A connected workspace.",
@@ -191,6 +193,7 @@ const NL: SiteText = {
     workspaceLead: "Tools verbonden met ASafariM OS",
     docs: "Handleidingen en je werkruimte",
     flow: "Werk automatiseren met workflows",
+    knowledge: "Technische artikelen en leren",
     breinhapWeb: "Website; missies in de browser volgen later",
     breinhapManagement: "Werkruimte voor uitgenodigde volwassenen",
     appsFoot: "Eén keer aanmelden. Een verbonden werkruimte.",
@@ -266,6 +269,7 @@ const FR: SiteText = {
     workspaceLead: "Outils connectés à ASafariM OS",
     docs: "Guides et votre espace de travail",
     flow: "Automatiser le travail avec des workflows",
+    knowledge: "Articles techniques et apprentissage",
     breinhapWeb: "Site web ; les missions dans le navigateur arrivent plus tard",
     breinhapManagement: "Espace de travail pour les adultes invités",
     appsFoot: "Une seule connexion. Un espace de travail connecté.",
@@ -345,6 +349,7 @@ const DE: SiteText = {
     workspaceLead: "Mit ASafariM OS verbundene Tools",
     docs: "Anleitungen und Ihr Arbeitsbereich",
     flow: "Arbeit mit Workflows automatisieren",
+    knowledge: "Technische Artikel und Lernen",
     breinhapWeb: "Website; Missionen im Browser folgen später",
     breinhapManagement: "Arbeitsbereich für eingeladene Erwachsene",
     appsFoot: "Eine Anmeldung. Ein verbundener Arbeitsbereich.",

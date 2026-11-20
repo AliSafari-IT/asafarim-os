@@ -94,7 +94,7 @@ describe("renderPage", () => {
     );
     for (const [, url] of html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)) {
       expect(url).toMatch(
-        /^https:\/\/(github\.com|asafarim\.com|igs-pharma\.be|(?:management\.)?breinhap\.com|((docs|flow|id|breinhap|igs|observatory)\.)?asafarim\.site)\//,
+        /^https:\/\/(github\.com|asafarim\.com|igs-pharma\.be|(?:management\.)?breinhap\.com|((docs|flow|learn|id|breinhap|igs|observatory)\.)?asafarim\.site)\//,
       );
     }
     // Stylesheets and icon are this origin's own; only the canonical and language links name a full URL.
@@ -119,6 +119,7 @@ describe("renderPage", () => {
     expect(nav).toContain("<summary>Products");
     expect(nav).toContain('<a class="nav-card" href="https://docs.asafarim.site/" aria-label="Docs">');
     expect(nav).toContain('<a class="nav-card" href="https://flow.asafarim.site/" aria-label="Flow">');
+    expect(nav).toContain('<a class="nav-card" href="https://learn.asafarim.site/" aria-label="ASafariM Knowledge">');
     expect(nav).toContain(
       '<a class="nav-product-link" href="https://breinhap.asafarim.site/en/" aria-label="Breinhap">',
     );

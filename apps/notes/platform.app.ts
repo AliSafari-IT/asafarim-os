@@ -10,7 +10,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "notes",
   name: "Notes",
-  version: "0.1.4",
+  version: "0.1.5",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   domains: {

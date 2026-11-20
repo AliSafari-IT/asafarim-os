@@ -125,6 +125,7 @@ export const APP_LINKS = {
   docs: { label: "Docs", href: "https://docs.asafarim.site/" },
   flow: { label: "Flow", href: "https://flow.asafarim.site/" },
   igs: { label: "IGS-Pharma", href: "https://igs.asafarim.site/en/" },
+  knowledge: { label: "ASafariM Knowledge", href: "https://learn.asafarim.site/" },
   signIn: { label: "Sign in", href: "https://id.asafarim.site/login" },
 } as const;
 
@@ -191,6 +192,10 @@ function renderTopbar(t: SiteText, locale: Locale, themeToggle: string, page = "
                 <a class="nav-card" href="${APP_LINKS.flow.href}" aria-label="Flow">
                   <span class="nav-card-icon nav-card-flow" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="5" height="5" rx="1" /><rect x="15" y="15" width="5" height="5" rx="1" /><path d="M9 6.5h4a2 2 0 0 1 2 2v4.5M15 13v2" /></svg></span>
                   <span class="nav-card-copy"><strong>Flow</strong><small>${t.nav.flow}</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
+                </a>
+                <a class="nav-card" href="${APP_LINKS.knowledge.href}" aria-label="ASafariM Knowledge">
+                  <span class="nav-card-icon nav-card-knowledge" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7.5 4v16M7.5 13 15.3 6.7M10.6 10.7l4.7 6.6" /><circle cx="16.8" cy="5.6" r="2.6" fill="currentColor" stroke="none" /><circle cx="16.8" cy="18.6" r="2.6" fill="currentColor" stroke="none" /></svg></span>
+                  <span class="nav-card-copy"><strong>Knowledge</strong><small>${t.nav.knowledge}</small></span><span class="nav-card-arrow" aria-hidden="true">↗</span>
                 </a>
                 <a class="nav-card" href="${products("breinhapWeb")}" aria-label="Breinhap web">
                   <span class="nav-card-icon nav-card-docs" aria-hidden="true">BH</span>
