@@ -191,7 +191,7 @@ jobs:
           : > .env.identity
           : > .env.docs
           # Every image tag is required (no default), also for a service whose profile is off.
-          export IMAGE_TAG=ci SITE_IMAGE_TAG=ci DOCS_IMAGE_TAG=ci CORE_API_IMAGE_TAG=ci ADMIN_IMAGE_TAG=ci FLOW_IMAGE_TAG=ci KNOWLEDGE_IMAGE_TAG=ci
+          export IMAGE_TAG=ci SITE_IMAGE_TAG=ci DOCS_IMAGE_TAG=ci CORE_API_IMAGE_TAG=ci ADMIN_IMAGE_TAG=ci FLOW_IMAGE_TAG=ci KNOWLEDGE_IMAGE_TAG=ci KNOWLEDGE_IMAGE_TAG=ci
           docker compose -p asafarim-os -f deploy/compose.prod.yml config -q
           # And with the core profile (os-postgres, os-core-api), as a deploy with core-api's env runs it.
           : > .env.core-api
