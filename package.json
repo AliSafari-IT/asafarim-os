@@ -40,11 +40,11 @@
     "env:decrypt:production": "envage decrypt --all --env production"
   },
   "devDependencies": {
-    "@asafarim/envage": "^0.5.0",
+    "@asafarim/envage": "^0.5.1",
     "@nats-io/nkeys": "^2.0.3",
     "pg": "^8.23.1",
-    "prettier": "^3.9.10",
-    "turbo": "^2.11.10",
+    "prettier": "^3.10.1",
+    "turbo": "^2.11.12",
     "typescript": "^5.9.0"
   },
   "dependencies": {}
