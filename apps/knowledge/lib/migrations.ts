@@ -132,6 +132,41 @@ CREATE TABLE ai_reservations (
 );
 CREATE INDEX ai_reservations_pending ON ai_reservations (created_at) WHERE charged IS NULL;`,
   },
+  {
+    version: 5,
+    name: "autosaves, slug redirects and slug-change audit (#372)",
+    sql: `
+-- The editor's unsaved text, one row per article and author, overwritten on every autosave. Never a revision and
+-- never public: it keeps work safe between saves and after a conflict. base_revision_id is the revision the editor
+-- opened (one of this article's own, by the composite key); an explicit save deletes the row.
+CREATE TABLE draft_autosaves (
+  item_id          text NOT NULL REFERENCES content_items (id),
+  author           text NOT NULL,
+  base_revision_id text NOT NULL,
+  title            text NOT NULL CHECK (length(title) <= 200),
+  summary          text NOT NULL DEFAULT '' CHECK (length(summary) <= 500),
+  doc              jsonb NOT NULL CHECK (jsonb_typeof(doc) = 'object'),
+  body             text NOT NULL DEFAULT '' CHECK (length(body) <= 200000),
+  saved_at         timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (item_id, author),
+  FOREIGN KEY (item_id, base_revision_id) REFERENCES content_revisions (item_id, id)
+);
+
+-- Old public addresses of an article. Each names the article, not another slug, so a redirect always leads to the
+-- article's current slug in one hop and can't form a chain or a cycle. An old slug is never any article's current
+-- slug (lib/content.ts keeps that inside the transaction that changes or claims a slug).
+CREATE TABLE slug_redirects (
+  old_slug   text PRIMARY KEY CHECK (old_slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' AND length(old_slug) <= 96),
+  item_id    text NOT NULL REFERENCES content_items (id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX slug_redirects_item ON slug_redirects (item_id);
+
+ALTER TABLE audit_events DROP CONSTRAINT audit_events_action_check;
+ALTER TABLE audit_events ADD CONSTRAINT audit_events_action_check CHECK (
+  action IN ('content.created', 'content.saved', 'content.published', 'content.withdrawn', 'content.slug_changed')
+);`,
+  },
 ];
 
 interface Queryable {

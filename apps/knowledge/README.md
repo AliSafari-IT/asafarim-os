@@ -2,12 +2,14 @@
 
 **ASafariM Knowledge** (`knowledge`): technical publishing and learning on ASafariM OS. This is **Phase 0** (#354), one working slice: authors write an article draft in the studio, publish a specific revision, anyone reads it, and the author can withdraw it. The design is in asafarim-docs, `ventures/asafarim-os/specs/ai-publishing-learning-platform.md`.
 
-| Path                   | Who                                        | What                                                  |
-| ---------------------- | ------------------------------------------ | ----------------------------------------------------- |
-| `/`                    | anyone                                     | published articles, newest first                      |
-| `/articles/<slug>`     | anyone                                     | one published article; anything else is a 404         |
-| `/studio`              | `knowledge.content.create` (gateway + app) | your articles (every article for an editor), create   |
-| `/studio/content/<id>` | the owner, or an editor                    | edit and save the draft, publish a revision, withdraw |
+| Path                           | Who                                        | What                                                            |
+| ------------------------------ | ------------------------------------------ | --------------------------------------------------------------- |
+| `/`                            | anyone                                     | published articles, newest first                                |
+| `/articles/<slug>`             | anyone                                     | one published article; anything else is a 404                   |
+| `/studio`                      | `knowledge.content.create` (gateway + app) | your articles (every article for an editor), create             |
+| `/studio/content/<id>`         | the owner, or an editor                    | edit and save the draft, publish a revision, withdraw           |
+| `/studio/content/<id>/preview` | the owner, or an editor                    | the draft head (or `?rev=<n>`) as the public page would show it |
+| `/studio/content/<id>/compare` | the owner, or an editor                    | `?from=&to=`: two revision numbers, `head`, or `autosave`       |
 
 ## Permissions and roles
 
@@ -35,7 +37,9 @@ A revoked role takes effect within the permission cache / access-token lifetime 
 - `content_items`: owner, slug, a **draft head** (newest saved revision) and a **published revision** pointer (NULL = not public).
 - `content_revisions`: immutable. Since #356 a revision is a **structured document** (`format = 'tiptap'`: Tiptap JSON in `doc`, validated and normalised by `lib/doc.ts`, with `schema_version`; `body` holds its plain text) or a Phase 0 **Markdown** body (`format = 'markdown'`). New articles start structured; a Markdown draft converts in the editor, which lists what the conversion drops (`lib/markdown-check.ts`). Structured bodies render on the server from the parsed document (`components/DocView.tsx`, Shiki for code), never from editor HTML. A trigger refuses UPDATE and DELETE. Each save adds one; a save carries the revision the editor opened and is refused with a conflict if someone saved since, with the author's text kept in the form.
 - Publishing points the public pointer at one named revision of the same article (a composite foreign key keeps it inside the article). Later saves stay private until that revision is published. Withdrawing clears the pointer in the same transaction.
-- `audit_events`: who created, saved, published and withdrew what; ids only, never text.
+- `audit_events`: who created, saved, published, withdrew and moved what; ids only, never text.
+- `draft_autosaves` (#372): the editor keeps the author's text a few seconds after they stop typing, one row per article and author, never a revision and never public. It records the revision the editor opened; if someone saved a newer one meanwhile, the autosave is still kept and the editor links a comparison instead of saving over it. Reopening the article offers to restore, compare or discard it. A save deletes it.
+- `slug_redirects` (#372): changing the address of an article that has been public keeps the old address, pointing at the article (not at a slug), so `/articles/<old>` answers a permanent redirect (308) to the current address in one hop; redirects can't chain or cycle, a slug is never both an address and a redirect, and no other article can take an old address. Moving a public article needs the publish permission; a never-published draft just moves. A withdrawn article's old addresses are 404 like its current one.
 
 The public pages read only through `published_revision_id`; there is no other query a guest reaches. Knowledge has no data path to the Docs app or any other app. Bodies are Markdown, rendered on the server with raw HTML dropped and `rehype-sanitize`. Studio responses are `private, no-store` and `noindex`.
 
@@ -57,7 +61,7 @@ Through the dev gateway: <http://knowledge.localhost:8080>. The address `learn.a
 
 Studio authors with `knowledge.ai.use` (in `knowledge.author` and `knowledge.editor`) can ask for four **proposals**: an outline from a brief, a rewrite of the selection, a summary with title and tag ideas, and a Mermaid diagram from a description. A proposal is previewed first; the author applies it to the editor (or discards it) and saves as usual, so the AI never saves, overwrites or publishes, and an AI failure leaves the draft as it was.
 
-- `lib/ai/provider.ts`: Anthropic's Messages API through the official SDK, `claude-opus-5-5` at effort `medium` by default, JSON answers constrained to a schema, one generation attempt per reservation (no retries or refusal fallback); admission requires enough headroom for the model’s maximum input plus the operation’s output limit. Off (the panel is hidden) without `KNOWLEDGE_AI_API_KEY`.
+- `lib/ai/provider.ts`: Anthropic's Messages API through the official SDK, `claude-opus-5-5` at effort `medium` by default, JSON answers constrained to a schema, one generation attempt per reservation (no retries or refusal fallback); each request reserves its input as counted by the token-counting endpoint (plus a 5% margin) and the operation's output limit. Off (the panel is hidden) without `KNOWLEDGE_AI_API_KEY`.
 - `lib/ai/operations.ts`: the four operations, bounded inputs, author text marked as data in the prompt, answers validated into proposals (outlines through `lib/doc.ts`, diagrams through `checkMermaid`).
 - `lib/ai/budget.ts`: monthly token caps for the publication (default 2 000 000) and per author (500 000), reserved before the call under row locks and settled to the reported usage.
 - `ai_jobs` logs who, which operation, article, revision, outcome and tokens: never a prompt, selection or answer.
@@ -66,4 +70,4 @@ Studio authors with `knowledge.ai.use` (in `knowledge.author` and `knowledge.edi
 
 ## Not in Phase 0
 
-Structured (Tiptap) editing, taxonomy and search, courses, media and video, AI drafting and Mermaid proposals, events, slug redirects, scheduling, author profiles, SEO/RSS/LinkedIn, translations, production deployment. Each has its own issue.
+Structured (Tiptap) editing, taxonomy and search, courses, media and video, AI drafting and Mermaid proposals, events, scheduling, author profiles, SEO/RSS/LinkedIn, translations, production deployment. Each has its own issue.

@@ -35,6 +35,7 @@ export const ERRORS: Record<string, string> = {
   ai_invalid_answer: "The AI's answer couldn't be used. Nothing changed; try again.",
   ai_empty_answer: "The AI didn't propose anything. Try rephrasing.",
   ai_unsafe_diagram: "The proposed diagram didn't pass the safety checks, so it isn't shown. Try again.",
+  autosave_failed: "the server couldn't be reached",
   invalid_slug: "The slug can only use lower-case letters, digits and single dashes.",
   app_inactive: "ASafariM Knowledge isn't active right now.",
   permissions_unavailable: "Permissions can't be checked right now. Try again in a moment.",
@@ -45,4 +46,6 @@ export const DONE: Record<string, string> = {
   saved: "Draft saved as a new revision.",
   published: "Published. Guests now see this revision.",
   withdrawn: "Withdrawn. The article is no longer public.",
+  slug_changed: "Address changed. If the article has been public, its old address now redirects here.",
+  autosave_discarded: "Unsaved changes discarded.",
 };

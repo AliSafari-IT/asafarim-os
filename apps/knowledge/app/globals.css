@@ -484,3 +484,73 @@ main .toolbar .tool:hover {
   color: var(--muted);
   margin-top: 4px;
 }
+
+/* #372: autosave status, slug form, revision links, and the comparison. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+form.inline {
+  display: inline;
+  margin-left: 8px;
+}
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+.inline-form label {
+  flex: 1 1 260px;
+}
+.inline-form button {
+  margin-bottom: 12px;
+}
+.save-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.revision-links {
+  display: inline-flex;
+  gap: 10px;
+  margin: 0 8px;
+  font-size: 0.9rem;
+}
+.diff {
+  list-style: none;
+  padding: 8px 0;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.9rem;
+  overflow-x: auto;
+}
+.diff li {
+  padding: 1px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-sign {
+  display: inline-block;
+  width: 1.5em;
+  color: var(--muted);
+}
+.diff-added {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.diff-removed {
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--bad) 60%, transparent);
+}
+ins {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  text-decoration: none;
+}
+del {
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+}
