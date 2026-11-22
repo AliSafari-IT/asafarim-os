@@ -153,9 +153,9 @@ jobs:
           home="$(docker exec smoke-knowledge sh -c 'wget -S -qO- http://127.0.0.1:3000/ 2>&1 || true')"
           awk '/HTTP\//{print $2; exit}' <<<"$home" | grep -qx 200 || { echo "::error::The public home page did not answer 200"; exit 1; }
           grep -q 'Nothing is published yet' <<<"$home" || { echo "::error::The public home page did not read the (empty) database"; exit 1; }
-          # Every migration the image ships, not a fixed number: each later issue adds one (lib/migrations.ts).
-          expected="$(grep -cE '^    version: [0-9]+,' apps/knowledge/lib/migrations.ts)"
-          docker exec smoke-db psql -U knowledge -d knowledge -tAc "SELECT count(*) FROM knowledge_migrations" | grep -qx "$expected" \
+          # The newest migration in lib/migrations.ts, so adding one doesn't break this check (#373 added 2).
+          latest="$(grep -oE '^    version: [0-9]+' apps/knowledge/lib/migrations.ts | awk '{print $2}' | sort -n | tail -1)"
+          docker exec smoke-db psql -U knowledge -d knowledge -tAc "SELECT max(version) FROM knowledge_migrations" | grep -qx "$latest" \
             || { echo "::error::Knowledge did not migrate its database"; exit 1; }
           status="$(docker exec smoke-knowledge sh -c 'wget -S -qO- http://127.0.0.1:3000/studio 2>&1 || true' | awk '/HTTP\//{print $2; exit}')"
           [[ "$status" == 401 ]] || { echo "::error::The studio answered ${status:-nothing} without a sign-in, not 401"; exit 1; }

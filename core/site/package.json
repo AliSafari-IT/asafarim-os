@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/site",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "The asafarim.site landing page (asafarim-os#70): what ASafariM OS is, what has shipped, Admin and Notes screenshots and the roadmap, rendered to static HTML from one progress file.",
   "type": "module",
@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "@asafarim/config": "workspace:*",
-    "@playwright/test": "^1.65.0",
+    "@playwright/test": "^1.65.1",
     "@types/node": "^24.19.2",
     "eslint": "^9.39.5",
     "typescript": "^5.9.3",

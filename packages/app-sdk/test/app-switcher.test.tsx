@@ -198,7 +198,7 @@ describe("AppSwitcher: the face is drawn in the current app's colour", () => {
 
 describe("app icons: an OS app's or product's tile shows a drawn icon, others their glyph (#302)", () => {
   it("draws an icon for every OS app and product the OS has today", () => {
-    for (const key of ["admin", "docs", "flow", "notes", ...MORE_FROM_ASAFARIM.map((m) => m.key)])
+    for (const key of ["admin", "docs", "flow", "knowledge", "notes", ...MORE_FROM_ASAFARIM.map((m) => m.key)])
       expect(hasAppIcon(key), key).toBe(true);
     expect(hasAppIcon("constructor")).toBe(false); // own keys only, not Object's
   });

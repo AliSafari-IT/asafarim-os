@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/admin",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "The ASafariM OS Admin console (P3.3b): apps, roles and grants, audit. A pure OIDC client of core/identity, built with @asafarim/app-sdk; every action is a call to core-api's admin API as the signed-in administrator.",
   "scripts": {
@@ -18,7 +18,7 @@
     "@asafarim/event-catalog": "workspace:*",
     "@asafarim/telemetry": "workspace:*",
     "@asafarim/theme": "workspace:*",
-    "next": "^16.4.3",
+    "next": "^16.4.6",
     "next-auth": "5.0.0-beta.32",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
@@ -26,7 +26,7 @@
   "devDependencies": {
     "@asafarim/config": "workspace:*",
     "@asafarim/registry-protocol": "workspace:*",
-    "@playwright/test": "^1.65.0",
+    "@playwright/test": "^1.65.1",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",

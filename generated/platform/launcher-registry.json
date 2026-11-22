@@ -33,6 +33,18 @@
       "status": "active",
       "access": "authenticated",
       "order": 30
+    },
+    {
+      "key": "knowledge",
+      "name": "ASafariM Knowledge",
+      "description": "Technical articles and learning from ASafariM: read what has been published, write in the studio.",
+      "glyph": "KN",
+      "color": "#0e7490",
+      "meta": "learn.asafarim.site",
+      "status": "active",
+      "access": "public",
+      "requiresAccountToUse": true,
+      "order": 40
     }
   ]
 }

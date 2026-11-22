@@ -1,8 +1,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { validateManifest } from "@asafarim/app-manifest";
+import { launcherEntries, validateManifest } from "@asafarim/app-manifest";
 import { describe, expect, it } from "vitest";
 import compiled from "../platform.app.json";
+import registry from "../../../generated/platform/launcher-registry.json";
 import manifest from "../platform.app";
 import pkg from "../package.json";
 
@@ -53,8 +54,27 @@ describe("knowledge manifest", () => {
     expect(author.grants.some((g) => g.endsWith(".any"))).toBe(false);
   });
 
-  it("isn't listed in launchers before it is deployed", () => {
-    expect(manifest.ui.launcher).toBeUndefined();
+  it("has a public launcher tile at learn.asafarim.site, after Flow, in the generated registry (#374)", () => {
+    // core-api's launcher and `platform sync` both build the switcher from launcherEntries.
+    const [tile] = launcherEntries([manifest]);
+    expect(tile).toEqual({
+      key: "knowledge",
+      name: "ASafariM Knowledge",
+      description: expect.stringContaining("articles"),
+      glyph: "KN",
+      color: "#0e7490",
+      meta: "learn.asafarim.site",
+      status: "active",
+      // Public: published articles are for everyone, so every signed-in person sees the tile.
+      access: "public",
+      requiresAccountToUse: true,
+      order: 40,
+    });
+    expect(manifest.domains?.primary).toBe("learn.asafarim.site");
+    const keys = registry.apps.map((a) => a.key);
+    expect(keys.filter((k) => k === "knowledge")).toHaveLength(1);
+    expect(keys.indexOf("knowledge")).toBeGreaterThan(keys.indexOf("flow"));
+    expect(registry.apps.find((a) => a.key === "knowledge")).toEqual(tile);
   });
 
   it("reads nothing from another app: no app dependency, no subscription, no import of apps/*", () => {

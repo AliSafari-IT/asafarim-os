@@ -98,6 +98,13 @@
         "href": "/studio"
       }
     ],
-    "status": "active"
+    "status": "active",
+    "launcher": {
+      "description": "Technical articles and learning from ASafariM: read what has been published, write in the studio.",
+      "meta": "learn.asafarim.site",
+      "access": "public",
+      "requiresAccountToUse": true,
+      "order": 40
+    }
   }
 }
