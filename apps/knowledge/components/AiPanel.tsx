@@ -40,6 +40,8 @@ export function AiPanel({ editor, itemId, baseRevisionId, title, onSummary, onTi
     revision: string;
     doc: Editor["state"]["doc"];
     range?: { from: number; to: number };
+    /** The spaces at the selection's edges, which the trimmed proposal must keep so words don't join. */
+    edges?: { lead: string; trail: string };
   } | null>(null);
   const proposal = stored?.revision === baseRevisionId ? stored.value : null;
 
@@ -53,6 +55,7 @@ export function AiPanel({ editor, itemId, baseRevisionId, title, onSummary, onTi
     setProposal(null);
     const doc = editor.state.doc;
     let range: { from: number; to: number } | undefined;
+    let edges: { lead: string; trail: string } | undefined;
     let input: Record<string, unknown>;
     if (op === "outline") input = { op, brief, title };
     else if (op === "mermaid") input = { op, description: brief };
@@ -61,12 +64,13 @@ export function AiPanel({ editor, itemId, baseRevisionId, title, onSummary, onTi
       const sel = selectedText();
       if (!sel.text.trim()) return setError("ai_input_empty");
       range = { from: sel.from, to: sel.to };
+      edges = { lead: /^[ \t]*/.exec(sel.text)![0], trail: /[ \t]*$/.exec(sel.text)![0] };
       input = { op, selection: sel.text, instruction };
     }
     setPending(true);
     try {
       const r = await aiAction({ itemId, baseRevisionId, input });
-      if (r.ok) setProposal({ value: r.proposal, revision: baseRevisionId, doc, range });
+      if (r.ok) setProposal({ value: r.proposal, revision: baseRevisionId, doc, range, edges });
       else setError(r.error);
     } catch {
       setError("ai_unavailable");
@@ -85,12 +89,16 @@ export function AiPanel({ editor, itemId, baseRevisionId, title, onSummary, onTi
   function apply() {
     if (!proposal || !isCurrent()) return;
     const range = stored?.range;
+    const edges = stored?.edges ?? { lead: "", trail: "" };
     const chain = editor.chain().focus();
     if (proposal.kind === "outline") chain.insertContent(proposal.doc.content).run();
     else if (proposal.kind === "mermaid")
       chain.insertMermaid({ source: proposal.source, description: proposal.description }).run();
     else if (proposal.kind === "text" && range) {
-      const paragraphs = proposal.text.split(/\n{2,}/).map((p) => ({
+      const parts = proposal.text.split(/\n{2,}/);
+      parts[0] = edges.lead + parts[0];
+      parts[parts.length - 1] += edges.trail;
+      const paragraphs = parts.map((p) => ({
         type: "paragraph",
         content: p ? [{ type: "text", text: p.replace(/\n/g, " ") }] : [],
       }));

@@ -300,7 +300,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
   });
 
   it("runs AI operations as proposals within the budgets, logging no text (#360)", async () => {
-    const { runAiOperation } = await import("../lib/ai/service");
+    const { runAiOperation, reservationFor } = await import("../lib/ai/service");
     const { AiError } = await import("../lib/ai/provider");
     const writer: Actor = { subject: "ai-writer", permissions: [...grants("knowledge.author")] };
     const a = ok(await createArticle(pool, writer, { slug: "ai-article", draft: draft("AI", "SECRET DRAFT TEXT") }));
@@ -308,8 +308,8 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
     const provider = {
       provider: "fake",
       model: "fake-model",
-      async modelLimits() {
-        return { model: "fake-model", maxInput: 1000 };
+      async countInput() {
+        return 1000;
       },
       async generate() {
         calls++;
@@ -374,7 +374,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
     });
     expect(calls).toBe(1);
 
-    // The author's cap: concurrent requests can't reserve past it (each reserves ~6 000 tokens; 20 000 allows 3).
+    // The author's cap: concurrent requests can't reserve past it (each reserves ~7 000 tokens; 20 000 allows 2).
     const results = await Promise.all(
       Array.from({ length: 6 }, () =>
         runAiOperation(pool, { provider, caps }, writer, { itemId: a.id, baseRevisionId: a.revisionId, input }),
@@ -415,14 +415,16 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
       runAiOperation(pool, { provider: p, caps }, writer, { itemId: a.id, baseRevisionId: a.revisionId, input });
     expect(await invoke(unreported)).toEqual({ ok: false, error: "ai_timeout" });
     const spent = async () => (await pool.query("SELECT used::int FROM ai_usage WHERE subject = '*'")).rows[0].used;
-    expect(await spent()).toBe(before + 50 + 7000);
+    // No usage reported: the whole reservation (counted input + margin + max output) is charged.
+    const whole = reservationFor(1000, 6000);
+    expect(await spent()).toBe(before + 50 + whole);
     // Force the success log insert to fail after a billable generation.
     await pool.query(
       "ALTER TABLE ai_jobs ADD CONSTRAINT test_fail_success_log CHECK (status <> 'succeeded') NOT VALID",
     );
     try {
       expect(await invoke(provider)).toEqual({ ok: false, error: "ai_unavailable" });
-      expect(await spent()).toBe(before + 50 + 7000 + 400);
+      expect(await spent()).toBe(before + 50 + whole + 400);
     } finally {
       await pool.query("ALTER TABLE ai_jobs DROP CONSTRAINT test_fail_success_log");
     }

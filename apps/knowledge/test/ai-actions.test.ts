@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aiAction } from "../app/studio/ai-actions";
+import type * as providerModule from "../lib/ai/provider";
 import { DEFAULT_EFFORT, DEFAULT_MODEL, createAnthropicProvider } from "../lib/ai/provider";
 import { runAiOperation } from "../lib/ai/service";
 import { db } from "../lib/db";
@@ -9,7 +10,7 @@ vi.mock("../lib/studio", () => ({ studioGate: vi.fn() }));
 vi.mock("../lib/db", () => ({ db: vi.fn() }));
 vi.mock("../lib/ai/service", () => ({ runAiOperation: vi.fn() }));
 vi.mock("../lib/ai/provider", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/ai/provider")>()),
+  ...(await importOriginal<typeof providerModule>()),
   createAnthropicProvider: vi.fn(),
 }));
 
@@ -20,7 +21,7 @@ const request = {
   input: { op: "improve", selection: "  First line.\r\nSecond line.  ", instruction: "  Clarify. " },
 };
 const pool = { query: vi.fn(), connect: vi.fn() } as unknown as Awaited<ReturnType<typeof db>>;
-const provider = { provider: "fake", model: DEFAULT_MODEL, generate: vi.fn() };
+const provider = { provider: "fake", model: DEFAULT_MODEL, countInput: vi.fn(), generate: vi.fn() };
 const providerCache = globalThis as typeof globalThis & { knowledgeAi?: unknown };
 
 beforeEach(() => {

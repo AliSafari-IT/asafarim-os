@@ -1,6 +1,6 @@
 /**
  * Token budgets for AI assistance (#360): a monthly cap for the publication and one per author. A request reserves
- * its worst case (input estimate + max output) before the call, under row locks in one transaction, so concurrent
+ * its worst case (counted input + margin + max output) before the call, under row locks in one transaction, so concurrent
  * requests can't overspend; afterwards it settles the reservation to the tokens the API reported.
  */
 import { randomUUID } from "node:crypto";

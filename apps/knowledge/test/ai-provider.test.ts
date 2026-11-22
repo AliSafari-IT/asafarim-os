@@ -27,7 +27,7 @@ describe("the Anthropic provider", () => {
   it("asks for a structured answer in one attempt, and reads the usage", async () => {
     const seen: { url?: string; init?: RequestInit }[] = [];
     const p = createAnthropicProvider(cfg, { fetch: fakeFetch(200, answer(), seen) });
-    const r = await p.generate(req, DEFAULT_MODEL);
+    const r = await p.generate(req);
     expect(r).toEqual({
       answer: { text: "Better." },
       usage: { inputTokens: 105, outputTokens: 20 },
@@ -46,6 +46,32 @@ describe("the Anthropic provider", () => {
     expect(body).not.toHaveProperty("fallbacks");
   });
 
+  it("counts the input of the same request body it would send, before any billable call", async () => {
+    const seen: { url?: string; init?: RequestInit }[] = [];
+    const p = createAnthropicProvider(cfg, { fetch: fakeFetch(200, { input_tokens: 321 }, seen) });
+    expect(await p.countInput(req)).toBe(321);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toContain("/v1/messages/count_tokens");
+    const body = JSON.parse(String(seen[0]!.init!.body));
+    expect(body).toMatchObject({
+      model: "claude-opus-5-5",
+      system: "S",
+      messages: [{ role: "user", content: "U" }],
+      output_config: { effort: "medium", format: { type: "json_schema", schema: { type: "object" } } },
+    });
+    expect(body).not.toHaveProperty("max_tokens");
+  });
+
+  it("treats a failed or empty count as unavailable", async () => {
+    for (const [status, body] of [
+      [500, { type: "error", error: { type: "api_error", message: "x" } }],
+      [200, { input_tokens: 0 }],
+    ] as const) {
+      const p = createAnthropicProvider(cfg, { fetch: fakeFetch(status, body) });
+      await expect(p.countInput(req)).rejects.toMatchObject({ code: "unavailable" });
+    }
+  });
+
   it("sends an outline without array limits and sums all billed iterations", async () => {
     const seen: { init?: RequestInit }[] = [];
     const iteration = { input_tokens: 7, cache_creation_input_tokens: 3, cache_read_input_tokens: 1, output_tokens: 5 };
@@ -61,7 +87,7 @@ describe("the Anthropic provider", () => {
         seen,
       ),
     });
-    const result = await provider.generate(buildRequest({ op: "outline", brief: "hooks", title: "" }), DEFAULT_MODEL);
+    const result = await provider.generate(buildRequest({ op: "outline", brief: "hooks", title: "" }));
     expect(JSON.stringify(JSON.parse(String(seen[0]?.init?.body)).output_config)).not.toContain("maxItems");
     expect(result.usage).toEqual({ inputTokens: 22, outputTokens: 10 });
   });
@@ -77,7 +103,7 @@ describe("the Anthropic provider", () => {
     ];
     for (const [status, body, code] of cases) {
       const p = createAnthropicProvider(cfg, { fetch: fakeFetch(status, body) });
-      const err = await p.generate(req, DEFAULT_MODEL).catch((e: unknown) => e);
+      const err = await p.generate(req).catch((e: unknown) => e);
       expect(err, JSON.stringify(body)).toBeInstanceOf(AiError);
       expect((err as AiError).code).toBe(code);
       expect((err as AiError).message).not.toContain("secret detail");
@@ -116,7 +142,6 @@ describe("the Anthropic provider", () => {
           usage: { input_tokens: 10, cache_creation_input_tokens: 30, cache_read_input_tokens: 60, output_tokens: 7 },
         }),
       ),
-      maxRetries: 0,
     });
     expect(await p.generate(req)).toEqual({
       answer: { text: "Better." },
@@ -128,7 +153,6 @@ describe("the Anthropic provider", () => {
   it("retains billable usage when the response is cut off", async () => {
     const p = createAnthropicProvider(cfg, {
       fetch: fakeFetch(200, answer({ stop_reason: "max_tokens" })),
-      maxRetries: 0,
     });
     await expect(p.generate(req)).rejects.toMatchObject({
       code: "invalid_answer",

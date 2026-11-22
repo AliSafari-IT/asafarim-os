@@ -51,8 +51,9 @@ export class AiError extends Error {
 export interface AiProvider {
   readonly provider: string;
   readonly model: string;
-  modelLimits(): Promise<{ model: string; maxInput: number }>;
-  generate(req: GenerateRequest, model: string): Promise<GenerateAnswer>;
+  /** The input tokens this exact request would bill, counted by the provider before it is sent. */
+  countInput(req: GenerateRequest): Promise<number>;
+  generate(req: GenerateRequest): Promise<GenerateAnswer>;
 }
 
 export interface AiConfig {
@@ -109,25 +110,33 @@ export function createAnthropicProvider(
     maxRetries: 0,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
+  // The same request body for counting and for generating, so the count covers what is billed.
+  const params = ({ system, user, schema }: GenerateRequest) => ({
+    model: config.model,
+    system,
+    messages: [{ role: "user" as const, content: user }],
+    output_config: { effort: config.effort, format: { type: "json_schema" as const, schema } },
+  });
   return {
     provider: "anthropic",
     model: config.model,
-    async modelLimits() {
-      const model = await client.models.retrieve(config.model);
-      const limit = model.max_input_tokens;
-      if (!limit || !Number.isSafeInteger(limit) || limit < 0) throw new AiError("unavailable");
-      return { model: model.id, maxInput: limit };
+    async countInput(req) {
+      let counted: Anthropic.Beta.BetaMessageTokensCount;
+      try {
+        counted = await client.beta.messages.countTokens(params(req));
+      } catch (err) {
+        if (err instanceof Anthropic.APIError)
+          throw new AiError("unavailable", undefined, `count_http_${err.status ?? "?"}`);
+        throw new AiError("unavailable", undefined, "count_failed");
+      }
+      const n = counted.input_tokens;
+      if (!Number.isSafeInteger(n) || n <= 0) throw new AiError("unavailable", undefined, "count_invalid");
+      return n;
     },
-    async generate({ system, user, schema, maxTokens }, model) {
+    async generate(req) {
       let response: Anthropic.Beta.BetaMessage;
       try {
-        response = await client.beta.messages.create({
-          model,
-          max_tokens: maxTokens,
-          system,
-          messages: [{ role: "user", content: user }],
-          output_config: { effort: config.effort, format: { type: "json_schema", schema } },
-        });
+        response = await client.beta.messages.create({ ...params(req), max_tokens: req.maxTokens });
       } catch (err) {
         if (err instanceof Anthropic.APIConnectionTimeoutError) throw new AiError("timeout", undefined, "timeout");
         if (err instanceof Anthropic.APIError) throw new AiError("unavailable", undefined, `http_${err.status ?? "?"}`);

@@ -49,6 +49,11 @@ async function log(
   );
 }
 
+/** Tokens to reserve for a request: its counted input with a 5% (at least 64-token) margin, plus max output. */
+export function reservationFor(inputTokens: number, maxTokens: number) {
+  return Math.ceil(inputTokens + Math.max(64, inputTokens * 0.05)) + maxTokens;
+}
+
 export async function runAiOperation(
   pool: Pool,
   deps: { provider: AiProvider; caps: Caps },
@@ -64,13 +69,15 @@ export async function runAiOperation(
   const revision = found.item.draftRevisionId;
   if (req.baseRevisionId !== revision) return { ok: false, error: "ai_stale_proposal" };
   const request = buildRequest(req.input);
-  let limits: Awaited<ReturnType<AiProvider["modelLimits"]>>;
+  // Reserve the counted input plus the most the answer may use. The count is the provider's own (it can differ
+  // slightly from billing), so a small margin; a request can then never settle far beyond what was admitted.
+  let input: number;
   try {
-    limits = await deps.provider.modelLimits();
+    input = await deps.provider.countInput(request);
   } catch {
     return { ok: false, error: "ai_unavailable" };
   }
-  const ceiling = limits.maxInput + request.maxTokens;
+  const ceiling = reservationFor(input, request.maxTokens);
   const base = { actor, op: req.input.op, itemId: req.itemId, baseRevisionId: revision };
   const reservation = await reserve(pool, actor.subject, ceiling, deps.caps);
   if (!reservation.ok) {
@@ -80,7 +87,7 @@ export async function runAiOperation(
 
   let used = reservation.tokens;
   try {
-    const answer = await deps.provider.generate(request, limits.model);
+    const answer = await deps.provider.generate(request);
     used = answer.usage.inputTokens + answer.usage.outputTokens;
     const proposal = toProposal(req.input.op, answer.answer);
     await log(pool, {
