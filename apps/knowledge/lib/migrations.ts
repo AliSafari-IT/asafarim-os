@@ -167,6 +167,94 @@ ALTER TABLE audit_events ADD CONSTRAINT audit_events_action_check CHECK (
   action IN ('content.created', 'content.saved', 'content.published', 'content.withdrawn', 'content.slug_changed')
 );`,
   },
+  {
+    version: 6,
+    name: "topics, curated tags and the public search projection (#357)",
+    sql: `
+-- Trigram similarity for misspelled titles and tags. A trusted extension: the database owner may create it.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- A small hierarchy: a topic is top level or the child of a top-level topic (lib/taxonomy.ts keeps it two deep).
+CREATE TABLE topics (
+  id          text PRIMARY KEY,
+  slug        text NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' AND length(slug) <= 64),
+  name        text NOT NULL CHECK (length(name) BETWEEN 1 AND 80),
+  description text NOT NULL DEFAULT '' CHECK (length(description) <= 300),
+  parent_id   text REFERENCES topics (id),
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  CHECK (parent_id IS NULL OR parent_id <> id)
+);
+
+-- Curated tags: only an editor creates them; authors pick from them. 'technology' tags are the technology facet.
+CREATE TABLE tags (
+  id         text PRIMARY KEY,
+  slug       text NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' AND length(slug) <= 64),
+  name       text NOT NULL CHECK (length(name) BETWEEN 1 AND 60),
+  kind       text NOT NULL DEFAULT 'subject' CHECK (kind IN ('subject', 'technology')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX tags_name_trgm ON tags USING gin (lower(name) gin_trgm_ops);
+-- Other spellings that resolve to a tag (js -> javascript, c-sharp -> csharp). Lower-case, never a tag's own slug.
+CREATE TABLE tag_aliases (
+  alias  text PRIMARY KEY CHECK (alias = lower(alias) AND length(alias) BETWEEN 1 AND 60),
+  tag_id text NOT NULL REFERENCES tags (id) ON DELETE CASCADE
+);
+
+-- An article's classification, set in the studio. Public only through the projection below.
+ALTER TABLE content_items
+  ADD COLUMN topic_id text REFERENCES topics (id),
+  ADD COLUMN level text CHECK (level IN ('beginner', 'intermediate', 'advanced'));
+CREATE TABLE item_tags (
+  item_id text NOT NULL REFERENCES content_items (id),
+  tag_id  text NOT NULL REFERENCES tags (id),
+  PRIMARY KEY (item_id, tag_id)
+);
+CREATE INDEX item_tags_tag ON item_tags (tag_id);
+
+-- The public search projection: one row per PUBLISHED article, written in the same transaction that publishes,
+-- withdraws, moves or reclassifies it (lib/search-index.ts), deleted on withdrawal. Search reads only this, so a
+-- draft or withdrawn article can't appear in results.
+CREATE TABLE search_documents (
+  item_id      text PRIMARY KEY REFERENCES content_items (id),
+  revision_id  text NOT NULL,
+  slug         text NOT NULL,
+  kind         text NOT NULL,
+  language     text NOT NULL,
+  topic_id     text REFERENCES topics (id),
+  level        text,
+  tag_ids      text[] NOT NULL DEFAULT '{}',
+  title        text NOT NULL,
+  summary      text NOT NULL,
+  published_at timestamptz NOT NULL,
+  -- Weighted: title A, tags and headings B, summary C, body D. 'simple': no stemming, so identifiers stay whole.
+  tsv          tsvector NOT NULL,
+  FOREIGN KEY (item_id, revision_id) REFERENCES content_revisions (item_id, id)
+);
+CREATE INDEX search_documents_tsv ON search_documents USING gin (tsv);
+CREATE INDEX search_documents_title_trgm ON search_documents USING gin (lower(title) gin_trgm_ops);
+CREATE INDEX search_documents_tags ON search_documents USING gin (tag_ids);
+CREATE INDEX search_documents_topic ON search_documents (topic_id, published_at DESC);
+
+-- Identifiers found in the article (useEffect, err_connection_reset, c#), lower-cased, for exact and prefix matches.
+CREATE TABLE search_terms (
+  item_id text NOT NULL REFERENCES search_documents (item_id) ON DELETE CASCADE,
+  term    text NOT NULL,
+  PRIMARY KEY (term, item_id)
+);
+CREATE INDEX search_terms_prefix ON search_terms (term text_pattern_ops);
+CREATE INDEX search_terms_item ON search_terms (item_id);
+
+-- The article split at its headings, for snippets that link to the section that matched.
+CREATE TABLE search_sections (
+  item_id  text NOT NULL REFERENCES search_documents (item_id) ON DELETE CASCADE,
+  position integer NOT NULL,
+  anchor   text,
+  heading  text NOT NULL DEFAULT '',
+  body     text NOT NULL,
+  tsv      tsvector NOT NULL,
+  PRIMARY KEY (item_id, position)
+);`,
+  },
 ];
 
 interface Queryable {

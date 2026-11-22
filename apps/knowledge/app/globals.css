@@ -554,3 +554,37 @@ ins {
 del {
   background: color-mix(in srgb, var(--bad) 14%, transparent);
 }
+
+/* #357: search and topics. */
+.facets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px 12px;
+}
+.facets select,
+.taxonomy select {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-weight: 400;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-2);
+  color: var(--ink);
+  margin: 4px 0 12px;
+}
+.snippet mark {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.tag-chip {
+  display: inline-block;
+  font-size: 0.85rem;
+  padding: 1px 8px;
+  margin: 2px 4px 2px 0;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+}

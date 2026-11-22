@@ -8,6 +8,8 @@ import { Notices } from "@/components/Notices";
 import { Pager } from "@/components/Pager";
 import { TopBar } from "@/components/TopBar";
 import { listStudioItems } from "@/lib/content";
+import { canManageTaxonomy, seesAll } from "@/lib/policy";
+import { searchStudio } from "@/lib/search";
 import { db } from "@/lib/db";
 import { requireStudio } from "@/lib/studio";
 
@@ -17,7 +19,7 @@ type Props = { searchParams: Promise<Record<string, string | undefined>> };
 
 export default async function Studio({ searchParams }: Props) {
   const g = await requireStudio();
-  const { error, done, after } = await searchParams;
+  const { error, done, after, q } = await searchParams;
   if (!g.ok) {
     return (
       <>
@@ -28,8 +30,14 @@ export default async function Studio({ searchParams }: Props) {
       </>
     );
   }
-  const page = await listStudioItems(await db(), g.actor, { after });
-  const items = page.items;
+  const pool = await db();
+  const query = (q ?? "").trim().slice(0, 200);
+  // The studio's own search (#357): titles and slugs of the articles this person may see, drafts included.
+  const found = query ? await searchStudio(pool, { subject: g.actor.subject, seesAll: seesAll(g.actor) }, query) : null;
+  const page = found ? { items: [], next: null } : await listStudioItems(pool, g.actor, { after });
+  const items = found
+    ? found.map((f) => ({ id: f.id, status: f.status, updatedAt: f.updatedAt, draft: { title: f.title } }))
+    : page.items;
 
   return (
     <>
@@ -37,6 +45,13 @@ export default async function Studio({ searchParams }: Props) {
       <main>
         <h1>Studio</h1>
         <Notices error={error} done={done} />
+        {canManageTaxonomy(g.actor) ? (
+          <p>
+            <Link href="/studio/taxonomy" data-testid="taxonomy-link">
+              Topics and tags
+            </Link>
+          </p>
+        ) : null}
 
         <form action={createArticleAction} className="card" data-testid="new-article">
           <h2>New article</h2>
@@ -57,7 +72,22 @@ export default async function Studio({ searchParams }: Props) {
           </button>
         </form>
 
-        {items.length === 0 && !after ? (
+        <form action="/studio" method="get" className="inline-form" role="search" data-testid="studio-search">
+          <label>
+            Find your articles <span className="muted">(drafts included; only in the studio)</span>
+            <input name="q" type="search" defaultValue={query} maxLength={200} />
+          </label>
+          <button type="submit" className="secondary">
+            Find
+          </button>
+          {query ? <Link href="/studio">Show all</Link> : null}
+        </form>
+
+        {items.length === 0 && query ? (
+          <p className="muted" data-testid="studio-no-match">
+            None of your articles matches that.
+          </p>
+        ) : items.length === 0 && !after ? (
           <p className="muted" data-testid="studio-empty">
             No articles yet.
           </p>

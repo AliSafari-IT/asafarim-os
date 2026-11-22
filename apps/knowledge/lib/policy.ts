@@ -10,6 +10,7 @@ export const PERMISSIONS = {
   editAny: "knowledge.content.edit.any",
   publishOwn: "knowledge.content.publish.own",
   publishAny: "knowledge.content.publish.any",
+  taxonomy: "knowledge.taxonomy.manage",
 } as const;
 
 /** The signed-in person, as the studio gate established them. */
@@ -42,4 +43,9 @@ export function canPublish(actor: Actor, item: { ownerSubject: string }): boolea
 /** Lists every item in the studio, not only the person's own. */
 export function seesAll(actor: Actor): boolean {
   return has(actor, PERMISSIONS.editAny) || has(actor, PERMISSIONS.publishAny);
+}
+
+/** Creates topics and the curated tags authors choose from (#357). */
+export function canManageTaxonomy(actor: Actor): boolean {
+  return has(actor, PERMISSIONS.taxonomy);
 }

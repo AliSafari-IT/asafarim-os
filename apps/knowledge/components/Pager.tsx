@@ -6,18 +6,24 @@ export function Pager({
   next,
   base,
   label,
+  first = "← Newest",
 }: {
   after?: string;
   next: string | null;
+  /** The list's URL, possibly with its own query (the search keeps its filters). */
   base: string;
   label: string;
+  first?: string;
 }) {
   if (!after && !next) return null;
   return (
     <nav className="pager" aria-label="Pages" data-testid="pager">
-      {after ? <Link href={base}>← Newest</Link> : <span />}
+      {after ? <Link href={base}>{first}</Link> : <span />}
       {next ? (
-        <Link href={`${base}?after=${encodeURIComponent(next)}`} data-testid="pager-older">
+        <Link
+          href={`${base}${base.includes("?") ? "&" : "?"}after=${encodeURIComponent(next)}`}
+          data-testid="pager-older"
+        >
           {label} →
         </Link>
       ) : null}

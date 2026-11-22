@@ -23,6 +23,7 @@ import { db } from "@/lib/db";
 import { studioGate } from "@/lib/studio";
 import { EMPTY_DOC, parseDoc } from "@/lib/doc";
 import { isSlug, parseDraft, parseSlug } from "@/lib/validation";
+import { classify, createTag, createTopic, type TagKind } from "@/lib/taxonomy";
 
 const field = (f: FormData, name: string) => {
   const v = f.get(name);
@@ -176,4 +177,57 @@ export async function changeSlugAction(formData: FormData) {
   revalidatePath(`/articles/${r.previous}`);
   revalidatePath(`/articles/${r.slug}`);
   redirect(`${back}?done=slug_changed`);
+}
+
+/** Classify an article (#357): topic, level and curated tags (comma-separated slugs, names or aliases). */
+export async function classifyAction(formData: FormData) {
+  const id = field(formData, "id");
+  if (!isUuid(id)) redirect("/studio?error=not_found");
+  const back = `/studio/content/${id}`;
+  const actor = await actorOrRedirect(back);
+  const tags = field(formData, "tags")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const r = await classify(await db(), actor, {
+    id,
+    topicSlug: field(formData, "topic") || null,
+    level: field(formData, "level") || null,
+    tags,
+  });
+  if (!r.ok) {
+    const q = new URLSearchParams({ error: r.error });
+    if (r.detail) q.set("detail", r.detail);
+    redirect(`${back}?${q}`);
+  }
+  revalidatePath("/search");
+  redirect(`${back}?done=classified`);
+}
+
+export async function createTopicAction(formData: FormData) {
+  const actor = await actorOrRedirect("/studio/taxonomy");
+  const r = await createTopic(await db(), actor, {
+    slug: field(formData, "slug").trim().toLowerCase(),
+    name: field(formData, "name"),
+    description: field(formData, "description"),
+    parentSlug: field(formData, "parent") || null,
+  });
+  if (!r.ok) redirect(`/studio/taxonomy?error=${r.error}`);
+  redirect("/studio/taxonomy?done=topic_created");
+}
+
+export async function createTagAction(formData: FormData) {
+  const actor = await actorOrRedirect("/studio/taxonomy");
+  const r = await createTag(await db(), actor, {
+    slug: field(formData, "slug").trim().toLowerCase(),
+    name: field(formData, "name"),
+    kind: (field(formData, "kind") || "subject") as TagKind,
+    aliases: field(formData, "aliases").split(","),
+  });
+  if (!r.ok) {
+    const q = new URLSearchParams({ error: r.error });
+    if (r.detail) q.set("detail", r.detail);
+    redirect(`/studio/taxonomy?${q}`);
+  }
+  redirect("/studio/taxonomy?done=tag_created");
 }

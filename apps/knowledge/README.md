@@ -20,6 +20,7 @@
 | `knowledge.content.publish.own` |         ✓          |         ✓          |
 | `knowledge.content.edit.any`    |                    |         ✓          |
 | `knowledge.content.publish.any` |                    |         ✓          |
+| `knowledge.taxonomy.manage`     |                    |         ✓          |
 
 Publishing covers withdrawing. Roles are granted only by an admin; registering the app grants nothing. The gateway asks for `knowledge.content.create` on `/studio/**`, and every studio action asks again and checks ownership against the row it locks (`lib/policy.ts`, `lib/content.ts`). An article someone may not see is "not found" to them.
 
@@ -42,6 +43,14 @@ A revoked role takes effect within the permission cache / access-token lifetime 
 - `slug_redirects` (#372): changing the address of an article that has been public keeps the old address, pointing at the article (not at a slug), so `/articles/<old>` answers a permanent redirect (308) to the current address in one hop; redirects can't chain or cycle, a slug is never both an address and a redirect, and no other article can take an old address. Moving a public article needs the publish permission; a never-published draft just moves. A withdrawn article's old addresses are 404 like its current one.
 
 The public pages read only through `published_revision_id`; there is no other query a guest reaches. Knowledge has no data path to the Docs app or any other app. Bodies are Markdown, rendered on the server with raw HTML dropped and `rehype-sanitize`. Studio responses are `private, no-store` and `noindex`.
+
+## Topics, tags and search (#357)
+
+- **Taxonomy.** Topics are a small hierarchy (top level plus one level). Tags are curated: editors (`knowledge.taxonomy.manage`) create them, of kind `subject` or `technology`, with aliases (`js` → `javascript`); authors pick existing tags by slug, name or alias, and an unknown tag is refused. An article has one topic, a level (beginner, intermediate, advanced) and up to 12 tags. Once an article has been public, changing its classification needs the publish permission, like its address.
+- **Projection.** `search_documents` (+ `search_terms`, `search_sections`) holds one row per **published** article, rewritten by `lib/search-index.ts` inside the transaction that publishes, withdraws, moves or reclassifies it, and deleted on withdrawal. Search reads nothing else, so drafts and withdrawn articles can't appear.
+- **Ranking** (`lib/search.ts`). Candidates come from weighted full text (`simple` configuration, so identifiers aren't stemmed; title A, tags and headings B, summary C, body D), exact identifiers (`useEffect`, `ERR_CONNECTION_RESET`, `C#`, stored lower-cased from code spans, code blocks and code-like words; `lib/identifiers.ts`), identifier prefixes, `pg_trgm` similarity of the title (misspellings) and tags the query names (aliases included). Facets (topic with its subtopics, tag, technology, level, language, kind) filter the candidates before ranking and paging; pages are keyset on (score, id). Each hit has a snippet from its best-matching section and a link to that heading.
+- **Limits.** `/search` and `/api/public/search` allow 30 searches a minute per client (bursts of 10), in memory per process; past that, 429 with `Retry-After`. On a seeded 10 000-article set the p95 is about 165 ms, and that is the worst case: one query matching every article. The median is about 30 ms (`test/search.integration.test.ts`).
+- The studio has its own authenticated search (`/studio?q=`): titles and slugs of the person's articles, drafts included.
 
 Migrations are in `lib/migrations.ts` (versioned SQL under an advisory lock, recorded in `knowledge_migrations`). Never edit a shipped one: add the next.
 
@@ -70,4 +79,4 @@ Studio authors with `knowledge.ai.use` (in `knowledge.author` and `knowledge.edi
 
 ## Not in Phase 0
 
-Structured (Tiptap) editing, taxonomy and search, courses, media and video, AI drafting and Mermaid proposals, events, scheduling, author profiles, SEO/RSS/LinkedIn, translations, production deployment. Each has its own issue.
+Courses, media and video, AI drafting and Mermaid proposals, events, scheduling, author profiles, SEO/RSS/LinkedIn, translations, production deployment. Each has its own issue.

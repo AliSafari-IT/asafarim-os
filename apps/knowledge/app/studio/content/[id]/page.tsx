@@ -5,11 +5,12 @@
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { changeSlugAction, discardAutosaveAction, publishAction, withdrawAction } from "../../actions";
+import { changeSlugAction, classifyAction, discardAutosaveAction, publishAction, withdrawAction } from "../../actions";
 import { EditorForm } from "@/components/EditorForm";
 import { Notices } from "@/components/Notices";
 import { TopBar } from "@/components/TopBar";
 import { getAutosave, getStudioItem } from "@/lib/content";
+import { getClassification, LEVELS, listTags, listTopics } from "@/lib/taxonomy";
 import { aiConfigFromEnv } from "@/lib/ai/provider";
 import { AI_PERMISSION } from "@/lib/ai/service";
 import { db } from "@/lib/db";
@@ -29,7 +30,7 @@ const stamp = (d: Date) => d.toISOString().slice(0, 16).replace("T", " ");
 
 export default async function StudioItemPage({ params, searchParams }: Props) {
   const { id } = await params;
-  const { error, done, before, restore } = await searchParams;
+  const { error, done, before, restore, detail } = await searchParams;
   const g = await requireStudio();
   if (!g.ok) {
     return (
@@ -45,7 +46,12 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
   const found = await getStudioItem(pool, g.actor, id, { before: parseBefore(before) });
   if (!found) notFound();
   // This author's unsaved text from an earlier session (#372), offered back rather than silently loaded.
-  const autosave = await getAutosave(pool, g.actor, id);
+  const [autosave, classification, topics, tags] = await Promise.all([
+    getAutosave(pool, g.actor, id),
+    getClassification(pool, id),
+    listTopics(pool),
+    listTags(pool),
+  ]);
   const restored = restore === "1" ? autosave : null;
   const { item, revisions, olderBefore, published } = found;
   const editable = canEdit(g.actor, item);
@@ -61,7 +67,7 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
           <Link href="/studio">← Studio</Link>
         </p>
         <h1>{item.draft.title}</h1>
-        <Notices error={error} done={done} />
+        <Notices error={error} done={done} detail={detail} />
 
         <section className="card" data-testid="publication">
           <h2>Publication</h2>
@@ -109,6 +115,64 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
               </button>
             </form>
           ) : null}
+        </section>
+
+        <section className="card taxonomy" data-testid="classification">
+          <h2>Classification</h2>
+          {(item.status === "draft" ? editable : publishable) ? (
+            <form action={classifyAction}>
+              <input type="hidden" name="id" value={item.id} />
+              <div className="facets">
+                <label>
+                  Topic
+                  <select name="topic" defaultValue={topics.find((t) => t.id === classification.topicId)?.slug ?? ""}>
+                    <option value="">None</option>
+                    {topics.map((t) => (
+                      <option key={t.id} value={t.slug}>
+                        {t.parentId ? `— ${t.name}` : t.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Level
+                  <select name="level" defaultValue={classification.level ?? ""}>
+                    <option value="">None</option>
+                    {LEVELS.map((l) => (
+                      <option key={l} value={l}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label>
+                Tags <span className="muted">(comma-separated; curated tags only, by name, slug or alias)</span>
+                <input
+                  name="tags"
+                  defaultValue={classification.tags.map((t) => t.slug).join(", ")}
+                  list="known-tags"
+                  data-testid="tags-input"
+                />
+              </label>
+              <datalist id="known-tags">
+                {tags.map((t) => (
+                  <option key={t.id} value={t.slug}>
+                    {t.name}
+                  </option>
+                ))}
+              </datalist>
+              <button type="submit" className="secondary" data-testid="classify">
+                Save classification
+              </button>
+              {item.status !== "draft" ? <span className="muted"> Applies to the public article at once.</span> : null}
+            </form>
+          ) : (
+            <p className="muted">
+              {topics.find((t) => t.id === classification.topicId)?.name ?? "No topic"} ·{" "}
+              {classification.level ?? "no level"} · {classification.tags.map((t) => t.name).join(", ") || "no tags"}
+            </p>
+          )}
         </section>
 
         {item.draft.format === "markdown" ? (
