@@ -117,6 +117,21 @@ CREATE TABLE ai_jobs (
 );
 CREATE INDEX ai_jobs_actor ON ai_jobs (actor, created_at DESC);`,
   },
+  {
+    version: 4,
+    name: "durable AI token reservations",
+    sql: `
+CREATE TABLE ai_reservations (
+  id uuid PRIMARY KEY,
+  month text NOT NULL,
+  subject text NOT NULL,
+  tokens bigint NOT NULL CHECK (tokens > 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  charged bigint CHECK (charged >= 0),
+  FOREIGN KEY (month, subject) REFERENCES ai_usage (month, subject)
+);
+CREATE INDEX ai_reservations_pending ON ai_reservations (created_at) WHERE charged IS NULL;`,
+  },
 ];
 
 interface Queryable {

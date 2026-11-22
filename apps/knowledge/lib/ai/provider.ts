@@ -2,8 +2,8 @@ import "server-only";
 /**
  * The AI behind the studio's writing assistance (#360), behind one small interface so the rest of Knowledge (and
  * its tests) don't know the provider. The one provider today is Anthropic's Messages API (Claude) through the
- * official TypeScript SDK. Every request asks for an answer constrained to a JSON schema (structured outputs), and
- * opts into the API's server-side fallback when a model declines. The key is KNOWLEDGE_AI_API_KEY (the encrypted
+ * official TypeScript SDK. Every request asks for an answer constrained to a JSON schema (structured outputs), with
+ * a single billable attempt per reservation. The key is KNOWLEDGE_AI_API_KEY (the encrypted
  * env); nothing here logs a prompt, a draft or an answer.
  */
 import Anthropic from "@anthropic-ai/sdk";
@@ -13,7 +13,6 @@ export const EFFORTS = ["low", "medium", "high"] as const;
 export type Effort = (typeof EFFORTS)[number];
 export const DEFAULT_EFFORT: Effort = "medium";
 export const AI_TIMEOUT_MS = 90_000;
-export const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
 export interface Usage {
   inputTokens: number;
@@ -52,7 +51,8 @@ export class AiError extends Error {
 export interface AiProvider {
   readonly provider: string;
   readonly model: string;
-  generate(req: GenerateRequest): Promise<GenerateAnswer>;
+  modelLimits(): Promise<{ model: string; maxInput: number }>;
+  generate(req: GenerateRequest, model: string): Promise<GenerateAnswer>;
 }
 
 export interface AiConfig {
@@ -88,35 +88,42 @@ export function aiConfigFromEnv(env: Record<string, string | undefined> = proces
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0);
 
 function usageOf(u: Anthropic.Beta.BetaUsage | undefined): Usage {
-  return {
-    inputTokens: num(u?.input_tokens) + num(u?.cache_creation_input_tokens) + num(u?.cache_read_input_tokens),
-    outputTokens: num(u?.output_tokens),
-  };
+  const total = { inputTokens: 0, outputTokens: 0 };
+  for (const entry of u?.iterations?.length ? u.iterations : [u]) {
+    total.inputTokens +=
+      num(entry?.input_tokens) + num(entry?.cache_creation_input_tokens) + num(entry?.cache_read_input_tokens);
+    total.outputTokens += num(entry?.output_tokens);
+  }
+  return total;
 }
 
 export function createAnthropicProvider(
   config: Pick<AiConfig, "apiKey" | "model" | "effort">,
   /** Tests pass a stand-in fetch; production uses the platform's. */
-  opts: { fetch?: typeof fetch; maxRetries?: number } = {},
+  opts: { fetch?: typeof fetch } = {},
 ): AiProvider {
-  // One retry for a connection error or 429/5xx; the budget reservation covers the worst case.
+  // A response can be lost after billing; each reservation covers one attempt.
   const client = new Anthropic({
     apiKey: config.apiKey,
     timeout: AI_TIMEOUT_MS,
-    maxRetries: opts.maxRetries ?? 1,
+    maxRetries: 0,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
   return {
     provider: "anthropic",
     model: config.model,
-    async generate({ system, user, schema, maxTokens }) {
+    async modelLimits() {
+      const model = await client.models.retrieve(config.model);
+      const limit = model.max_input_tokens;
+      if (!limit || !Number.isSafeInteger(limit) || limit < 0) throw new AiError("unavailable");
+      return { model: model.id, maxInput: limit };
+    },
+    async generate({ system, user, schema, maxTokens }, model) {
       let response: Anthropic.Beta.BetaMessage;
       try {
         response = await client.beta.messages.create({
-          model: config.model,
+          model,
           max_tokens: maxTokens,
-          betas: [FALLBACK_BETA],
-          fallbacks: "default",
           system,
           messages: [{ role: "user", content: user }],
           output_config: { effort: config.effort, format: { type: "json_schema", schema } },
@@ -126,6 +133,7 @@ export function createAnthropicProvider(
         if (err instanceof Anthropic.APIError) throw new AiError("unavailable", undefined, `http_${err.status ?? "?"}`);
         throw new AiError("unavailable", undefined, "request_failed");
       }
+      if (!response.usage) throw new AiError("invalid_answer", undefined, "missing_usage");
       const usage = usageOf(response.usage);
       if (response.stop_reason === "refusal") throw new AiError("refused", usage);
       if (response.stop_reason === "max_tokens") throw new AiError("invalid_answer", usage, "max_tokens");

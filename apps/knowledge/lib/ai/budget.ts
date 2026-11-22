@@ -3,6 +3,7 @@
  * its worst case (input estimate + max output) before the call, under row locks in one transaction, so concurrent
  * requests can't overspend; afterwards it settles the reservation to the tokens the API reported.
  */
+import { randomUUID } from "node:crypto";
 import type pg from "pg";
 
 type Pool = Pick<pg.Pool, "connect" | "query">;
@@ -17,7 +18,8 @@ export interface Caps {
   authorMonthlyTokenCap: number;
 }
 
-export type Reservation = { ok: true; month: string; tokens: number } | { ok: false; scope: "publication" | "author" };
+export type Reservation =
+  { ok: true; id: string; month: string; tokens: number } | { ok: false; scope: "publication" | "author" };
 
 export async function reserve(
   pool: Pool,
@@ -26,6 +28,7 @@ export async function reserve(
   caps: Caps,
   now = new Date(),
 ): Promise<Reservation> {
+  await reconcile(pool);
   const month = monthOf(now);
   const client = await pool.connect();
   try {
@@ -56,8 +59,15 @@ export async function reserve(
       [PUBLICATION, subject],
       tokens,
     ]);
+    const id = randomUUID();
+    await client.query("INSERT INTO ai_reservations (id, month, subject, tokens) VALUES ($1,$2,$3,$4)", [
+      id,
+      month,
+      subject,
+      tokens,
+    ]);
     await client.query("COMMIT");
-    return { ok: true, month, tokens };
+    return { ok: true, id, month, tokens };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw err;
@@ -66,18 +76,25 @@ export async function reserve(
   }
 }
 
-/** Replace a reservation with what the call actually used (0 when it never reached the API). */
-export async function settle(
-  pool: Pick<Pool, "query">,
-  subject: string,
-  r: { month: string; tokens: number },
-  used: number,
-) {
+/** Claim the pending row and move both counters in the same statement. A repeat claims no rows. */
+export async function settle(pool: Pick<Pool, "query">, id: string, used: number | null) {
   await pool.query(
-    `UPDATE ai_usage SET reserved = GREATEST(reserved - $3, 0), used = used + $4
-     WHERE month = $1 AND subject = ANY($2::text[])`,
-    [r.month, [PUBLICATION, subject], r.tokens, Math.max(0, Math.round(used))],
+    `WITH settled AS (
+       UPDATE ai_reservations SET charged = COALESCE($2, tokens)
+       WHERE id = $1 AND charged IS NULL RETURNING month, subject, tokens, charged
+     )
+     UPDATE ai_usage u SET reserved = u.reserved - s.tokens, used = u.used + s.charged
+     FROM settled s WHERE u.month = s.month AND u.subject IN ('*', s.subject)`,
+    [id, used],
   );
+}
+
+/** Recover interrupted calls on subsequent activity. The lease exceeds the provider timeout. */
+export async function reconcile(pool: Pick<Pool, "query">) {
+  const { rows } = await pool.query<{ id: string }>(
+    "SELECT id FROM ai_reservations WHERE charged IS NULL AND created_at < now() - interval '1 hour' ORDER BY created_at LIMIT 100",
+  );
+  for (const row of rows) await settle(pool, row.id, null);
 }
 
 /** What is left this month, for the studio to show. */

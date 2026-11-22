@@ -35,9 +35,13 @@ export function AiPanel({ editor, itemId, baseRevisionId, title, onSummary, onTi
   const [instruction, setInstruction] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [proposal, setProposal] = useState<Proposal | null>(null);
-  // The selection the "improve" proposal replaces, captured when it was asked for.
-  const [range, setRange] = useState<{ from: number; to: number } | null>(null);
+  const [stored, setProposal] = useState<{
+    value: Proposal;
+    revision: string;
+    doc: Editor["state"]["doc"];
+    range?: { from: number; to: number };
+  } | null>(null);
+  const proposal = stored?.revision === baseRevisionId ? stored.value : null;
 
   const selectedText = () => {
     const { from, to } = editor.state.selection;
@@ -47,6 +51,8 @@ export function AiPanel({ editor, itemId, baseRevisionId, title, onSummary, onTi
   async function ask() {
     setError(null);
     setProposal(null);
+    const doc = editor.state.doc;
+    let range: { from: number; to: number } | undefined;
     let input: Record<string, unknown>;
     if (op === "outline") input = { op, brief, title };
     else if (op === "mermaid") input = { op, description: brief };
@@ -54,13 +60,13 @@ export function AiPanel({ editor, itemId, baseRevisionId, title, onSummary, onTi
     else {
       const sel = selectedText();
       if (!sel.text.trim()) return setError("ai_input_empty");
-      setRange({ from: sel.from, to: sel.to });
+      range = { from: sel.from, to: sel.to };
       input = { op, selection: sel.text, instruction };
     }
     setPending(true);
     try {
       const r = await aiAction({ itemId, baseRevisionId, input });
-      if (r.ok) setProposal(r.proposal);
+      if (r.ok) setProposal({ value: r.proposal, revision: baseRevisionId, doc, range });
       else setError(r.error);
     } catch {
       setError("ai_unavailable");
@@ -69,8 +75,16 @@ export function AiPanel({ editor, itemId, baseRevisionId, title, onSummary, onTi
     }
   }
 
+  function isCurrent() {
+    if (proposal && stored?.doc.eq(editor.state.doc)) return true;
+    setProposal(null);
+    setError("ai_stale_proposal");
+    return false;
+  }
+
   function apply() {
-    if (!proposal) return;
+    if (!proposal || !isCurrent()) return;
+    const range = stored?.range;
     const chain = editor.chain().focus();
     if (proposal.kind === "outline") chain.insertContent(proposal.doc.content).run();
     else if (proposal.kind === "mermaid")
@@ -159,11 +173,15 @@ export function AiPanel({ editor, itemId, baseRevisionId, title, onSummary, onTi
           <div className="ai-actions">
             {proposal.kind === "metadata" ? (
               <>
-                <button type="button" onClick={() => onSummary(proposal.summary)} data-testid="ai-use-summary">
+                <button
+                  type="button"
+                  onClick={() => isCurrent() && onSummary(proposal.summary)}
+                  data-testid="ai-use-summary"
+                >
                   Use as summary
                 </button>
                 {proposal.titles.map((t) => (
-                  <button type="button" key={t} className="secondary" onClick={() => onTitle(t)}>
+                  <button type="button" key={t} className="secondary" onClick={() => isCurrent() && onTitle(t)}>
                     Title: {t}
                   </button>
                 ))}

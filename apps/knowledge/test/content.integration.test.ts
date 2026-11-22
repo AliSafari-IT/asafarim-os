@@ -75,7 +75,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
     pool.on("error", () => undefined);
     const c = await pool.connect();
     try {
-      expect(await migrate(c)).toEqual([1, 2, 3]);
+      expect(await migrate(c)).toEqual([1, 2, 3, 4]);
       expect(await migrate(c)).toEqual([]); // idempotent
     } finally {
       c.release();
@@ -308,6 +308,9 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
     const provider = {
       provider: "fake",
       model: "fake-model",
+      async modelLimits() {
+        return { model: "fake-model", maxInput: 1000 };
+      },
       async generate() {
         calls++;
         return {
@@ -355,6 +358,10 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
       ok: false,
       error: "not_found",
     });
+    expect(
+      await runAiOperation(pool, { provider, caps }, writer, { itemId: a.id, baseRevisionId: other.revisionId, input }),
+    ).toEqual({ ok: false, error: "ai_stale_proposal" });
+    expect((await pool.query("SELECT id FROM ai_jobs")).rowCount).toBe(1);
     const noAi: Actor = {
       subject: "ai-writer",
       permissions: writer.permissions.filter((x) => x !== "knowledge.ai.use"),
@@ -398,6 +405,43 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
       used: before + 50,
       reserved: 0,
     });
+    const unreported = {
+      ...provider,
+      async generate(): Promise<never> {
+        throw new AiError("timeout");
+      },
+    };
+    const invoke = (p: typeof provider) =>
+      runAiOperation(pool, { provider: p, caps }, writer, { itemId: a.id, baseRevisionId: a.revisionId, input });
+    expect(await invoke(unreported)).toEqual({ ok: false, error: "ai_timeout" });
+    const spent = async () => (await pool.query("SELECT used::int FROM ai_usage WHERE subject = '*'")).rows[0].used;
+    expect(await spent()).toBe(before + 50 + 7000);
+    // Force the success log insert to fail after a billable generation.
+    await pool.query(
+      "ALTER TABLE ai_jobs ADD CONSTRAINT test_fail_success_log CHECK (status <> 'succeeded') NOT VALID",
+    );
+    try {
+      expect(await invoke(provider)).toEqual({ ok: false, error: "ai_unavailable" });
+      expect(await spent()).toBe(before + 50 + 7000 + 400);
+    } finally {
+      await pool.query("ALTER TABLE ai_jobs DROP CONSTRAINT test_fail_success_log");
+    }
+  });
+
+  it("settles once and charges expired reservations conservatively", async () => {
+    const { reserve, settle, reconcile } = await import("../lib/ai/budget");
+    const caps = { monthlyTokenCap: 1000, authorMonthlyTokenCap: 1000 };
+    const now = new Date("2001-01-01Z");
+    const a = ok(await reserve(pool, "ledger", 400, caps, now));
+    const b = ok(await reserve(pool, "ledger", 500, caps, now));
+    await Promise.all([settle(pool, a.id, 100), settle(pool, a.id, 100)]);
+    await pool.query("UPDATE ai_reservations SET created_at = now() - interval '2 hours' WHERE id=$1", [b.id]);
+    await reconcile(pool);
+    await reconcile(pool);
+    expect((await pool.query("SELECT reserved::int, used::int FROM ai_usage WHERE month='2001-01'")).rows).toEqual([
+      { reserved: 0, used: 600 },
+      { reserved: 0, used: 600 },
+    ]);
   });
 
   it("records who did what, without the text", async () => {

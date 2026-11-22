@@ -66,7 +66,7 @@ export function parseInput(
 
 /** Author material in the prompt: marked as data, and unable to close its own marker. */
 export function material(name: string, text: string): string {
-  const safe = text.replace(/<\/?\s*material\b[^>]*>/gi, "");
+  const safe = text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   return `<material name="${name}">\n${safe}\n</material>`;
 }
 
@@ -84,7 +84,7 @@ interface Spec {
   maxTokens: number;
 }
 
-const strings = (maxItems: number) => ({ type: "array", items: { type: "string" }, maxItems });
+const strings = { type: "array", items: { type: "string" } };
 
 export const SPECS: Record<Operation, Spec> = {
   outline: {
@@ -98,12 +98,11 @@ export const SPECS: Record<Operation, Spec> = {
       properties: {
         sections: {
           type: "array",
-          maxItems: 8,
           items: {
             type: "object",
             additionalProperties: false,
             required: ["heading", "points"],
-            properties: { heading: { type: "string" }, points: strings(5) },
+            properties: { heading: { type: "string" }, points: strings },
           },
         },
       },
@@ -130,7 +129,7 @@ export const SPECS: Record<Operation, Spec> = {
       type: "object",
       additionalProperties: false,
       required: ["summary", "titles", "tags"],
-      properties: { summary: { type: "string" }, titles: strings(3), tags: strings(6) },
+      properties: { summary: { type: "string" }, titles: strings, tags: strings },
     },
     maxTokens: 2_000,
   },
@@ -147,9 +146,6 @@ export const SPECS: Record<Operation, Spec> = {
     maxTokens: 4_000,
   },
 };
-
-/** A rough upper bound of the request's input tokens (about 3 characters a token, plus the fixed prompt). */
-export const estimateInputTokens = (system: string, user: string) => Math.ceil((system.length + user.length) / 3) + 50;
 
 export function buildRequest(input: OperationInput) {
   const spec = SPECS[input.op];
@@ -221,6 +217,7 @@ export function toProposal(
       const m = checkMermaid(source);
       if (!m.ok) return { ok: false, error: "ai_unsafe_diagram" };
       const description = clip(str(a.description), DOC_LIMITS.mermaidDescription);
+      if (!description) return { ok: false, error: "ai_empty_answer" };
       return { ok: true, proposal: { kind: "mermaid", source: m.source, description } };
     }
   }

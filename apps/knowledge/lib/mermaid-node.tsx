@@ -19,7 +19,8 @@ declare module "@tiptap/core" {
 function MermaidView({ node, updateAttributes, editor, deleteNode }: ReactNodeViewProps) {
   const source = String(node.attrs.source ?? "");
   const description = String(node.attrs.description ?? "");
-  const [preview, setPreview] = useState(source);
+  const [edit, setEdit] = useState<{ local: string; preview: string } | null>(null);
+  const preview = edit?.local === source ? edit.preview : source;
   const check = checkMermaid(source);
   return (
     <NodeViewWrapper className="mermaid-block" data-testid="mermaid-block">
@@ -39,8 +40,12 @@ function MermaidView({ node, updateAttributes, editor, deleteNode }: ReactNodeVi
           maxLength={LIMITS.mermaid}
           value={source}
           readOnly={!editor.isEditable}
-          onChange={(e) => updateAttributes({ source: e.target.value })}
-          onBlur={() => setPreview(source)}
+          onChange={(e) => {
+            const local = e.target.value;
+            setEdit({ local, preview });
+            updateAttributes({ source: local });
+          }}
+          onBlur={() => setEdit(null)}
           data-testid="mermaid-source"
         />
       </label>

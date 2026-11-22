@@ -8,7 +8,7 @@ import type pg from "pg";
 import { getStudioItem } from "../content";
 import { canEdit, type Actor } from "../policy";
 import { reserve, settle, type Caps } from "./budget";
-import { buildRequest, estimateInputTokens, toProposal, type OperationInput, type Proposal } from "./operations";
+import { buildRequest, toProposal, type OperationInput, type Proposal } from "./operations";
 import { AiError, type AiProvider } from "./provider";
 
 export const AI_PERMISSION = "knowledge.ai.use";
@@ -61,18 +61,26 @@ export async function runAiOperation(
   if (!found) return { ok: false, error: "not_found" };
   if (!canEdit(actor, found.item)) return { ok: false, error: "forbidden" };
 
+  const revision = found.item.draftRevisionId;
+  if (req.baseRevisionId !== revision) return { ok: false, error: "ai_stale_proposal" };
   const request = buildRequest(req.input);
-  const estimate = estimateInputTokens(request.system, request.user) + request.maxTokens;
-  const base = { actor, op: req.input.op, itemId: req.itemId, baseRevisionId: req.baseRevisionId };
-  const reservation = await reserve(pool, actor.subject, estimate, deps.caps);
+  let limits: Awaited<ReturnType<AiProvider["modelLimits"]>>;
+  try {
+    limits = await deps.provider.modelLimits();
+  } catch {
+    return { ok: false, error: "ai_unavailable" };
+  }
+  const ceiling = limits.maxInput + request.maxTokens;
+  const base = { actor, op: req.input.op, itemId: req.itemId, baseRevisionId: revision };
+  const reservation = await reserve(pool, actor.subject, ceiling, deps.caps);
   if (!reservation.ok) {
     await log(pool, { ...base, status: "over_budget", error: `budget_${reservation.scope}` });
     return { ok: false, error: reservation.scope === "author" ? "ai_author_budget" : "ai_budget" };
   }
 
-  let used = 0;
+  let used = reservation.tokens;
   try {
-    const answer = await deps.provider.generate(request);
+    const answer = await deps.provider.generate(request, limits.model);
     used = answer.usage.inputTokens + answer.usage.outputTokens;
     const proposal = toProposal(req.input.op, answer.answer);
     await log(pool, {
@@ -86,7 +94,7 @@ export async function runAiOperation(
     return proposal.ok ? { ok: true, proposal: proposal.proposal, model: answer.model } : proposal;
   } catch (err) {
     const e = err instanceof AiError ? err : new AiError("unavailable", undefined, "unexpected");
-    used = e.usage ? e.usage.inputTokens + e.usage.outputTokens : 0;
+    if (e.usage) used = e.usage.inputTokens + e.usage.outputTokens;
     await log(pool, {
       ...base,
       status: e.code === "refused" ? "refused" : "failed",
@@ -96,6 +104,6 @@ export async function runAiOperation(
     });
     return { ok: false, error: `ai_${e.code}` };
   } finally {
-    await settle(pool, actor.subject, reservation, used);
+    await settle(pool, reservation.id, used);
   }
 }

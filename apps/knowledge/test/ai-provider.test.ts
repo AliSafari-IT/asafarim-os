@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { aiConfigFromEnv, AiError, createAnthropicProvider, DEFAULT_MODEL, FALLBACK_BETA } from "../lib/ai/provider";
+import { buildRequest } from "../lib/ai/operations";
+import { aiConfigFromEnv, AiError, createAnthropicProvider, DEFAULT_MODEL } from "../lib/ai/provider";
 
 const answer = (over: Record<string, unknown> = {}) => ({
   id: "msg_1",
@@ -23,10 +24,10 @@ const cfg = { apiKey: "test-key-not-real", model: DEFAULT_MODEL, effort: "medium
 const req = { system: "S", user: "U", schema: { type: "object" }, maxTokens: 1000 };
 
 describe("the Anthropic provider", () => {
-  it("asks for a structured answer with server-side fallback, and reads the usage", async () => {
+  it("asks for a structured answer in one attempt, and reads the usage", async () => {
     const seen: { url?: string; init?: RequestInit }[] = [];
-    const p = createAnthropicProvider(cfg, { fetch: fakeFetch(200, answer(), seen), maxRetries: 0 });
-    const r = await p.generate(req);
+    const p = createAnthropicProvider(cfg, { fetch: fakeFetch(200, answer(), seen) });
+    const r = await p.generate(req, DEFAULT_MODEL);
     expect(r).toEqual({
       answer: { text: "Better." },
       usage: { inputTokens: 105, outputTokens: 20 },
@@ -37,14 +38,32 @@ describe("the Anthropic provider", () => {
     expect(body).toMatchObject({
       model: "claude-opus-5-5",
       max_tokens: 1000,
-      fallbacks: "default",
       system: "S",
       messages: [{ role: "user", content: "U" }],
       output_config: { effort: "medium", format: { type: "json_schema", schema: { type: "object" } } },
     });
     expect(body).not.toHaveProperty("temperature");
-    const headers = new Headers(seen[0]!.init!.headers);
-    expect(headers.get("anthropic-beta")).toContain(FALLBACK_BETA);
+    expect(body).not.toHaveProperty("fallbacks");
+  });
+
+  it("sends an outline without array limits and sums all billed iterations", async () => {
+    const seen: { init?: RequestInit }[] = [];
+    const iteration = { input_tokens: 7, cache_creation_input_tokens: 3, cache_read_input_tokens: 1, output_tokens: 5 };
+    const provider = createAnthropicProvider(cfg, {
+      fetch: fakeFetch(
+        200,
+        answer({
+          usage: {
+            input_tokens: 999,
+            iterations: [iteration, iteration],
+          },
+        }),
+        seen,
+      ),
+    });
+    const result = await provider.generate(buildRequest({ op: "outline", brief: "hooks", title: "" }), DEFAULT_MODEL);
+    expect(JSON.stringify(JSON.parse(String(seen[0]?.init?.body)).output_config)).not.toContain("maxItems");
+    expect(result.usage).toEqual({ inputTokens: 22, outputTokens: 10 });
   });
 
   it("turns refusals, cut-off and non-JSON answers, and API errors into typed errors", async () => {
@@ -57,8 +76,8 @@ describe("the Anthropic provider", () => {
       [400, { type: "error", error: { type: "invalid_request_error", message: "x" } }, "unavailable"],
     ];
     for (const [status, body, code] of cases) {
-      const p = createAnthropicProvider(cfg, { fetch: fakeFetch(status, body), maxRetries: 0 });
-      const err = await p.generate(req).catch((e: unknown) => e);
+      const p = createAnthropicProvider(cfg, { fetch: fakeFetch(status, body) });
+      const err = await p.generate(req, DEFAULT_MODEL).catch((e: unknown) => e);
       expect(err, JSON.stringify(body)).toBeInstanceOf(AiError);
       expect((err as AiError).code).toBe(code);
       expect((err as AiError).message).not.toContain("secret detail");

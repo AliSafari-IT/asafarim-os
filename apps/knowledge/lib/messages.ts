@@ -22,6 +22,7 @@ export const ERRORS: Record<string, string> = {
   mermaid_html: "A diagram contains HTML or a script link, which isn't allowed.",
   mermaid_type: "A diagram has to start with its type, such as flowchart TD or sequenceDiagram.",
   mermaid_description_too_long: "A diagram's text description can be at most 500 characters.",
+  ai_stale_proposal: "The draft changed. Ask again for a proposal based on the current text.",
   ai_off: "AI assistance isn't set up for this publication.",
   ai_budget: "The publication's AI budget for this month is used up.",
   ai_author_budget: "Your AI budget for this month is used up.",

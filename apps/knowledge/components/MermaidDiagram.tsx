@@ -21,6 +21,7 @@ async function mermaid() {
   ready ??= import("mermaid").then((m) => m.default);
   const mm = await ready;
   mm.initialize({
+    suppressErrorRendering: true,
     startOnLoad: false,
     securityLevel: "strict",
     theme: dark() ? "dark" : "default",
