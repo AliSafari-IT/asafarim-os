@@ -12,7 +12,9 @@ import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/r
 import StarterKit from "@tiptap/starter-kit";
 import { useActionState, useState } from "react";
 import { saveDraftAction, type SaveState } from "@/app/studio/actions";
+import { AiPanel } from "@/components/AiPanel";
 import { Callout } from "@/lib/callout";
+import { Mermaid } from "@/lib/mermaid-node";
 import { safeHref, type Doc } from "@/lib/doc";
 import { ERRORS } from "@/lib/messages";
 
@@ -25,6 +27,8 @@ export interface EditorFormProps {
   doc: Doc | null;
   markdown: string;
   canEdit: boolean;
+  /** AI assistance is configured and the person holds knowledge.ai.use. */
+  aiEnabled: boolean;
 }
 
 export const LANGUAGES = [
@@ -100,6 +104,12 @@ function Toolbar({ editor }: { editor: Editor }) {
       {b("1. List", s.ordered, () => chain().toggleOrderedList().run(), "Numbered list")}
       {b("Quote", s.quote, () => chain().toggleBlockquote().run())}
       {b("Callout", s.callout, () => chain().toggleCallout("note").run())}
+      {b(
+        "Diagram",
+        false,
+        () => chain().insertMermaid({ source: 'flowchart TD\n  A["Start"] --> B["End"]' }).run(),
+        "Mermaid diagram",
+      )}
       <span className="sep" />
       {b("Code block", s.codeBlock, () => chain().toggleCodeBlock().run())}
       {s.codeBlock ? (
@@ -155,6 +165,7 @@ export function EditorForm(props: EditorFormProps) {
       }),
       TableKit.configure({ table: { resizable: false } }),
       Callout,
+      Mermaid,
       Markdown,
     ],
     ...(props.doc ? { content: props.doc } : { content: props.markdown, contentType: "markdown" as const }),
@@ -207,6 +218,16 @@ export function EditorForm(props: EditorFormProps) {
       <div className="editor-frame" aria-labelledby="body-label">
         <EditorContent editor={editor} />
       </div>
+      {editor && props.canEdit && props.aiEnabled ? (
+        <AiPanel
+          editor={editor}
+          itemId={props.id}
+          baseRevisionId={props.revisionId}
+          title={title}
+          onSummary={setSummary}
+          onTitle={setTitle}
+        />
+      ) : null}
       <button type="submit" disabled={pending || !props.canEdit || !doc} data-testid="save">
         {pending ? "Saving…" : "Save draft"}
       </button>

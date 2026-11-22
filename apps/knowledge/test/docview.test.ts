@@ -65,4 +65,22 @@ describe("structured article rendering", () => {
     expect(html).toContain("&lt;script&gt;");
     expect(html).toContain('<a href="https://x.example/" rel="noopener noreferrer nofollow">');
   });
+  it("renders a diagram's source as fallback text and escapes its caption", async () => {
+    const html = await render({
+      type: "doc",
+      content: [
+        {
+          type: "mermaid",
+          attrs: {
+            source: 'flowchart LR\n  A["Request & response"] --> B',
+            description: "Request goes to <server>.",
+          },
+        },
+      ],
+    });
+    expect(html).toContain('aria-label="Diagram source"');
+    expect(html).toContain("Request &amp; response");
+    expect(html).toContain("<figcaption>Request goes to &lt;server&gt;.</figcaption>");
+    expect(html).not.toContain("<svg");
+  });
 });

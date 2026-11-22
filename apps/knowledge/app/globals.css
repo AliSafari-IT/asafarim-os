@@ -393,3 +393,94 @@ main .toolbar .tool:hover {
 .table-wrap {
   overflow-x: auto;
 }
+/* AI assistance and diagrams (#360). */
+.ai-panel {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+}
+.ai-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+.ai-ops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.ai-op {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.ai-op input {
+  width: auto;
+  margin: 0;
+}
+.ai-op.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ai-proposal {
+  margin-top: 10px;
+  padding: 10px;
+  border-left: 4px solid var(--accent);
+  background: var(--card-2);
+  border-radius: 0 8px 8px 0;
+}
+.ai-text {
+  white-space: pre-wrap;
+}
+.ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.mermaid-block {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 12px 0;
+  background: var(--card-2);
+}
+.mermaid-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.diagram {
+  margin: 12px 0;
+}
+.diagram-svg {
+  overflow-x: auto;
+}
+.diagram-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+.diagram-source {
+  overflow-x: auto;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--card-2);
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+.diagram figcaption {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin-top: 4px;
+}

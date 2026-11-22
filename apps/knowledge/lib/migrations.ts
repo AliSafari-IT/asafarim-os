@@ -86,6 +86,52 @@ ALTER TABLE content_revisions
     OR (format = 'markdown' AND doc IS NULL AND schema_version IS NULL)
   );`,
   },
+  {
+    version: 3,
+    name: "AI writing assistance: token budgets and a job log without prompts or answers (#360)",
+    sql: `
+-- Tokens reserved and used per calendar month (UTC), for the whole publication (subject '*') and per author.
+-- A request reserves its worst case first (in one transaction with the cap check), then settles to what it used.
+CREATE TABLE ai_usage (
+  month    text NOT NULL CHECK (month ~ '^[0-9]{4}-[0-9]{2}$'),
+  subject  text NOT NULL,
+  reserved bigint NOT NULL DEFAULT 0 CHECK (reserved >= 0),
+  used     bigint NOT NULL DEFAULT 0 CHECK (used >= 0),
+  PRIMARY KEY (month, subject)
+);
+
+-- One row per AI request: who, what, on which article and revision, the outcome and the tokens. Never the prompt,
+-- the selected text or the answer.
+CREATE TABLE ai_jobs (
+  id               text PRIMARY KEY,
+  actor            text NOT NULL,
+  operation        text NOT NULL CHECK (operation IN ('outline', 'improve', 'summary', 'mermaid')),
+  item_id          text NOT NULL REFERENCES content_items (id),
+  base_revision_id text NOT NULL,
+  status           text NOT NULL CHECK (status IN ('succeeded', 'failed', 'refused', 'over_budget')),
+  error_code       text,
+  model            text,
+  input_tokens     integer NOT NULL DEFAULT 0,
+  output_tokens    integer NOT NULL DEFAULT 0,
+  created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ai_jobs_actor ON ai_jobs (actor, created_at DESC);`,
+  },
+  {
+    version: 4,
+    name: "durable AI token reservations",
+    sql: `
+CREATE TABLE ai_reservations (
+  id uuid PRIMARY KEY,
+  month text NOT NULL,
+  subject text NOT NULL,
+  tokens bigint NOT NULL CHECK (tokens > 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  charged bigint CHECK (charged >= 0),
+  FOREIGN KEY (month, subject) REFERENCES ai_usage (month, subject)
+);
+CREATE INDEX ai_reservations_pending ON ai_reservations (created_at) WHERE charged IS NULL;`,
+  },
 ];
 
 interface Queryable {
