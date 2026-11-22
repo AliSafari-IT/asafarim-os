@@ -75,7 +75,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
     pool.on("error", () => undefined);
     const c = await pool.connect();
     try {
-      expect(await migrate(c)).toEqual([1, 2, 3, 4]);
+      expect(await migrate(c)).toEqual([1, 2, 3, 4, 5]);
       expect(await migrate(c)).toEqual([]); // idempotent
     } finally {
       c.release();
@@ -297,6 +297,151 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
         [md.id],
       ),
     ).rejects.toThrow(/content_revisions_doc_matches_format/);
+  });
+
+  it("autosaves without making revisions, keeps work through a conflict, and shows it for comparison (#372)", async () => {
+    const { autosaveDraft, getAutosave, discardAutosave, getRevision } = await import("../lib/content");
+    const { parseDoc } = await import("../lib/doc");
+    const docOf = (text: string) => {
+      const p = parseDoc({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] });
+      if (!p.ok) throw new Error(p.error);
+      return p;
+    };
+    const a = ok(await createArticle(pool, alice, { slug: "autosaved", draft: draft("Autosaved", "v1") }));
+    const mine = docOf("alice's unsaved line");
+    const first = ok(
+      await autosaveDraft(pool, alice, {
+        id: a.id,
+        baseRevisionId: a.revisionId,
+        draft: { title: "Autosaved", summary: "", body: mine.text, doc: mine.doc },
+      }),
+    );
+    expect(first.conflict).toBeNull();
+    // An autosave is not a revision, and is only the author's own.
+    expect((await getStudioItem(pool, alice, a.id))?.revisions).toHaveLength(1);
+    expect(await getAutosave(pool, alice, a.id)).toMatchObject({ baseNumber: 1, body: "alice's unsaved line" });
+    expect(await getAutosave(pool, erin, a.id)).toBeNull();
+    // Someone who can't edit the article can't autosave to it either.
+    expect(
+      await autosaveDraft(pool, bob, {
+        id: a.id,
+        baseRevisionId: a.revisionId,
+        draft: { title: "x", summary: "", body: mine.text, doc: mine.doc },
+      }),
+    ).toEqual({ ok: false, error: "not_found" });
+    // A base revision from another article is refused.
+    const other = ok(await createArticle(pool, alice, { slug: "autosave-other", draft: draft("Other") }));
+    expect(
+      await autosaveDraft(pool, alice, {
+        id: a.id,
+        baseRevisionId: other.revisionId,
+        draft: { title: "x", summary: "", body: mine.text, doc: mine.doc },
+      }),
+    ).toEqual({ ok: false, error: "unknown_revision" });
+
+    // An editor saves a newer revision meanwhile. Alice's next autosave is still kept, and reports the conflict.
+    const v2 = ok(
+      await saveDraft(pool, erin, {
+        id: a.id,
+        expectedRevisionId: a.revisionId,
+        draft: draft("Autosaved", "erin's v2"),
+      }),
+    );
+    const later = docOf("alice's unsaved line, longer");
+    const second = ok(
+      await autosaveDraft(pool, alice, {
+        id: a.id,
+        baseRevisionId: a.revisionId,
+        draft: { title: "Autosaved", summary: "", body: later.text, doc: later.doc },
+      }),
+    );
+    expect(second.conflict).toBe(v2.revisionId);
+    expect(await getAutosave(pool, alice, a.id)).toMatchObject({
+      baseRevisionId: a.revisionId,
+      body: "alice's unsaved line, longer",
+    });
+    // Her explicit save on the old base is refused (nothing overwritten), and the autosave survives it.
+    expect(
+      await saveDraft(pool, alice, { id: a.id, expectedRevisionId: a.revisionId, draft: draft("Autosaved", "x") }),
+    ).toEqual({ ok: false, error: "conflict", currentRevisionId: v2.revisionId });
+    expect(await getAutosave(pool, alice, a.id)).not.toBeNull();
+    // Both revisions can be read back for the comparison; a revision number that doesn't exist can't.
+    expect((await getRevision(pool, alice, a.id, 2))?.revision.body).toBe("erin's v2");
+    expect(await getRevision(pool, alice, a.id, 9)).toBeNull();
+    expect(await getRevision(pool, bob, a.id, 1)).toBeNull();
+
+    // Once she saves on top of the newest revision, the autosave is gone.
+    ok(
+      await saveDraft(pool, alice, {
+        id: a.id,
+        expectedRevisionId: v2.revisionId,
+        draft: draft("Autosaved", "merged"),
+      }),
+    );
+    expect(await getAutosave(pool, alice, a.id)).toBeNull();
+    // Discard removes only the caller's own.
+    ok(
+      await autosaveDraft(pool, alice, {
+        id: other.id,
+        baseRevisionId: other.revisionId,
+        draft: { title: "Other", summary: "", body: mine.text, doc: mine.doc },
+      }),
+    );
+    await discardAutosave(pool, erin, other.id);
+    expect(await getAutosave(pool, alice, other.id)).not.toBeNull();
+    await discardAutosave(pool, alice, other.id);
+    expect(await getAutosave(pool, alice, other.id)).toBeNull();
+  });
+
+  it("changes slugs with one-hop redirects for published articles, never chains or cycles (#372)", async () => {
+    const { changeSlug, resolveSlugRedirect } = await import("../lib/content");
+    const a = ok(await createArticle(pool, alice, { slug: "slug-one", draft: draft("Slugs") }));
+    // A never-published draft just moves: no redirect.
+    expect(await changeSlug(pool, alice, { id: a.id, slug: "slug-draft" })).toMatchObject({ ok: true });
+    expect(await resolveSlugRedirect(pool, "slug-one")).toBeNull();
+    ok(await publishRevision(pool, alice, { id: a.id, revisionId: a.revisionId }));
+    // Published: the old address redirects to the article's current one, in one hop, however often it moves.
+    ok(await changeSlug(pool, alice, { id: a.id, slug: "slug-two" }));
+    ok(await changeSlug(pool, alice, { id: a.id, slug: "slug-three" }));
+    expect(await resolveSlugRedirect(pool, "slug-draft")).toBe("slug-three");
+    expect(await resolveSlugRedirect(pool, "slug-two")).toBe("slug-three");
+    expect(await getPublishedArticle(pool, "slug-two")).toBeNull();
+    expect(await getPublishedArticle(pool, "slug-three")).toMatchObject({ title: "Slugs" });
+    // Taking back an old slug removes its redirect: no cycle, and the current slug is never a redirect.
+    ok(await changeSlug(pool, alice, { id: a.id, slug: "slug-two" }));
+    expect(await resolveSlugRedirect(pool, "slug-two")).toBeNull();
+    expect(await resolveSlugRedirect(pool, "slug-three")).toBe("slug-two");
+    const redirects = await pool.query("SELECT old_slug FROM slug_redirects WHERE item_id = $1 ORDER BY old_slug", [
+      a.id,
+    ]);
+    expect(redirects.rows.map((r: { old_slug: string }) => r.old_slug)).toEqual(["slug-draft", "slug-three"]);
+
+    // Another article can't take a current slug or an old one, at creation or by a change.
+    const b = ok(await createArticle(pool, bob, { slug: "slug-bob", draft: draft("Bob's") }));
+    expect(await changeSlug(pool, bob, { id: b.id, slug: "slug-two" })).toEqual({ ok: false, error: "slug_taken" });
+    expect(await changeSlug(pool, bob, { id: b.id, slug: "slug-three" })).toEqual({ ok: false, error: "slug_taken" });
+    expect(await createArticle(pool, bob, { slug: "slug-draft", draft: draft("x") })).toEqual({
+      ok: false,
+      error: "slug_taken",
+    });
+    // Only someone who may edit (draft) or publish (once public) moves an article; others don't see it at all.
+    expect(await changeSlug(pool, bob, { id: a.id, slug: "slug-x" })).toEqual({ ok: false, error: "not_found" });
+    const editOnly: Actor = {
+      subject: "alice",
+      permissions: alice.permissions.filter((p) => p !== "knowledge.content.publish.own"),
+    };
+    expect(await changeSlug(pool, editOnly, { id: a.id, slug: "slug-x" })).toEqual({ ok: false, error: "forbidden" });
+
+    // Withdrawn: the redirect stays recorded but leads nowhere a guest can see; republished, it works again.
+    ok(await withdrawArticle(pool, alice, { id: a.id }));
+    expect(await resolveSlugRedirect(pool, "slug-three")).toBeNull();
+    ok(await publishRevision(pool, alice, { id: a.id, revisionId: a.revisionId }));
+    expect(await resolveSlugRedirect(pool, "slug-three")).toBe("slug-two");
+    const audit = await pool.query(
+      "SELECT count(*)::int AS n FROM audit_events WHERE item_id = $1 AND action = 'content.slug_changed'",
+      [a.id],
+    );
+    expect(audit.rows[0].n).toBe(4);
   });
 
   it("runs AI operations as proposals within the budgets, logging no text (#360)", async () => {

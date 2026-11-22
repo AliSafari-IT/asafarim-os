@@ -75,7 +75,8 @@ export type Failure =
   | { ok: false; error: "slug_taken" }
   | { ok: false; error: "conflict"; currentRevisionId: string }
   | { ok: false; error: "unknown_revision" }
-  | { ok: false; error: "not_published" };
+  | { ok: false; error: "not_published" }
+  | { ok: false; error: "invalid_slug" };
 
 export type Result<T> = ({ ok: true } & T) | Failure;
 
@@ -164,6 +165,9 @@ async function insertRevision(c: Client, itemId: string, number: number, draft: 
   return id;
 }
 
+const slugIsRedirect = async (c: Client, slug: string) =>
+  ((await c.query("SELECT 1 FROM slug_redirects WHERE old_slug = $1", [slug])).rowCount ?? 0) > 0;
+
 const lockItem = async (c: Client, id: string) =>
   (await c.query<ItemRow>("SELECT * FROM content_items WHERE id = $1 FOR UPDATE", [id])).rows[0];
 
@@ -176,6 +180,10 @@ export async function createArticle(
   if (!canCreate(actor)) return { ok: false, error: "forbidden" };
   return inTransaction(pool, async (c) => {
     const id = randomUUID();
+    // An old address keeps leading to its article: a new article can't take it (#372). Under the same lock as
+    // changeSlug, so a slug that is becoming a redirect can't be claimed in between.
+    await c.query("SELECT pg_advisory_xact_lock(hashtext('knowledge.slug_redirects'))");
+    if (await slugIsRedirect(c, input.slug)) return { ok: false, error: "slug_taken" } as const;
     const inserted = await c.query(
       `INSERT INTO content_items (id, owner_subject, slug) VALUES ($1, $2, $3) ON CONFLICT (slug) DO NOTHING`,
       [id, actor.subject, input.slug],
@@ -214,6 +222,8 @@ export async function saveDraft(
       item.id,
       revisionId,
     ]);
+    // The author's unsaved text is now a revision: the autosave has done its job.
+    await c.query("DELETE FROM draft_autosaves WHERE item_id = $1 AND author = $2", [item.id, actor.subject]);
     await audit(c, actor, "content.saved", item.id, revisionId);
     return { ok: true, revisionId } as const;
   });
@@ -425,4 +435,174 @@ export async function listPublished(
 export async function getPublishedArticle(pool: Pick<Pool, "query">, slug: string): Promise<PublishedArticle | null> {
   const row = (await pool.query<PublicRow>(`${PUBLIC_SELECT} AND i.slug = $1`, [slug])).rows[0];
   return row ? toPublished(row) : null;
+}
+
+/**
+ * Where an old address of a published article leads now (#372): its current slug, or null when the slug was never
+ * an old address or the article isn't public (a guest then gets the same 404 as for any unknown slug).
+ */
+export async function resolveSlugRedirect(pool: Pick<Pool, "query">, slug: string): Promise<string | null> {
+  const { rows } = await pool.query<{ slug: string }>(
+    `SELECT i.slug FROM slug_redirects s JOIN content_items i ON i.id = s.item_id
+     WHERE s.old_slug = $1 AND i.published_revision_id IS NOT NULL`,
+    [slug],
+  );
+  return rows[0]?.slug ?? null;
+}
+
+/**
+ * Give an article a new address (#372). Once an article has been public (published now, or withdrawn), changing
+ * its address is a publishing decision (canPublish), and the old address is kept as a redirect to the article; a
+ * never-published draft just moves (canEdit). Taking back one of the article's own old slugs removes that redirect,
+ * so a slug is never both an address and a redirect, and redirects never chain.
+ */
+export async function changeSlug(
+  pool: Pool,
+  actor: Actor,
+  input: { id: string; slug: string },
+): Promise<Result<{ slug: string; previous: string }>> {
+  return inTransaction(pool, async (c) => {
+    const item = await lockItem(c, input.id);
+    if (!item || !canView(actor, ownerOf(item))) return { ok: false, error: "not_found" } as const;
+    const wasPublic = item.published_revision_id !== null || item.withdrawn_at !== null;
+    const allowed = wasPublic ? canPublish(actor, ownerOf(item)) : canEdit(actor, ownerOf(item));
+    if (!allowed) return { ok: false, error: "forbidden" } as const;
+    if (input.slug === item.slug) return { ok: true, slug: item.slug, previous: item.slug } as const;
+    // Serialise slug changes, so two articles can't trade addresses into a state the checks below would refuse.
+    await c.query("SELECT pg_advisory_xact_lock(hashtext('knowledge.slug_redirects'))");
+    const redirect = (
+      await c.query<{ item_id: string }>("SELECT item_id FROM slug_redirects WHERE old_slug = $1", [input.slug])
+    ).rows[0];
+    if (redirect && redirect.item_id !== item.id) return { ok: false, error: "slug_taken" } as const;
+    const taken = await c.query("SELECT 1 FROM content_items WHERE slug = $1", [input.slug]);
+    if ((taken.rowCount ?? 0) > 0) return { ok: false, error: "slug_taken" } as const;
+    if (redirect) await c.query("DELETE FROM slug_redirects WHERE old_slug = $1", [input.slug]);
+    if (wasPublic) {
+      await c.query("INSERT INTO slug_redirects (old_slug, item_id) VALUES ($1, $2)", [item.slug, item.id]);
+    }
+    await c.query("UPDATE content_items SET slug = $2, updated_at = now() WHERE id = $1", [item.id, input.slug]);
+    await audit(c, actor, "content.slug_changed", item.id, null);
+    return { ok: true, slug: input.slug, previous: item.slug } as const;
+  });
+}
+
+/** The editor's unsaved text for one author (#372). */
+export interface Autosave {
+  baseRevisionId: string;
+  /** The base revision's number, to name it in the studio. */
+  baseNumber: number;
+  title: string;
+  summary: string;
+  doc: Doc;
+  body: string;
+  savedAt: Date;
+}
+
+/**
+ * Keep the editor's current text (#372), overwriting this author's previous autosave of the article. It is always
+ * stored, so nothing typed is lost, and it never becomes a revision. When the draft head has moved past the
+ * revision the editor opened, the result says so (`conflict`) and names the newer revision: the editor then offers
+ * a comparison instead of a save that would put this text on top unseen.
+ */
+export async function autosaveDraft(
+  pool: Pool,
+  actor: Actor,
+  input: { id: string; baseRevisionId: string; draft: DraftInput & { doc: Doc } },
+): Promise<Result<{ savedAt: Date; conflict: string | null }>> {
+  return inTransaction(pool, async (c) => {
+    const item = await lockItem(c, input.id);
+    if (!item || !canView(actor, ownerOf(item))) return { ok: false, error: "not_found" } as const;
+    if (!canEdit(actor, ownerOf(item))) return { ok: false, error: "forbidden" } as const;
+    const own = await c.query("SELECT 1 FROM content_revisions WHERE item_id = $1 AND id = $2", [
+      item.id,
+      input.baseRevisionId,
+    ]);
+    if (own.rowCount === 0) return { ok: false, error: "unknown_revision" } as const;
+    const { rows } = await c.query<{ saved_at: Date }>(
+      `INSERT INTO draft_autosaves (item_id, author, base_revision_id, title, summary, doc, body)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (item_id, author) DO UPDATE SET base_revision_id = EXCLUDED.base_revision_id, title = EXCLUDED.title,
+         summary = EXCLUDED.summary, doc = EXCLUDED.doc, body = EXCLUDED.body, saved_at = now()
+       RETURNING saved_at`,
+      [
+        item.id,
+        actor.subject,
+        input.baseRevisionId,
+        input.draft.title,
+        input.draft.summary,
+        JSON.stringify(input.draft.doc),
+        input.draft.body,
+      ],
+    );
+    const conflict = item.draft_revision_id !== input.baseRevisionId ? item.draft_revision_id : null;
+    return { ok: true, savedAt: rows[0]!.saved_at, conflict } as const;
+  });
+}
+
+/** This author's autosave of an article they may still edit, or null. */
+export async function getAutosave(pool: Pick<Pool, "query">, actor: Actor, id: string): Promise<Autosave | null> {
+  if (!UUID.test(id)) return null;
+  const { rows } = await pool.query<{
+    owner_subject: string;
+    base_revision_id: string;
+    number: number;
+    title: string;
+    summary: string;
+    doc: Doc;
+    body: string;
+    saved_at: Date;
+  }>(
+    `SELECT i.owner_subject, a.base_revision_id, r.number, a.title, a.summary, a.doc, a.body, a.saved_at
+     FROM draft_autosaves a JOIN content_items i ON i.id = a.item_id
+     JOIN content_revisions r ON r.id = a.base_revision_id AND r.item_id = a.item_id
+     WHERE a.item_id = $1 AND a.author = $2`,
+    [id, actor.subject],
+  );
+  const r = rows[0];
+  if (!r || !canEdit(actor, { ownerSubject: r.owner_subject })) return null;
+  return {
+    baseRevisionId: r.base_revision_id,
+    baseNumber: r.number,
+    title: r.title,
+    summary: r.summary,
+    doc: r.doc,
+    body: r.body,
+    savedAt: r.saved_at,
+  };
+}
+
+/** Throw away this author's autosave of an article (the "Discard" in the studio). */
+export async function discardAutosave(pool: Pick<Pool, "query">, actor: Actor, id: string): Promise<void> {
+  if (!UUID.test(id)) return;
+  await pool.query("DELETE FROM draft_autosaves WHERE item_id = $1 AND author = $2", [id, actor.subject]);
+}
+
+/** One revision of an article the person may see, by its number, or null. For preview and comparison. */
+export async function getRevision(
+  pool: Pick<Pool, "query">,
+  actor: Actor,
+  id: string,
+  number: number,
+): Promise<{
+  item: Pick<StudioItem, "id" | "slug" | "draftRevisionId" | "publishedRevisionId">;
+  revision: Revision;
+} | null> {
+  if (!UUID.test(id) || !Number.isSafeInteger(number) || number < 1) return null;
+  const { rows } = await pool.query<RevisionRow & ItemRow & { r_id: string; r_created_at: Date }>(
+    `SELECT i.*, r.id AS r_id, r.number, r.format, r.doc, r.title, r.summary, r.body, r.author, r.created_at AS r_created_at
+     FROM content_items i JOIN content_revisions r ON r.item_id = i.id
+     WHERE i.id = $1 AND r.number = $2`,
+    [id, number],
+  );
+  const r = rows[0];
+  if (!r || !canView(actor, ownerOf(r))) return null;
+  return {
+    item: {
+      id: r.id,
+      slug: r.slug,
+      draftRevisionId: r.draft_revision_id,
+      publishedRevisionId: r.published_revision_id,
+    },
+    revision: toRevision({ ...r, id: r.r_id, created_at: r.r_created_at }),
+  };
 }

@@ -5,11 +5,11 @@
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { publishAction, withdrawAction } from "../../actions";
+import { changeSlugAction, discardAutosaveAction, publishAction, withdrawAction } from "../../actions";
 import { EditorForm } from "@/components/EditorForm";
 import { Notices } from "@/components/Notices";
 import { TopBar } from "@/components/TopBar";
-import { getStudioItem } from "@/lib/content";
+import { getAutosave, getStudioItem } from "@/lib/content";
 import { aiConfigFromEnv } from "@/lib/ai/provider";
 import { AI_PERMISSION } from "@/lib/ai/service";
 import { db } from "@/lib/db";
@@ -29,7 +29,7 @@ const stamp = (d: Date) => d.toISOString().slice(0, 16).replace("T", " ");
 
 export default async function StudioItemPage({ params, searchParams }: Props) {
   const { id } = await params;
-  const { error, done, before } = await searchParams;
+  const { error, done, before, restore } = await searchParams;
   const g = await requireStudio();
   if (!g.ok) {
     return (
@@ -41,8 +41,12 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
       </>
     );
   }
-  const found = await getStudioItem(await db(), g.actor, id, { before: parseBefore(before) });
+  const pool = await db();
+  const found = await getStudioItem(pool, g.actor, id, { before: parseBefore(before) });
   if (!found) notFound();
+  // This author's unsaved text from an earlier session (#372), offered back rather than silently loaded.
+  const autosave = await getAutosave(pool, g.actor, id);
+  const restored = restore === "1" ? autosave : null;
   const { item, revisions, olderBefore, published } = found;
   const editable = canEdit(g.actor, item);
   const publishable = canPublish(g.actor, item);
@@ -74,6 +78,29 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
               </>
             ) : null}
           </p>
+          {(item.status === "draft" ? editable : publishable) ? (
+            <form action={changeSlugAction} className="inline-form" data-testid="slug-form">
+              <input type="hidden" name="id" value={item.id} />
+              <label>
+                Address{" "}
+                <span className="muted">
+                  {item.status === "draft"
+                    ? "(never published, so no redirect is needed)"
+                    : "(the old address will redirect to the new one)"}
+                </span>
+                <input name="slug" defaultValue={item.slug} maxLength={96} pattern="[a-z0-9]+(-[a-z0-9]+)*" required />
+              </label>
+              <button type="submit" className="secondary" data-testid="change-slug">
+                Change address
+              </button>
+            </form>
+          ) : null}
+          <p>
+            <Link href={`/studio/content/${item.id}/preview`} data-testid="preview-link">
+              Preview the draft
+            </Link>{" "}
+            <span className="muted">(only you and editors can open it)</span>
+          </p>
           {item.status === "published" && publishable ? (
             <form action={withdrawAction}>
               <input type="hidden" name="id" value={item.id} />
@@ -96,14 +123,40 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
             ) : null}
           </div>
         ) : null}
+        {autosave && !restored && editable ? (
+          <div className="notice" data-testid="autosave-offer">
+            You have unsaved changes from {stamp(autosave.savedAt)} UTC, based on revision #{autosave.baseNumber}
+            {autosave.baseRevisionId !== item.draftRevisionId ? (
+              <strong> (a newer revision has been saved since: compare before restoring)</strong>
+            ) : null}
+            .{" "}
+            <Link href={`/studio/content/${item.id}?restore=1`} data-testid="autosave-restore">
+              Restore them
+            </Link>{" "}
+            ·{" "}
+            <Link
+              href={`/studio/content/${item.id}/compare?from=head&to=autosave`}
+              data-testid="autosave-compare-offer"
+            >
+              Compare with the draft
+            </Link>
+            <form action={discardAutosaveAction} className="inline">
+              <input type="hidden" name="id" value={item.id} />
+              <button type="submit" className="secondary" data-testid="autosave-discard">
+                Discard them
+              </button>
+            </form>
+          </div>
+        ) : null}
         <EditorForm
-          key={item.id}
+          key={restored ? `${item.id}:restored` : item.id}
           id={item.id}
-          revisionId={item.draftRevisionId}
-          title={item.draft.title}
-          summary={item.draft.summary}
-          doc={item.draft.format === "tiptap" ? item.draft.doc : null}
-          markdown={item.draft.format === "markdown" ? item.draft.body : ""}
+          // Restored text builds on the revision it was written against, so a save over a newer one is a conflict.
+          revisionId={restored ? restored.baseRevisionId : item.draftRevisionId}
+          title={restored ? restored.title : item.draft.title}
+          summary={restored ? restored.summary : item.draft.summary}
+          doc={restored ? restored.doc : item.draft.format === "tiptap" ? item.draft.doc : null}
+          markdown={!restored && item.draft.format === "markdown" ? item.draft.body : ""}
           canEdit={editable}
           aiEnabled={aiEnabled}
         />
@@ -117,6 +170,17 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
                   <strong>#{r.number}</strong> {r.title} <span className="muted">· {stamp(r.createdAt)}</span>
                   {r.id === item.draftRevisionId ? <span className="badge draft">draft head</span> : null}
                   {r.id === item.publishedRevisionId ? <span className="badge published">public</span> : null}
+                  <span className="revision-links">
+                    <Link href={`/studio/content/${item.id}/preview?rev=${r.number}`}>Preview</Link>
+                    {r.number > 1 ? (
+                      <Link
+                        href={`/studio/content/${item.id}/compare?from=${r.number - 1}&to=${r.number}`}
+                        data-testid={`compare-${r.number}`}
+                      >
+                        Changes
+                      </Link>
+                    ) : null}
+                  </span>
                 </span>
                 {publishable && r.id !== item.publishedRevisionId ? (
                   <form action={publishAction}>

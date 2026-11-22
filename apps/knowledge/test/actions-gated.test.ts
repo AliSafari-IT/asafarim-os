@@ -11,7 +11,15 @@ describe("studio server actions", () => {
     const src = readFileSync(path.resolve(import.meta.dirname, "../app/studio/actions.ts"), "utf8");
     const actions = [...src.matchAll(/export async function (\w+)\([^)]*\)[^{]*\{([\s\S]*?)\n\}/g)];
     expect(actions.map((a) => a[1]).sort()).toEqual(
-      ["createArticleAction", "publishAction", "saveDraftAction", "withdrawAction"].sort(),
+      [
+        "autosaveAction",
+        "changeSlugAction",
+        "createArticleAction",
+        "discardAutosaveAction",
+        "publishAction",
+        "saveDraftAction",
+        "withdrawAction",
+      ].sort(),
     );
     for (const [, name, body] of actions) {
       expect(body, name).toMatch(/await (?:studioGate|actorOrRedirect)\(/);

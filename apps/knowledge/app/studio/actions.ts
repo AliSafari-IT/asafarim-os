@@ -8,7 +8,10 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
+  autosaveDraft,
+  changeSlug,
   createArticle,
+  discardAutosave,
   getStudioItem,
   isUuid,
   publishRevision,
@@ -19,7 +22,7 @@ import {
 import { db } from "@/lib/db";
 import { studioGate } from "@/lib/studio";
 import { EMPTY_DOC, parseDoc } from "@/lib/doc";
-import { parseDraft, parseSlug } from "@/lib/validation";
+import { isSlug, parseDraft, parseSlug } from "@/lib/validation";
 
 const field = (f: FormData, name: string) => {
   const v = f.get(name);
@@ -117,4 +120,60 @@ export async function withdrawAction(formData: FormData) {
   if (!r.ok) fail(back, r);
   await refreshPublic(id);
   redirect(`${back}?done=withdrawn`);
+}
+
+/** What the editor shows after an autosave: when it was kept, or why not, and a newer revision if one exists. */
+export type AutosaveResult =
+  { ok: true; savedAt: string; conflict: { revisionId: string } | null } | { ok: false; error: string };
+
+/**
+ * Autosave from the editor (#372), called a few seconds after the author stops typing. It keeps the text as this
+ * author's autosave of the article, never as a revision, and reports a newer draft head instead of overwriting it.
+ */
+export async function autosaveAction(input: {
+  id: string;
+  baseRevisionId: string;
+  title: string;
+  summary: string;
+  doc: string;
+}): Promise<AutosaveResult> {
+  if (!isUuid(input.id) || typeof input.baseRevisionId !== "string") return { ok: false, error: "not_found" };
+  const g = await studioGate();
+  if (!g.ok) return { ok: false, error: g.status === 401 ? "unauthenticated" : g.error };
+  const doc = parseDoc(typeof input.doc === "string" ? input.doc : "");
+  if (!doc.ok) return { ok: false, error: doc.error };
+  // An autosave may be untitled for now; a save still requires a title.
+  const draft = parseDraft({ title: input.title || "Untitled", summary: input.summary, body: doc.text });
+  if (!draft.ok) return { ok: false, error: draft.error };
+  const r = await autosaveDraft(await db(), g.actor, {
+    id: input.id,
+    baseRevisionId: input.baseRevisionId,
+    draft: { ...draft.value, title: typeof input.title === "string" ? input.title.trim() : "", doc: doc.doc },
+  });
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, savedAt: r.savedAt.toISOString(), conflict: r.conflict ? { revisionId: r.conflict } : null };
+}
+
+export async function discardAutosaveAction(formData: FormData) {
+  const id = field(formData, "id");
+  if (!isUuid(id)) redirect("/studio?error=not_found");
+  const back = `/studio/content/${id}`;
+  const actor = await actorOrRedirect(back);
+  await discardAutosave(await db(), actor, id);
+  redirect(`${back}?done=autosave_discarded`);
+}
+
+export async function changeSlugAction(formData: FormData) {
+  const id = field(formData, "id");
+  if (!isUuid(id)) redirect("/studio?error=not_found");
+  const back = `/studio/content/${id}`;
+  const actor = await actorOrRedirect(back);
+  const slug = field(formData, "slug").trim().toLowerCase();
+  if (!isSlug(slug)) redirect(`${back}?error=invalid_slug`);
+  const r = await changeSlug(await db(), actor, { id, slug });
+  if (!r.ok) fail(back, r);
+  revalidatePath("/");
+  revalidatePath(`/articles/${r.previous}`);
+  revalidatePath(`/articles/${r.slug}`);
+  redirect(`${back}?done=slug_changed`);
 }

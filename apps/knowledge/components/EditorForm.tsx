@@ -10,8 +10,9 @@ import { TableKit } from "@tiptap/extension-table";
 import { Markdown } from "@tiptap/markdown";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { useActionState, useState } from "react";
-import { saveDraftAction, type SaveState } from "@/app/studio/actions";
+import Link from "next/link";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { autosaveAction, saveDraftAction, type AutosaveResult, type SaveState } from "@/app/studio/actions";
 import { AiPanel } from "@/components/AiPanel";
 import { Callout } from "@/lib/callout";
 import { Mermaid } from "@/lib/mermaid-node";
@@ -29,7 +30,15 @@ export interface EditorFormProps {
   canEdit: boolean;
   /** AI assistance is configured and the person holds knowledge.ai.use. */
   aiEnabled: boolean;
+  /** Milliseconds of quiet before an autosave (#372); tests shorten it. */
+  autosaveDelay?: number;
 }
+
+/** How long after the last keystroke the editor keeps the text as an autosave. */
+export const AUTOSAVE_DELAY_MS = 3_000;
+
+const clock = (iso: string) =>
+  new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 export const LANGUAGES = [
   "",
@@ -179,6 +188,32 @@ export function EditorForm(props: EditorFormProps) {
   // article, not the revision, so that refresh never resets the author's text.
   const expected = props.revisionId;
 
+  // Autosave (#372): a few seconds after the last change, keep the text on the server as this author's autosave.
+  // It never becomes a revision; when someone saved a newer one meanwhile, the editor says so and links the
+  // comparison instead of saving on top of it.
+  const [autosave, setAutosave] = useState<AutosaveResult | null>(null);
+  const initial = useRef<string | null>(null);
+  const last = useRef<string | null>(null);
+  useEffect(() => {
+    if (!props.canEdit || !doc) return;
+    const payload = JSON.stringify([title, summary, doc]);
+    if (initial.current === null) {
+      initial.current = payload; // what the page opened with: nothing to keep yet
+      last.current = payload;
+      return;
+    }
+    if (payload === last.current) return;
+    const timer = setTimeout(async () => {
+      last.current = payload;
+      try {
+        setAutosave(await autosaveAction({ id: props.id, baseRevisionId: expected, title, summary, doc }));
+      } catch {
+        setAutosave({ ok: false, error: "autosave_failed" });
+      }
+    }, props.autosaveDelay ?? AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [title, summary, doc, expected, props.id, props.canEdit, props.autosaveDelay]);
+
   return (
     <form action={action} className="card editor" data-testid="editor">
       {state.error ? (
@@ -228,9 +263,31 @@ export function EditorForm(props: EditorFormProps) {
           onTitle={setTitle}
         />
       ) : null}
-      <button type="submit" disabled={pending || !props.canEdit || !doc} data-testid="save">
-        {pending ? "Saving…" : "Save draft"}
-      </button>
+      <div className="save-row">
+        <button type="submit" disabled={pending || !props.canEdit || !doc} data-testid="save">
+          {pending ? "Saving…" : "Save draft"}
+        </button>
+        {autosave?.ok && !autosave.conflict ? (
+          <span className="muted" role="status" data-testid="autosave-status">
+            Unsaved changes kept at {clock(autosave.savedAt)}
+          </span>
+        ) : null}
+        {autosave && !autosave.ok ? (
+          <span className="muted" role="status" data-testid="autosave-status">
+            Autosave didn&apos;t work ({ERRORS[autosave.error] ?? autosave.error}). Your text is still here.
+          </span>
+        ) : null}
+      </div>
+      {autosave?.ok && autosave.conflict ? (
+        <div className="notice bad" role="alert" data-testid="autosave-conflict">
+          Someone saved a newer revision while you were editing. Your text is kept (at {clock(autosave.savedAt)}) and
+          nothing was overwritten.{" "}
+          <Link href={`/studio/content/${props.id}/compare?from=head&to=autosave`} data-testid="autosave-compare">
+            Compare your text with the newest revision
+          </Link>{" "}
+          before you save.
+        </div>
+      ) : null}
     </form>
   );
 }
