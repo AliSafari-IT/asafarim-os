@@ -103,4 +103,37 @@ describe("the Anthropic provider", () => {
       }),
     ).toMatchObject({ effort: "medium", monthlyTokenCap: 2_000_000, authorMonthlyTokenCap: 1000 });
   });
+  it("returns the fallback model and includes both cache token categories in the reported usage", async () => {
+    const p = createAnthropicProvider(cfg, {
+      fetch: fakeFetch(
+        200,
+        answer({
+          model: "fallback-model",
+          content: [
+            { type: "thinking", thinking: "not the answer" },
+            { type: "text", text: '{"text":"Better."}' },
+          ],
+          usage: { input_tokens: 10, cache_creation_input_tokens: 30, cache_read_input_tokens: 60, output_tokens: 7 },
+        }),
+      ),
+      maxRetries: 0,
+    });
+    expect(await p.generate(req)).toEqual({
+      answer: { text: "Better." },
+      model: "fallback-model",
+      usage: { inputTokens: 100, outputTokens: 7 },
+    });
+  });
+
+  it("retains billable usage when the response is cut off", async () => {
+    const p = createAnthropicProvider(cfg, {
+      fetch: fakeFetch(200, answer({ stop_reason: "max_tokens" })),
+      maxRetries: 0,
+    });
+    await expect(p.generate(req)).rejects.toMatchObject({
+      code: "invalid_answer",
+      detail: "max_tokens",
+      usage: { inputTokens: 105, outputTokens: 20 },
+    });
+  });
 });

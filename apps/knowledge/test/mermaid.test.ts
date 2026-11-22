@@ -52,4 +52,50 @@ describe("Mermaid diagrams in documents", () => {
       error: "mermaid_config",
     });
   });
+  it("checks the exact character and line limits after normalizing line endings", () => {
+    const header = "flowchart TD\n";
+    const atCharacterLimit = header + "A".repeat(5000 - header.length);
+    expect(checkMermaid(atCharacterLimit)).toEqual({ ok: true, source: atCharacterLimit });
+    expect(checkMermaid(atCharacterLimit + "A")).toEqual({ ok: false, error: "mermaid_too_large" });
+
+    const lines = ["flowchart TD", ...Array<string>(199).fill("  A --> B")];
+    expect(checkMermaid(lines.join("\r\n"))).toEqual({ ok: true, source: lines.join("\n") });
+    expect(checkMermaid([...lines, "  B --> C"].join("\r\n"))).toEqual({
+      ok: false,
+      error: "mermaid_too_large",
+    });
+  });
+
+  it("keeps captions in reading order and leaves diagram syntax out of the article text", () => {
+    const paragraph = (text: string) => ({ type: "paragraph", content: [{ type: "text", text }] });
+    const source = "flowchart LR\n  A --> B";
+    expect(
+      parseDoc({
+        type: "doc",
+        content: [
+          paragraph("Before"),
+          { type: "mermaid", attrs: { source, description: "  Request flows to the server.  " } },
+          { type: "mermaid", attrs: { source } },
+          paragraph("After"),
+        ],
+      }),
+    ).toMatchObject({ ok: true, text: "Before\nRequest flows to the server.\nAfter" });
+  });
+
+  it("checks the caption limit and rejects a Mermaid block with child nodes", () => {
+    const attrs = { source: "flowchart LR\n  A --> B", description: "x".repeat(500) };
+    expect(parseDoc({ type: "doc", content: [{ type: "mermaid", attrs }] })).toMatchObject({
+      ok: true,
+      text: attrs.description,
+    });
+    expect(
+      parseDoc({
+        type: "doc",
+        content: [{ type: "mermaid", attrs: { ...attrs, description: attrs.description + "x" } }],
+      }),
+    ).toEqual({ ok: false, error: "mermaid_description_too_long" });
+    expect(
+      parseDoc({ type: "doc", content: [{ type: "mermaid", attrs, content: [{ type: "text", text: "unexpected" }] }] }),
+    ).toEqual({ ok: false, error: "doc_invalid" });
+  });
 });

@@ -75,4 +75,30 @@ describe("AI operations", () => {
       });
     }
   });
+  it.each([
+    ["outline", "brief", 4000, {}],
+    ["improve", "selection", 8000, {}],
+    ["improve", "instruction", 500, { selection: "Keep this meaning." }],
+    ["summary", "text", 60000, {}],
+    ["mermaid", "description", 2000, {}],
+  ] as const)("enforces the %s %s limit after trimming", (op, field, limit, other) => {
+    const text = "x".repeat(limit);
+    expect(parseInput({ op, ...other, [field]: `  ${text}  ` })).toMatchObject({
+      ok: true,
+      input: { [field]: text },
+    });
+    expect(parseInput({ op, ...other, [field]: `${text}x` })).toEqual({ ok: false, error: "ai_input_too_long" });
+  });
+
+  it("normalizes a rewrite as plain text while preserving paragraph breaks", () => {
+    expect(toProposal("improve", { text: "  Use fetch().\r\n\r\nThen check the status.  " })).toEqual({
+      ok: true,
+      proposal: { kind: "text", text: "Use fetch().\n\nThen check the status." },
+    });
+    expect(toProposal("improve", { text: ["Not a string"] })).toEqual({ ok: false, error: "ai_empty_answer" });
+    expect(toProposal("summary", { summary: " ", titles: ["A title"], tags: ["topic"] })).toEqual({
+      ok: false,
+      error: "ai_empty_answer",
+    });
+  });
 });
