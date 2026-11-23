@@ -4,11 +4,12 @@
  *
  * Seeded: four published articles; a published course "Ship a web app" with three lessons in two modules, plus a
  * fourth lesson whose article is withdrawn after the course was published; then a new draft of the first lesson's
- * article, which the published course must not show.
+ * article, which the published course must not show. And an article with a YouTube video (#359).
  */
 import pg from "pg";
 import { createArticle, publishRevision, saveDraft, withdrawArticle } from "../lib/content";
 import { createCourse, editCourse, publishCourse, type CourseEdit } from "../lib/courses";
+import { parseDoc } from "../lib/doc";
 import { migrate } from "../lib/migrations";
 import type { Actor } from "../lib/policy";
 import { E2E_DATABASE_URL } from "../playwright.config";
@@ -83,6 +84,23 @@ export default async function seed() {
         draft: { title: "Plan the app (rewritten)", summary: "", body: "A draft nobody may see yet." },
       }),
     );
+
+    // #359: an article with a video, which a guest loads only on request.
+    const video = parseDoc({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Watch the demo." }] },
+        { type: "video", attrs: { provider: "youtube", videoId: "dQw4w9WgXcQ", title: "The demo" } },
+      ],
+    });
+    if (!video.ok) throw new Error(video.error);
+    const demo = ok(
+      await createArticle(pool, author, {
+        slug: "video-demo",
+        draft: { title: "Video demo", summary: "", body: video.text, doc: video.doc },
+      }),
+    );
+    ok(await publishRevision(pool, author, { id: demo.id, revisionId: demo.revisionId }));
   } finally {
     await pool.end();
   }

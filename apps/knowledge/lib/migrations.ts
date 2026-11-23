@@ -367,6 +367,47 @@ CREATE TABLE course_audit_events (
 );
 CREATE INDEX course_audit_events_course ON course_audit_events (course_id, at);`,
   },
+  {
+    version: 8,
+    name: "media: uploaded assets with quarantine, and the assets each revision uses (#359)",
+    sql: `
+-- One uploaded file. Its bytes are in the media store: under uploads/<id> while pending (quarantine: never served),
+-- under assets/<id> once the server checked its size and first bytes against the type it claimed. Who may read it is
+-- worked out per request (lib/media/assets.ts), never stored: public exactly while a public revision uses it.
+CREATE TABLE media_assets (
+  id            text PRIMARY KEY,
+  owner_subject text NOT NULL,
+  kind          text NOT NULL CHECK (kind IN ('image', 'file')),
+  content_type  text NOT NULL CHECK (content_type IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf')),
+  byte_size     bigint NOT NULL CHECK (byte_size > 0 AND byte_size <= 26214400),
+  filename      text NOT NULL CHECK (length(filename) BETWEEN 1 AND 200),
+  status        text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ready', 'rejected')),
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  checked_at    timestamptz,
+  CHECK ((status = 'pending') = (checked_at IS NULL))
+);
+CREATE INDEX media_assets_owner ON media_assets (owner_subject, created_at DESC);
+CREATE INDEX media_assets_pending ON media_assets (created_at) WHERE status <> 'ready';
+
+-- The assets a revision uses, written with the revision and as immutable. An asset in use can't be deleted.
+CREATE TABLE content_revision_media (
+  revision_id text NOT NULL REFERENCES content_revisions (id),
+  asset_id    text NOT NULL REFERENCES media_assets (id),
+  PRIMARY KEY (revision_id, asset_id)
+);
+CREATE INDEX content_revision_media_asset ON content_revision_media (asset_id);
+CREATE TRIGGER content_revision_media_immutable BEFORE UPDATE OR DELETE ON content_revision_media
+  FOR EACH ROW EXECUTE FUNCTION knowledge_revisions_immutable();
+
+CREATE TABLE media_audit_events (
+  id       bigserial PRIMARY KEY,
+  at       timestamptz NOT NULL DEFAULT now(),
+  actor    text NOT NULL,
+  action   text NOT NULL CHECK (action IN ('media.requested', 'media.accepted', 'media.rejected', 'media.deleted')),
+  asset_id text NOT NULL
+);
+CREATE INDEX media_audit_events_asset ON media_audit_events (asset_id, at);`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

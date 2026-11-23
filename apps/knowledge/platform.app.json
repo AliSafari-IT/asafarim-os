@@ -1,7 +1,7 @@
 {
   "id": "knowledge",
   "name": "ASafariM Knowledge",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "platform": ">=0.1 <1",
   "owner": "ASafariM Digital",
   "domains": {
@@ -33,6 +33,7 @@
       "/search",
       "/topics/**",
       "/api/public/**",
+      "/media/**",
       "/health/live",
       "/health/ready"
     ]
@@ -110,7 +111,7 @@
       "permission": "knowledge.content.create"
     }
   ],
-  "secrets": ["KNOWLEDGE_AI_API_KEY"],
+  "secrets": ["KNOWLEDGE_AI_API_KEY", "KNOWLEDGE_MEDIA_ACCESS_KEY", "KNOWLEDGE_MEDIA_SECRET_KEY"],
   "ui": {
     "glyph": "KN",
     "color": "#0e7490",

@@ -130,3 +130,23 @@ test("the collector runs scripts/dev/otel/config.yaml, mounted as a read-only di
   assert.match(text, /endpoint: 0\.0\.0\.0:4318/);
   assert.match(text, /exporters: \[debug\]/);
 });
+
+// #359: Knowledge's media store, started only with the "media" profile.
+const media = render(["media"]);
+const minio = media.services.minio;
+
+test("MinIO is off in `pnpm dev`: only the media profile starts it, with its bucket", () => {
+  assert.equal(config.services.minio, undefined);
+  assert.ok(minio, "the media profile has a minio service");
+  assert.deepEqual(minio.profiles, ["media"]);
+  assert.match(media.services["minio-init"].command.join(" "), /mc mb --ignore-existing local\/knowledge-media/);
+});
+
+test("MinIO is pinned, limited, and published on 127.0.0.1 only", () => {
+  assert.match(minio.image, /^minio\/minio:RELEASE\.\d{4}-\d{2}-\d{2}T/, "an exact release");
+  assert.ok(minio.mem_limit, "mem_limit is set");
+  assert.ok(Number(minio.cpus) > 0, "cpus is set");
+  for (const p of minio.ports) assert.equal(p.host_ip, "127.0.0.1", `port ${p.published} binds to ${p.host_ip}`);
+  const data = minio.volumes.find((v) => v.target === "/data");
+  assert.ok(data && data.type === "volume" && data.source === "minio_data", "its data is the minio_data volume");
+});

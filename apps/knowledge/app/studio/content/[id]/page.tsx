@@ -12,6 +12,7 @@ import { TopBar } from "@/components/TopBar";
 import { getAutosave, getStudioItem } from "@/lib/content";
 import { getClassification, LANGUAGES, LEVELS, listTags, listTopics } from "@/lib/taxonomy";
 import { aiConfigFromEnv } from "@/lib/ai/provider";
+import { mediaConfigFromEnv } from "@/lib/media/store";
 import { AI_PERMISSION } from "@/lib/ai/service";
 import { db } from "@/lib/db";
 import { markdownLosses } from "@/lib/markdown-check";
@@ -235,6 +236,7 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
           markdown={!restored && item.draft.format === "markdown" ? item.draft.body : ""}
           canEdit={editable}
           aiEnabled={aiEnabled}
+          mediaEnabled={mediaConfigFromEnv() !== null}
         />
 
         <section className="card" data-testid="revisions">

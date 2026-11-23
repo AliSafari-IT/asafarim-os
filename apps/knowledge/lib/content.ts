@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { decodeCursor, encodeCursor } from "./cursor";
+import { checkRevisionMedia, recordRevisionMedia } from "./media/assets";
 import { refreshSearchDocument } from "./search-index";
 import { canCreate, canEdit, canPublish, canView, seesAll, type Actor } from "./policy";
 import type { Doc } from "./doc";
@@ -77,7 +78,8 @@ export type Failure =
   | { ok: false; error: "conflict"; currentRevisionId: string }
   | { ok: false; error: "unknown_revision" }
   | { ok: false; error: "not_published" }
-  | { ok: false; error: "invalid_slug" };
+  | { ok: false; error: "invalid_slug" }
+  | { ok: false; error: "media_unavailable" };
 
 export type Result<T> = ({ ok: true } & T) | Failure;
 
@@ -185,12 +187,16 @@ export async function createArticle(
     // changeSlug, so a slug that is becoming a redirect can't be claimed in between.
     await c.query("SELECT pg_advisory_xact_lock(hashtext('knowledge.slug_redirects'))");
     if (await slugIsRedirect(c, input.slug)) return { ok: false, error: "slug_taken" } as const;
+    // Before anything is written: a refusal returns, and this transaction commits only what came before.
+    const media = await checkRevisionMedia(c, actor, { id: null, ownerSubject: actor.subject }, input.draft.doc);
+    if (!media.ok) return media;
     const inserted = await c.query(
       `INSERT INTO content_items (id, owner_subject, slug) VALUES ($1, $2, $3) ON CONFLICT (slug) DO NOTHING`,
       [id, actor.subject, input.slug],
     );
     if (inserted.rowCount === 0) return { ok: false, error: "slug_taken" } as const;
     const revisionId = await insertRevision(c, id, 1, input.draft, actor.subject);
+    await recordRevisionMedia(c, revisionId, media.ids);
     await c.query("UPDATE content_items SET draft_revision_id = $2 WHERE id = $1", [id, revisionId]);
     await audit(c, actor, "content.created", id, revisionId);
     return { ok: true, id, revisionId } as const;
@@ -214,11 +220,20 @@ export async function saveDraft(
     if (item.draft_revision_id !== input.expectedRevisionId) {
       return { ok: false, error: "conflict", currentRevisionId: item.draft_revision_id } as const;
     }
+    // Media (#359): every asset the document uses must be one this author may use, checked under the item's lock.
+    const media = await checkRevisionMedia(
+      c,
+      actor,
+      { id: item.id, ownerSubject: item.owner_subject },
+      input.draft.doc,
+    );
+    if (!media.ok) return media;
     const { rows } = await c.query<{ n: number }>(
       "SELECT max(number)::int AS n FROM content_revisions WHERE item_id = $1",
       [item.id],
     );
     const revisionId = await insertRevision(c, item.id, (rows[0]?.n ?? 0) + 1, input.draft, actor.subject);
+    await recordRevisionMedia(c, revisionId, media.ids);
     await c.query("UPDATE content_items SET draft_revision_id = $2, updated_at = now() WHERE id = $1", [
       item.id,
       revisionId,

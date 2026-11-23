@@ -48,6 +48,9 @@ export default async function Studio({ searchParams }: Props) {
         <h1>Studio</h1>
         <Notices error={error} done={done} />
         <p className="studio-links">
+          <Link href="/studio/media" data-testid="media-link">
+            Media
+          </Link>
           {canCreateCourse(g.actor) || seesAllCourses(g.actor) ? (
             <Link href="/studio/courses" data-testid="courses-link">
               Courses

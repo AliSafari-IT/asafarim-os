@@ -101,7 +101,44 @@ services:
     mem_limit: 256m
     cpus: 0.5
 
+  # #359: Knowledge's media store, an S3-compatible MinIO, the same server production runs. Only with
+  # `docker compose -f compose.dev.yml --profile media up -d --wait` (the "media" profile): `pnpm dev` leaves it off,
+  # and Knowledge offers no uploads until .dev/knowledge.env sets the KNOWLEDGE_MEDIA_* values (apps/knowledge/README.md).
+  # Fixed, dev-only keys: it listens on 127.0.0.1 only. minio-init creates the bucket and exits.
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    profiles: ["media"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: knowledge-dev
+      MINIO_ROOT_PASSWORD: knowledge-dev-only
+    ports:
+      - "127.0.0.1:59000:9000"
+      - "127.0.0.1:59001:9001"
+    volumes:
+      - minio_data:/data
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles: ["media"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mc alias set local http://minio:9000 knowledge-dev knowledge-dev-only && mc mb --ignore-existing local/knowledge-media
+    mem_limit: 64m
+    cpus: 0.25
+
 volumes:
   postgres_data:
   redis_data:
   nats_data:
+  minio_data:

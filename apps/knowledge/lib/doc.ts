@@ -6,6 +6,8 @@
  * sees a parsed document, so no author-supplied HTML, script, style or event handler can reach a page.
  */
 
+import { isAssetId, isVideoId, MEDIA_LIMITS } from "./media/validate";
+
 export const SCHEMA_VERSION = 1;
 
 export const LIMITS = {
@@ -100,6 +102,9 @@ const NODES: Record<string, { children: "block" | "inline" | "none" | string[]; 
   codeBlock: { children: "inline" },
   horizontalRule: { children: "none" },
   mermaid: { children: "none" },
+  image: { children: "none" },
+  attachment: { children: "none" },
+  video: { children: "none" },
   table: { children: ["tableRow"] },
   tableRow: { children: ["tableHeader", "tableCell"] },
   tableHeader: { children: "block" },
@@ -118,6 +123,9 @@ const BLOCK = new Set([
   "horizontalRule",
   "table",
   "mermaid",
+  "image",
+  "attachment",
+  "video",
 ]);
 const INLINE = new Set(["text", "hardBreak"]);
 const MARKS = new Set(["bold", "italic", "strike", "underline", "code", "link"]);
@@ -197,6 +205,31 @@ export function parseDoc(input: unknown): DocResult {
         if (description.length > LIMITS.mermaidDescription) throw new Invalid("mermaid_description_too_long");
         return { source: m.source, description };
       }
+      // Media (#359): an uploaded asset by id (whether it exists and may be used is checked when the revision is
+      // saved), and a video as a provider and a validated id, never a URL or HTML.
+      case "image": {
+        if (!isAssetId(raw.asset)) throw new Invalid("media_invalid");
+        const alt = typeof raw.alt === "string" ? raw.alt.replace(/\s+/g, " ").trim() : "";
+        if (!alt) throw new Invalid("image_alt_required");
+        const caption = typeof raw.caption === "string" ? raw.caption.replace(/\s+/g, " ").trim() : "";
+        if (alt.length > MEDIA_LIMITS.alt || caption.length > MEDIA_LIMITS.caption)
+          throw new Invalid("media_text_too_long");
+        return { asset: raw.asset, alt, caption };
+      }
+      case "attachment": {
+        if (!isAssetId(raw.asset)) throw new Invalid("media_invalid");
+        const label = typeof raw.label === "string" ? raw.label.replace(/\s+/g, " ").trim() : "";
+        if (!label) throw new Invalid("attachment_label_required");
+        if (label.length > MEDIA_LIMITS.label) throw new Invalid("media_text_too_long");
+        return { asset: raw.asset, label };
+      }
+      case "video": {
+        if (!isVideoId(raw.provider, raw.videoId)) throw new Invalid("video_invalid");
+        const title = typeof raw.title === "string" ? raw.title.replace(/\s+/g, " ").trim() : "";
+        if (!title) throw new Invalid("video_title_required");
+        if (title.length > MEDIA_LIMITS.videoTitle) throw new Invalid("media_text_too_long");
+        return { provider: raw.provider, videoId: raw.videoId as string, title };
+      }
       case "tableCell":
       case "tableHeader":
         return { colspan: int(raw.colspan, 1, 20) ?? 1, rowspan: int(raw.rowspan, 1, 100) ?? 1 };
@@ -262,6 +295,12 @@ export function parseDoc(input: unknown): DocResult {
     const blocks = (n: DocNode): void => {
       if (n.type === "mermaid") {
         if (n.attrs?.description) lines.push(String(n.attrs.description));
+      } else if (n.type === "image") {
+        lines.push(String(n.attrs?.alt ?? ""), String(n.attrs?.caption ?? ""));
+      } else if (n.type === "attachment") {
+        lines.push(String(n.attrs?.label ?? ""));
+      } else if (n.type === "video") {
+        lines.push(String(n.attrs?.title ?? ""));
       } else if (["paragraph", "heading", "codeBlock"].includes(n.type)) {
         const acc: string[] = [];
         collect(n, acc);
@@ -274,6 +313,17 @@ export function parseDoc(input: unknown): DocResult {
     if (err instanceof Invalid) return { ok: false, error: err.message };
     throw err;
   }
+}
+
+/** The uploaded assets a (parsed) document uses, each once, in order. */
+export function mediaAssetIds(doc: DocNode): string[] {
+  const ids = new Set<string>();
+  const visit = (n: DocNode) => {
+    if ((n.type === "image" || n.type === "attachment") && typeof n.attrs?.asset === "string") ids.add(n.attrs.asset);
+    for (const c of n.content ?? []) visit(c);
+  };
+  visit(doc);
+  return [...ids];
 }
 
 export const EMPTY_DOC: Doc = { type: "doc", content: [{ type: "paragraph" }] };
