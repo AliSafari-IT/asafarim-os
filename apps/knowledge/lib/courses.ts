@@ -568,6 +568,8 @@ export interface OutlineLesson {
 }
 
 export interface PublishedCourse {
+  /** The published course revision this outline was read from. */
+  revisionId: string;
   slug: string;
   title: string;
   summary: string;
@@ -576,6 +578,7 @@ export interface PublishedCourse {
 }
 
 interface OutlineRow {
+  revision_id: string;
   course_slug: string;
   course_title: string;
   course_summary: string;
@@ -589,7 +592,7 @@ interface OutlineRow {
 /** The published course and its outline: modules with at least one lesson a guest may open, in order. */
 export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string): Promise<PublishedCourse | null> {
   const { rows } = await pool.query<OutlineRow>(
-    `SELECT c.slug AS course_slug, cr.title AS course_title, cr.summary AS course_summary, c.published_at,
+    `SELECT cr.id AS revision_id, c.slug AS course_slug, cr.title AS course_title, cr.summary AS course_summary, c.published_at,
             m.position AS module_position, m.title AS module_title, l.lesson_id, r.title AS lesson_title
      FROM courses c JOIN course_revisions cr ON cr.id = c.published_revision_id
      LEFT JOIN course_modules m ON m.revision_id = cr.id
@@ -613,6 +616,7 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
     current.lessons.push({ lessonId: r.lesson_id, title: r.lesson_title! });
   }
   return {
+    revisionId: first.revision_id,
     slug: first.course_slug,
     title: first.course_title,
     summary: first.course_summary,
@@ -655,12 +659,13 @@ export async function getPublishedLesson(
     doc: Doc | null;
     body: string;
   }>(
+    // The course revision the outline came from, so a publish in between can't mix two revisions on one page.
     `SELECT i.slug, r.title, r.summary, r.format, r.doc, r.body
-     FROM courses c JOIN course_lessons l ON l.revision_id = c.published_revision_id
+     FROM course_lessons l
      JOIN content_items i ON i.id = l.item_id AND i.published_revision_id IS NOT NULL
      JOIN content_revisions r ON r.id = l.item_revision_id
-     WHERE c.slug = $1 AND l.lesson_id = $2`,
-    [slug, lessonId],
+     WHERE l.revision_id = $1 AND l.lesson_id = $2`,
+    [course.revisionId, lessonId],
   );
   const r = rows[0];
   if (!r) return null;
