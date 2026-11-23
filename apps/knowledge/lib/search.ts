@@ -157,7 +157,13 @@ export async function searchPublished(
   const after = decodeScoreCursor(input.after);
   const prefixes = terms.filter((t) => t.length >= 3).map(likePrefix);
   const { rows } = await pool.query<HitRow & { score: string }>(
-    `WITH query AS (SELECT websearch_to_tsquery('simple', $7) AS tq, lower($7) AS lq),
+    `WITH parsed AS (SELECT websearch_to_tsquery('simple', $7) AS tq),
+     -- rq ranks: the same words OR'ed (ts_rank's AND is quadratic in word positions; matching still uses tq).
+     query AS (
+       SELECT tq, lower($7) AS lq,
+              CASE WHEN tq::text ~ '[!<|]' THEN tq ELSE replace(tq::text, ' & ', ' | ')::tsquery END AS rq
+       FROM parsed
+     ),
      named_tags AS (
        SELECT id FROM tags WHERE slug = ANY($8::text[]) OR lower(name) = ANY($8::text[]) OR lower(name) = (SELECT lq FROM query)
        UNION SELECT tag_id FROM tag_aliases WHERE alias = ANY($8::text[]) OR alias = (SELECT lq FROM query)
@@ -169,17 +175,23 @@ export async function searchPublished(
        UNION SELECT d.item_id FROM search_documents d, query WHERE lower(d.title) % query.lq
        UNION SELECT d.item_id FROM search_documents d WHERE d.tag_ids && ARRAY(SELECT id FROM named_tags)
      ),
+     -- Identifier hits aggregated once (not a subquery per candidate: a broad query has thousands of them).
+     exact_hits AS (
+       SELECT item_id, count(*) AS n FROM search_terms WHERE term = ANY($8::text[]) GROUP BY item_id
+     ),
+     prefix_hits AS (
+       SELECT DISTINCT st.item_id FROM unnest($9::text[]) AS p JOIN search_terms st ON st.term LIKE p
+     ),
      scored AS (
        SELECT d.*, round((
-           3 * (SELECT count(*) FROM search_terms st WHERE st.item_id = d.item_id AND st.term = ANY($8::text[]))::numeric
-             / greatest(cardinality($8::text[]), 1)
-         + CASE WHEN EXISTS (SELECT 1 FROM unnest($9::text[]) AS p JOIN search_terms st
-                             ON st.item_id = d.item_id AND st.term LIKE p) THEN 0.5 ELSE 0 END
-         + 4 * ts_rank('{0.1, 0.2, 0.4, 1.0}', d.tsv, query.tq)::numeric
+           3 * coalesce(e.n, 0)::numeric / greatest(cardinality($8::text[]), 1)
+         + CASE WHEN ph.item_id IS NOT NULL THEN 0.5 ELSE 0 END
+         + 4 * ts_rank('{0.1, 0.2, 0.4, 1.0}', d.tsv, query.rq)::numeric
          + 2 * similarity(lower(d.title), query.lq)::numeric
          + CASE WHEN d.tag_ids && ARRAY(SELECT id FROM named_tags) THEN 1.5 ELSE 0 END
        ), 6) AS score
-       FROM candidates c JOIN search_documents d ON d.item_id = c.item_id, query
+       FROM candidates c JOIN search_documents d ON d.item_id = c.item_id
+         LEFT JOIN exact_hits e ON e.item_id = d.item_id LEFT JOIN prefix_hits ph ON ph.item_id = d.item_id, query
        WHERE ${FACETS}
      ),
      -- Rank and cut the page first; only the page's rows get a snippet (ts_headline is the expensive part).
