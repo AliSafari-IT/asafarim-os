@@ -5,6 +5,7 @@
 import Link from "next/link";
 import { createCourseAction } from "../course-actions";
 import { Notices } from "@/components/Notices";
+import { Pager } from "@/components/Pager";
 import { TopBar } from "@/components/TopBar";
 import { listStudioCourses } from "@/lib/courses";
 import { db } from "@/lib/db";
@@ -29,7 +30,9 @@ export default async function StudioCourses({ searchParams }: Props) {
       </>
     );
   }
-  const courses = await listStudioCourses(await db(), g.actor);
+  const after = one(sp.after);
+  const page = await listStudioCourses(await db(), g.actor, { after });
+  const courses = page.items;
   const canCreate = canCreateCourse(g.actor);
 
   return (
@@ -65,7 +68,7 @@ export default async function StudioCourses({ searchParams }: Props) {
             Creating courses needs the <span className="perm">knowledge.courses.manage.own</span> permission.
           </p>
         )}
-        {courses.length === 0 ? (
+        {courses.length === 0 && !after ? (
           <p className="muted" data-testid="courses-empty">
             No courses yet.
           </p>
@@ -93,6 +96,7 @@ export default async function StudioCourses({ searchParams }: Props) {
             </tbody>
           </table>
         )}
+        <Pager after={after} next={page.next} base="/studio/courses" label="Older courses" />
       </main>
     </>
   );

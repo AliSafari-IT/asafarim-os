@@ -15,7 +15,8 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { Doc } from "./doc";
 import { canCreateCourse, canManageCourse, seesAllCourses, type Actor } from "./policy";
-import type { RevisionFormat } from "./content";
+import { PAGE_SIZE, pageOf, type Page, type RevisionFormat } from "./content";
+import { decodeCursor } from "./cursor";
 
 type Pool = Pick<pg.Pool, "connect" | "query">;
 type Client = Pick<pg.PoolClient, "query">;
@@ -66,6 +67,7 @@ interface CourseRow {
   published_revision_id: string | null;
   published_at: Date | null;
   withdrawn_at: Date | null;
+  publication: number;
   updated_at: Date;
 }
 
@@ -350,17 +352,20 @@ async function unavailableLessons(c: Pick<Pool, "query">, revisionId: string): P
 
 /**
  * Publish the course's draft head: only when it has a lesson and every lesson's article is public now. A withdrawn
- * article blocks the course, naming the lessons in `detail`.
+ * article blocks the course, naming the lessons in `detail`. `publication` is the publication state the studio showed
+ * (StudioCourse.publication); a publish or withdrawal made elsewhere since then is a conflict.
  */
 export async function publishCourse(
   pool: Pool,
   actor: Actor,
-  input: { id: string; revisionId: string },
+  input: { id: string; revisionId: string; publication: number },
 ): Promise<CourseResult<{ revisionId: string }>> {
   return inTransaction(pool, async (c) => {
     const course = await lockCourse(c, input.id);
     if (!course || !canManageCourse(actor, ownerOf(course))) return { ok: false, error: "not_found" } as const;
-    if (course.draft_revision_id !== input.revisionId) return { ok: false, error: "conflict" } as const;
+    if (course.draft_revision_id !== input.revisionId || course.publication !== input.publication) {
+      return { ok: false, error: "conflict" } as const;
+    }
     // The lessons' articles are locked too, so one can't be withdrawn while this checks them.
     const { rows } = await c.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM (
@@ -372,7 +377,8 @@ export async function publishCourse(
     const blocked = await unavailableLessons(c, input.revisionId);
     if (blocked.length) return { ok: false, error: "lesson_unavailable", detail: blocked.join(", ") } as const;
     await c.query(
-      `UPDATE courses SET published_revision_id = $2, published_at = now(), withdrawn_at = NULL, updated_at = now()
+      `UPDATE courses SET published_revision_id = $2, published_at = now(), withdrawn_at = NULL,
+              publication = publication + 1, updated_at = now()
        WHERE id = $1`,
       [course.id, input.revisionId],
     );
@@ -381,13 +387,20 @@ export async function publishCourse(
   });
 }
 
-export async function withdrawCourse(pool: Pool, actor: Actor, input: { id: string }): Promise<CourseResult<object>> {
+/** Take the course offline. `publication` is the publication state the studio showed, as for publishCourse. */
+export async function withdrawCourse(
+  pool: Pool,
+  actor: Actor,
+  input: { id: string; publication: number },
+): Promise<CourseResult<object>> {
   return inTransaction(pool, async (c) => {
     const course = await lockCourse(c, input.id);
     if (!course || !canManageCourse(actor, ownerOf(course))) return { ok: false, error: "not_found" } as const;
+    if (course.publication !== input.publication) return { ok: false, error: "conflict" } as const;
     if (!course.published_revision_id) return { ok: false, error: "not_published" } as const;
     await c.query(
-      `UPDATE courses SET published_revision_id = NULL, published_at = NULL, withdrawn_at = now(), updated_at = now()
+      `UPDATE courses SET published_revision_id = NULL, published_at = NULL, withdrawn_at = now(),
+              publication = publication + 1, updated_at = now()
        WHERE id = $1`,
       [course.id],
     );
@@ -407,13 +420,27 @@ export interface StudioCourseSummary {
   updatedAt: Date;
 }
 
-export async function listStudioCourses(pool: Pick<Pool, "query">, actor: Actor): Promise<StudioCourseSummary[]> {
-  const { rows } = await pool.query<CourseRow & { title: string }>(
-    `SELECT c.*, r.title FROM courses c JOIN course_revisions r ON r.id = c.draft_revision_id
-     WHERE $1 OR c.owner_subject = $2 ORDER BY c.updated_at DESC, c.id DESC LIMIT 200`,
-    [seesAllCourses(actor), actor.subject],
+/** The studio's course list, most recently changed first, one page at a time (keyset on updated_at, id). */
+export async function listStudioCourses(
+  pool: Pick<Pool, "query">,
+  actor: Actor,
+  opts: { after?: string | null; limit?: number } = {},
+): Promise<Page<StudioCourseSummary>> {
+  const limit = opts.limit ?? PAGE_SIZE.studio;
+  const after = decodeCursor(opts.after);
+  const { rows } = await pool.query<CourseRow & { title: string; at_key: string }>(
+    `SELECT c.*, c.updated_at::text AS at_key, r.title FROM courses c JOIN course_revisions r ON r.id = c.draft_revision_id
+     WHERE ($1::boolean OR c.owner_subject = $2)
+       AND ($3::timestamptz IS NULL OR (c.updated_at, c.id) < ($3::timestamptz, $4::text))
+     ORDER BY c.updated_at DESC, c.id DESC LIMIT $5`,
+    [seesAllCourses(actor), actor.subject, after?.at ?? null, after?.id ?? null, limit + 1],
   );
-  return rows.map((r) => ({ id: r.id, slug: r.slug, title: r.title, status: statusOf(r), updatedAt: r.updated_at }));
+  return pageOf(
+    rows,
+    limit,
+    (r) => r.at_key,
+    (r) => ({ id: r.id, slug: r.slug, title: r.title, status: statusOf(r), updatedAt: r.updated_at }),
+  );
 }
 
 export interface StudioLesson {
@@ -432,6 +459,8 @@ export interface StudioCourse {
   draftRevisionId: string;
   publishedRevisionId: string | null;
   draftIsPublished: boolean;
+  /** The publication state shown: publish and withdraw forms send it back, so a stale one is refused. */
+  publication: number;
   title: string;
   summary: string;
   modules: { title: string; lessons: StudioLesson[] }[];
@@ -467,6 +496,7 @@ export async function getStudioCourse(
     draftRevisionId: course.draft_revision_id,
     publishedRevisionId: course.published_revision_id,
     draftIsPublished: course.published_revision_id === course.draft_revision_id,
+    publication: course.publication,
     title: draft.title,
     summary: draft.summary,
     modules: draft.modules.map((m) => ({
@@ -500,27 +530,36 @@ export interface PublishedCourseSummary {
   lessons: number;
 }
 
-export async function listPublishedCourses(pool: Pick<Pool, "query">): Promise<PublishedCourseSummary[]> {
+/** Published courses, newest first, one page at a time (keyset on published_at, id). */
+export async function listPublishedCourses(
+  pool: Pick<Pool, "query">,
+  opts: { after?: string | null; limit?: number } = {},
+): Promise<Page<PublishedCourseSummary>> {
+  const limit = opts.limit ?? PAGE_SIZE.public;
+  const after = decodeCursor(opts.after);
   const { rows } = await pool.query<{
+    id: string;
+    at_key: string;
     slug: string;
     title: string;
     summary: string;
     published_at: Date;
     lessons: number;
   }>(
-    `SELECT c.slug, r.title, r.summary, c.published_at,
+    `SELECT c.id, c.published_at::text AS at_key, c.slug, r.title, r.summary, c.published_at,
             (SELECT count(*)::int FROM course_lessons l JOIN content_items i ON i.id = l.item_id
              WHERE l.revision_id = r.id AND i.published_revision_id IS NOT NULL) AS lessons
      FROM courses c JOIN course_revisions r ON r.id = c.published_revision_id
-     ORDER BY c.published_at DESC, c.id DESC LIMIT 100`,
+     WHERE ($1::timestamptz IS NULL OR (c.published_at, c.id) < ($1::timestamptz, $2::text))
+     ORDER BY c.published_at DESC, c.id DESC LIMIT $3`,
+    [after?.at ?? null, after?.id ?? null, limit + 1],
   );
-  return rows.map((r) => ({
-    slug: r.slug,
-    title: r.title,
-    summary: r.summary,
-    publishedAt: r.published_at,
-    lessons: r.lessons,
-  }));
+  return pageOf(
+    rows,
+    limit,
+    (r) => r.at_key,
+    (r) => ({ slug: r.slug, title: r.title, summary: r.summary, publishedAt: r.published_at, lessons: r.lessons }),
+  );
 }
 
 export interface OutlineLesson {

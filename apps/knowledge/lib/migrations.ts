@@ -290,6 +290,9 @@ CREATE TABLE courses (
   published_revision_id text,
   published_at          timestamptz,
   withdrawn_at          timestamptz,
+  -- Counts publishes and withdrawals, so a studio form names the publication state it showed and a stale one is
+  -- refused even after a publish/withdraw cycle that put the pointers back where they were.
+  publication           integer NOT NULL DEFAULT 0 CHECK (publication >= 0),
   created_at            timestamptz NOT NULL DEFAULT now(),
   updated_at            timestamptz NOT NULL DEFAULT now()
 );

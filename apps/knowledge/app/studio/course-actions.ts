@@ -25,6 +25,12 @@ const field = (f: FormData, name: string) => {
   return typeof v === "string" ? v : "";
 };
 
+/** The publication state the page showed; anything unreadable never matches, so the change is refused as stale. */
+const shownPublication = (f: FormData) => {
+  const n = Number(field(f, "publication"));
+  return Number.isSafeInteger(n) && n >= 0 ? n : -1;
+};
+
 async function actorOrRedirect(back: string) {
   const g = await studioGate();
   if (!g.ok) redirect(g.status === 401 ? "/studio" : `${back}?error=${g.error}`);
@@ -107,7 +113,11 @@ export async function publishCourseAction(formData: FormData) {
   const back = `/studio/courses/${id}`;
   const actor = await actorOrRedirect(back);
   const pool = await db();
-  const r = await publishCourse(pool, actor, { id, revisionId: field(formData, "revision") });
+  const r = await publishCourse(pool, actor, {
+    id,
+    revisionId: field(formData, "revision"),
+    publication: shownPublication(formData),
+  });
   const course = r.ok ? await getStudioCourse(pool, actor, id) : null;
   if (course) await refreshPublic(course.slug);
   outcome(back, r, "course_published");
@@ -119,7 +129,7 @@ export async function withdrawCourseAction(formData: FormData) {
   const back = `/studio/courses/${id}`;
   const actor = await actorOrRedirect(back);
   const pool = await db();
-  const r = await withdrawCourse(pool, actor, { id });
+  const r = await withdrawCourse(pool, actor, { id, publication: shownPublication(formData) });
   const course = r.ok ? await getStudioCourse(pool, actor, id) : null;
   if (course) await refreshPublic(course.slug);
   outcome(back, r, "course_withdrawn");

@@ -55,6 +55,9 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
     return rev;
   }
 
+  /** The publication state a studio page would show now. */
+  const shown = async (actor: Actor, id: string) => (await getStudioCourse(pool, actor, id))!.publication;
+
   beforeAll(async () => {
     admin = new pg.Client({ connectionString: ADMIN_URL });
     await admin.connect();
@@ -97,7 +100,7 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
     ]);
     // Nothing public before it is published.
     expect(await getPublishedCourse(pool, "getting-started")).toBeNull();
-    ok(await publishCourse(pool, alice, { id: c.id, revisionId: rev }));
+    ok(await publishCourse(pool, alice, { id: c.id, revisionId: rev, publication: await shown(alice, c.id) }));
 
     const course = (await getPublishedCourse(pool, "getting-started"))!;
     expect(course.summary).toBe("From zero to an app");
@@ -112,11 +115,11 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
     expect(lesson.moduleTitle).toBe("Basics");
     expect(lesson.prev?.lessonId).toBe(first!.lessonId);
     expect(lesson.next?.lessonId).toBe(third!.lessonId);
-    expect((await listPublishedCourses(pool)).map((s) => [s.slug, s.lessons])).toEqual([["getting-started", 3]]);
+    expect((await listPublishedCourses(pool)).items.map((s) => [s.slug, s.lessons])).toEqual([["getting-started", 3]]);
   });
 
   it("keeps published course content when a referenced article gets a new draft or revision", async () => {
-    const c = (await listStudioCourses(pool, alice)).find((s) => s.slug === "getting-started")!;
+    const c = (await listStudioCourses(pool, alice)).items.find((s) => s.slug === "getting-started")!;
     const setup = articles.setup!;
     const v2 = ok(
       await saveDraft(pool, alice, {
@@ -135,13 +138,13 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
     // ...until its author updates the lesson to the latest and publishes the course again.
     const rev = await edit(alice, c.id, [{ op: "update_lesson", lessonId }]);
     expect((await getPublishedLesson(pool, "getting-started", lessonId))!.title).toBe("Setting up");
-    ok(await publishCourse(pool, alice, { id: c.id, revisionId: rev }));
+    ok(await publishCourse(pool, alice, { id: c.id, revisionId: rev, publication: await shown(alice, c.id) }));
     const after = (await getPublishedLesson(pool, "getting-started", lessonId))!;
     expect([after.title, after.body]).toEqual(["Setting up (v2)", "Install the new tools."]);
   });
 
   it("hides a lesson whose article is withdrawn from guests and blocks publishing the course", async () => {
-    const c = (await listStudioCourses(pool, alice)).find((s) => s.slug === "getting-started")!;
+    const c = (await listStudioCourses(pool, alice)).items.find((s) => s.slug === "getting-started")!;
     const lessonId = (await getPublishedCourse(pool, "getting-started"))!.modules[1]!.lessons[0]!.lessonId;
     ok(await withdrawArticle(pool, alice, { id: articles["first-app"]!.id }));
 
@@ -152,11 +155,17 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
     expect((await getPublishedLesson(pool, "getting-started", course.modules[0]!.lessons[1]!.lessonId))!.next).toBe(
       null,
     );
-    expect((await listPublishedCourses(pool))[0]!.lessons).toBe(2);
+    expect((await listPublishedCourses(pool)).items[0]!.lessons).toBe(2);
 
     const studio = (await getStudioCourse(pool, alice, c.id))!;
     expect(studio.modules[1]!.lessons[0]!.state).toBe("unavailable");
-    expect(await publishCourse(pool, alice, { id: c.id, revisionId: studio.draftRevisionId })).toEqual({
+    expect(
+      await publishCourse(pool, alice, {
+        id: c.id,
+        revisionId: studio.draftRevisionId,
+        publication: await shown(alice, c.id),
+      }),
+    ).toEqual({
       ok: false,
       error: "lesson_unavailable",
       detail: "Your first app",
@@ -170,16 +179,18 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
       }),
     ).toEqual({ ok: false, error: "article_not_public" });
     const rev = await edit(alice, c.id, [{ op: "remove_lesson", lessonId }]);
-    ok(await publishCourse(pool, alice, { id: c.id, revisionId: rev }));
+    ok(await publishCourse(pool, alice, { id: c.id, revisionId: rev, publication: await shown(alice, c.id) }));
   });
 
   it("pins only public articles, refuses empty courses, stale editors and other people's courses", async () => {
     const c = ok(await createCourse(pool, bob, { slug: "bobs-course", title: "Bob's course" }));
     const rev0 = (await getStudioCourse(pool, bob, c.id))!.draftRevisionId;
-    expect(await publishCourse(pool, bob, { id: c.id, revisionId: rev0 })).toEqual({
-      ok: false,
-      error: "empty_course",
-    });
+    expect(await publishCourse(pool, bob, { id: c.id, revisionId: rev0, publication: await shown(bob, c.id) })).toEqual(
+      {
+        ok: false,
+        error: "empty_course",
+      },
+    );
     const rev1 = await edit(bob, c.id, [{ op: "add_module", title: "One" }]);
     expect(
       await editCourse(pool, bob, {
@@ -204,8 +215,8 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
     expect(
       await editCourse(pool, alice, { id: c.id, expectedRevisionId: rev1, edit: { op: "add_module", title: "X" } }),
     ).toEqual({ ok: false, error: "not_found" });
-    expect((await listStudioCourses(pool, alice)).map((s) => s.slug)).toEqual(["getting-started"]);
-    expect((await listStudioCourses(pool, erin)).length).toBe(2);
+    expect((await listStudioCourses(pool, alice)).items.map((s) => s.slug)).toEqual(["getting-started"]);
+    expect((await listStudioCourses(pool, erin)).items.length).toBe(2);
     const reader: Actor = { subject: "rita", permissions: ["knowledge.content.create"] };
     expect(await createCourse(pool, reader, { slug: "nope", title: "Nope" })).toEqual({
       ok: false,
@@ -245,10 +256,54 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
     const rev = await edit(erin, c.id, [{ op: "move_lesson", lessonId: await id("intro"), delta: -1 }]);
     expect(await titles()).toEqual([["setup", "intro"], []]);
 
-    ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev }));
+    ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev, publication: await shown(erin, c.id) }));
     expect(await getPublishedCourse(pool, "ordering")).not.toBeNull();
-    ok(await withdrawCourse(pool, erin, { id: c.id }));
+    ok(await withdrawCourse(pool, erin, { id: c.id, publication: await shown(erin, c.id) }));
     expect(await getPublishedCourse(pool, "ordering")).toBeNull();
     expect((await getStudioCourse(pool, erin, c.id))!.status).toBe("withdrawn");
+  });
+
+  it("refuses publish and withdraw forms from a tab that missed a publication change", async () => {
+    const c = ok(await createCourse(pool, erin, { slug: "two-tabs", title: "Two tabs" }));
+    const rev1 = await edit(erin, c.id, [
+      { op: "add_module", title: "A" },
+      { op: "add_lesson", module: 0, articleSlug: "intro" },
+    ]);
+    ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev1, publication: await shown(erin, c.id) }));
+    const rev2 = await edit(erin, c.id, [{ op: "meta", title: "Two tabs, v2", summary: "" }]);
+    // Both tabs show revision 2 as an unpublished draft of a published course.
+    const tab = await shown(erin, c.id);
+    ok(await withdrawCourse(pool, erin, { id: c.id, publication: tab }));
+    // The other tab's Publish must not bring back the course the first tab just took offline...
+    expect(await publishCourse(pool, erin, { id: c.id, revisionId: rev2, publication: tab })).toEqual({
+      ok: false,
+      error: "conflict",
+    });
+    expect(await getPublishedCourse(pool, "two-tabs")).toBeNull();
+    // ...and after a full withdraw/publish cycle, an old Withdraw form can't take the new publication offline.
+    const before = await shown(erin, c.id);
+    ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev2, publication: before }));
+    expect(await withdrawCourse(pool, erin, { id: c.id, publication: before })).toEqual({
+      ok: false,
+      error: "conflict",
+    });
+    expect((await getPublishedCourse(pool, "two-tabs"))!.title).toBe("Two tabs, v2");
+  });
+
+  it("pages through course lists without repeating or skipping one", async () => {
+    const all = (await listStudioCourses(pool, erin)).items.map((s) => s.id);
+    const seen: string[] = [];
+    let after: string | null = null;
+    do {
+      const page = await listStudioCourses(pool, erin, { after, limit: 2 });
+      seen.push(...page.items.map((s) => s.id));
+      after = page.next;
+    } while (after);
+    expect(seen).toEqual(all);
+    const published = (await listPublishedCourses(pool)).items.map((s) => s.slug);
+    expect(published.length).toBeGreaterThan(1);
+    const first = await listPublishedCourses(pool, { limit: 1 });
+    const rest = await listPublishedCourses(pool, { after: first.next });
+    expect([...first.items, ...rest.items].map((s) => s.slug)).toEqual(published);
   });
 });

@@ -1,7 +1,7 @@
 /**
  * One course in the studio (#358): its title, modules and lessons in order, each lesson's pin state, and publish /
- * withdraw. Every form names the revision this page shows, so a change made elsewhere meanwhile is refused, not
- * overwritten. Someone who may not manage the course gets a 404.
+ * withdraw. Every form names the revision (and publish / withdraw the publication state) this page shows, so a change
+ * made elsewhere meanwhile is refused, not overwritten. Someone who may not manage the course gets a 404.
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -40,7 +40,8 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
   const pool = await db();
   const [course, choices] = await Promise.all([getStudioCourse(pool, g.actor, id), listLessonChoices(pool)]);
   if (!course) notFound();
-  const lessons = course.modules.flatMap((m) => m.lessons);
+  // A lesson moves within its module, or across the edge into the neighbouring module, even an empty one.
+  const lastModule = course.modules.length - 1;
 
   /** A small form for one change: the operation, the revision shown, and any extra fields. */
   const Op = ({
@@ -98,6 +99,7 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
               <form action={publishCourseAction} className="inline">
                 <input type="hidden" name="id" value={course.id} />
                 <input type="hidden" name="revision" value={course.draftRevisionId} />
+                <input type="hidden" name="publication" value={course.publication} />
                 <button type="submit" data-testid="publish-course">
                   Publish this version
                 </button>
@@ -106,6 +108,7 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
             {course.status === "published" ? (
               <form action={withdrawCourseAction} className="inline">
                 <input type="hidden" name="id" value={course.id} />
+                <input type="hidden" name="publication" value={course.publication} />
                 <button type="submit" className="secondary danger" data-testid="withdraw-course">
                   Withdraw
                 </button>
@@ -157,8 +160,9 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
             </form>
             {m.lessons.length === 0 ? <p className="muted">No lessons yet.</p> : null}
             <ol className="course-lessons">
-              {m.lessons.map((l) => {
-                const at = lessons.indexOf(l);
+              {m.lessons.map((l, li) => {
+                const canUp = li > 0 || mi > 0;
+                const canDown = li < m.lessons.length - 1 || mi < lastModule;
                 return (
                   <li key={l.lessonId} data-testid="studio-lesson" data-state={l.state}>
                     <div>
@@ -169,8 +173,8 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
                       <span className="muted"> revision {l.pinnedNumber}</span>
                     </div>
                     <div className="actions">
-                      {at > 0 ? <Op op="lesson_up" label="↑" title="Move up" fields={{ lesson: l.lessonId }} /> : null}
-                      {at < lessons.length - 1 ? (
+                      {canUp ? <Op op="lesson_up" label="↑" title="Move up" fields={{ lesson: l.lessonId }} /> : null}
+                      {canDown ? (
                         <Op op="lesson_down" label="↓" title="Move down" fields={{ lesson: l.lessonId }} />
                       ) : null}
                       {l.state === "outdated" ? (

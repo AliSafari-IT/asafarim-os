@@ -72,7 +72,7 @@ export default async function seed() {
     for (const edit of edits) {
       rev = ok(await editCourse(pool, author, { id: course.id, expectedRevisionId: rev, edit })).revisionId;
     }
-    ok(await publishCourse(pool, author, { id: course.id, revisionId: rev }));
+    ok(await publishCourse(pool, author, { id: course.id, revisionId: rev, publication: 0 }));
 
     // After publication: one lesson's article is withdrawn, another's gets a new (unpublished) draft.
     ok(await withdrawArticle(pool, author, { id: extra.id }));
