@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { decodeCursor, encodeCursor } from "./cursor";
+import { refreshSearchDocument } from "./search-index";
 import { canCreate, canEdit, canPublish, canView, seesAll, type Actor } from "./policy";
 import type { Doc } from "./doc";
 import { SCHEMA_VERSION } from "./doc";
@@ -249,6 +250,8 @@ export async function publishRevision(
        WHERE id = $1`,
       [item.id, input.revisionId],
     );
+    // The public search projection changes in the same transaction (#357).
+    await refreshSearchDocument(c, item.id);
     await audit(c, actor, "content.published", item.id, input.revisionId);
     return { ok: true, revisionId: input.revisionId } as const;
   });
@@ -266,6 +269,8 @@ export async function withdrawArticle(pool: Pool, actor: Actor, input: { id: str
        WHERE id = $1`,
       [item.id],
     );
+    // The public search projection changes in the same transaction (#357).
+    await refreshSearchDocument(c, item.id);
     await audit(c, actor, "content.withdrawn", item.id, item.published_revision_id);
     return { ok: true } as const;
   });
@@ -481,6 +486,8 @@ export async function changeSlug(
       await c.query("INSERT INTO slug_redirects (old_slug, item_id) VALUES ($1, $2)", [item.slug, item.id]);
     }
     await c.query("UPDATE content_items SET slug = $2, updated_at = now() WHERE id = $1", [item.id, input.slug]);
+    // The public search projection changes in the same transaction (#357).
+    await refreshSearchDocument(c, item.id);
     await audit(c, actor, "content.slug_changed", item.id, null);
     return { ok: true, slug: input.slug, previous: item.slug } as const;
   });

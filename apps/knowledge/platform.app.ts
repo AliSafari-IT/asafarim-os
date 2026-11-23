@@ -9,7 +9,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.1.6",
+  version: "0.1.7",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   // Live since #361. The dev gateway is generated from this; production routes it through
@@ -37,7 +37,8 @@ export default defineApp({
   auth: {
     client: "oidc",
     // Published articles are for everyone. The app only ever reads published revisions there.
-    publicPaths: ["/", "/articles/**", "/health/live", "/health/ready"],
+    // Search, topic pages and the search API read only the published projection (#357).
+    publicPaths: ["/", "/articles/**", "/search", "/topics/**", "/api/public/**", "/health/live", "/health/ready"],
   },
   permissions: [
     { key: "knowledge.content.create", description: "Open the studio and create article drafts" },
@@ -45,6 +46,10 @@ export default defineApp({
     { key: "knowledge.content.edit.any", description: "Edit and save drafts of any article" },
     { key: "knowledge.content.publish.own", description: "Publish and withdraw your own articles" },
     { key: "knowledge.content.publish.any", description: "Publish and withdraw any article" },
+    {
+      key: "knowledge.taxonomy.manage",
+      description: "Create topics and the curated tags (with aliases) authors classify articles with",
+    },
     {
       key: "knowledge.ai.use",
       description: "Ask the AI for proposals (outline, rewrite, summary, diagram) on articles you may edit",
@@ -69,9 +74,10 @@ export default defineApp({
         "knowledge.content.edit.any",
         "knowledge.content.publish.own",
         "knowledge.content.publish.any",
+        "knowledge.taxonomy.manage",
         "knowledge.ai.use",
       ],
-      description: "Edits, publishes and withdraws any article",
+      description: "Edits, publishes and withdraws any article, and curates topics and tags",
     },
   ],
   routes: [

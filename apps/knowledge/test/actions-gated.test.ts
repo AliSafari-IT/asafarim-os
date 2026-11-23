@@ -14,7 +14,10 @@ describe("studio server actions", () => {
       [
         "autosaveAction",
         "changeSlugAction",
+        "classifyAction",
         "createArticleAction",
+        "createTagAction",
+        "createTopicAction",
         "discardAutosaveAction",
         "publishAction",
         "saveDraftAction",

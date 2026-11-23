@@ -34,6 +34,9 @@ export async function TopBar({ next = "/" }: { next?: string }) {
       <div className="topbar-inner">
         <AppBrand name={APP_NAME} glyph="KN" icon={<KnowledgeMark />} />
         <nav className="tools" aria-label="Account" data-testid="who">
+          <Link href="/search" className="nav-link" data-testid="search-link">
+            Search
+          </Link>
           {isAuthor ? (
             <Link href="/studio" className="nav-link" data-testid="studio-link">
               Studio
