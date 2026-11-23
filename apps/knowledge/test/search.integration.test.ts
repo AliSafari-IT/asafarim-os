@@ -114,6 +114,9 @@ describe.skipIf(!ADMIN_URL)("search on PostgreSQL", () => {
       error: "alias_taken",
       detail: "ecmascript",
     });
+    expect(
+      await createTag(pool, erin, { slug: "long", name: "Long", kind: "subject", aliases: ["", "x".repeat(61)] }),
+    ).toEqual({ ok: false, error: "invalid_alias", detail: "x".repeat(61) });
     const r = await resolveTags(pool, ["js", "C#", "Networking"]);
     expect(r.ok && r.ids.length).toBe(3);
     expect(await resolveTags(pool, ["js", "cobol"])).toEqual({ ok: false, error: "unknown_tag", key: "cobol" });

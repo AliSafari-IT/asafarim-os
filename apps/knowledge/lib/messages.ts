@@ -40,6 +40,7 @@ export const ERRORS: Record<string, string> = {
   unknown_topic: "That topic doesn't exist.",
   topic_too_deep: "Topics go two levels deep: choose a top-level topic as the parent.",
   unknown_tag: "That tag isn't one of the curated tags. Pick an existing tag, or ask an editor to add it.",
+  invalid_alias: "Aliases can be up to 60 characters.",
   alias_taken: "One of those aliases is already a tag or another tag's alias.",
   ambiguous_tag: "More than one tag has that name. Use the tag's slug instead.",
   invalid_language: "Choose one of the listed languages.",

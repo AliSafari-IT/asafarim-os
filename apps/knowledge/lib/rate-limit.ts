@@ -1,8 +1,9 @@
 /**
  * A per-client token bucket for the public search (#357): a burst of `burst` requests, refilled at `perMinute`.
  * In memory, per process: Knowledge runs one instance, and the limit protects the database from one client's
- * flood, not from a distributed one (that is the edge's job). The client is the first X-Forwarded-For address,
- * which the gateway (Caddy) sets; without it, every request shares one bucket.
+ * flood, not from a distributed one (that is the edge's job). The client is the LAST X-Forwarded-For address,
+ * the one the gateway (Caddy) appends; entries to its left come from the client and can be forged, so they never
+ * key the limit (as in apps/flow). Without it, every request shares one bucket.
  */
 export interface Limiter {
   take(key: string, now?: number): { ok: true } | { ok: false; retryAfterSeconds: number };
@@ -34,7 +35,7 @@ export function createLimiter(opts: { perMinute: number; burst: number; maxKeys?
 
 /** The client address the gateway reported, or a shared key. */
 export function clientKey(headers: { get(name: string): string | null }): string {
-  const forwarded = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  const forwarded = headers.get("x-forwarded-for")?.split(",").pop()?.trim();
   return forwarded || headers.get("x-real-ip") || "unknown";
 }
 

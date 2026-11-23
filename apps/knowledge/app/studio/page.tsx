@@ -2,6 +2,7 @@
  * The studio home: the person's own articles (every article for an editor) and a form to start one.
  * The gateway asks for knowledge.content.create on /studio/**; requireStudio asks again.
  */
+import { one, type SearchParams } from "@/lib/params";
 import Link from "next/link";
 import { createArticleAction } from "./actions";
 import { Notices } from "@/components/Notices";
@@ -15,11 +16,12 @@ import { requireStudio } from "@/lib/studio";
 
 export const dynamic = "force-dynamic";
 
-type Props = { searchParams: Promise<Record<string, string | undefined>> };
+type Props = { searchParams: Promise<SearchParams> };
 
 export default async function Studio({ searchParams }: Props) {
   const g = await requireStudio();
-  const { error, done, after, q } = await searchParams;
+  const sp = await searchParams;
+  const [error, done, after, q] = [one(sp.error), one(sp.done), one(sp.after), one(sp.q)];
   if (!g.ok) {
     return (
       <>

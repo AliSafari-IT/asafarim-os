@@ -2,6 +2,7 @@
  * Public search (#357): a query and facet filters (topic, technology, level, language) over published articles
  * only. Rate limited per client like the API; the filters apply before ranking and paging (lib/search.ts).
  */
+import { one, type SearchParams } from "@/lib/params";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { SearchResults } from "@/components/SearchResults";
@@ -15,16 +16,16 @@ import { LANGUAGES, LEVELS, listTags, listTopics, type Tag, type Topic } from "@
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Search" };
 
-type Props = { searchParams: Promise<Record<string, string | undefined>> };
+type Props = { searchParams: Promise<SearchParams> };
 
 export default async function SearchPage({ searchParams }: Props) {
   const sp = await searchParams;
-  const q = (sp.q ?? "").slice(0, 200);
+  const q = (one(sp.q) ?? "").slice(0, 200);
   const filters = normaliseFilters({
-    topic: sp.topic,
-    technology: sp.technology,
-    level: sp.level,
-    language: sp.language,
+    topic: one(sp.topic),
+    technology: one(sp.technology),
+    level: one(sp.level),
+    language: one(sp.language),
   });
   const asked = Boolean(q.trim() || filters.topic || filters.technology || filters.level || filters.language);
 
@@ -41,7 +42,7 @@ export default async function SearchPage({ searchParams }: Props) {
     if (asked) {
       const limited = searchLimiter.take(clientKey(await headers()));
       if (!limited.ok) error = "rate_limited";
-      else page = await searchPublished(pool, { q, filters, after: sp.after });
+      else page = await searchPublished(pool, { q, filters, after: one(sp.after) });
     }
   } catch {
     error = "unavailable";
@@ -134,7 +135,13 @@ export default async function SearchPage({ searchParams }: Props) {
           </p>
         ) : null}
         {page && page.items.length ? <SearchResults hits={page.items} /> : null}
-        <Pager after={sp.after} next={page?.next ?? null} base={base} label="More results" first="← First results" />
+        <Pager
+          after={one(sp.after)}
+          next={page?.next ?? null}
+          base={base}
+          label="More results"
+          first="← First results"
+        />
       </main>
     </>
   );

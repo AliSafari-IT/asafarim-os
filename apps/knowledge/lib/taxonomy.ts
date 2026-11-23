@@ -68,6 +68,7 @@ export type TaxonomyResult<T> =
         | "topic_too_deep"
         | "unknown_tag"
         | "alias_taken"
+        | "invalid_alias"
         | "too_many_tags"
         | "ambiguous_tag"
         | "invalid_level"
@@ -166,9 +167,10 @@ export async function createTag(
   if (!isTaxonomySlug(input.slug)) return { ok: false, error: "invalid_slug" };
   if (!name || name.length > TAXONOMY_LIMITS.tagName) return { ok: false, error: "invalid_name" };
   if (!(TAG_KINDS as readonly string[]).includes(input.kind)) return { ok: false, error: "invalid_name" };
-  const aliases = [...new Set((input.aliases ?? []).map(aliasOf).filter((a): a is string => !!a))].filter(
-    (a) => a !== input.slug,
-  );
+  const entered = (input.aliases ?? []).map((a) => a.trim()).filter(Boolean);
+  const tooLong = entered.find((a) => !aliasOf(a));
+  if (tooLong) return { ok: false, error: "invalid_alias", detail: tooLong };
+  const aliases = [...new Set(entered.map((a) => aliasOf(a)!))].filter((a) => a !== input.slug);
   return inTransaction(pool, async (c) => {
     // One lock for every tag name, so a slug and an alias can't be claimed at once by two tags.
     await c.query("SELECT pg_advisory_xact_lock(hashtext('knowledge.tags'))");
