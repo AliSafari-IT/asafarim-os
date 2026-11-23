@@ -135,7 +135,8 @@ export async function searchPublished(
   const q = (input.q ?? "").replace(/\s+/g, " ").trim().slice(0, SEARCH_LIMITS.query);
   const terms = queryTerms(q);
 
-  if (!q || terms.length === 0) {
+  // A query with no identifier-like word ("R", "排序") still ranks: full text and title similarity carry it.
+  if (!q) {
     const after = decodeCursor(input.after);
     const { rows } = await pool.query<HitRow & { at_key: string }>(
       `SELECT ${HIT_COLUMNS}, d.published_at::text AS at_key, NULL AS snippet, NULL AS anchor, NULL AS heading
@@ -194,6 +195,8 @@ export async function searchPublished(
        SELECT x.anchor, x.heading, ts_headline('simple', x.body, query.tq, $13) AS snippet
        FROM search_sections x
        WHERE x.item_id = d.item_id
+         -- Only a section that really matches; when the title or a tag matched, the result shows the summary.
+         AND (x.tsv @@ query.tq OR EXISTS (SELECT 1 FROM unnest($8::text[]) AS w WHERE position(w IN lower(x.body)) > 0))
        ORDER BY ts_rank(x.tsv, query.tq) DESC,
                 (SELECT count(*) FROM unnest($8::text[]) AS w WHERE position(w IN lower(x.body)) > 0) DESC,
                 x.position

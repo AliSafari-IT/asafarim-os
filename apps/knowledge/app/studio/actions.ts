@@ -193,6 +193,7 @@ export async function classifyAction(formData: FormData) {
     id,
     topicSlug: field(formData, "topic") || null,
     level: field(formData, "level") || null,
+    language: field(formData, "language") || undefined,
     tags,
   });
   if (!r.ok) {

@@ -10,7 +10,7 @@ import { TopBar } from "@/components/TopBar";
 import { db } from "@/lib/db";
 import { clientKey, searchLimiter } from "@/lib/rate-limit";
 import { normaliseFilters, searchPublished, type SearchPage } from "@/lib/search";
-import { LEVELS, listTags, listTopics, type Tag, type Topic } from "@/lib/taxonomy";
+import { LANGUAGES, LEVELS, listTags, listTopics, type Tag, type Topic } from "@/lib/taxonomy";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Search" };
@@ -106,10 +106,11 @@ export default async function SearchPage({ searchParams }: Props) {
               Language
               <select name="language" defaultValue={filters.language ?? ""}>
                 <option value="">Any</option>
-                <option value="en">English</option>
-                <option value="nl">Nederlands</option>
-                <option value="fr">Français</option>
-                <option value="de">Deutsch</option>
+                {Object.entries(LANGUAGES).map(([code, name]) => (
+                  <option key={code} value={code}>
+                    {name}
+                  </option>
+                ))}
               </select>
             </label>
           </div>

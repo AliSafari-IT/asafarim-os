@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import manifest from "../platform.app";
 import { createArticle, publishRevision, saveDraft, withdrawArticle } from "../lib/content";
 import { parseDoc, type Doc } from "../lib/doc";
-import { migrate } from "../lib/migrations";
+import { backfillSearch, migrate } from "../lib/migrations";
 import type { Actor } from "../lib/policy";
 import { searchPublished, searchStudio, snippetParts } from "../lib/search";
 import { classify, createTag, createTopic, resolveTags } from "../lib/taxonomy";
@@ -116,7 +116,7 @@ describe.skipIf(!ADMIN_URL)("search on PostgreSQL", () => {
     });
     const r = await resolveTags(pool, ["js", "C#", "Networking"]);
     expect(r.ok && r.ids.length).toBe(3);
-    expect(await resolveTags(pool, ["js", "cobol"])).toEqual({ ok: false, unknown: "cobol" });
+    expect(await resolveTags(pool, ["js", "cobol"])).toEqual({ ok: false, error: "unknown_tag", key: "cobol" });
   });
 
   it("indexes only published articles, in the transaction that publishes, withdraws or reclassifies", async () => {
@@ -241,6 +241,97 @@ describe.skipIf(!ADMIN_URL)("search on PostgreSQL", () => {
     expect((await searchStudio(pool, { subject: "erin", seesAll: true }, "secret")).map((r) => r.status)).toEqual([
       "draft",
     ]);
+  });
+
+  it("resolves a tag name only when one tag has it, and counts tags after resolving", async () => {
+    ok(await createTag(pool, erin, { slug: "golang", name: "Go", kind: "technology" }));
+    ok(await createTag(pool, erin, { slug: "go-game", name: "Go", kind: "subject" }));
+    expect(await resolveTags(pool, ["Go"])).toEqual({ ok: false, error: "ambiguous_tag", key: "go" });
+    const r = await resolveTags(pool, ["golang"]);
+    expect(r.ok && r.ids.length).toBe(1);
+    const a = await publish(alice, "board-games", "Board games", "Stones on a grid.");
+    expect(await classify(pool, alice, { id: a.id, topicSlug: null, level: null, tags: ["Go"] })).toEqual({
+      ok: false,
+      error: "ambiguous_tag",
+      detail: "go",
+    });
+    ok(await classify(pool, alice, { id: a.id, topicSlug: null, level: null, tags: ["go-game"] }));
+    expect(slugs(await searchPublished(pool, { filters: { technology: "golang" } }))).toEqual([]);
+  });
+
+  it("finds words in list items, short and non-Latin queries, and links a section only when it matches", async () => {
+    const list = parseDoc({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "What the stack needs." }] },
+        {
+          type: "bulletList",
+          content: ["PostgreSQL", "Redis"].map((w) => ({
+            type: "listItem",
+            content: [{ type: "paragraph", content: [{ type: "text", text: w }] }],
+          })),
+        },
+      ],
+    });
+    if (!list.ok) throw new Error(list.error);
+    const a = ok(
+      await createArticle(pool, alice, {
+        slug: "deploy-checklist",
+        draft: { title: "Deployment checklist", summary: "", body: list.text, doc: list.doc },
+      }),
+    );
+    ok(await publishRevision(pool, alice, { id: a.id, revisionId: a.revisionId }));
+    expect(slugs(await searchPublished(pool, { q: "Redis" }))).toEqual(["deploy-checklist"]);
+
+    await publish(alice, "r-stats", "Statistics in R", "Data frames and plots.");
+    expect(slugs(await searchPublished(pool, { q: "R" }))).toContain("r-stats");
+    await publish(alice, "sorting-zh", "排序 算法", "快速 排序 和 归并 排序");
+    expect(slugs(await searchPublished(pool, { q: "排序" }))).toEqual(["sorting-zh"]);
+
+    // The title matches; no section says "vacuum", so the result has no section link and shows the summary.
+    await publish(alice, "vacuum", "Vacuum tuning", "## Installation\nInstall the server first.", "Keep tables lean");
+    const hit = (await searchPublished(pool, { q: "vacuum" })).items.find((h) => h.slug === "vacuum")!;
+    expect(hit.section).toBeNull();
+    expect(hit.snippet).toBe("Keep tables lean");
+  });
+
+  it("files an article under the language its author sets", async () => {
+    const a = await publish(alice, "postgres-fr", "PostgreSQL en production", "Sauvegardes et réplication.");
+    expect(slugs(await searchPublished(pool, { q: "réplication", filters: { language: "fr" } }))).toEqual([]);
+    expect(await classify(pool, alice, { id: a.id, topicSlug: null, level: null, tags: [], language: "xx" })).toEqual({
+      ok: false,
+      error: "invalid_language",
+    });
+    ok(await classify(pool, alice, { id: a.id, topicSlug: null, level: null, tags: [], language: "fr" }));
+    expect(slugs(await searchPublished(pool, { q: "réplication", filters: { language: "fr" } }))).toEqual([
+      "postgres-fr",
+    ]);
+    expect(slugs(await searchPublished(pool, { q: "réplication", filters: { language: "en" } }))).toEqual([]);
+  });
+
+  it("backfills articles that were public before search existed, from the published revision", async () => {
+    const a = await publish(alice, "legacy", "Legacy article", "Published before search.");
+    ok(
+      await saveDraft(pool, alice, {
+        id: a.id,
+        expectedRevisionId: a.revisionId,
+        draft: { title: "Legacy article", summary: "", body: "Unpublished zeppelin draft." },
+      }),
+    );
+    // As on an install upgraded from version 5: the projection is empty.
+    await pool.query("DELETE FROM search_documents");
+    expect(slugs(await searchPublished(pool, { q: "legacy" }))).toEqual([]);
+    const c = await pool.connect();
+    try {
+      await c.query("BEGIN");
+      await backfillSearch(c);
+      await c.query("COMMIT");
+    } finally {
+      c.release();
+    }
+    expect(slugs(await searchPublished(pool, { q: "legacy" }))).toEqual(["legacy"]);
+    expect(slugs(await searchPublished(pool, { q: "zeppelin" }))).toEqual([]);
+    expect(slugs(await searchPublished(pool, { q: "secret" }))).toEqual([]);
   });
 
   it("answers within the latency bound on 10 000 published articles (p95)", async () => {

@@ -35,11 +35,23 @@ function textOf(n: DocNode, acc: string[], code: string[]): void {
   }
   if (n.type === "hardBreak") acc.push("\n");
   if (n.type === "mermaid") {
-    acc.push(String(n.attrs?.description ?? ""));
+    acc.push(String(n.attrs?.description ?? ""), "\n");
     return;
   }
   for (const c of n.content ?? []) textOf(c, acc, code);
+  // Every node with children is a block (marks sit on text nodes, not around them): end it with a break so list
+  // items, table cells and nested paragraphs don't run together ("PostgreSQL" + "Redis" ≠ "PostgreSQLRedis").
+  if (n.content?.length) acc.push("\n");
 }
+
+/** A block's text: its own lines, without empty ones. */
+const joined = (parts: string[]) =>
+  parts
+    .join("")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join("\n");
 
 function fromDoc(doc: Doc): { sections: Section[]; code: string[] } {
   const ids = headingIds(doc);
@@ -50,7 +62,7 @@ function fromDoc(doc: Doc): { sections: Section[]; code: string[] } {
     if (block.type === "heading") {
       const parts: string[] = [];
       textOf(block, parts, code);
-      sections.push({ anchor: ids.get(block) ?? null, heading: parts.join("").trim(), body: "" });
+      sections.push({ anchor: ids.get(block) ?? null, heading: joined(parts).replace(/\n/g, " "), body: "" });
       lines.push([]);
       continue;
     }
@@ -59,7 +71,7 @@ function fromDoc(doc: Doc): { sections: Section[]; code: string[] } {
     textOf(block, parts, blockCode);
     if (block.type === "codeBlock") code.push(parts.join(""));
     else code.push(...blockCode);
-    lines.at(-1)!.push(parts.join("").trim());
+    lines.at(-1)!.push(joined(parts));
   }
   sections.forEach((s, i) => (s.body = lines[i]!.filter(Boolean).join("\n")));
   return { sections, code };
@@ -70,15 +82,36 @@ function fromMarkdown(markdown: string): { sections: Section[]; code: string[] }
   const code: string[] = [];
   const body: string[][] = [[]];
   let fenced = false;
-  for (const line of markdown.split("\n")) {
-    if (/^\s*(```|~~~)/.test(line)) {
+  let comment = false;
+  for (const raw of markdown.split("\n")) {
+    if (!comment && /^\s*(```|~~~)/.test(raw)) {
       fenced = !fenced;
       continue;
     }
     if (fenced) {
-      code.push(line);
-      body.at(-1)!.push(line);
+      code.push(raw);
+      body.at(-1)!.push(raw);
       continue;
+    }
+    // HTML comments are hidden on the page (components/Markdown.tsx), so they stay out of search and snippets too.
+    let line = "";
+    let rest = raw;
+    while (rest) {
+      if (comment) {
+        const end = rest.indexOf("-->");
+        if (end < 0) break;
+        rest = rest.slice(end + 3);
+        comment = false;
+      } else {
+        const start = rest.indexOf("<!--");
+        if (start < 0) {
+          line += rest;
+          break;
+        }
+        line += rest.slice(0, start);
+        rest = rest.slice(start + 4);
+        comment = true;
+      }
     }
     const h = /^#{1,6}\s+(.*)$/.exec(line);
     if (h) {

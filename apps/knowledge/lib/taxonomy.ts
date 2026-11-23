@@ -15,6 +15,16 @@ type Client = Pick<pg.PoolClient, "query">;
 export const LEVELS = ["beginner", "intermediate", "advanced"] as const;
 export type Level = (typeof LEVELS)[number];
 export const TAG_KINDS = ["subject", "technology"] as const;
+/** The languages an article can be written in (the platform's locales), with the name readers see. */
+export const LANGUAGES = {
+  en: "English",
+  nl: "Nederlands",
+  fr: "Français",
+  de: "Deutsch",
+  lb: "Lëtzebuergesch",
+} as const;
+export type Language = keyof typeof LANGUAGES;
+export const isLanguage = (s: string): s is Language => Object.hasOwn(LANGUAGES, s);
 export type TagKind = (typeof TAG_KINDS)[number];
 export const TAXONOMY_LIMITS = { slug: 64, topicName: 80, description: 300, tagName: 60, alias: 60, tagsPerItem: 12 };
 
@@ -40,6 +50,7 @@ export interface Tag {
 export interface Classification {
   topicId: string | null;
   level: Level | null;
+  language: string;
   tags: Tag[];
 }
 
@@ -58,7 +69,9 @@ export type TaxonomyResult<T> =
         | "unknown_tag"
         | "alias_taken"
         | "too_many_tags"
-        | "invalid_level";
+        | "ambiguous_tag"
+        | "invalid_level"
+        | "invalid_language";
       detail?: string;
     };
 
@@ -179,26 +192,29 @@ export async function createTag(
 export async function resolveTags(
   pool: Pick<Pool, "query">,
   names: string[],
-): Promise<{ ok: true; ids: string[] } | { ok: false; unknown: string }> {
+): Promise<{ ok: true; ids: string[] } | { ok: false; error: "unknown_tag" | "ambiguous_tag"; key: string }> {
   const wanted = [...new Set(names.map((n) => n.trim().toLowerCase()).filter(Boolean))];
   if (!wanted.length) return { ok: true, ids: [] };
-  const { rows } = await pool.query<{ key: string; id: string }>(
-    `SELECT w AS key, coalesce(t.id, n.id, a.tag_id) AS id
-     FROM unnest($1::text[]) AS w
-     LEFT JOIN tags t ON t.slug = w
-     LEFT JOIN tags n ON lower(n.name) = w
-     LEFT JOIN tag_aliases a ON a.alias = w`,
+  // Each word names exactly one tag: a slug or an alias first (both unique), else a display name only when one tag
+  // has it (names may repeat across kinds, e.g. a subject and a technology both called "Go").
+  const { rows } = await pool.query<{ key: string; id: string | null; names: number }>(
+    `SELECT w AS key,
+            coalesce((SELECT id FROM tags WHERE slug = w), (SELECT tag_id FROM tag_aliases WHERE alias = w),
+                     (SELECT min(id) FROM tags WHERE lower(name) = w HAVING count(*) = 1)) AS id,
+            (SELECT count(*)::int FROM tags WHERE lower(name) = w) AS names
+     FROM unnest($1::text[]) AS w`,
     [wanted],
   );
-  const missing = rows.find((r) => !r.id);
-  if (missing) return { ok: false, unknown: missing.key };
-  return { ok: true, ids: [...new Set(rows.map((r) => r.id))] };
+  for (const r of rows) {
+    if (!r.id) return { ok: false, error: r.names > 1 ? "ambiguous_tag" : "unknown_tag", key: r.key };
+  }
+  return { ok: true, ids: [...new Set(rows.map((r) => r.id!))] };
 }
 
 export async function getClassification(pool: Pick<Pool, "query">, itemId: string): Promise<Classification> {
   const item = (
-    await pool.query<{ topic_id: string | null; level: Level | null }>(
-      "SELECT topic_id, level FROM content_items WHERE id = $1",
+    await pool.query<{ topic_id: string | null; level: Level | null; language: string }>(
+      "SELECT topic_id, level, language FROM content_items WHERE id = $1",
       [itemId],
     )
   ).rows[0];
@@ -207,7 +223,7 @@ export async function getClassification(pool: Pick<Pool, "query">, itemId: strin
      WHERE it.item_id = $1 ORDER BY t.name`,
     [itemId],
   );
-  return { topicId: item?.topic_id ?? null, level: item?.level ?? null, tags: rows };
+  return { topicId: item?.topic_id ?? null, level: item?.level ?? null, language: item?.language ?? "en", tags: rows };
 }
 
 /**
@@ -217,14 +233,16 @@ export async function getClassification(pool: Pick<Pool, "query">, itemId: strin
 export async function classify(
   pool: Pool,
   actor: Actor,
-  input: { id: string; topicSlug: string | null; level: string | null; tags: string[] },
+  input: { id: string; topicSlug: string | null; level: string | null; tags: string[]; language?: string },
 ): Promise<TaxonomyResult<object>> {
   if (input.level !== null && !(LEVELS as readonly string[]).includes(input.level)) {
     return { ok: false, error: "invalid_level" };
   }
+  if (input.language !== undefined && !isLanguage(input.language)) return { ok: false, error: "invalid_language" };
   if (input.tags.length > TAXONOMY_LIMITS.tagsPerItem) return { ok: false, error: "too_many_tags" };
   const tags = await resolveTags(pool, input.tags);
-  if (!tags.ok) return { ok: false, error: "unknown_tag", detail: tags.unknown };
+  if (!tags.ok) return { ok: false, error: tags.error, detail: tags.key };
+  if (tags.ids.length > TAXONOMY_LIMITS.tagsPerItem) return { ok: false, error: "too_many_tags" };
   return inTransaction(pool, async (c) => {
     const item = (
       await c.query<{
@@ -247,11 +265,10 @@ export async function classify(
         (await c.query<{ id: string }>("SELECT id FROM topics WHERE slug = $1", [input.topicSlug])).rows[0]?.id ?? null;
       if (!topicId) return { ok: false, error: "unknown_topic" } as const;
     }
-    await c.query("UPDATE content_items SET topic_id = $2, level = $3, updated_at = now() WHERE id = $1", [
-      item.id,
-      topicId,
-      input.level,
-    ]);
+    await c.query(
+      "UPDATE content_items SET topic_id = $2, level = $3, language = coalesce($4, language), updated_at = now() WHERE id = $1",
+      [item.id, topicId, input.level, input.language ?? null],
+    );
     await c.query("DELETE FROM item_tags WHERE item_id = $1", [item.id]);
     if (tags.ids.length) {
       await c.query("INSERT INTO item_tags (item_id, tag_id) SELECT $1, t FROM unnest($2::text[]) AS t", [

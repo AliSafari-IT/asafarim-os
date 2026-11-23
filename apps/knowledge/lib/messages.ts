@@ -41,6 +41,8 @@ export const ERRORS: Record<string, string> = {
   topic_too_deep: "Topics go two levels deep: choose a top-level topic as the parent.",
   unknown_tag: "That tag isn't one of the curated tags. Pick an existing tag, or ask an editor to add it.",
   alias_taken: "One of those aliases is already a tag or another tag's alias.",
+  ambiguous_tag: "More than one tag has that name. Use the tag's slug instead.",
+  invalid_language: "Choose one of the listed languages.",
   too_many_tags: "An article can have at most 12 tags.",
   invalid_level: "Choose beginner, intermediate or advanced.",
   invalid_slug: "The slug can only use lower-case letters, digits and single dashes.",

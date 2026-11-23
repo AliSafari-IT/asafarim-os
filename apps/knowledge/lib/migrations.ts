@@ -1,10 +1,30 @@
 /**
  * Knowledge's own migrations, in order (the SQL pattern of apps/flow). Each runs once, recorded in
  * `knowledge_migrations`, all under one advisory lock so two instances starting at once can't run them
- * twice. Never edit one that has shipped: add the next.
+ * twice. Never edit one that has shipped: add the next. A migration may also run `after` (TypeScript, in the same
+ * transaction, after its SQL) when the data it needs is built in code, like the search projection.
  */
+import { refreshSearchDocument } from "./search-index";
 
-export const MIGRATIONS: readonly { version: number; name: string; sql: string }[] = [
+interface Queryable {
+  query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+}
+
+/** Index every article that was already public before search existed (#357), from its published revision. */
+export async function backfillSearch(client: Queryable): Promise<void> {
+  const { rows } = await client.query(
+    "SELECT id FROM content_items WHERE published_revision_id IS NOT NULL ORDER BY id FOR UPDATE",
+  );
+  for (const r of rows)
+    await refreshSearchDocument(client as Parameters<typeof refreshSearchDocument>[0], String(r.id));
+}
+
+export const MIGRATIONS: readonly {
+  version: number;
+  name: string;
+  sql: string;
+  after?: (client: Queryable) => Promise<void>;
+}[] = [
   {
     version: 1,
     name: "content items, immutable revisions and the audit log (Phase 0)",
@@ -254,12 +274,9 @@ CREATE TABLE search_sections (
   tsv      tsvector NOT NULL,
   PRIMARY KEY (item_id, position)
 );`,
+    after: backfillSearch,
   },
 ];
-
-interface Queryable {
-  query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
-}
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */
 export async function migrate(client: Queryable): Promise<number[]> {
@@ -276,6 +293,7 @@ export async function migrate(client: Queryable): Promise<number[]> {
     for (const m of MIGRATIONS) {
       if (done.has(m.version)) continue;
       await client.query(m.sql);
+      await m.after?.(client);
       await client.query("INSERT INTO knowledge_migrations (version, name) VALUES ($1, $2)", [m.version, m.name]);
       applied.push(m.version);
     }

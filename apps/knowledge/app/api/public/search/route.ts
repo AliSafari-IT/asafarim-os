@@ -46,7 +46,8 @@ export async function GET(req: NextRequest) {
         })),
         next: page.next,
       },
-      { headers: { "Cache-Control": "public, max-age=30" } },
+      // Not cacheable: a withdrawn article must leave the results at once, for every reader.
+      { headers: { "Cache-Control": "no-store" } },
     );
   } catch {
     return NextResponse.json({ error: "unavailable", message: "Search is unavailable right now." }, { status: 503 });

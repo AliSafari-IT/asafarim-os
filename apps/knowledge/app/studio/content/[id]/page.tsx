@@ -10,7 +10,7 @@ import { EditorForm } from "@/components/EditorForm";
 import { Notices } from "@/components/Notices";
 import { TopBar } from "@/components/TopBar";
 import { getAutosave, getStudioItem } from "@/lib/content";
-import { getClassification, LEVELS, listTags, listTopics } from "@/lib/taxonomy";
+import { getClassification, LANGUAGES, LEVELS, listTags, listTopics } from "@/lib/taxonomy";
 import { aiConfigFromEnv } from "@/lib/ai/provider";
 import { AI_PERMISSION } from "@/lib/ai/service";
 import { db } from "@/lib/db";
@@ -145,6 +145,16 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
                     ))}
                   </select>
                 </label>
+                <label>
+                  Language
+                  <select name="language" defaultValue={classification.language} data-testid="language-select">
+                    {Object.entries(LANGUAGES).map(([code, name]) => (
+                      <option key={code} value={code}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
               <label>
                 Tags <span className="muted">(comma-separated; curated tags only, by name, slug or alias)</span>
@@ -170,7 +180,9 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
           ) : (
             <p className="muted">
               {topics.find((t) => t.id === classification.topicId)?.name ?? "No topic"} ·{" "}
-              {classification.level ?? "no level"} · {classification.tags.map((t) => t.name).join(", ") || "no tags"}
+              {classification.level ?? "no level"} ·{" "}
+              {LANGUAGES[classification.language as keyof typeof LANGUAGES] ?? classification.language} ·{" "}
+              {classification.tags.map((t) => t.name).join(", ") || "no tags"}
             </p>
           )}
         </section>
