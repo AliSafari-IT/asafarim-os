@@ -9,7 +9,7 @@ import { Notices } from "@/components/Notices";
 import { Pager } from "@/components/Pager";
 import { TopBar } from "@/components/TopBar";
 import { listStudioItems } from "@/lib/content";
-import { canManageTaxonomy, seesAll } from "@/lib/policy";
+import { canCreateCourse, canManageTaxonomy, seesAll, seesAllCourses } from "@/lib/policy";
 import { searchStudio } from "@/lib/search";
 import { db } from "@/lib/db";
 import { requireStudio } from "@/lib/studio";
@@ -47,13 +47,18 @@ export default async function Studio({ searchParams }: Props) {
       <main>
         <h1>Studio</h1>
         <Notices error={error} done={done} />
-        {canManageTaxonomy(g.actor) ? (
-          <p>
+        <p className="studio-links">
+          {canCreateCourse(g.actor) || seesAllCourses(g.actor) ? (
+            <Link href="/studio/courses" data-testid="courses-link">
+              Courses
+            </Link>
+          ) : null}
+          {canManageTaxonomy(g.actor) ? (
             <Link href="/studio/taxonomy" data-testid="taxonomy-link">
               Topics and tags
             </Link>
-          </p>
-        ) : null}
+          ) : null}
+        </p>
 
         <form action={createArticleAction} className="card" data-testid="new-article">
           <h2>New article</h2>

@@ -9,7 +9,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.1.7",
+  version: "0.1.8",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   // Live since #361. The dev gateway is generated from this; production routes it through
@@ -38,7 +38,18 @@ export default defineApp({
     client: "oidc",
     // Published articles are for everyone. The app only ever reads published revisions there.
     // Search, topic pages and the search API read only the published projection (#357).
-    publicPaths: ["/", "/articles/**", "/search", "/topics/**", "/api/public/**", "/health/live", "/health/ready"],
+    // Published courses and their lessons too (#358): only published course revisions, only public articles.
+    publicPaths: [
+      "/",
+      "/articles/**",
+      "/courses",
+      "/courses/**",
+      "/search",
+      "/topics/**",
+      "/api/public/**",
+      "/health/live",
+      "/health/ready",
+    ],
   },
   permissions: [
     { key: "knowledge.content.create", description: "Open the studio and create article drafts" },
@@ -49,6 +60,14 @@ export default defineApp({
     {
       key: "knowledge.taxonomy.manage",
       description: "Create topics and the curated tags (with aliases) authors classify articles with",
+    },
+    {
+      key: "knowledge.courses.manage.own",
+      description: "Create courses from published articles, and edit, publish and withdraw your own courses",
+    },
+    {
+      key: "knowledge.courses.manage.any",
+      description: "Edit, publish and withdraw any course",
     },
     {
       key: "knowledge.ai.use",
@@ -62,9 +81,10 @@ export default defineApp({
         "knowledge.content.create",
         "knowledge.content.edit.own",
         "knowledge.content.publish.own",
+        "knowledge.courses.manage.own",
         "knowledge.ai.use",
       ],
-      description: "Writes, publishes and withdraws their own articles",
+      description: "Writes, publishes and withdraws their own articles and courses",
     },
     {
       key: "knowledge.editor",
@@ -75,9 +95,11 @@ export default defineApp({
         "knowledge.content.publish.own",
         "knowledge.content.publish.any",
         "knowledge.taxonomy.manage",
+        "knowledge.courses.manage.own",
+        "knowledge.courses.manage.any",
         "knowledge.ai.use",
       ],
-      description: "Edits, publishes and withdraws any article, and curates topics and tags",
+      description: "Edits, publishes and withdraws any article or course, and curates topics and tags",
     },
   ],
   routes: [
@@ -96,6 +118,7 @@ export default defineApp({
     color: "#0e7490",
     nav: [
       { label: "Articles", href: "/" },
+      { label: "Courses", href: "/courses" },
       { label: "Studio", href: "/studio" },
     ],
     status: "active",

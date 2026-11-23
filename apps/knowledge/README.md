@@ -21,6 +21,8 @@
 | `knowledge.content.edit.any`    |                    |         ✓          |
 | `knowledge.content.publish.any` |                    |         ✓          |
 | `knowledge.taxonomy.manage`     |                    |         ✓          |
+| `knowledge.courses.manage.own`  |         ✓          |         ✓          |
+| `knowledge.courses.manage.any`  |                    |         ✓          |
 
 Publishing covers withdrawing. Roles are granted only by an admin; registering the app grants nothing. The gateway asks for `knowledge.content.create` on `/studio/**`, and every studio action asks again and checks ownership against the row it locks (`lib/policy.ts`, `lib/content.ts`). An article someone may not see is "not found" to them.
 
@@ -54,12 +56,27 @@ The public pages read only through `published_revision_id`; there is no other qu
 
 Migrations are in `lib/migrations.ts` (versioned SQL under an advisory lock, recorded in `knowledge_migrations`). Never edit a shipped one: add the next.
 
+## Courses (#358)
+
+- **Model.** `courses` has the same two pointers as an article (draft head, published revision) over immutable `course_revisions`; each revision's `course_modules` and `course_lessons` are immutable with it. A lesson names one **article revision** (its pin), and its `lesson_id` stays the same across the course's revisions, so `/courses/:slug/lessons/:lessonId` keeps working.
+- **Pinning.** A lesson is pinned to its article's current published revision when it is added, and again only by "Update to latest". Every other change carries the pin over, so a new draft, or a newer published revision, of the article never changes the published course (`lib/courses.ts`).
+- **Eligibility.** A lesson whose article isn't public now (withdrawn) is hidden from guests (outline, navigation, its own page is a 404) and blocks publishing the course; the studio marks it. Publishing locks the lessons' articles while it checks them.
+- **Studio.** `/studio/courses`: create, then add modules and lessons (published articles, by slug), reorder, remove, update a lesson to the latest revision, publish and withdraw. Every change names the revision the page showed, so a stale tab is refused (`course_conflict`), not merged.
+- **Public pages.** `/courses`, `/courses/:slug` (outline), `/courses/:slug/lessons/:lessonId` (the pinned revision, previous/next, the outline, and the article's own URL as canonical). Learner progress is a later phase.
+
 ## Run and test
 
 ```bash
 pnpm dev                                   # installs and runs every app; Knowledge on http://localhost:4140
 pnpm platform role grant knowledge.author dev-member
 pnpm --filter @asafarim/knowledge test     # unit tests; with KNOWLEDGE_TEST_DATABASE_URL also the PostgreSQL ones
+```
+
+Guest journeys in a browser (Playwright, CI job `knowledge-e2e`): build, then run them against a throwaway `knowledge_e2e` database that `e2e/seed.ts` creates and seeds through `lib/`:
+
+```bash
+pnpm --filter @asafarim/knowledge build
+KNOWLEDGE_E2E_ADMIN_URL=postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres pnpm --filter @asafarim/knowledge e2e
 ```
 
 `KNOWLEDGE_TEST_DATABASE_URL` is an admin connection (locally `postgres://postgres:postgres-dev-only@127.0.0.1:55440/postgres`; CI sets its own). Each run creates and drops its own database.
@@ -79,4 +96,4 @@ Studio authors with `knowledge.ai.use` (in `knowledge.author` and `knowledge.edi
 
 ## Not in Phase 0
 
-Courses, media and video, AI drafting and Mermaid proposals, events, scheduling, author profiles, SEO/RSS/LinkedIn, translations, production deployment. Each has its own issue.
+Media and video, events, scheduling, author profiles, SEO/RSS/LinkedIn, translations, production deployment. Each has its own issue.

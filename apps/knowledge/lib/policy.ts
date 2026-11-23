@@ -11,6 +11,8 @@ export const PERMISSIONS = {
   publishOwn: "knowledge.content.publish.own",
   publishAny: "knowledge.content.publish.any",
   taxonomy: "knowledge.taxonomy.manage",
+  coursesOwn: "knowledge.courses.manage.own",
+  coursesAny: "knowledge.courses.manage.any",
 } as const;
 
 /** The signed-in person, as the studio gate established them. */
@@ -48,4 +50,19 @@ export function seesAll(actor: Actor): boolean {
 /** Creates topics and the curated tags authors choose from (#357). */
 export function canManageTaxonomy(actor: Actor): boolean {
   return has(actor, PERMISSIONS.taxonomy);
+}
+
+/** Creates courses (#358): either course permission. */
+export function canCreateCourse(actor: Actor): boolean {
+  return has(actor, PERMISSIONS.coursesOwn) || has(actor, PERMISSIONS.coursesAny);
+}
+
+/** Edits, publishes and withdraws a course: one capability, like an article's for its owner. */
+export function canManageCourse(actor: Actor, course: { ownerSubject: string }): boolean {
+  return has(actor, PERMISSIONS.coursesAny) || (has(actor, PERMISSIONS.coursesOwn) && owns(actor, course));
+}
+
+/** Lists every course in the studio, not only the person's own. */
+export function seesAllCourses(actor: Actor): boolean {
+  return has(actor, PERMISSIONS.coursesAny);
 }

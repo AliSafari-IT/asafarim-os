@@ -421,3 +421,55 @@ jobs:
             apps/flow/test-results/
             apps/flow/playwright-report/
           if-no-files-found: ignore
+
+  # #358: Knowledge's guest journeys on their own (no identity stack: guests only). Playwright's global setup
+  # makes a throwaway database and seeds it through apps/knowledge/lib (e2e/seed.ts); the production build is
+  # served by `next start`. Today: a guest follows a published course from the list to its last lesson.
+  knowledge-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      KNOWLEDGE_E2E_ADMIN_URL: postgres://postgres:postgres-ci-only@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install the browser
+        run: pnpm --filter @asafarim/knowledge exec playwright install --with-deps chromium
+
+      - name: Build Knowledge and its workspace dependencies
+        run: pnpm exec turbo run build --filter=@asafarim/knowledge --output-logs=errors-only
+
+      - name: Knowledge end-to-end
+        run: pnpm --filter @asafarim/knowledge e2e
+
+      - name: Upload the Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: knowledge-e2e
+          path: |
+            apps/knowledge/test-results/
+            apps/knowledge/playwright-report/
+          if-no-files-found: ignore

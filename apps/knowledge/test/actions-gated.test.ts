@@ -4,11 +4,13 @@ import { describe, expect, it } from "vitest";
 
 /**
  * The gateway checks studio PAGES only (#363); studio POSTs reach the app and are authorised there.
- * So every server action in app/studio/actions.ts must start at the studio gate.
+ * So every server action in app/studio/actions.ts and course-actions.ts must start at the studio gate.
  */
 describe("studio server actions", () => {
   it("each one passes the studio gate before doing anything", () => {
-    const src = readFileSync(path.resolve(import.meta.dirname, "../app/studio/actions.ts"), "utf8");
+    const src = ["actions.ts", "course-actions.ts"]
+      .map((f) => readFileSync(path.resolve(import.meta.dirname, "../app/studio", f), "utf8"))
+      .join("\n");
     const actions = [...src.matchAll(/export async function (\w+)\([^)]*\)[^{]*\{([\s\S]*?)\n\}/g)];
     expect(actions.map((a) => a[1]).sort()).toEqual(
       [
@@ -16,6 +18,10 @@ describe("studio server actions", () => {
         "changeSlugAction",
         "classifyAction",
         "createArticleAction",
+        "createCourseAction",
+        "editCourseAction",
+        "publishCourseAction",
+        "withdrawCourseAction",
         "createTagAction",
         "createTopicAction",
         "discardAutosaveAction",
