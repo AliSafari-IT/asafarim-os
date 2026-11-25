@@ -1,5 +1,5 @@
 /**
- * Media on a real PostgreSQL (#359), with an in-memory store standing in for MinIO: the upload handshake and its
+ * Media on a real PostgreSQL (#359), with an in-memory store standing in for the S3 store: the upload handshake and its
  * quarantine, who may use and read an asset, public exactly while a public revision uses it, deletion and cleanup.
  * Runs when KNOWLEDGE_TEST_DATABASE_URL names a server where it may create a throwaway database.
  */

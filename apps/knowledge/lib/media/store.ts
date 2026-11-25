@@ -1,5 +1,5 @@
 /**
- * Where uploaded media lives (#359): one private bucket on an S3-compatible store (MinIO on the VPS). The bucket is
+ * Where uploaded media lives (#359): one private bucket on an S3-compatible store on the VPS (Garage in dev and CI). The bucket is
  * never public. A browser only ever gets a short presigned PUT for one new object under `uploads/`, and reads go
  * through the app (/media/:id), which checks who may see the asset first.
  *
@@ -25,7 +25,7 @@ export interface MediaStore {
 }
 
 export interface S3Config extends Credentials {
-  /** Where the server reaches the store (http://os-minio:9000 in production). */
+  /** Where the server reaches the store (e.g. http://os-media:3900 in production). */
   endpoint: string;
   /** Where browsers reach it for uploads (https://media.learn.asafarim.site); the endpoint when not set. */
   publicEndpoint: string;

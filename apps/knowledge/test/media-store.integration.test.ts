@@ -1,6 +1,6 @@
 /**
- * The S3 store against a real S3-compatible server (#359): MinIO in CI and in `pnpm dev`. Runs when
- * KNOWLEDGE_TEST_S3_URL is set, e.g. http://minioadmin:minioadmin@localhost:9000 (the keys as the URL's user info).
+ * The S3 store against a real S3-compatible server (#359): Garage in CI and in compose.dev.yml's media profile.
+ * Runs when KNOWLEDGE_TEST_S3_URL is set, e.g. http://GK…:<secret>@localhost:9000 (the keys as the URL's user info).
  */
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";

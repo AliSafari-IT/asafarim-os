@@ -101,39 +101,41 @@ services:
     mem_limit: 256m
     cpus: 0.5
 
-  # #359: Knowledge's media store, an S3-compatible MinIO, the same server production runs. Only with
-  # `docker compose -f compose.dev.yml --profile media up -d --wait` (the "media" profile): `pnpm dev` leaves it off,
+  # #359: Knowledge's media store, Garage (a small S3-compatible server). Only with
+  # `docker compose -f compose.dev.yml --profile media up -d` (the "media" profile): `pnpm dev` leaves it off,
   # and Knowledge offers no uploads until .dev/knowledge.env sets the KNOWLEDGE_MEDIA_* values (apps/knowledge/README.md).
-  # Fixed, dev-only keys: it listens on 127.0.0.1 only. minio-init creates the bucket and exits.
-  minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+  # Fixed, dev-only keys: it listens on 127.0.0.1 only. garage-init (scripts/dev/garage/init.sh) sets up the node,
+  # the key and the bucket through the admin API, then exits.
+  garage:
+    image: dxflrs/garage:v2.1.0
     profiles: ["media"]
-    command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: knowledge-dev
-      MINIO_ROOT_PASSWORD: knowledge-dev-only
+      # Dev-only values: this server only listens on 127.0.0.1.
+      GARAGE_RPC_SECRET: "0000000000000000000000000000000000000000000000000000000000000d01"
+      GARAGE_ADMIN_TOKEN: knowledge-dev-admin
     ports:
-      - "127.0.0.1:59000:9000"
-      - "127.0.0.1:59001:9001"
+      - "127.0.0.1:59000:3900"
     volumes:
-      - minio_data:/data
+      - ./scripts/dev/garage/garage.toml:/etc/garage.toml:ro
+      - garage_data:/var/lib/garage
     mem_limit: 256m
     cpus: 0.5
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
 
-  minio-init:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+  garage-init:
+    image: curlimages/curl:8.11.1
     profiles: ["media"]
     depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - mc alias set local http://minio:9000 knowledge-dev knowledge-dev-only && mc mb --ignore-existing local/knowledge-media
+      - garage
+    entrypoint: ["/bin/sh", "/init.sh"]
+    environment:
+      GARAGE_ADMIN_URL: http://garage:3903
+      GARAGE_ADMIN_TOKEN: knowledge-dev-admin
+      GARAGE_KEY_ID: GK6b6e6f776c656467652d6465
+      GARAGE_SECRET_KEY: 6b6e6f776c656467652d6465762d6f6e6c792d6b6e6f776c656467652d646576
+      GARAGE_BUCKET: knowledge-media
+      GARAGE_S3_URL: http://garage:3900
+    volumes:
+      - ./scripts/dev/garage/init.sh:/init.sh:ro
     mem_limit: 64m
     cpus: 0.25
 
@@ -141,4 +143,4 @@ volumes:
   postgres_data:
   redis_data:
   nats_data:
-  minio_data:
+  garage_data:

@@ -1,7 +1,7 @@
 /**
  * AWS Signature Version 4 for an S3-compatible store (#359): presigned URLs for the browser's direct upload, and
- * signed headers for the server's own requests. Path-style addressing (`<endpoint>/<bucket>/<key>`), which MinIO
- * serves without per-bucket DNS. No SDK: the signing is small, and test/sigv4.test.ts checks it against the worked
+ * signed headers for the server's own requests. Path-style addressing (`<endpoint>/<bucket>/<key>`), which MinIO and Garage
+ * serve without per-bucket DNS. No SDK: the signing is small, and test/sigv4.test.ts checks it against the worked
  * examples in AWS's S3 documentation.
  */
 import { createHash, createHmac } from "node:crypto";

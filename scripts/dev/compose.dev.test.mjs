@@ -131,22 +131,35 @@ test("the collector runs scripts/dev/otel/config.yaml, mounted as a read-only di
   assert.match(text, /exporters: \[debug\]/);
 });
 
-// #359: Knowledge's media store, started only with the "media" profile.
+// #359: Knowledge's media store (Garage), started only with the "media" profile.
 const media = render(["media"]);
-const minio = media.services.minio;
+const garage = media.services.garage;
+const garageInit = media.services["garage-init"];
 
-test("MinIO is off in `pnpm dev`: only the media profile starts it, with its bucket", () => {
-  assert.equal(config.services.minio, undefined);
-  assert.ok(minio, "the media profile has a minio service");
-  assert.deepEqual(minio.profiles, ["media"]);
-  assert.match(media.services["minio-init"].command.join(" "), /mc mb --ignore-existing local\/knowledge-media/);
+test("Garage is off in `pnpm dev`: only the media profile starts it, with a setup step for its bucket", () => {
+  assert.equal(config.services.garage, undefined);
+  assert.ok(garage, "the media profile has a garage service");
+  assert.deepEqual(garage.profiles, ["media"]);
+  assert.deepEqual(garageInit.profiles, ["media"]);
+  assert.equal(garageInit.environment.GARAGE_BUCKET, "knowledge-media");
+  assert.equal(garageInit.environment.GARAGE_ADMIN_TOKEN, garage.environment.GARAGE_ADMIN_TOKEN);
+  assert.match(garageInit.environment.GARAGE_KEY_ID, /^GK[0-9a-f]{24}$/);
+  assert.match(garageInit.environment.GARAGE_SECRET_KEY, /^[0-9a-f]{64}$/);
+  assert.match(garage.environment.GARAGE_RPC_SECRET, /^[0-9a-f]{64}$/);
+  assert.ok(garageInit.volumes.some((v) => v.target === "/init.sh" && v.source.endsWith("scripts/dev/garage/init.sh")));
 });
 
-test("MinIO is pinned, limited, and published on 127.0.0.1 only", () => {
-  assert.match(minio.image, /^minio\/minio:RELEASE\.\d{4}-\d{2}-\d{2}T/, "an exact release");
-  assert.ok(minio.mem_limit, "mem_limit is set");
-  assert.ok(Number(minio.cpus) > 0, "cpus is set");
-  for (const p of minio.ports) assert.equal(p.host_ip, "127.0.0.1", `port ${p.published} binds to ${p.host_ip}`);
-  const data = minio.volumes.find((v) => v.target === "/data");
-  assert.ok(data && data.type === "volume" && data.source === "minio_data", "its data is the minio_data volume");
+test("Garage is pinned, limited, and published on 127.0.0.1 only (S3 port only)", () => {
+  assert.match(garage.image, /^dxflrs\/garage:v\d+\.\d+\.\d+$/, "an exact release");
+  assert.match(garageInit.image, /^curlimages\/curl:\d+\.\d+\.\d+$/, "an exact release");
+  for (const s of [garage, garageInit]) {
+    assert.ok(s.mem_limit, "mem_limit is set");
+    assert.ok(Number(s.cpus) > 0, "cpus is set");
+  }
+  assert.deepEqual(
+    garage.ports.map((p) => [p.host_ip, p.published, p.target]),
+    [["127.0.0.1", "59000", 3900]],
+  );
+  const data = garage.volumes.find((v) => v.target === "/var/lib/garage");
+  assert.ok(data && data.type === "volume" && data.source === "garage_data", "its data is the garage_data volume");
 });

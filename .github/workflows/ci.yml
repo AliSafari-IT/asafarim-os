@@ -45,8 +45,8 @@ jobs:
       IDENTITY_TEST_DATABASE_URL: postgres://postgres:postgres-ci-only@localhost:5432/postgres
       # apps/knowledge's PostgreSQL tests (#354): each run creates and drops its own database.
       KNOWLEDGE_TEST_DATABASE_URL: postgres://postgres:postgres-ci-only@localhost:5432/postgres
-      # apps/knowledge's media store tests (#359): a throwaway MinIO (started below), keys as the URL's user info.
-      KNOWLEDGE_TEST_S3_URL: http://knowledge-ci:knowledge-ci-only@localhost:9000
+      # apps/knowledge's media store tests (#359): a throwaway Garage (started below), keys as the URL's user info.
+      KNOWLEDGE_TEST_S3_URL: http://GK6b6e6f776c656467652d6369:6b6e6f776c656467652d63692d6f6e6c792d6b6e6f776c656467652d63692d31@localhost:9000
     steps:
       - uses: actions/checkout@v7
         with:
@@ -78,15 +78,23 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      # A service container can't be given MinIO's `server` command, so it is started here. The same image as
-      # compose.dev.yml's media profile.
-      - name: Start MinIO for Knowledge's media store tests
+      # A service container can't mount the config, so Garage is started here: the same image and setup script as
+      # compose.dev.yml's media profile. Fixed, CI-only keys.
+      - name: Start Garage (S3-compatible) for Knowledge's media store tests
+        env:
+          GARAGE_ADMIN_URL: http://127.0.0.1:3903
+          GARAGE_ADMIN_TOKEN: knowledge-ci-admin
+          GARAGE_KEY_ID: GK6b6e6f776c656467652d6369
+          GARAGE_SECRET_KEY: 6b6e6f776c656467652d63692d6f6e6c792d6b6e6f776c656467652d63692d31
+          GARAGE_BUCKET: knowledge-media
+          GARAGE_S3_URL: http://127.0.0.1:9000
         run: |
-          docker run -d --name minio -p 127.0.0.1:9000:9000 \
-            -e MINIO_ROOT_USER=knowledge-ci -e MINIO_ROOT_PASSWORD=knowledge-ci-only \
-            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
-          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9000/minio/health/live && exit 0; sleep 1; done
-          docker logs minio; exit 1
+          docker run -d --name garage -p 127.0.0.1:9000:3900 -p 127.0.0.1:3903:3903 \
+            -e GARAGE_RPC_SECRET=0000000000000000000000000000000000000000000000000000000000000c01 \
+            -e GARAGE_ADMIN_TOKEN="$GARAGE_ADMIN_TOKEN" \
+            -v "$PWD/scripts/dev/garage/garage.toml:/etc/garage.toml:ro" \
+            dxflrs/garage:v2.1.0
+          sh scripts/dev/garage/init.sh || { docker logs garage; exit 1; }
 
       - name: Unit tests
         run: pnpm test
