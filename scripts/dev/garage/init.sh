@@ -10,11 +10,14 @@
 #                       browser on a local Knowledge can upload. Dev only; production sets CORS on its proxy.
 set -eu
 
+# One admin API call; the answer comes back on one line with no whitespace (Garage pretty-prints its JSON), so sed
+# and grep below can match it.
 api() {
   method=$1 path=$2
   shift 2
-  curl -fsS -X "$method" -H "Authorization: Bearer $GARAGE_ADMIN_TOKEN" -H "Content-Type: application/json" \
-    "$GARAGE_ADMIN_URL/v2/$path" "$@"
+  out=$(curl -fsS -X "$method" -H "Authorization: Bearer $GARAGE_ADMIN_TOKEN" -H "Content-Type: application/json" \
+    "$GARAGE_ADMIN_URL/v2/$path" "$@") || return 1
+  printf '%s' "$out" | tr -d ' \t\r\n'
 }
 
 i=0
@@ -36,7 +39,7 @@ fi
 i=0
 until curl -fsS "$GARAGE_ADMIN_URL/health" >/dev/null 2>&1; do
   i=$((i + 1))
-  [ "$i" -lt 60 ] || { echo "garage: not healthy after the layout" >&2; exit 1; }
+  [ "$i" -lt 60 ] || { echo "garage: not healthy after the layout: $(api GET GetClusterLayout)" >&2; exit 1; }
   sleep 1
 done
 
