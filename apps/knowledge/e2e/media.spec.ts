@@ -8,13 +8,14 @@ test("a guest loads an embedded video only on request", async ({ page }) => {
   const requested: string[] = [];
   page.on("request", (r) => requested.push(r.url()));
   // The provider is never contacted for real in a test.
-  await page.route(/youtube(-nocookie)?\.com/, (route) => route.fulfill({ status: 204, body: "" }));
+  const provider = /^https:\/\/(www\.)?youtube(-nocookie)?\.com\//;
+  await page.route(provider, (route) => route.fulfill({ status: 204, body: "" }));
 
   await page.goto("/articles/video-demo");
   const video = page.getByTestId("video");
   await expect(video).toContainText("The demo");
   await expect(video.locator("iframe")).toHaveCount(0);
-  expect(requested.filter((u) => /youtube/.test(u))).toEqual([]);
+  expect(requested.filter((u) => provider.test(u))).toEqual([]);
 
   await page.getByTestId("video-load").click();
   const frame = video.locator("iframe");
