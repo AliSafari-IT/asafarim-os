@@ -41,7 +41,7 @@ describe("knowledge manifest", () => {
     }
   });
 
-  it("gives authors their own articles only, and keeps any-article rights for editors", () => {
+  it("gives authors their own articles and courses only, and keeps any-item rights for editors", () => {
     const author = manifest.roles.find((r) => r.key === "knowledge.author")!;
     expect(author.grants.sort()).toEqual(
       [
@@ -49,6 +49,7 @@ describe("knowledge manifest", () => {
         "knowledge.content.create",
         "knowledge.content.edit.own",
         "knowledge.content.publish.own",
+        "knowledge.courses.manage.own",
       ].sort(),
     );
     expect(author.grants.some((g) => g.endsWith(".any"))).toBe(false);

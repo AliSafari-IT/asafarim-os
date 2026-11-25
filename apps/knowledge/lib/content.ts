@@ -325,7 +325,7 @@ export async function listStudioItems(
   );
 }
 
-function pageOf<R extends { id: string }, T>(
+export function pageOf<R extends { id: string }, T>(
   rows: R[],
   limit: number,
   key: (r: R) => string,

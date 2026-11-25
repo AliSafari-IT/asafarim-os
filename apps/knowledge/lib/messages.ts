@@ -49,6 +49,24 @@ export const ERRORS: Record<string, string> = {
   invalid_slug: "The slug can only use lower-case letters, digits and single dashes.",
   app_inactive: "ASafariM Knowledge isn't active right now.",
   permissions_unavailable: "Permissions can't be checked right now. Try again in a moment.",
+  // Courses (#358): the course actions redirect with course_<error>.
+  course_forbidden: "You don't have permission to create courses.",
+  course_not_found: "That course doesn't exist, or it isn't yours.",
+  course_slug_taken: "Another course already uses that address. Choose a different slug.",
+  course_invalid_slug: "The slug can only use lower-case letters, digits and single dashes.",
+  course_invalid_title: "Titles need 1 to 200 characters, and a summary at most 500.",
+  course_conflict: "The course changed in another tab or by someone else. Nothing was changed: look again and retry.",
+  course_not_published: "The course isn't published.",
+  course_too_many_modules: "A course can have at most 20 modules.",
+  course_too_many_lessons: "A course can have at most 100 lessons.",
+  course_unknown_module: "That module doesn't exist any more.",
+  course_unknown_lesson: "That lesson doesn't exist any more.",
+  course_article_not_public: "Only published articles can be lessons. Publish the article first.",
+  course_not_pinnable: "A lesson can only show the article's current published revision.",
+  course_duplicate_lesson: "That lesson is already in the course.",
+  course_empty_course: "Add at least one lesson before publishing.",
+  course_lesson_unavailable:
+    "Some lessons' articles aren't public any more. Remove those lessons, or publish their articles again, then publish the course.",
 };
 
 export const DONE: Record<string, string> = {
@@ -61,4 +79,8 @@ export const DONE: Record<string, string> = {
   classified: "Classification saved. If the article is published, search and topic pages show it now.",
   topic_created: "Topic created.",
   tag_created: "Tag created.",
+  course_created: "Course created. Add a module, then lessons from published articles.",
+  course_saved: "Course saved as a new revision. Publish it to show the change to guests.",
+  course_published: "Course published. Guests now see this revision.",
+  course_withdrawn: "Course withdrawn. It is no longer public.",
 };

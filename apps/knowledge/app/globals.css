@@ -588,3 +588,104 @@ del {
   border-radius: 999px;
   border: 1px solid var(--line);
 }
+
+/* Courses (#358) */
+.studio-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.actions form.inline {
+  margin-left: 0;
+}
+.course-lessons {
+  padding-left: 20px;
+  margin: 8px 0 12px;
+}
+.course-lessons li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.course-lessons li::marker {
+  color: var(--muted);
+}
+.button-link {
+  display: inline-block;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  text-decoration: none;
+}
+.button-link:hover {
+  background: var(--accent-hover);
+}
+.course-outline h2 {
+  font-size: 1rem;
+  margin: 16px 0 4px;
+}
+.course-outline ol {
+  margin: 0;
+  padding-left: 20px;
+}
+.course-outline li {
+  padding: 3px 0;
+}
+main.lesson-layout {
+  max-width: 1080px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 32px;
+}
+@media (min-width: 900px) {
+  main.lesson-layout {
+    grid-template-columns: minmax(0, 1fr) 260px;
+  }
+  main.lesson-layout aside {
+    position: sticky;
+    top: 16px;
+    align-self: start;
+  }
+}
+.lesson-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 24px 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+/* Phones: the top bar's links, theme toggle and sign-in still fit on one line at 360 px. */
+@media (max-width: 520px) {
+  .topbar-inner {
+    gap: 6px;
+    padding: 8px 10px;
+  }
+  .tools {
+    gap: 2px;
+  }
+  .nav-link {
+    padding: 6px;
+  }
+  /* The app's name stays for screen readers; the mark alone shows. */
+  .asafarim-brand__link > span:last-child {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}

@@ -276,6 +276,97 @@ CREATE TABLE search_sections (
 );`,
     after: backfillSearch,
   },
+  {
+    version: 7,
+    name: "courses: immutable revisions of ordered lessons pinned to article revisions (#358)",
+    sql: `
+-- A course has the same two pointers as an article: the draft head and the published revision (NULL = not public).
+-- Its slug is its own namespace (/courses/:slug).
+CREATE TABLE courses (
+  id                    text PRIMARY KEY,
+  owner_subject         text NOT NULL,
+  slug                  text NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' AND length(slug) <= 96),
+  draft_revision_id     text,
+  published_revision_id text,
+  published_at          timestamptz,
+  withdrawn_at          timestamptz,
+  -- Counts publishes and withdrawals, so a studio form names the publication state it showed and a stale one is
+  -- refused even after a publish/withdraw cycle that put the pointers back where they were.
+  publication           integer NOT NULL DEFAULT 0 CHECK (publication >= 0),
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_at            timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX courses_owner ON courses (owner_subject, updated_at DESC);
+CREATE INDEX courses_published ON courses (published_at DESC) WHERE published_revision_id IS NOT NULL;
+
+-- Immutable, like article revisions: every change to a course (its title, modules, lesson order, a lesson's pin)
+-- is a new revision, and a published course is always exactly one of these.
+CREATE TABLE course_revisions (
+  id         text PRIMARY KEY,
+  course_id  text NOT NULL REFERENCES courses (id),
+  number     integer NOT NULL CHECK (number >= 1),
+  title      text NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+  summary    text NOT NULL DEFAULT '' CHECK (length(summary) <= 500),
+  author     text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (course_id, number),
+  UNIQUE (course_id, id)
+);
+
+CREATE TABLE course_modules (
+  revision_id text NOT NULL REFERENCES course_revisions (id),
+  position    integer NOT NULL CHECK (position >= 0),
+  title       text NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+  PRIMARY KEY (revision_id, position)
+);
+
+-- A lesson names one article revision (the pin), so a published course never changes when the article gets a new
+-- draft or is published again. lesson_id stays the same across a course's revisions: lesson URLs keep working.
+CREATE TABLE course_lessons (
+  revision_id      text NOT NULL,
+  lesson_id        text NOT NULL,
+  module_position  integer NOT NULL,
+  position         integer NOT NULL CHECK (position >= 0),
+  item_id          text NOT NULL,
+  item_revision_id text NOT NULL,
+  PRIMARY KEY (revision_id, lesson_id),
+  UNIQUE (revision_id, module_position, position),
+  FOREIGN KEY (revision_id, module_position) REFERENCES course_modules (revision_id, position),
+  FOREIGN KEY (item_id, item_revision_id) REFERENCES content_revisions (item_id, id)
+);
+CREATE INDEX course_lessons_item ON course_lessons (item_id);
+
+CREATE FUNCTION knowledge_course_revisions_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'course revisions are immutable: save a new revision';
+END $$;
+CREATE TRIGGER course_revisions_immutable BEFORE UPDATE OR DELETE ON course_revisions
+  FOR EACH ROW EXECUTE FUNCTION knowledge_course_revisions_immutable();
+CREATE TRIGGER course_modules_immutable BEFORE UPDATE OR DELETE ON course_modules
+  FOR EACH ROW EXECUTE FUNCTION knowledge_course_revisions_immutable();
+CREATE TRIGGER course_lessons_immutable BEFORE UPDATE OR DELETE ON course_lessons
+  FOR EACH ROW EXECUTE FUNCTION knowledge_course_revisions_immutable();
+
+ALTER TABLE courses
+  ADD CONSTRAINT courses_draft_fk FOREIGN KEY (id, draft_revision_id)
+    REFERENCES course_revisions (course_id, id) DEFERRABLE INITIALLY DEFERRED,
+  ADD CONSTRAINT courses_published_fk FOREIGN KEY (id, published_revision_id)
+    REFERENCES course_revisions (course_id, id),
+  ADD CONSTRAINT courses_publication CHECK (
+    (published_revision_id IS NULL OR (published_at IS NOT NULL AND withdrawn_at IS NULL))
+  );
+
+-- Who did what to which course: identifiers only.
+CREATE TABLE course_audit_events (
+  id          bigserial PRIMARY KEY,
+  at          timestamptz NOT NULL DEFAULT now(),
+  actor       text NOT NULL,
+  action      text NOT NULL CHECK (action IN ('course.created', 'course.saved', 'course.published', 'course.withdrawn')),
+  course_id   text NOT NULL REFERENCES courses (id),
+  revision_id text
+);
+CREATE INDEX course_audit_events_course ON course_audit_events (course_id, at);`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

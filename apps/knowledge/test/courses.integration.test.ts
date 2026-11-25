@@ -1,0 +1,309 @@
+/**
+ * Courses on a real PostgreSQL (#358): pinning, eligibility, publish rules and the public reads.
+ * Runs when KNOWLEDGE_TEST_DATABASE_URL names a server where it may create a throwaway database.
+ */
+import { randomBytes } from "node:crypto";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import manifest from "../platform.app";
+import { createArticle, publishRevision, saveDraft, withdrawArticle } from "../lib/content";
+import {
+  createCourse,
+  editCourse,
+  getPublishedCourse,
+  getPublishedLesson,
+  getStudioCourse,
+  listPublishedCourses,
+  listStudioCourses,
+  publishCourse,
+  withdrawCourse,
+  type CourseEdit,
+} from "../lib/courses";
+import { migrate } from "../lib/migrations";
+import type { Actor } from "../lib/policy";
+
+const ADMIN_URL = process.env.KNOWLEDGE_TEST_DATABASE_URL;
+const grants = (role: string) => manifest.roles.find((r) => r.key === role)!.grants;
+const alice: Actor = { subject: "alice", permissions: grants("knowledge.author") };
+const bob: Actor = { subject: "bob", permissions: grants("knowledge.author") };
+const erin: Actor = { subject: "erin", permissions: grants("knowledge.editor") };
+
+function ok<T extends { ok: boolean }>(r: T): Extract<T, { ok: true }> {
+  if (!r.ok) throw new Error(`expected ok, got ${JSON.stringify(r)}`);
+  return r as Extract<T, { ok: true }>;
+}
+
+const draft = (title: string, body: string) => ({ title, summary: "", body });
+
+describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
+  const dbName = `knowledge_courses_${randomBytes(6).toString("hex")}`;
+  let admin: pg.Client;
+  let pool: pg.Pool;
+  const articles: Record<string, { id: string; revisionId: string }> = {};
+
+  async function article(slug: string, title: string, body: string, publish = true) {
+    const a = ok(await createArticle(pool, alice, { slug, draft: draft(title, body) }));
+    if (publish) ok(await publishRevision(pool, alice, { id: a.id, revisionId: a.revisionId }));
+    articles[slug] = a;
+    return a;
+  }
+
+  /** Apply edits in order, each on the revision the previous one wrote. */
+  async function edit(actor: Actor, id: string, edits: CourseEdit[]) {
+    let rev = (await getStudioCourse(pool, actor, id))!.draftRevisionId;
+    for (const e of edits) rev = ok(await editCourse(pool, actor, { id, expectedRevisionId: rev, edit: e })).revisionId;
+    return rev;
+  }
+
+  /** The publication state a studio page would show now. */
+  const shown = async (actor: Actor, id: string) => (await getStudioCourse(pool, actor, id))!.publication;
+
+  beforeAll(async () => {
+    admin = new pg.Client({ connectionString: ADMIN_URL });
+    await admin.connect();
+    await admin.query(`CREATE DATABASE ${dbName}`);
+    const url = new URL(ADMIN_URL!);
+    url.pathname = `/${dbName}`;
+    pool = new pg.Pool({ connectionString: url.toString(), max: 4 });
+    pool.on("error", () => undefined);
+    const c = await pool.connect();
+    try {
+      await migrate(c);
+    } finally {
+      c.release();
+    }
+    await article("intro", "Introduction", "Welcome to the course.");
+    await article("setup", "Setting up", "Install the tools.");
+    await article("first-app", "Your first app", "Write the code.");
+    await article("unfinished", "Unfinished", "Not yet public.", false);
+  });
+
+  afterAll(async () => {
+    await pool?.end();
+    await admin?.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+    await admin?.end();
+  });
+
+  it("an author publishes a three-lesson course from their published articles", async () => {
+    const c = ok(await createCourse(pool, alice, { slug: "getting-started", title: "Getting started" }));
+    expect(await createCourse(pool, bob, { slug: "getting-started", title: "Again" })).toEqual({
+      ok: false,
+      error: "slug_taken",
+    });
+    const rev = await edit(alice, c.id, [
+      { op: "add_module", title: "Basics" },
+      { op: "add_lesson", module: 0, articleSlug: "intro" },
+      { op: "add_lesson", module: 0, articleSlug: "setup" },
+      { op: "add_module", title: "Building" },
+      { op: "add_lesson", module: 1, articleSlug: "first-app" },
+      { op: "meta", title: "Getting started", summary: "From zero to an app" },
+    ]);
+    // Nothing public before it is published.
+    expect(await getPublishedCourse(pool, "getting-started")).toBeNull();
+    ok(await publishCourse(pool, alice, { id: c.id, revisionId: rev, publication: await shown(alice, c.id) }));
+
+    const course = (await getPublishedCourse(pool, "getting-started"))!;
+    expect(course.summary).toBe("From zero to an app");
+    expect(course.modules.map((m) => [m.title, m.lessons.map((l) => l.title)])).toEqual([
+      ["Basics", ["Introduction", "Setting up"]],
+      ["Building", ["Your first app"]],
+    ]);
+    const [first, second, third] = course.modules.flatMap((m) => m.lessons);
+    const lesson = (await getPublishedLesson(pool, "getting-started", second!.lessonId))!;
+    expect(lesson.body).toBe("Install the tools.");
+    expect(lesson.articleSlug).toBe("setup");
+    expect(lesson.moduleTitle).toBe("Basics");
+    expect(lesson.prev?.lessonId).toBe(first!.lessonId);
+    expect(lesson.next?.lessonId).toBe(third!.lessonId);
+    expect((await listPublishedCourses(pool)).items.map((s) => [s.slug, s.lessons])).toEqual([["getting-started", 3]]);
+  });
+
+  it("keeps published course content when a referenced article gets a new draft or revision", async () => {
+    const c = (await listStudioCourses(pool, alice)).items.find((s) => s.slug === "getting-started")!;
+    const setup = articles.setup!;
+    const v2 = ok(
+      await saveDraft(pool, alice, {
+        id: setup.id,
+        expectedRevisionId: setup.revisionId,
+        draft: draft("Setting up (v2)", "Install the new tools."),
+      }),
+    );
+    const lessonId = (await getPublishedCourse(pool, "getting-started"))!.modules[0]!.lessons[1]!.lessonId;
+    expect((await getPublishedLesson(pool, "getting-started", lessonId))!.body).toBe("Install the tools.");
+    // Even once the article publishes v2, the course still shows the revision it pinned...
+    ok(await publishRevision(pool, alice, { id: setup.id, revisionId: v2.revisionId }));
+    expect((await getPublishedLesson(pool, "getting-started", lessonId))!.title).toBe("Setting up");
+    const studio = (await getStudioCourse(pool, alice, c.id))!;
+    expect(studio.modules[0]!.lessons[1]!.state).toBe("outdated");
+    // ...until its author updates the lesson to the latest and publishes the course again.
+    const rev = await edit(alice, c.id, [{ op: "update_lesson", lessonId }]);
+    expect((await getPublishedLesson(pool, "getting-started", lessonId))!.title).toBe("Setting up");
+    ok(await publishCourse(pool, alice, { id: c.id, revisionId: rev, publication: await shown(alice, c.id) }));
+    const after = (await getPublishedLesson(pool, "getting-started", lessonId))!;
+    expect([after.title, after.body]).toEqual(["Setting up (v2)", "Install the new tools."]);
+  });
+
+  it("hides a lesson whose article is withdrawn from guests and blocks publishing the course", async () => {
+    const c = (await listStudioCourses(pool, alice)).items.find((s) => s.slug === "getting-started")!;
+    const lessonId = (await getPublishedCourse(pool, "getting-started"))!.modules[1]!.lessons[0]!.lessonId;
+    ok(await withdrawArticle(pool, alice, { id: articles["first-app"]!.id }));
+
+    const course = (await getPublishedCourse(pool, "getting-started"))!;
+    expect(course.modules.map((m) => m.title)).toEqual(["Basics"]);
+    expect(await getPublishedLesson(pool, "getting-started", lessonId)).toBeNull();
+    // The lesson before it no longer links to it.
+    expect((await getPublishedLesson(pool, "getting-started", course.modules[0]!.lessons[1]!.lessonId))!.next).toBe(
+      null,
+    );
+    expect((await listPublishedCourses(pool)).items[0]!.lessons).toBe(2);
+
+    const studio = (await getStudioCourse(pool, alice, c.id))!;
+    expect(studio.modules[1]!.lessons[0]!.state).toBe("unavailable");
+    expect(
+      await publishCourse(pool, alice, {
+        id: c.id,
+        revisionId: studio.draftRevisionId,
+        publication: await shown(alice, c.id),
+      }),
+    ).toEqual({
+      ok: false,
+      error: "lesson_unavailable",
+      detail: "Your first app",
+    });
+    // It can't be updated to a revision that isn't public either; removing it makes the course publishable.
+    expect(
+      await editCourse(pool, alice, {
+        id: c.id,
+        expectedRevisionId: studio.draftRevisionId,
+        edit: { op: "update_lesson", lessonId },
+      }),
+    ).toEqual({ ok: false, error: "article_not_public" });
+    const rev = await edit(alice, c.id, [{ op: "remove_lesson", lessonId }]);
+    ok(await publishCourse(pool, alice, { id: c.id, revisionId: rev, publication: await shown(alice, c.id) }));
+  });
+
+  it("pins only public articles, refuses empty courses, stale editors and other people's courses", async () => {
+    const c = ok(await createCourse(pool, bob, { slug: "bobs-course", title: "Bob's course" }));
+    const rev0 = (await getStudioCourse(pool, bob, c.id))!.draftRevisionId;
+    expect(await publishCourse(pool, bob, { id: c.id, revisionId: rev0, publication: await shown(bob, c.id) })).toEqual(
+      {
+        ok: false,
+        error: "empty_course",
+      },
+    );
+    const rev1 = await edit(bob, c.id, [{ op: "add_module", title: "One" }]);
+    expect(
+      await editCourse(pool, bob, {
+        id: c.id,
+        expectedRevisionId: rev1,
+        edit: { op: "add_lesson", module: 0, articleSlug: "unfinished" },
+      }),
+    ).toEqual({ ok: false, error: "article_not_public" });
+    expect(
+      await editCourse(pool, bob, {
+        id: c.id,
+        expectedRevisionId: rev1,
+        edit: { op: "add_lesson", module: 3, articleSlug: "intro" },
+      }),
+    ).toEqual({ ok: false, error: "unknown_module" });
+    // An editor opened on an older revision can't write over a newer one.
+    expect(
+      await editCourse(pool, bob, { id: c.id, expectedRevisionId: rev0, edit: { op: "add_module", title: "Two" } }),
+    ).toEqual({ ok: false, error: "conflict" });
+    // Alice can neither see nor change Bob's course; an editor can.
+    expect(await getStudioCourse(pool, alice, c.id)).toBeNull();
+    expect(
+      await editCourse(pool, alice, { id: c.id, expectedRevisionId: rev1, edit: { op: "add_module", title: "X" } }),
+    ).toEqual({ ok: false, error: "not_found" });
+    expect((await listStudioCourses(pool, alice)).items.map((s) => s.slug)).toEqual(["getting-started"]);
+    expect((await listStudioCourses(pool, erin)).items.length).toBe(2);
+    const reader: Actor = { subject: "rita", permissions: ["knowledge.content.create"] };
+    expect(await createCourse(pool, reader, { slug: "nope", title: "Nope" })).toEqual({
+      ok: false,
+      error: "forbidden",
+    });
+    // A pin can't be forged to a revision the article never published.
+    const draftOnly = ok(
+      await saveDraft(pool, alice, {
+        id: articles.intro!.id,
+        expectedRevisionId: articles.intro!.revisionId,
+        draft: draft("Intro draft", "Not public"),
+      }),
+    );
+    await expect(pool.query("UPDATE course_lessons SET item_revision_id = $1", [draftOnly.revisionId])).rejects.toThrow(
+      /immutable/,
+    );
+  });
+
+  it("moves lessons within and across modules, and withdraws a course", async () => {
+    const c = ok(await createCourse(pool, erin, { slug: "ordering", title: "Ordering" }));
+    await edit(erin, c.id, [
+      { op: "add_module", title: "A" },
+      { op: "add_module", title: "B" },
+      { op: "add_lesson", module: 0, articleSlug: "intro" },
+      { op: "add_lesson", module: 0, articleSlug: "setup" },
+    ]);
+    const titles = async () =>
+      (await getStudioCourse(pool, erin, c.id))!.modules.map((m) => m.lessons.map((l) => l.articleSlug));
+    const id = (slug: string) =>
+      getStudioCourse(pool, erin, c.id).then(
+        (s) => s!.modules.flatMap((m) => m.lessons).find((l) => l.articleSlug === slug)!.lessonId,
+      );
+    await edit(erin, c.id, [{ op: "move_lesson", lessonId: await id("setup"), delta: -1 }]);
+    expect(await titles()).toEqual([["setup", "intro"], []]);
+    await edit(erin, c.id, [{ op: "move_lesson", lessonId: await id("intro"), delta: 1 }]);
+    expect(await titles()).toEqual([["setup"], ["intro"]]);
+    const rev = await edit(erin, c.id, [{ op: "move_lesson", lessonId: await id("intro"), delta: -1 }]);
+    expect(await titles()).toEqual([["setup", "intro"], []]);
+
+    ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev, publication: await shown(erin, c.id) }));
+    expect(await getPublishedCourse(pool, "ordering")).not.toBeNull();
+    ok(await withdrawCourse(pool, erin, { id: c.id, publication: await shown(erin, c.id) }));
+    expect(await getPublishedCourse(pool, "ordering")).toBeNull();
+    expect((await getStudioCourse(pool, erin, c.id))!.status).toBe("withdrawn");
+  });
+
+  it("refuses publish and withdraw forms from a tab that missed a publication change", async () => {
+    const c = ok(await createCourse(pool, erin, { slug: "two-tabs", title: "Two tabs" }));
+    const rev1 = await edit(erin, c.id, [
+      { op: "add_module", title: "A" },
+      { op: "add_lesson", module: 0, articleSlug: "intro" },
+    ]);
+    ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev1, publication: await shown(erin, c.id) }));
+    const rev2 = await edit(erin, c.id, [{ op: "meta", title: "Two tabs, v2", summary: "" }]);
+    // Both tabs show revision 2 as an unpublished draft of a published course.
+    const tab = await shown(erin, c.id);
+    ok(await withdrawCourse(pool, erin, { id: c.id, publication: tab }));
+    // The other tab's Publish must not bring back the course the first tab just took offline...
+    expect(await publishCourse(pool, erin, { id: c.id, revisionId: rev2, publication: tab })).toEqual({
+      ok: false,
+      error: "conflict",
+    });
+    expect(await getPublishedCourse(pool, "two-tabs")).toBeNull();
+    // ...and after a full withdraw/publish cycle, an old Withdraw form can't take the new publication offline.
+    const before = await shown(erin, c.id);
+    ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev2, publication: before }));
+    expect(await withdrawCourse(pool, erin, { id: c.id, publication: before })).toEqual({
+      ok: false,
+      error: "conflict",
+    });
+    expect((await getPublishedCourse(pool, "two-tabs"))!.title).toBe("Two tabs, v2");
+  });
+
+  it("pages through course lists without repeating or skipping one", async () => {
+    const all = (await listStudioCourses(pool, erin)).items.map((s) => s.id);
+    const seen: string[] = [];
+    let after: string | null = null;
+    do {
+      const page = await listStudioCourses(pool, erin, { after, limit: 2 });
+      seen.push(...page.items.map((s) => s.id));
+      after = page.next;
+    } while (after);
+    expect(seen).toEqual(all);
+    const published = (await listPublishedCourses(pool)).items.map((s) => s.slug);
+    expect(published.length).toBeGreaterThan(1);
+    const first = await listPublishedCourses(pool, { limit: 1 });
+    const rest = await listPublishedCourses(pool, { after: first.next });
+    expect([...first.items, ...rest.items].map((s) => s.slug)).toEqual(published);
+  });
+});
