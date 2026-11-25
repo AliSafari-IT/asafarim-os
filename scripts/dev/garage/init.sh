@@ -32,6 +32,14 @@ if api GET GetClusterLayout | grep -q '"version":0'; then
   echo "garage: layout applied on node $node"
 fi
 
+# Keys and buckets answer "Layout not ready" until the new layout has taken effect; /health turns 200 then.
+i=0
+until curl -fsS "$GARAGE_ADMIN_URL/health" >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -lt 60 ] || { echo "garage: not healthy after the layout" >&2; exit 1; }
+  sleep 1
+done
+
 if ! api GET "GetKeyInfo?id=$GARAGE_KEY_ID" >/dev/null 2>&1; then
   api POST ImportKey -d "{\"accessKeyId\":\"$GARAGE_KEY_ID\",\"secretAccessKey\":\"$GARAGE_SECRET_KEY\",\"name\":\"knowledge\"}" >/dev/null
   echo "garage: key $GARAGE_KEY_ID imported"
