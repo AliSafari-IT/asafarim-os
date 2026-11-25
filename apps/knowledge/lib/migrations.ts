@@ -381,7 +381,7 @@ CREATE TABLE media_assets (
   content_type  text NOT NULL CHECK (content_type IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf')),
   byte_size     bigint NOT NULL CHECK (byte_size > 0 AND byte_size <= 26214400),
   filename      text NOT NULL CHECK (length(filename) BETWEEN 1 AND 200),
-  status        text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ready', 'rejected')),
+  status        text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ready', 'rejected', 'deleting')),
   created_at    timestamptz NOT NULL DEFAULT now(),
   checked_at    timestamptz,
   CHECK ((status = 'pending') = (checked_at IS NULL))

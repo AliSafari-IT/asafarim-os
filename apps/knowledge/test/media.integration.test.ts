@@ -117,6 +117,77 @@ describe.skipIf(!ADMIN_URL)("media on PostgreSQL", () => {
     expect(await readableAsset(pool, alice, short.id)).toBeNull();
   });
 
+  it("checks the copy it serves: bytes swapped into quarantine just before the copy are not promoted", async () => {
+    const t = ok(
+      await requestUpload(pool, store, alice, { contentType: "image/png", size: PNG.byteLength, filename: "x.png" }),
+    );
+    store.objects.set(uploadKey(t.id), PNG);
+    // The uploader's presigned PUT is still valid: same size, other bytes, landing between the HEAD and the copy.
+    const swapping = {
+      ...store,
+      async copy(from: string, to: string) {
+        store.objects.set(from, new TextEncoder().encode("<html><script>1</script>".slice(0, PNG.byteLength)));
+        return store.copy(from, to);
+      },
+    };
+    expect(await finishUpload(pool, swapping, alice, t.id)).toEqual({ ok: false, error: "media_rejected" });
+    expect(store.objects.has(assetKey(t.id))).toBe(false);
+    expect(await readableAsset(pool, alice, t.id)).toBeNull();
+  });
+
+  it("keeps the quarantine copy until the asset is ready, so a failed finish can be retried", async () => {
+    const t = ok(
+      await requestUpload(pool, store, alice, { contentType: "image/png", size: PNG.byteLength, filename: "r.png" }),
+    );
+    store.objects.set(uploadKey(t.id), PNG);
+    const failing = {
+      ...store,
+      async readStart(): Promise<Uint8Array> {
+        throw new Error("store down");
+      },
+    };
+    await expect(finishUpload(pool, failing, alice, t.id)).rejects.toThrow("store down");
+    expect(store.objects.has(uploadKey(t.id))).toBe(true);
+    ok(await finishUpload(pool, store, alice, t.id));
+    expect(store.objects.has(uploadKey(t.id))).toBe(false);
+  });
+
+  it("hides an asset as soon as its delete starts, and cleanup finishes a delete the store failed", async () => {
+    const id = (await upload(alice, PNG)).id;
+    const down = {
+      ...store,
+      async remove(): Promise<void> {
+        throw new Error("store down");
+      },
+    };
+    ok(await deleteAsset(pool, down, alice, id));
+    // Its bytes are still there, but no read, library or revision sees it.
+    expect(store.objects.has(assetKey(id))).toBe(true);
+    expect(await readableAsset(pool, alice, id)).toBeNull();
+    expect((await listLibrary(pool, alice)).items.some((x) => x.id === id)).toBe(false);
+    expect(await createArticle(pool, alice, { slug: "deleting", draft: draft(docWith(image(id))) })).toEqual({
+      ok: false,
+      error: "media_unavailable",
+    });
+    expect(await deleteAsset(pool, store, alice, id)).toEqual({ ok: false, error: "not_found" });
+    // The next cleanup run, whatever the asset's age, finishes it.
+    await cleanupMedia(pool, store);
+    expect(store.objects.has(assetKey(id))).toBe(false);
+    expect((await pool.query("SELECT 1 FROM media_assets WHERE id = $1", [id])).rowCount).toBe(0);
+  });
+
+  it("pages the library, newest first, own ready assets only", async () => {
+    const carol: Actor = { subject: "carol", permissions: grants("knowledge.author") };
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) ids.push((await upload(carol, PNG)).id);
+    ok(await requestUpload(pool, store, carol, { contentType: "image/png", size: 10, filename: "pending" }));
+    const first = await listLibrary(pool, carol, { limit: 2 });
+    expect(first.items.map((a) => a.id)).toEqual([ids[2], ids[1]]);
+    const second = await listLibrary(pool, carol, { limit: 2, after: first.next });
+    expect(second.items.map((a) => a.id)).toEqual([ids[0]]);
+    expect(second.next).toBeNull();
+  });
+
   it("refuses types, sizes and people before anything is stored", async () => {
     const ask = (actor: Actor, contentType: string, size: number) =>
       requestUpload(pool, store, actor, { contentType, size, filename: "x" });
@@ -241,7 +312,7 @@ describe.skipIf(!ADMIN_URL)("media on PostgreSQL", () => {
     );
     expect(await deleteAsset(pool, store, alice, used)).toEqual({ ok: false, error: "media_in_use" });
     expect(await deleteAsset(pool, store, bob, unused)).toEqual({ ok: false, error: "not_found" });
-    expect((await listLibrary(pool, alice)).find((x) => x.id === used)?.uses).toBe(1);
+    expect((await listLibrary(pool, alice)).items.find((x) => x.id === used)?.uses).toBe(1);
 
     const stale = ok(await requestUpload(pool, store, alice, { contentType: "image/png", size: 10, filename: "s" })).id;
     store.objects.set(uploadKey(stale), PNG);

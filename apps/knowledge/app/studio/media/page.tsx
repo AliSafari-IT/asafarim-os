@@ -6,6 +6,7 @@ import Link from "next/link";
 import { deleteMediaAction } from "../media-actions";
 import { MediaUpload } from "@/components/MediaUpload";
 import { Notices } from "@/components/Notices";
+import { Pager } from "@/components/Pager";
 import { TopBar } from "@/components/TopBar";
 import { db } from "@/lib/db";
 import { listLibrary } from "@/lib/media/assets";
@@ -32,7 +33,8 @@ export default async function StudioMedia({ searchParams }: { searchParams: Prom
     );
   }
   const on = mediaConfigFromEnv() !== null;
-  const assets = on ? await listLibrary(await db(), g.actor) : [];
+  const after = one(sp.after);
+  const assets = on ? await listLibrary(await db(), g.actor, { after }) : { items: [], next: null };
   return (
     <>
       <TopBar next="/studio/media" />
@@ -49,13 +51,13 @@ export default async function StudioMedia({ searchParams }: { searchParams: Prom
         ) : (
           <>
             <MediaUpload />
-            {assets.length === 0 ? (
+            {assets.items.length === 0 && !after ? (
               <p className="muted" data-testid="media-empty">
                 No uploads yet.
               </p>
             ) : (
               <ul className="media-list" data-testid="media-list">
-                {assets.map((a) => (
+                {assets.items.map((a) => (
                   <li key={a.id} data-testid="media-item">
                     {a.kind === "image" ? <img src={`/media/${a.id}`} alt="" loading="lazy" /> : null}
                     <div>
@@ -77,6 +79,7 @@ export default async function StudioMedia({ searchParams }: { searchParams: Prom
                 ))}
               </ul>
             )}
+            <Pager after={after} next={assets.next} base="/studio/media" label="Older uploads" />
           </>
         )}
       </main>

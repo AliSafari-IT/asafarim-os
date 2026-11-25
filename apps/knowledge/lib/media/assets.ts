@@ -4,7 +4,11 @@
  * The upload is direct and in two steps. `requestUpload` checks the type and size the author claims, records a
  * pending asset and hands out a presigned PUT for `uploads/<id>` (quarantine). The browser sends the file to the
  * store itself. `finishUpload` then checks what actually arrived (its size, and that its first bytes are the type it
- * claimed), and only then moves it to `assets/<id>` and marks it ready. Nothing under `uploads/` is ever served.
+ * claimed), and only then marks it ready. It checks the copy in `assets/<id>`, which only the server writes, so bytes
+ * swapped into `uploads/<id>` after a check can't slip through. Nothing under `uploads/` is ever served.
+ *
+ * Deleting is in two steps too: the record is first marked `deleting` (no read, revision or library sees it), then its
+ * bytes go, then the record. A failure in between leaves a `deleting` record that cleanup retries.
  *
  * Reading: an asset is public exactly while a public revision uses it (an article's published revision, or a lesson
  * of a published course whose article is public). Otherwise only its uploader, people who see every article, and
@@ -13,6 +17,8 @@
  */
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { pageOf, PAGE_SIZE, type Page } from "../content";
+import { decodeCursor } from "../cursor";
 import { mediaAssetIds, type Doc } from "../doc";
 import { canCreate, canView, seesAll, type Actor } from "../policy";
 import type { MediaStore } from "./store";
@@ -23,7 +29,7 @@ type Client = Pick<pg.PoolClient, "query">;
 
 export type MediaResult<T> = ({ ok: true } & T) | { ok: false; error: string };
 
-export type AssetStatus = "pending" | "ready" | "rejected";
+export type AssetStatus = "pending" | "ready" | "rejected" | "deleting";
 
 export interface MediaAsset {
   id: string;
@@ -124,24 +130,29 @@ export async function finishUpload(
   id: string,
 ): Promise<MediaResult<{ asset: MediaAsset }>> {
   if (!isAssetId(id)) return { ok: false, error: "not_found" };
-  return inTransaction(pool, async (c) => {
+  const result = await inTransaction(pool, async (c): Promise<MediaResult<{ asset: MediaAsset }>> => {
     const row = (await c.query<AssetRow>("SELECT * FROM media_assets WHERE id = $1 FOR UPDATE", [id])).rows[0];
-    if (!row || row.owner_subject !== actor.subject) return { ok: false, error: "not_found" } as const;
+    if (!row || row.owner_subject !== actor.subject || row.status === "deleting") {
+      return { ok: false, error: "not_found" } as const;
+    }
     if (row.status === "ready") return { ok: true, asset: toAsset(row) } as const;
     if (row.status === "rejected") return { ok: false, error: "media_rejected" } as const;
     const info = await store.head(uploadKey(id));
     if (!info) return { ok: false, error: "media_not_uploaded" } as const;
+    // Check the server's own copy: what is checked is what is served, even if `uploads/<id>` changes meanwhile.
+    await store.copy(uploadKey(id), assetKey(id));
+    const copied = await store.head(assetKey(id));
     const fits =
-      info.size === Number(row.byte_size) &&
-      sniffMatches(row.content_type, await store.readStart(uploadKey(id), SNIFF_BYTES));
+      copied !== null &&
+      copied.size === Number(row.byte_size) &&
+      sniffMatches(row.content_type, await store.readStart(assetKey(id), SNIFF_BYTES));
     if (!fits) {
+      await store.remove(assetKey(id));
       await store.remove(uploadKey(id));
       await c.query("UPDATE media_assets SET status = 'rejected', checked_at = now() WHERE id = $1", [id]);
       await audit(c, `user:${actor.subject}`, "media.rejected", id);
       return { ok: false, error: "media_rejected" } as const;
     }
-    await store.copy(uploadKey(id), assetKey(id));
-    await store.remove(uploadKey(id));
     const ready = (
       await c.query<AssetRow>(
         "UPDATE media_assets SET status = 'ready', checked_at = now() WHERE id = $1 RETURNING *",
@@ -151,12 +162,17 @@ export async function finishUpload(
     await audit(c, `user:${actor.subject}`, "media.accepted", id);
     return { ok: true, asset: toAsset(ready) } as const;
   });
+  // The quarantine copy goes only once the asset is ready: until then a retry still needs it. Left behind, it is
+  // removed with the asset (deleteAsset, cleanup) and never served.
+  if (result.ok) await store.remove(uploadKey(id)).catch(() => undefined);
+  return result;
 }
 
 /**
  * Before a revision is saved: every asset its document uses must be ready, of the right kind for its node, and one
  * this author may use (their own, the article owner's, one the article already used, or any for someone who sees
- * every article). Run inside the saving transaction.
+ * every article). Run inside the saving transaction; it holds the assets (FOR SHARE) so a delete waits for the save
+ * and then sees the new use.
  */
 export async function checkRevisionMedia(
   c: Client,
@@ -172,7 +188,8 @@ export async function checkRevisionMedia(
      WHERE a.id = ANY($1::text[]) AND a.status = 'ready'
        AND ($2::boolean OR a.owner_subject = $3 OR a.owner_subject = $4
             OR EXISTS (SELECT 1 FROM content_revision_media rm JOIN content_revisions r ON r.id = rm.revision_id
-                       WHERE rm.asset_id = a.id AND r.item_id = $5))`,
+                       WHERE rm.asset_id = a.id AND r.item_id = $5))
+     FOR SHARE OF a`,
     [ids, seesAll(actor), actor.subject, item.ownerSubject, item.id],
   );
   const kinds = new Map(rows.map((r) => [r.id, r.kind]));
@@ -241,23 +258,43 @@ export interface LibraryAsset extends MediaAsset {
   uses: number;
 }
 
-/** The person's own ready assets, newest first, for the studio's media page and the editor's picker. */
+/** The person's own ready assets, newest first, a page at a time, for the studio's media page and the editor's picker. */
 export async function listLibrary(
   pool: Pick<Pool, "query">,
   actor: Actor,
-  opts: { limit?: number; kind?: MediaKind } = {},
-): Promise<LibraryAsset[]> {
-  const { rows } = await pool.query<AssetRow & { uses: number }>(
-    `SELECT a.*, (SELECT count(*)::int FROM content_revision_media rm WHERE rm.asset_id = a.id) AS uses
+  opts: { after?: string | null; limit?: number; kind?: MediaKind } = {},
+): Promise<Page<LibraryAsset>> {
+  const limit = Math.min(Math.max(opts.limit ?? PAGE_SIZE.studio, 1), 200);
+  const after = decodeCursor(opts.after);
+  const { rows } = await pool.query<AssetRow & { uses: number; at_key: string }>(
+    `SELECT a.*, a.created_at::text AS at_key,
+            (SELECT count(*)::int FROM content_revision_media rm WHERE rm.asset_id = a.id) AS uses
      FROM media_assets a
      WHERE a.owner_subject = $1 AND a.status = 'ready' AND ($2::text IS NULL OR a.kind = $2)
-     ORDER BY a.created_at DESC, a.id DESC LIMIT $3`,
-    [actor.subject, opts.kind ?? null, Math.min(Math.max(opts.limit ?? 100, 1), 200)],
+       AND ($3::timestamptz IS NULL OR (a.created_at, a.id) < ($3::timestamptz, $4::text))
+     ORDER BY a.created_at DESC, a.id DESC LIMIT $5`,
+    [actor.subject, opts.kind ?? null, after?.at ?? null, after?.id ?? null, limit + 1],
   );
-  return rows.map((r) => ({ ...toAsset(r), uses: r.uses }));
+  return pageOf(
+    rows,
+    limit,
+    (r) => r.at_key,
+    (r) => ({ ...toAsset(r), uses: r.uses }),
+  );
 }
 
-/** Delete one of the person's assets that no revision uses: its bytes first, then its record. */
+/** Marked `deleting`: from here on nothing reads or uses it; its bytes and then its record go. */
+const markDeleting = (c: Client, id: string) =>
+  c.query("UPDATE media_assets SET status = 'deleting', checked_at = coalesce(checked_at, now()) WHERE id = $1", [id]);
+
+/** The bytes, then the record. Throws (leaving the `deleting` record for cleanup) when the store fails. */
+async function purge(pool: Pool, store: MediaStore, id: string): Promise<void> {
+  await store.remove(assetKey(id));
+  await store.remove(uploadKey(id));
+  await pool.query("DELETE FROM media_assets WHERE id = $1 AND status = 'deleting'", [id]);
+}
+
+/** Delete one of the person's assets that no revision uses. */
 export async function deleteAsset(
   pool: Pool,
   store: MediaStore,
@@ -265,33 +302,36 @@ export async function deleteAsset(
   id: string,
 ): Promise<MediaResult<object>> {
   if (!isAssetId(id)) return { ok: false, error: "not_found" };
-  return inTransaction(pool, async (c) => {
+  const claimed = await inTransaction(pool, async (c): Promise<MediaResult<object>> => {
     const row = (await c.query<AssetRow>("SELECT * FROM media_assets WHERE id = $1 FOR UPDATE", [id])).rows[0];
-    if (!row || (row.owner_subject !== actor.subject && !seesAll(actor)))
+    if (!row || row.status === "deleting" || (row.owner_subject !== actor.subject && !seesAll(actor)))
       return { ok: false, error: "not_found" } as const;
     const used = await c.query("SELECT 1 FROM content_revision_media WHERE asset_id = $1 LIMIT 1", [id]);
     if (used.rowCount) return { ok: false, error: "media_in_use" } as const;
-    await store.remove(assetKey(id));
-    await store.remove(uploadKey(id));
-    await c.query("DELETE FROM media_assets WHERE id = $1", [id]);
+    await markDeleting(c, id);
     await audit(c, `user:${actor.subject}`, "media.deleted", id);
     return { ok: true } as const;
   });
+  if (!claimed.ok) return claimed;
+  // Already gone for everyone; if the store fails now, cleanup finishes it.
+  await purge(pool, store, id).catch(() => undefined);
+  return { ok: true };
 }
 
 /**
- * Remove what nobody will use: uploads never finished (or rejected) after a day, and ready assets no revision and no
- * autosaved draft has used for a week. One run at a time across processes. Returns how many assets went.
+ * Remove what nobody will use: uploads never finished (or rejected) after a day, ready assets no revision and no
+ * autosaved draft has used for a week, and deletions a failure left half done. Returns how many assets went.
  */
 export async function cleanupMedia(pool: Pool, store: MediaStore, now = new Date()): Promise<number> {
-  return inTransaction(pool, async (c) => {
+  const ids = await inTransaction(pool, async (c) => {
     const lock = await c.query<{ ok: boolean }>(
       "SELECT pg_try_advisory_xact_lock(hashtext('knowledge.media.cleanup')) AS ok",
     );
-    if (!lock.rows[0]!.ok) return 0;
+    if (!lock.rows[0]!.ok) return [];
     const { rows } = await c.query<{ id: string; status: AssetStatus }>(
       `SELECT a.id, a.status FROM media_assets a
-       WHERE (a.status <> 'ready' AND a.created_at < $1)
+       WHERE a.status = 'deleting'
+          OR (a.status IN ('pending', 'rejected') AND a.created_at < $1)
           OR (a.status = 'ready' AND a.created_at < $2
               AND NOT EXISTS (SELECT 1 FROM content_revision_media rm WHERE rm.asset_id = a.id)
               AND NOT EXISTS (SELECT 1 FROM draft_autosaves d WHERE strpos(d.doc::text, a.id) > 0))
@@ -300,10 +340,20 @@ export async function cleanupMedia(pool: Pool, store: MediaStore, now = new Date
       [new Date(now.getTime() - CLEANUP_AGE.pending), new Date(now.getTime() - CLEANUP_AGE.unused)],
     );
     for (const r of rows) {
-      await store.remove(r.status === "ready" ? assetKey(r.id) : uploadKey(r.id));
-      await c.query("DELETE FROM media_assets WHERE id = $1", [r.id]);
+      if (r.status === "deleting") continue;
+      await markDeleting(c, r.id);
       await audit(c, "system:cleanup", "media.deleted", r.id);
     }
-    return rows.length;
+    return rows.map((r) => r.id);
   });
+  let removed = 0;
+  for (const id of ids) {
+    try {
+      await purge(pool, store, id);
+      removed += 1;
+    } catch {
+      // Stays `deleting`; the next run tries again.
+    }
+  }
+  return removed;
 }

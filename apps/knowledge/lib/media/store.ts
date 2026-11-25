@@ -33,6 +33,7 @@ export interface S3Config extends Credentials {
 }
 
 export const UPLOAD_URL_SECONDS = 600;
+const ANSWER_MS = 15_000;
 
 export function mediaConfigFromEnv(env: Record<string, string | undefined> = process.env): S3Config | null {
   const endpoint = env.KNOWLEDGE_MEDIA_ENDPOINT?.trim();
@@ -58,14 +59,20 @@ export function s3Store(
   const url = (base: string, key?: string, query = "") =>
     new URL(`${base}/${uriEncode(cfg.bucket)}${key === undefined ? "" : `/${uriEncode(key, true)}`}${query}`);
 
+  /** One signed request. The 15 s limit is on the store answering, not on the body: open() streams that on. */
   async function call(method: string, target: URL, headers: Record<string, string> = {}): Promise<Response> {
-    const res = await fetchImpl(target, {
-      method,
-      headers: signHeaders(cfg, { method, url: target, headers }),
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
-    });
-    return res;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(new Error("media store: no answer in 15 s")), ANSWER_MS);
+    try {
+      return await fetchImpl(target, {
+        method,
+        headers: signHeaders(cfg, { method, url: target, headers }),
+        redirect: "error",
+        signal: abort.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   const fail = async (what: string, res: Response): Promise<never> => {

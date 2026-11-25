@@ -49,13 +49,17 @@ if ! api GET "GetKeyInfo?id=$GARAGE_KEY_ID" >/dev/null 2>&1; then
 fi
 api POST "UpdateKey?id=$GARAGE_KEY_ID" -d '{"allow":{"createBucket":true}}' >/dev/null
 
-if ! api GET "GetBucketInfo?globalAlias=$GARAGE_BUCKET" >/dev/null 2>&1; then
+if info=$(api GET "GetBucketInfo?globalAlias=$GARAGE_BUCKET" 2>/dev/null); then
+  bucket=$(printf '%s' "$info" | sed -n 's/.*"id":"\([0-9a-f]\{64\}\)".*/\1/p')
+else
   bucket=$(api POST CreateBucket -d "{\"globalAlias\":\"$GARAGE_BUCKET\"}" | sed -n 's/.*"id":"\([0-9a-f]\{64\}\)".*/\1/p')
-  [ -n "$bucket" ] || { echo "garage: CreateBucket gave no id" >&2; exit 1; }
-  api POST AllowBucketKey \
-    -d "{\"bucketId\":\"$bucket\",\"accessKeyId\":\"$GARAGE_KEY_ID\",\"permissions\":{\"read\":true,\"write\":true,\"owner\":true}}" >/dev/null
   echo "garage: bucket $GARAGE_BUCKET created"
 fi
+[ -n "$bucket" ] || { echo "garage: no id for bucket $GARAGE_BUCKET" >&2; exit 1; }
+# Every run, so a run cut short between creating the bucket and granting the key is put right by the next one.
+api POST AllowBucketKey \
+  -d "{\"bucketId\":\"$bucket\",\"accessKeyId\":\"$GARAGE_KEY_ID\",\"permissions\":{\"read\":true,\"write\":true,\"owner\":true}}" >/dev/null
+
 if [ -n "${GARAGE_S3_URL:-}" ]; then
   curl -fsS -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user "$GARAGE_KEY_ID:$GARAGE_SECRET_KEY" \
     -H "Content-Type: application/xml" "$GARAGE_S3_URL/$GARAGE_BUCKET?cors" --data-binary \

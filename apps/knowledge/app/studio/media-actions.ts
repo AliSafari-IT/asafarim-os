@@ -45,12 +45,15 @@ export async function finishUploadAction(id: string): Promise<UploadDone> {
   return { ok: true, asset: { id: r.asset.id, kind: r.asset.kind, filename: r.asset.filename } };
 }
 
-/** The person's own ready assets, for the editor's "choose an uploaded file". */
+/** The person's newest ready assets, for the editor's "choose an uploaded file" (older ones: the Media page). */
 export async function listMediaAction(kind?: "image" | "file") {
   const g = await studioGate();
   if (!g.ok) return [];
-  const rows = await listLibrary(await db(), g.actor, { kind: kind === "image" || kind === "file" ? kind : undefined });
-  return rows.map((a) => ({ id: a.id, kind: a.kind, filename: a.filename }));
+  const page = await listLibrary(await db(), g.actor, {
+    kind: kind === "image" || kind === "file" ? kind : undefined,
+    limit: 100,
+  });
+  return page.items.map((a) => ({ id: a.id, kind: a.kind, filename: a.filename }));
 }
 
 export async function deleteMediaAction(formData: FormData) {
