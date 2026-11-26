@@ -34,10 +34,14 @@ async function cli(method: string, path: string) {
 }
 const grant = (role: string, sub: string) => cli("PUT", `/admin/v1/roles/${role}/grants/${sub}`);
 const revoke = (role: string, sub: string) => cli("DELETE", `/admin/v1/roles/${role}/grants/${sub}`);
-/** Re-runnable: no role mappings left over from an earlier run (#355). */
-async function deleteAllMappings() {
+/** The one mapping the suite makes (#355). Anything else on the dev stack is left alone. */
+const E2E_MAPPING = { source: "core.admin", target: "notes.editor" };
+/** Re-runnable: deletes the suite's own mapping if an earlier, interrupted run left it. */
+async function deleteE2eMapping() {
   const { body } = await cli("GET", "/admin/v1/role-mappings");
-  for (const m of (body.mappings ?? []) as { id: number }[]) await cli("DELETE", `/admin/v1/role-mappings/${m.id}`);
+  for (const m of (body.mappings ?? []) as { id: number; source: string; target: string }[])
+    if (m.source === E2E_MAPPING.source && m.target === E2E_MAPPING.target)
+      await cli("DELETE", `/admin/v1/role-mappings/${m.id}`);
 }
 
 /** What notes (an app) gets from core-api's launcher endpoint for a person: the same signed call the SDK makes. */
@@ -98,7 +102,7 @@ test.beforeAll(async ({ browser }) => {
   await revoke("core.admin", "dev-member");
   await revoke("notes.editor", "dev-member");
   await revoke("notes.viewer", "dev-member");
-  await deleteAllMappings();
+  await deleteE2eMapping();
   await cli("POST", "/admin/v1/apps/notes/deactivate");
   startId =
     (
@@ -111,7 +115,7 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-  await deleteAllMappings();
+  await deleteE2eMapping();
   await revoke("notes.viewer", "dev-admin");
   await revoke("notes.editor", "dev-member");
   await cli("POST", "/admin/v1/apps/notes/deactivate");
@@ -426,7 +430,6 @@ test("revoking asks first, then takes the role away", async () => {
 test("a role mapping gives its target to the source's holders, and deleting it takes that away", async () => {
   const page = await adminCtx.newPage();
   await page.goto(`${ADMIN}/admin/roles?app=notes`);
-  await expect(page.getByTestId("no-mappings")).toBeVisible();
   const form = page.getByRole("form", { name: "Add a role mapping" });
   await form.getByLabel("Whoever holds").selectOption("core.admin");
   // A mapping never gives a core role: none is offered as a target.
@@ -447,7 +450,7 @@ test("a role mapping gives its target to the source's holders, and deleting it t
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(page.getByTestId("flash-notice")).toContainText("1 derived grant removed");
   await expect(page.getByTestId("holder-notes.editor-dev-admin")).toHaveCount(0);
-  await expect(page.getByTestId("no-mappings")).toBeVisible();
+  await expect(page.getByTestId("mapping-core.admin-notes.editor")).toHaveCount(0);
   await page.close();
 });
 

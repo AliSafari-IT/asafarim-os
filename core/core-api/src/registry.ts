@@ -570,6 +570,12 @@ export function createRegistry(deps: RegistryDeps) {
         }
       }
 
+      // A role that was retired or restored here changes what the mappings naming it give (ADR 0004):
+      // a retired source or target derives nothing, a restored one derives again. Only rows derived from
+      // an administrator's mapping change; registration still never writes a deliberate grant.
+      const restored = beforeRoles.filter((b) => b.deprecated_at && roleKeys.has(b.key)).map((b) => b.key);
+      await reconcileMappingsNaming(c, [...roles.deprecated, ...restored]);
+
       // Event subscriptions: exactly what the manifest declares now.
       await c.query("DELETE FROM event_subscriptions WHERE app_id = $1", [appId]);
       for (const s of m.events?.subscribes ?? []) {
@@ -590,7 +596,7 @@ export function createRegistry(deps: RegistryDeps) {
         roles,
         ...events,
       });
-      // Registration never changes the state and never writes role_grants.
+      // Registration never changes the state and never writes a deliberate grant.
       return { appId, version: m.version, state, permissions: perms, roles, events };
     });
   }
@@ -1232,6 +1238,29 @@ export function createRegistry(deps: RegistryDeps) {
       }
       return { id, source: m.source_role, target: m.target_role, removedGrants: removed };
     });
+  }
+
+  /** Reconcile everyone a mapping that names one of `roleKeys` (as source or target) could affect. */
+  async function reconcileMappingsNaming(c: pg.PoolClient, roleKeys: string[]): Promise<void> {
+    if (roleKeys.length === 0) return;
+    const named = async () =>
+      (
+        await c.query<{ id: string }>(
+          "SELECT id FROM role_mappings WHERE source_role = ANY($1) OR target_role = ANY($1)",
+          [roleKeys],
+        )
+      ).rows.map((r) => Number(r.id));
+    if ((await named()).length === 0) return; // the common case: no lock taken
+    await lockMappings(c);
+    const ids = await named();
+    const subjects = new Set(await subjectsDerivedFrom(c, ids));
+    const holders = await c.query<{ subject: string }>(
+      `SELECT DISTINCT g.subject FROM role_grants g JOIN role_mappings m ON m.source_role = g.role_key
+        WHERE m.id = ANY($1) AND g.granted_by NOT LIKE 'mapping:%'`,
+      [ids],
+    );
+    for (const h of holders.rows) subjects.add(h.subject);
+    for (const subject of [...subjects].sort()) await auditDerived(c, await reconcile(c, subject));
   }
 
   async function subjectsDerivedFrom(c: pg.PoolClient, ids: number[]): Promise<string[]> {
