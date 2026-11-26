@@ -70,7 +70,7 @@ export const CALLOUT_KINDS = ["note", "tip", "warning"] as const;
 export type CalloutKind = (typeof CALLOUT_KINDS)[number];
 
 export interface DocMark {
-  type: "bold" | "italic" | "strike" | "underline" | "code" | "link";
+  type: "bold" | "italic" | "strike" | "underline" | "code" | "link" | "highlight" | "subscript" | "superscript";
   attrs?: { href: string };
 }
 
@@ -128,7 +128,27 @@ const BLOCK = new Set([
   "video",
 ]);
 const INLINE = new Set(["text", "hardBreak"]);
-const MARKS = new Set(["bold", "italic", "strike", "underline", "code", "link"]);
+const MARKS = new Set([
+  "bold",
+  "italic",
+  "strike",
+  "underline",
+  "code",
+  "link",
+  "highlight",
+  "subscript",
+  "superscript",
+]);
+
+/**
+ * Alignment a paragraph or heading may carry (text copied from a centred page keeps its arrangement). Left is the
+ * default, so it is never stored. Only these words reach the page, as a React style value, never as CSS text.
+ */
+export const TEXT_ALIGNS = ["center", "right", "justify"] as const;
+/** Table cells: Tiptap's table offers left, center and right. */
+export const CELL_ALIGNS = ["center", "right"] as const;
+const alignOf = (raw: unknown, allowed: readonly string[]): string | null =>
+  typeof raw === "string" && allowed.includes(raw) ? raw : null;
 
 /** A link the page may carry: http(s), mailto, a path on this site, or an anchor in the page. */
 export function safeHref(raw: unknown): string | null {
@@ -180,6 +200,10 @@ export function parseDoc(input: unknown): DocResult {
       const type = (m as { type?: unknown })?.type;
       if (typeof type !== "string" || !MARKS.has(type)) throw new Invalid("doc_invalid");
       if (out.some((x) => x.type === type)) continue;
+      // Below and above the line at once can't be drawn: the first one wins.
+      if (type === "subscript" || type === "superscript") {
+        if (out.some((x) => x.type === "subscript" || x.type === "superscript")) continue;
+      }
       if (type === "link") {
         const href = safeHref((m as { attrs?: { href?: unknown } }).attrs?.href);
         if (href) out.push({ type: "link", attrs: { href } }); // an unsafe link drops the mark, keeps the text
@@ -190,8 +214,14 @@ export function parseDoc(input: unknown): DocResult {
 
   function attrsOf(type: string, raw: Record<string, unknown>): DocNode["attrs"] {
     switch (type) {
-      case "heading":
-        return { level: int(raw.level, 1, 4) ?? 2 };
+      case "heading": {
+        const align = alignOf(raw.textAlign, TEXT_ALIGNS);
+        return { level: int(raw.level, 1, 4) ?? 2, ...(align ? { textAlign: align } : {}) };
+      }
+      case "paragraph": {
+        const align = alignOf(raw.textAlign, TEXT_ALIGNS);
+        return align ? { textAlign: align } : undefined;
+      }
       case "orderedList":
         return { start: int(raw.start, 1, 100_000) ?? 1 };
       case "codeBlock":
@@ -231,8 +261,14 @@ export function parseDoc(input: unknown): DocResult {
         return { provider: raw.provider, videoId: raw.videoId as string, title };
       }
       case "tableCell":
-      case "tableHeader":
-        return { colspan: int(raw.colspan, 1, 20) ?? 1, rowspan: int(raw.rowspan, 1, 100) ?? 1 };
+      case "tableHeader": {
+        const align = alignOf(raw.align, CELL_ALIGNS);
+        return {
+          colspan: int(raw.colspan, 1, 20) ?? 1,
+          rowspan: int(raw.rowspan, 1, 100) ?? 1,
+          ...(align ? { align } : {}),
+        };
+      }
       default:
         return undefined;
     }

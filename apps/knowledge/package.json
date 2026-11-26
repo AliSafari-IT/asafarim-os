@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/knowledge",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "description": "ASafariM Knowledge: technical publishing and learning on ASafariM OS (#354). Phase 0: drafts, revisions, publish, public read and withdraw.",
   "scripts": {
@@ -20,7 +20,11 @@
     "@asafarim/telemetry": "workspace:*",
     "@asafarim/theme": "workspace:*",
     "@tiptap/core": "3.32.2",
+    "@tiptap/extension-highlight": "3.32.2",
+    "@tiptap/extension-subscript": "3.32.2",
+    "@tiptap/extension-superscript": "3.32.2",
     "@tiptap/extension-table": "3.32.2",
+    "@tiptap/extension-text-align": "3.32.2",
     "@tiptap/markdown": "3.32.2",
     "@tiptap/pm": "3.32.2",
     "@tiptap/react": "3.34.0",
@@ -49,6 +53,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "eslint": "^9.39.5",
+    "jsdom": "27.4.0",
     "typescript": "^5.9.3",
     "vitest": "^5.1.0"
   }

@@ -39,6 +39,9 @@ function withMarks(text: string, marks: DocMark[] | undefined, key: string): Rea
     else if (m.type === "strike") out = <s>{out}</s>;
     else if (m.type === "underline") out = <u>{out}</u>;
     else if (m.type === "code") out = <code>{out}</code>;
+    else if (m.type === "highlight") out = <mark>{out}</mark>;
+    else if (m.type === "subscript") out = <sub>{out}</sub>;
+    else if (m.type === "superscript") out = <sup>{out}</sup>;
     else if (m.type === "link" && m.attrs) {
       const external = /^(https?:|mailto:)/.test(m.attrs.href);
       out = (
@@ -50,6 +53,10 @@ function withMarks(text: string, marks: DocMark[] | undefined, key: string): Rea
   }
   return <span key={key}>{out}</span>;
 }
+
+/** A parsed alignment (lib/doc.ts allows only a few words) as a React style; nothing for the default. */
+const aligned = (value: unknown) =>
+  typeof value === "string" ? { style: { textAlign: value as "center" | "right" | "justify" } } : {};
 
 const CALLOUT_LABEL: Record<string, string> = { note: "Note", tip: "Tip", warning: "Warning" };
 
@@ -73,13 +80,17 @@ export async function DocView({ doc }: { doc: Doc }) {
       case "hardBreak":
         return <br key={key} />;
       case "paragraph":
-        return <p key={key}>{kids()}</p>;
+        return (
+          <p key={key} {...aligned(n.attrs?.textAlign)}>
+            {kids()}
+          </p>
+        );
       case "heading": {
         const level = Math.min(Math.max(Number(n.attrs?.level ?? 2), 1), 4) + 1; // the page's title is the h1
         const Tag = `h${Math.min(level, 6)}` as "h2";
         const id = ids.get(n)!;
         return (
-          <Tag key={key} id={id}>
+          <Tag key={key} id={id} {...aligned(n.attrs?.textAlign)}>
             {kids()}{" "}
             <a className="anchor" href={`#${id}`} aria-label="Link to this section">
               #
@@ -174,7 +185,12 @@ export async function DocView({ doc }: { doc: Doc }) {
         const colSpan = Number(n.attrs?.colspan ?? 1);
         const rowSpan = Number(n.attrs?.rowspan ?? 1);
         return (
-          <Cell key={key} {...(colSpan > 1 ? { colSpan } : {})} {...(rowSpan > 1 ? { rowSpan } : {})}>
+          <Cell
+            key={key}
+            {...(colSpan > 1 ? { colSpan } : {})}
+            {...(rowSpan > 1 ? { rowSpan } : {})}
+            {...aligned(n.attrs?.align)}
+          >
             {kids()}
           </Cell>
         );

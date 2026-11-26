@@ -6,10 +6,8 @@
  * the page lists anything the conversion drops (lib/markdown-check.ts). A refused save (a conflict, a validation
  * error, an expired session) leaves the editor exactly as it was: the editor and fields live in this component.
  */
-import { TableKit } from "@tiptap/extension-table";
 import { Markdown } from "@tiptap/markdown";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
 import Link from "next/link";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { autosaveAction, saveDraftAction, type AutosaveResult, type SaveState } from "@/app/studio/actions";
@@ -18,6 +16,8 @@ import { Callout } from "@/lib/callout";
 import { Mermaid } from "@/lib/mermaid-node";
 import { AttachmentNode, ImageNode, uploadFile, VideoNode } from "@/lib/media-nodes";
 import { MEDIA_TYPES, parseVideoUrl } from "@/lib/media/validate";
+import { textExtensions } from "@/lib/editor-extensions";
+import { RichPaste } from "@/lib/rich-paste";
 import { safeHref, type Doc } from "@/lib/doc";
 import { ERRORS } from "@/lib/messages";
 
@@ -63,36 +63,60 @@ export const LANGUAGES = [
   "yaml",
 ];
 
+type MediaMessage = { bad: boolean; text: string } | null;
+
+/**
+ * Upload image or PDF files one after another (straight to the store, checked by the server) and insert each where
+ * the cursor is. Used by the toolbar's file picker and by pasting or dropping an image into the body.
+ */
+async function uploadAndInsert(editor: Editor, files: File[], say: (m: MediaMessage) => void): Promise<void> {
+  for (const file of files) {
+    say({ bad: false, text: `Uploading ${file.name || "image"}…` });
+    try {
+      const r = await uploadFile(file);
+      if (!r.ok) return say({ bad: true, text: ERRORS[r.error] ?? r.error });
+      if (r.asset.kind === "image") editor.chain().focus().insertImage({ asset: r.asset.id }).run();
+      else editor.chain().focus().insertAttachment({ asset: r.asset.id, label: r.asset.filename }).run();
+    } catch {
+      return say({ bad: true, text: ERRORS.media_not_uploaded! });
+    }
+  }
+  const images = files.filter((f) => f.type.startsWith("image/")).length;
+  say({
+    bad: false,
+    text: images
+      ? `${images === 1 ? "Image" : `${images} images`} added. Write the alt text below each image.`
+      : "File added.",
+  });
+}
+
 /**
  * Media tools (#359): upload an image or PDF (straight to the store, checked by the server, then inserted), and
  * embed a video by its YouTube or Vimeo address. Status and errors are announced in place, never in a dialog.
  */
-function MediaTools({ editor, uploads }: { editor: Editor; uploads: boolean }) {
+function MediaTools({
+  editor,
+  uploads,
+  busy,
+  message,
+  onFiles,
+  setMessage,
+}: {
+  editor: Editor;
+  uploads: boolean;
+  busy: boolean;
+  message: MediaMessage;
+  onFiles: (files: File[]) => Promise<void>;
+  setMessage: (m: MediaMessage) => void;
+}) {
   const fileInput = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ bad: boolean; text: string } | null>(null);
   const [videoOpen, setVideoOpen] = useState(false);
   const [address, setAddress] = useState("");
 
   const onFile = async (file: File | undefined) => {
     if (!file) return;
-    setBusy(true);
-    setMessage({ bad: false, text: `Uploading ${file.name}…` });
-    try {
-      const r = await uploadFile(file);
-      if (!r.ok) return setMessage({ bad: true, text: ERRORS[r.error] ?? r.error });
-      if (r.asset.kind === "image") editor.chain().focus().insertImage({ asset: r.asset.id }).run();
-      else editor.chain().focus().insertAttachment({ asset: r.asset.id, label: r.asset.filename }).run();
-      setMessage({
-        bad: false,
-        text: r.asset.kind === "image" ? "Image added. Write its alt text below the image." : "File added.",
-      });
-    } catch {
-      setMessage({ bad: true, text: ERRORS.media_not_uploaded! });
-    } finally {
-      setBusy(false);
-      if (fileInput.current) fileInput.current.value = "";
-    }
+    await onFiles([file]);
+    if (fileInput.current) fileInput.current.value = "";
   };
 
   const addVideo = () => {
@@ -161,7 +185,11 @@ function MediaTools({ editor, uploads }: { editor: Editor; uploads: boolean }) {
         </span>
       ) : null}
       {message ? (
-        <span className={message.bad ? "notice bad" : "muted"} role={message.bad ? "alert" : "status"}>
+        <span
+          className={message.bad ? "notice bad" : "muted"}
+          role={message.bad ? "alert" : "status"}
+          data-testid="media-message"
+        >
           {message.text}
         </span>
       ) : null}
@@ -169,13 +197,29 @@ function MediaTools({ editor, uploads }: { editor: Editor; uploads: boolean }) {
   );
 }
 
-function Toolbar({ editor, mediaEnabled }: { editor: Editor; mediaEnabled: boolean }) {
+interface MediaState {
+  busy: boolean;
+  message: MediaMessage;
+  onFiles: (files: File[]) => Promise<void>;
+  setMessage: (m: MediaMessage) => void;
+}
+
+const ALIGNS = [
+  ["", "Align left"],
+  ["center", "Centre"],
+  ["right", "Align right"],
+  ["justify", "Justify"],
+] as const;
+
+function Toolbar({ editor, mediaEnabled, media }: { editor: Editor; mediaEnabled: boolean; media: MediaState }) {
   const s = useEditorState({
     editor,
     selector: ({ editor: e }) => ({
       bold: e.isActive("bold"),
       italic: e.isActive("italic"),
       code: e.isActive("code"),
+      highlight: e.isActive("highlight"),
+      align: (["center", "right", "justify"] as const).find((a) => e.isActive({ textAlign: a })) ?? "",
       link: e.isActive("link"),
       h2: e.isActive("heading", { level: 2 }),
       h3: e.isActive("heading", { level: 3 }),
@@ -215,6 +259,7 @@ function Toolbar({ editor, mediaEnabled }: { editor: Editor; mediaEnabled: boole
       {b("B", s.bold, () => chain().toggleBold().run(), "Bold")}
       {b("I", s.italic, () => chain().toggleItalic().run(), "Italic")}
       {b("`code`", s.code, () => chain().toggleCode().run(), "Inline code")}
+      {b("Mark", s.highlight, () => chain().toggleHighlight().run(), "Highlight")}
       {b("Link", s.link, setLink)}
       <span className="sep" />
       {b("H2", s.h2, () => chain().toggleHeading({ level: 2 }).run(), "Heading")}
@@ -222,6 +267,22 @@ function Toolbar({ editor, mediaEnabled }: { editor: Editor; mediaEnabled: boole
       {b("• List", s.bullet, () => chain().toggleBulletList().run(), "Bulleted list")}
       {b("1. List", s.ordered, () => chain().toggleOrderedList().run(), "Numbered list")}
       {b("Quote", s.quote, () => chain().toggleBlockquote().run())}
+      <label className="inline">
+        <span className="visually-hidden">Alignment</span>
+        <select
+          value={s.align}
+          onChange={(e) =>
+            e.target.value ? chain().setTextAlign(e.target.value).run() : chain().unsetTextAlign().run()
+          }
+          data-testid="text-align"
+        >
+          {ALIGNS.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
       {b("Callout", s.callout, () => chain().toggleCallout("note").run())}
       {b(
         "Diagram",
@@ -261,7 +322,7 @@ function Toolbar({ editor, mediaEnabled }: { editor: Editor; mediaEnabled: boole
         </>
       ) : null}
       <span className="sep" />
-      <MediaTools editor={editor} uploads={mediaEnabled} />
+      <MediaTools editor={editor} uploads={mediaEnabled} {...media} />
       <span className="sep" />
       {b("Undo", false, () => chain().undo().run())}
       {b("Redo", false, () => chain().redo().run())}
@@ -274,17 +335,41 @@ export function EditorForm(props: EditorFormProps) {
   const [title, setTitle] = useState(props.title);
   const [summary, setSummary] = useState(props.summary);
   const [doc, setDoc] = useState<string>("");
+  const [mediaBusy, setMediaBusy] = useState(false);
+  const [mediaMessage, setMediaMessage] = useState<MediaMessage>(null);
+  const editorRef = useRef<Editor | null>(null);
+  const uploads = props.canEdit && (props.mediaEnabled ?? false);
+
+  const onFiles = async (files: File[]) => {
+    const e = editorRef.current;
+    if (!e || !files.length) return;
+    setMediaBusy(true);
+    try {
+      await uploadAndInsert(e, files, setMediaMessage);
+    } finally {
+      setMediaBusy(false);
+    }
+  };
+  // The paste handler is set up once with the editor; it calls the newest upload function through this ref.
+  const onFilesRef = useRef(onFiles);
+  onFilesRef.current = onFiles;
 
   const editor = useEditor({
     // Rendered on the client only: the page's HTML has no editor markup to hydrate against.
     immediatelyRender: false,
     editable: props.canEdit,
     extensions: [
-      StarterKit.configure({
-        heading: { levels: [2, 3, 4] },
-        link: { openOnClick: false, autolink: true, isAllowedUri: (url) => safeHref(url) !== null },
+      ...textExtensions(),
+      RichPaste.configure({
+        onImageFiles: uploads ? (files) => void onFilesRef.current(files) : null,
+        onDroppedImages: (n) =>
+          setMediaMessage({
+            bad: false,
+            text: `Formatting kept. ${n === 1 ? "1 image" : `${n} images`} from the other page can't be copied${
+              uploads ? ": save each one and add it with Image / file (or paste the image itself)." : "."
+            }`,
+          }),
       }),
-      TableKit.configure({ table: { resizable: false } }),
       Callout,
       Mermaid,
       ImageNode,
@@ -294,7 +379,10 @@ export function EditorForm(props: EditorFormProps) {
     ],
     ...(props.doc ? { content: props.doc } : { content: props.markdown, contentType: "markdown" as const }),
     editorProps: { attributes: { class: "prose editor-area", "aria-label": "Article body", "data-testid": "body" } },
-    onCreate: ({ editor: e }) => setDoc(JSON.stringify(e.getJSON())),
+    onCreate: ({ editor: e }) => {
+      editorRef.current = e;
+      setDoc(JSON.stringify(e.getJSON()));
+    },
     onUpdate: ({ editor: e }) => setDoc(JSON.stringify(e.getJSON())),
   });
 
@@ -364,7 +452,13 @@ export function EditorForm(props: EditorFormProps) {
       <span className="field-label" id="body-label">
         Body
       </span>
-      {editor && props.canEdit ? <Toolbar editor={editor} mediaEnabled={props.mediaEnabled ?? false} /> : null}
+      {editor && props.canEdit ? (
+        <Toolbar
+          editor={editor}
+          mediaEnabled={props.mediaEnabled ?? false}
+          media={{ busy: mediaBusy, message: mediaMessage, onFiles, setMessage: setMediaMessage }}
+        />
+      ) : null}
       <div className="editor-frame" aria-labelledby="body-label">
         <EditorContent editor={editor} />
       </div>

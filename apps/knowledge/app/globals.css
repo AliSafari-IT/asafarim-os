@@ -574,7 +574,8 @@ del {
   color: var(--ink);
   margin: 4px 0 12px;
 }
-.snippet mark {
+.snippet mark,
+.prose mark {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: inherit;
   border-radius: 3px;
