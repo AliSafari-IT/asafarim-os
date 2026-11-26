@@ -101,7 +101,46 @@ services:
     mem_limit: 256m
     cpus: 0.5
 
+  # #359: Knowledge's media store, Garage (a small S3-compatible server). Only with
+  # `docker compose -f compose.dev.yml --profile media up -d` (the "media" profile): `pnpm dev` leaves it off,
+  # and Knowledge offers no uploads until .dev/knowledge.env sets the KNOWLEDGE_MEDIA_* values (apps/knowledge/README.md).
+  # Fixed, dev-only keys: it listens on 127.0.0.1 only. garage-init (scripts/dev/garage/init.sh) sets up the node,
+  # the key and the bucket through the admin API, then exits.
+  garage:
+    image: dxflrs/garage:v2.1.0
+    profiles: ["media"]
+    environment:
+      # Dev-only values: this server only listens on 127.0.0.1.
+      GARAGE_RPC_SECRET: "0000000000000000000000000000000000000000000000000000000000000d01"
+      GARAGE_ADMIN_TOKEN: knowledge-dev-admin
+    ports:
+      - "127.0.0.1:59000:3900"
+    volumes:
+      - ./scripts/dev/garage/garage.toml:/etc/garage.toml:ro
+      - garage_data:/var/lib/garage
+    mem_limit: 256m
+    cpus: 0.5
+
+  garage-init:
+    image: curlimages/curl:8.11.1
+    profiles: ["media"]
+    depends_on:
+      - garage
+    entrypoint: ["/bin/sh", "/init.sh"]
+    environment:
+      GARAGE_ADMIN_URL: http://garage:3903
+      GARAGE_ADMIN_TOKEN: knowledge-dev-admin
+      GARAGE_KEY_ID: GK6b6e6f776c656467652d6465
+      GARAGE_SECRET_KEY: 6b6e6f776c656467652d6465762d6f6e6c792d6b6e6f776c656467652d646576
+      GARAGE_BUCKET: knowledge-media
+      GARAGE_S3_URL: http://garage:3900
+    volumes:
+      - ./scripts/dev/garage/init.sh:/init.sh:ro
+    mem_limit: 64m
+    cpus: 0.25
+
 volumes:
   postgres_data:
   redis_data:
   nats_data:
+  garage_data:

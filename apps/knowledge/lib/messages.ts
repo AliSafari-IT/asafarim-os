@@ -67,9 +67,29 @@ export const ERRORS: Record<string, string> = {
   course_empty_course: "Add at least one lesson before publishing.",
   course_lesson_unavailable:
     "Some lessons' articles aren't public any more. Remove those lessons, or publish their articles again, then publish the course.",
+  // Media (#359)
+  media_off: "Uploads aren't set up on this server yet.",
+  media_type: "That kind of file can't be uploaded. Use PNG, JPEG, GIF, WebP or PDF.",
+  media_empty: "That file is empty.",
+  media_too_large: "That file is too large: images up to 10 MB, PDFs up to 25 MB.",
+  media_too_many_pending: "You have too many unfinished uploads. Wait a moment and try again.",
+  media_rate_limited: "Too many uploads in a short time. Try again in a few minutes.",
+  media_not_uploaded: "The file didn't reach the server. Try the upload again.",
+  media_rejected: "The file isn't what its type says (or arrived incomplete), so it was removed. Nothing was added.",
+  media_in_use: "That file is used by a revision of an article, so it can't be deleted.",
+  media_unavailable:
+    "The document uses an image or file that isn't available to you (deleted, still uploading, or someone else's). Nothing was saved; remove it and add it again.",
+  media_invalid: "An image or file in the document couldn't be read.",
+  media_text_too_long:
+    "An image's alt text or caption, a file's label or a video's title is too long (at most 300, 300, 200 and 200 characters).",
+  image_alt_required: "Every image needs alt text: describe what it shows for readers who can't see it.",
+  attachment_label_required: "Every attached file needs a label.",
+  video_invalid: "Only YouTube and Vimeo videos can be embedded, by their address.",
+  video_title_required: "Every video needs a title.",
 };
 
 export const DONE: Record<string, string> = {
+  media_deleted: "The file was deleted.",
   created: "Draft created.",
   saved: "Draft saved as a new revision.",
   published: "Published. Guests now see this revision.",

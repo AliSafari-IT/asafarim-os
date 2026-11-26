@@ -7,7 +7,9 @@ import "server-only";
 import type { ReactNode } from "react";
 import { bundledLanguages, getSingletonHighlighter } from "shiki";
 import { MermaidDiagram } from "@/components/MermaidDiagram";
+import { VideoEmbed } from "@/components/VideoEmbed";
 import { headingIds, type Doc, type DocMark, type DocNode } from "@/lib/doc";
+import { isVideoId } from "@/lib/media/validate";
 
 const THEMES = { light: "github-light-default", dark: "github-dark-default" } as const;
 const PRELOADED = ["bash", "json", "yaml", "ts", "tsx", "js", "jsx", "sql", "diff", "css", "html", "python", "csharp"];
@@ -125,6 +127,37 @@ export async function DocView({ doc }: { doc: Doc }) {
             description={String(n.attrs?.description ?? "")}
           />
         );
+      // Media (#359): served by /media/:id, which decides who may see it. Alt text is required by lib/doc.ts.
+      case "image": {
+        const caption = String(n.attrs?.caption ?? "");
+        return (
+          <figure key={key} className="media-image">
+            <img
+              src={`/media/${String(n.attrs?.asset)}`}
+              alt={String(n.attrs?.alt ?? "")}
+              loading="lazy"
+              decoding="async"
+            />
+            {caption ? <figcaption>{caption}</figcaption> : null}
+          </figure>
+        );
+      }
+      case "attachment":
+        return (
+          <p key={key} className="media-file">
+            <a href={`/media/${String(n.attrs?.asset)}`} download>
+              {String(n.attrs?.label ?? "")}
+            </a>
+          </p>
+        );
+      case "video": {
+        const provider = n.attrs?.provider;
+        const videoId = n.attrs?.videoId;
+        if (!isVideoId(provider, videoId)) return null;
+        return (
+          <VideoEmbed key={key} provider={provider} videoId={String(videoId)} title={String(n.attrs?.title ?? "")} />
+        );
+      }
       case "table":
         return (
           <div key={key} className="table-wrap" tabIndex={0} role="region" aria-label="Table">

@@ -130,3 +130,36 @@ test("the collector runs scripts/dev/otel/config.yaml, mounted as a read-only di
   assert.match(text, /endpoint: 0\.0\.0\.0:4318/);
   assert.match(text, /exporters: \[debug\]/);
 });
+
+// #359: Knowledge's media store (Garage), started only with the "media" profile.
+const media = render(["media"]);
+const garage = media.services.garage;
+const garageInit = media.services["garage-init"];
+
+test("Garage is off in `pnpm dev`: only the media profile starts it, with a setup step for its bucket", () => {
+  assert.equal(config.services.garage, undefined);
+  assert.ok(garage, "the media profile has a garage service");
+  assert.deepEqual(garage.profiles, ["media"]);
+  assert.deepEqual(garageInit.profiles, ["media"]);
+  assert.equal(garageInit.environment.GARAGE_BUCKET, "knowledge-media");
+  assert.equal(garageInit.environment.GARAGE_ADMIN_TOKEN, garage.environment.GARAGE_ADMIN_TOKEN);
+  assert.match(garageInit.environment.GARAGE_KEY_ID, /^GK[0-9a-f]{24}$/);
+  assert.match(garageInit.environment.GARAGE_SECRET_KEY, /^[0-9a-f]{64}$/);
+  assert.match(garage.environment.GARAGE_RPC_SECRET, /^[0-9a-f]{64}$/);
+  assert.ok(garageInit.volumes.some((v) => v.target === "/init.sh" && v.source.endsWith("scripts/dev/garage/init.sh")));
+});
+
+test("Garage is pinned, limited, and published on 127.0.0.1 only (S3 port only)", () => {
+  assert.match(garage.image, /^dxflrs\/garage:v\d+\.\d+\.\d+$/, "an exact release");
+  assert.match(garageInit.image, /^curlimages\/curl:\d+\.\d+\.\d+$/, "an exact release");
+  for (const s of [garage, garageInit]) {
+    assert.ok(s.mem_limit, "mem_limit is set");
+    assert.ok(Number(s.cpus) > 0, "cpus is set");
+  }
+  assert.deepEqual(
+    garage.ports.map((p) => [p.host_ip, p.published, p.target]),
+    [["127.0.0.1", "59000", 3900]],
+  );
+  const data = garage.volumes.find((v) => v.target === "/var/lib/garage");
+  assert.ok(data && data.type === "volume" && data.source === "garage_data", "its data is the garage_data volume");
+});

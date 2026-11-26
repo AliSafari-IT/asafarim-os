@@ -9,7 +9,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.1.8",
+  version: "0.1.9",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   // Live since #361. The dev gateway is generated from this; production routes it through
@@ -47,6 +47,9 @@ export default defineApp({
       "/search",
       "/topics/**",
       "/api/public/**",
+      // Uploaded media (#359): the app answers each request itself, public only while a public revision uses the
+      // asset and otherwise only for a signed-in person who may see it (lib/media/assets.ts), 404 to anyone else.
+      "/media/**",
       "/health/live",
       "/health/ready",
     ],
@@ -111,8 +114,9 @@ export default defineApp({
     // as Flow and Docs do for all their pages and actions.
     { path: "/studio/**", methods: ["GET", "HEAD"], permission: "knowledge.content.create" },
   ],
-  // Names only: values never appear in a manifest. Optional: without it the AI assistance is off (#360).
-  secrets: ["KNOWLEDGE_AI_API_KEY"],
+  // Names only: values never appear in a manifest. Optional: without the first the AI assistance is off (#360);
+  // without the media store's keys uploads are off (#359).
+  secrets: ["KNOWLEDGE_AI_API_KEY", "KNOWLEDGE_MEDIA_ACCESS_KEY", "KNOWLEDGE_MEDIA_SECRET_KEY"],
   ui: {
     glyph: "KN",
     color: "#0e7490",

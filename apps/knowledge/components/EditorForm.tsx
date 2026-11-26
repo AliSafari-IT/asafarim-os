@@ -16,6 +16,8 @@ import { autosaveAction, saveDraftAction, type AutosaveResult, type SaveState } 
 import { AiPanel } from "@/components/AiPanel";
 import { Callout } from "@/lib/callout";
 import { Mermaid } from "@/lib/mermaid-node";
+import { AttachmentNode, ImageNode, uploadFile, VideoNode } from "@/lib/media-nodes";
+import { MEDIA_TYPES, parseVideoUrl } from "@/lib/media/validate";
 import { safeHref, type Doc } from "@/lib/doc";
 import { ERRORS } from "@/lib/messages";
 
@@ -30,6 +32,8 @@ export interface EditorFormProps {
   canEdit: boolean;
   /** AI assistance is configured and the person holds knowledge.ai.use. */
   aiEnabled: boolean;
+  /** The media store is configured (#359): uploads are offered. Videos need no store. */
+  mediaEnabled?: boolean;
   /** Milliseconds of quiet before an autosave (#372); tests shorten it. */
   autosaveDelay?: number;
 }
@@ -59,7 +63,113 @@ export const LANGUAGES = [
   "yaml",
 ];
 
-function Toolbar({ editor }: { editor: Editor }) {
+/**
+ * Media tools (#359): upload an image or PDF (straight to the store, checked by the server, then inserted), and
+ * embed a video by its YouTube or Vimeo address. Status and errors are announced in place, never in a dialog.
+ */
+function MediaTools({ editor, uploads }: { editor: Editor; uploads: boolean }) {
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ bad: boolean; text: string } | null>(null);
+  const [videoOpen, setVideoOpen] = useState(false);
+  const [address, setAddress] = useState("");
+
+  const onFile = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true);
+    setMessage({ bad: false, text: `Uploading ${file.name}…` });
+    try {
+      const r = await uploadFile(file);
+      if (!r.ok) return setMessage({ bad: true, text: ERRORS[r.error] ?? r.error });
+      if (r.asset.kind === "image") editor.chain().focus().insertImage({ asset: r.asset.id }).run();
+      else editor.chain().focus().insertAttachment({ asset: r.asset.id, label: r.asset.filename }).run();
+      setMessage({
+        bad: false,
+        text: r.asset.kind === "image" ? "Image added. Write its alt text below the image." : "File added.",
+      });
+    } catch {
+      setMessage({ bad: true, text: ERRORS.media_not_uploaded! });
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
+
+  const addVideo = () => {
+    const v = parseVideoUrl(address);
+    if (!v) return setMessage({ bad: true, text: ERRORS.video_invalid! });
+    editor.chain().focus().insertVideo({ provider: v.provider, videoId: v.id }).run();
+    setAddress("");
+    setVideoOpen(false);
+    setMessage({ bad: false, text: "Video added. Give it a title." });
+  };
+
+  return (
+    <>
+      {uploads ? (
+        <>
+          <input
+            ref={fileInput}
+            type="file"
+            style={{ display: "none" }}
+            accept={Object.keys(MEDIA_TYPES).join(",")}
+            onChange={(e) => onFile(e.target.files?.[0])}
+            data-testid="media-file"
+          />
+          <button
+            type="button"
+            className="tool"
+            disabled={busy}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => fileInput.current?.click()}
+            title="Upload an image (PNG, JPEG, GIF, WebP) or a PDF"
+          >
+            {busy ? "Uploading…" : "Image / file"}
+          </button>
+        </>
+      ) : null}
+      <button
+        type="button"
+        className={videoOpen ? "tool active" : "tool"}
+        aria-expanded={videoOpen}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setVideoOpen((o) => !o)}
+        title="Embed a YouTube or Vimeo video"
+      >
+        Video
+      </button>
+      {videoOpen ? (
+        <span className="inline">
+          <label>
+            <span className="visually-hidden">YouTube or Vimeo address</span>
+            <input
+              value={address}
+              placeholder="https://www.youtube.com/watch?v=…"
+              onChange={(e) => setAddress(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addVideo();
+                }
+              }}
+              data-testid="video-address"
+            />
+          </label>
+          <button type="button" className="tool" onClick={addVideo} data-testid="video-add">
+            Add
+          </button>
+        </span>
+      ) : null}
+      {message ? (
+        <span className={message.bad ? "notice bad" : "muted"} role={message.bad ? "alert" : "status"}>
+          {message.text}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+function Toolbar({ editor, mediaEnabled }: { editor: Editor; mediaEnabled: boolean }) {
   const s = useEditorState({
     editor,
     selector: ({ editor: e }) => ({
@@ -151,6 +261,8 @@ function Toolbar({ editor }: { editor: Editor }) {
         </>
       ) : null}
       <span className="sep" />
+      <MediaTools editor={editor} uploads={mediaEnabled} />
+      <span className="sep" />
       {b("Undo", false, () => chain().undo().run())}
       {b("Redo", false, () => chain().redo().run())}
     </div>
@@ -175,6 +287,9 @@ export function EditorForm(props: EditorFormProps) {
       TableKit.configure({ table: { resizable: false } }),
       Callout,
       Mermaid,
+      ImageNode,
+      AttachmentNode,
+      VideoNode,
       Markdown,
     ],
     ...(props.doc ? { content: props.doc } : { content: props.markdown, contentType: "markdown" as const }),
@@ -249,7 +364,7 @@ export function EditorForm(props: EditorFormProps) {
       <span className="field-label" id="body-label">
         Body
       </span>
-      {editor && props.canEdit ? <Toolbar editor={editor} /> : null}
+      {editor && props.canEdit ? <Toolbar editor={editor} mediaEnabled={props.mediaEnabled ?? false} /> : null}
       <div className="editor-frame" aria-labelledby="body-label">
         <EditorContent editor={editor} />
       </div>

@@ -9,5 +9,10 @@ export default defineConfig({
       "server-only": path.resolve(import.meta.dirname, "test/server-only.ts"),
     },
   },
-  test: { include: ["test/**/*.test.ts"] },
+  test: {
+    include: ["test/**/*.test.ts"],
+    // test/routes.test.ts imports each page on first use; the first import transforms the app's whole module graph,
+    // which under CI's parallel `pnpm test` can pass the 5 s default.
+    testTimeout: 20_000,
+  },
 });
