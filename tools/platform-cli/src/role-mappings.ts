@@ -76,6 +76,9 @@ export function formatMappings(list: ListedMapping[]): string[] {
   return [line(header), ...rows.map(line)];
 }
 
+/** A change whose answer was lost: core-api may or may not have made it. */
+const UNKNOWN = "If core-api received the request, it may have made the change: run `platform role mappings` to check.";
+
 export async function roleMappingCommand(
   args: string[],
   root: string,
@@ -101,7 +104,7 @@ export async function roleMappingCommand(
       target: p.target,
     });
     if (!r.ok) {
-      const nothing = "No mapping was created.";
+      const nothing = "unreachable" in r ? UNKNOWN : "No mapping was created.";
       if (!("unreachable" in r) && r.error === "role_not_found")
         return { ok: false, lines: [`core-api refused: ${r.message ?? "no such role"}.`, nothing] };
       return { ok: false, lines: commonRefusal(r, "", nothing).filter(Boolean) };
@@ -111,13 +114,13 @@ export async function roleMappingCommand(
     return {
       ok: true,
       lines: [
-        `Mapping ${id}: whoever holds ${p.source} now also holds ${p.target} (${n} ${n === 1 ? "person" : "people"} got it now).`,
+        `Mapping ${id}: whoever holds ${p.source} now also holds ${p.target} (${n} new derived grant${n === 1 ? "" : "s"}).`,
       ],
     };
   }
   const r = await request(target, "DELETE", `/admin/v1/role-mappings/${p.id}`, fetchImpl);
   if (!r.ok) {
-    const nothing = "Nothing was deleted.";
+    const nothing = "unreachable" in r ? UNKNOWN : "Nothing was deleted.";
     if (!("unreachable" in r) && r.error === "not_found")
       return { ok: false, lines: [`core-api has no role mapping ${p.id}.`, nothing] };
     return { ok: false, lines: commonRefusal(r, "", nothing).filter(Boolean) };

@@ -181,6 +181,7 @@ describe.skipIf(!ADMIN_URL)("role mappings (integration)", () => {
         headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
+    await registry.grantRole("core.admin", "ann", ADMIN); // already hers from the first test: a no-op then
     await registry.grantRole("core.admin", "hal", ADMIN);
     const created = await call("POST", "/admin/v1/role-mappings", { source: "core.admin", target: "knowledge.author" });
     expect(created.status).toBe(201);
@@ -191,7 +192,7 @@ describe.skipIf(!ADMIN_URL)("role mappings (integration)", () => {
     expect(list.mappings.find((x) => x.id === id)).toMatchObject({
       source: "core.admin",
       target: "knowledge.author",
-      derivedGrants: 2, // ann (from the first test) and hal
+      derivedGrants: 2, // ann and hal
     });
     expect((await call("POST", "/admin/v1/role-mappings", { source: "core.admin", target: "core.admin" })).status).toBe(
       400,

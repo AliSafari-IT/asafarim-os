@@ -65,7 +65,7 @@ describe("role mappings: replies", () => {
     const r = await roleMappingCommand(["map", "core.admin", "knowledge.author"], workspace(), ENV, f);
     expect(r).toEqual({
       ok: true,
-      lines: ["Mapping 3: whoever holds core.admin now also holds knowledge.author (1 person got it now)."],
+      lines: ["Mapping 3: whoever holds core.admin now also holds knowledge.author (1 new derived grant)."],
     });
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
     expect([url, init.method, init.body]).toEqual([
@@ -93,5 +93,19 @@ describe("role mappings: replies", () => {
       ok: false,
       lines: ["core-api refused: bad_request (a mapping can't grant a core role)", "No mapping was created."],
     });
+  });
+
+  it("a lost answer doesn't claim nothing changed: it says to check", async () => {
+    const lost = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+    for (const args of [
+      ["map", "core.admin", "knowledge.author"],
+      ["unmap", "3"],
+    ]) {
+      const r = await roleMappingCommand(args, workspace(), ENV, lost);
+      expect(r?.ok).toBe(false);
+      expect(r?.lines.at(-1)).toMatch(/may have made the change: run `platform role mappings`/);
+    }
   });
 });

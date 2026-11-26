@@ -110,7 +110,7 @@ export async function mapRole(formData: FormData) {
       throw new CoreApiError(400, "bad_request", "Pick a source role and a target role.");
     const out = await api.createRoleMapping(source, target);
     const n = out.derivedGrants;
-    return `Everyone who holds ${source} now holds ${target} too (${n} ${n === 1 ? "person" : "people"} now).`;
+    return `Everyone who holds ${source} now holds ${target} too (${n} new derived grant${n === 1 ? "" : "s"}).`;
   });
 }
 
