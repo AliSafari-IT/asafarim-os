@@ -24,6 +24,9 @@
  *   GET  /admin/v1/events                        the event catalog: publisher, schema, subscribers (P4.2)
  *   GET  /admin/v1/roles[?app=<id>]              roles, permissions, holders, what needs migrating
  *   GET  /admin/v1/roles/<role>/grants           who holds a role
+ *   GET  /admin/v1/role-mappings                 the admin-configured role mappings (#355, ADR 0004)
+ *   POST /admin/v1/role-mappings                 body {source, target}: whoever holds source also holds target
+ *   DELETE /admin/v1/role-mappings/<id>          only the grants derived from it go
  *   GET  /admin/v1/subjects/<sub>/grants         what a person holds
  *   GET  /admin/v1/audit[?app=&actor=&action=&involving=&since=&until=&limit=&before=]
  *                                                the audit log, newest first (action: exact, or a kind ending in ".")
@@ -182,6 +185,8 @@ const ROUTES: readonly [RegExp, string][] = (
     [`/admin/v1/roles/${ROLE}/grants`, "/admin/v1/roles/:role/grants"],
     [`/admin/v1/roles/${ROLE}/grants/${SUB}`, "/admin/v1/roles/:role/grants/:sub"],
     [`/admin/v1/subjects/${SUB}/grants`, "/admin/v1/subjects/:sub/grants"],
+    ["/admin/v1/role-mappings", "/admin/v1/role-mappings"],
+    ["/admin/v1/role-mappings/\\d{1,18}", "/admin/v1/role-mappings/:id"],
     ["/admin/v1/audit", "/admin/v1/audit"],
     ["/admin/v1/audit/summary", "/admin/v1/audit/summary"],
     ["/admin/v1/status", "/admin/v1/status"],
@@ -515,6 +520,35 @@ export function createHandler(opts: {
               routes: a.manifest.routes ?? [],
             })),
           });
+        }
+        if (p === "/admin/v1/role-mappings" && req.method === "GET") {
+          return json(res, 200, { mappings: await opts.registry.roleMappings() });
+        }
+        if (p === "/admin/v1/role-mappings" && req.method === "POST") {
+          let body: unknown;
+          try {
+            body = JSON.parse(await readBody(req));
+          } catch {
+            throw new ApiError("bad_request", "the body must be JSON: {source, target}");
+          }
+          const { source, target } = (body ?? {}) as { source?: unknown; target?: unknown };
+          const ROLE_KEY = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
+          if (
+            typeof source !== "string" ||
+            typeof target !== "string" ||
+            !ROLE_KEY.test(source) ||
+            !ROLE_KEY.test(target)
+          )
+            throw new ApiError("bad_request", "source and target must be role keys, like core.admin");
+          const out = await opts.registry.createRoleMapping(source, target, actor);
+          log({ msg: "role.mapped", id: out.id, source, target, actor });
+          return json(res, 201, out);
+        }
+        m = /^\/admin\/v1\/role-mappings\/(\d{1,18})$/.exec(p);
+        if (m && req.method === "DELETE") {
+          const out = await opts.registry.deleteRoleMapping(Number(m[1]), actor);
+          log({ msg: "role.unmapped", id: out.id, actor });
+          return json(res, 200, out);
         }
         m = /^\/admin\/v1\/roles\/([a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+)\/grants\/([^/]{1,400})$/.exec(p);
         if (m && (req.method === "PUT" || req.method === "DELETE")) {

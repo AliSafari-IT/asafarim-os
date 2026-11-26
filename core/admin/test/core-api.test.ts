@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CoreApiError, coreApi } from "../lib/core-api";
+import { CoreApiError, coreApi, derivedFrom } from "../lib/core-api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -66,6 +66,22 @@ describe("the console's core-api client", () => {
     await coreApi("t").audit();
     expect(lastCall(fn).url).toBe("http://core.test/admin/v1/audit?");
 
+    fn = stub(200, { mappings: [] });
+    expect(await coreApi("t").roleMappings()).toEqual([]);
+    expect(lastCall(fn).url).toBe("http://core.test/admin/v1/role-mappings");
+    fn = stub(201, { id: 7, source: "core.admin", target: "notes.editor", derivedGrants: 2 });
+    await coreApi("t").createRoleMapping("core.admin", "notes.editor");
+    expect(lastCall(fn)).toMatchObject({
+      url: "http://core.test/admin/v1/role-mappings",
+      init: { method: "POST", body: '{"source":"core.admin","target":"notes.editor"}' },
+    });
+    fn = stub(200, { id: 7, removedGrants: 2 });
+    await coreApi("t").deleteRoleMapping(7);
+    expect(lastCall(fn)).toMatchObject({
+      url: "http://core.test/admin/v1/role-mappings/7",
+      init: { method: "DELETE" },
+    });
+
     fn = stub(200, { roles: [] });
     await coreApi("t").roles("notes");
     expect(lastCall(fn).url).toBe("http://core.test/admin/v1/roles?app=notes");
@@ -117,5 +133,14 @@ describe("the console's core-api client", () => {
       .catch((e) => e);
     expect(err).toMatchObject({ status: 0, code: "unreachable" });
     expect(String(err.message)).not.toContain("10.0.0.5");
+  });
+});
+
+describe("derivedFrom", () => {
+  it("reads the mapping id from a derived grant's granted_by, and nothing else", () => {
+    expect(derivedFrom("mapping:12")).toBe(12);
+    expect(derivedFrom("user:dev-owner")).toBeNull();
+    expect(derivedFrom("mapping:")).toBeNull();
+    expect(derivedFrom("mapping:1x")).toBeNull();
   });
 });

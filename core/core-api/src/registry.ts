@@ -37,6 +37,7 @@ import {
 } from "./event-plumbing.ts";
 import { DEFAULT_RETENTION_DAYS, purgeAfter, type BackupFile, type DatabaseBackups } from "./backup.ts";
 import { adminTile, launcherFor, type LauncherApp } from "./launcher.ts";
+import { isDerived, listMappings, lockMappings, reconcile, type DerivedChange } from "./role-mappings.ts";
 import {
   appDatabaseNames,
   dropDatabaseAndRole,
@@ -734,6 +735,7 @@ export function createRegistry(deps: RegistryDeps) {
    * The writes: state `removed`, `removed_at`, and with a backup its row in `app_backups`, `backup_id`
    * and `purge_after` (removed_at + `retentionDays`); every credential revoked (it can't register,
    * upload schemas, get a token or connect to the bus); its event subscriptions and schemas deleted;
+   * the role mappings naming its roles deleted (and the grants they derived elsewhere reconciled, #355),
    * the grants of its roles deleted, its roles and permissions deprecated (the rows stay for their
    * foreign keys; a reinstall + registration restores them, as an upgrade does, with no grant carried
    * over). The database itself is kept until `purge`. Its OIDC client is not touched here.
@@ -788,11 +790,27 @@ export function createRegistry(deps: RegistryDeps) {
         "DELETE FROM event_schemas WHERE app_id = $1 RETURNING event_type",
         [appId],
       );
+      // Its role mappings (#355) go first, and the grants they derived in other apps are reconciled away.
+      await lockMappings(c);
+      const mappings = (
+        await c.query<{ id: string; source_role: string; target_role: string }>(
+          `DELETE FROM role_mappings m USING roles r
+            WHERE (r.key = m.source_role OR r.key = m.target_role) AND r.app_id = $1
+            RETURNING m.id, m.source_role, m.target_role`,
+          [appId],
+        )
+      ).rows;
       const grants = await c.query<{ role_key: string; subject: string }>(
         `DELETE FROM role_grants g USING roles r WHERE r.key = g.role_key AND r.app_id = $1
            RETURNING g.role_key, g.subject`,
         [appId],
       );
+      for (const subject of await subjectsDerivedFrom(
+        c,
+        mappings.map((m) => Number(m.id)),
+      )) {
+        await auditDerived(c, await reconcile(c, subject));
+      }
       await c.query(
         "UPDATE roles SET deprecated_at = now(), updated_at = now() WHERE app_id = $1 AND deprecated_at IS NULL",
         [appId],
@@ -808,6 +826,13 @@ export function createRegistry(deps: RegistryDeps) {
           .map((g) => ({ role: g.role_key, subject: g.subject }))
           .sort((a, b) => a.role.localeCompare(b.role) || a.subject.localeCompare(b.subject)),
         removedEventSchemas: schemas.rows.map((x) => x.event_type).sort(),
+        ...(mappings.length
+          ? {
+              removedRoleMappings: mappings
+                .map((m) => ({ id: Number(m.id), source: m.source_role, target: m.target_role }))
+                .sort((x, y) => x.id - y.id),
+            }
+          : {}),
         removedAt: removedAt.toISOString(),
         backup,
         purgeAfter: purgeAt?.toISOString() ?? null,
@@ -1061,29 +1086,166 @@ export function createRegistry(deps: RegistryDeps) {
     return { subject, apps: tiles };
   }
 
-  /** Admin: give a subject a role (an app's declared role). Idempotent; audited. */
+  /** Audit what a reconciliation (role-mappings.ts) added or removed. */
+  async function auditDerived(c: pg.PoolClient, changes: DerivedChange[]) {
+    for (const d of changes) await audit(c, d.via, d.action, d.appId, { role: d.role, subject: d.subject, via: d.via });
+  }
+
+  /**
+   * Admin: give a subject a role (an app's declared role). Idempotent; audited. A role held through a
+   * mapping becomes a deliberate grant (it then outlives the mapping). Then the subject's derived grants
+   * are reconciled, as this role may be a mapping's source (#355).
+   */
   async function grantRole(roleKey: string, subject: string, actor: string) {
     return inTx(async (c) => {
+      await lockMappings(c);
       const role = (await c.query("SELECT app_id FROM roles WHERE key = $1 AND deprecated_at IS NULL", [roleKey]))
         .rows[0];
       if (!role) throw new ApiError("role_not_found", `no active role "${roleKey}"`);
-      const r = await c.query(
-        "INSERT INTO role_grants (role_key, subject, granted_by) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-        [roleKey, subject, actor],
-      );
-      if (r.rowCount) await audit(c, actor, "role.granted", role.app_id, { role: roleKey, subject });
-      return { role: roleKey, subject, granted: (r.rowCount ?? 0) > 0 };
+      const held = (
+        await c.query<{ granted_by: string }>(
+          "SELECT granted_by FROM role_grants WHERE role_key = $1 AND subject = $2 FOR UPDATE",
+          [roleKey, subject],
+        )
+      ).rows[0];
+      let granted = false;
+      if (!held) {
+        await c.query("INSERT INTO role_grants (role_key, subject, granted_by) VALUES ($1, $2, $3)", [
+          roleKey,
+          subject,
+          actor,
+        ]);
+        await audit(c, actor, "role.granted", role.app_id, { role: roleKey, subject });
+        granted = true;
+      } else if (isDerived(held.granted_by)) {
+        await c.query(
+          "UPDATE role_grants SET granted_by = $3, granted_at = now() WHERE role_key = $1 AND subject = $2",
+          [roleKey, subject, actor],
+        );
+        await audit(c, actor, "role.granted", role.app_id, { role: roleKey, subject, was: held.granted_by });
+        granted = true;
+      }
+      await auditDerived(c, await reconcile(c, subject));
+      return { role: roleKey, subject, granted };
     });
   }
 
+  /**
+   * Admin: take a deliberate grant back. A derived one (held through a mapping) is refused: revoke its
+   * source or delete the mapping, or the next reconciliation would put it back (ADR 0004 rule 8). Revoking a
+   * deliberate grant that a mapping still entitles leaves a derived one.
+   */
   async function revokeRole(roleKey: string, subject: string, actor: string) {
     return inTx(async (c) => {
+      await lockMappings(c);
       const role = (await c.query("SELECT app_id FROM roles WHERE key = $1", [roleKey])).rows[0];
       if (!role) throw new ApiError("role_not_found", `no role "${roleKey}"`);
-      const r = await c.query("DELETE FROM role_grants WHERE role_key = $1 AND subject = $2", [roleKey, subject]);
-      if (r.rowCount) await audit(c, actor, "role.revoked", role.app_id, { role: roleKey, subject });
-      return { role: roleKey, subject, revoked: (r.rowCount ?? 0) > 0 };
+      const held = (
+        await c.query<{ granted_by: string }>(
+          "SELECT granted_by FROM role_grants WHERE role_key = $1 AND subject = $2 FOR UPDATE",
+          [roleKey, subject],
+        )
+      ).rows[0];
+      if (held && isDerived(held.granted_by)) {
+        throw new ApiError(
+          "invalid_state",
+          `${subject} holds ${roleKey} through ${held.granted_by}: revoke the role it maps from, or delete the mapping`,
+          { via: held.granted_by },
+        );
+      }
+      if (held) {
+        await c.query("DELETE FROM role_grants WHERE role_key = $1 AND subject = $2", [roleKey, subject]);
+        await audit(c, actor, "role.revoked", role.app_id, { role: roleKey, subject });
+      }
+      await auditDerived(c, await reconcile(c, subject));
+      return { role: roleKey, subject, revoked: Boolean(held) };
     });
+  }
+
+  /**
+   * Admin: map `source` to `target` (#355, ADR 0004). Both must be active roles, the target can't be a
+   * core role, and the pair is new. Every direct holder of the source gets the target at once.
+   */
+  async function createRoleMapping(source: string, target: string, actor: string) {
+    if (source === target) throw new ApiError("bad_request", "a role can't map to itself");
+    if (target.startsWith(`${BUILT_IN_APP}.`)) {
+      throw new ApiError("bad_request", `a mapping can't grant a ${BUILT_IN_APP} role`);
+    }
+    return inTx(async (c) => {
+      await lockMappings(c);
+      const roles = (
+        await c.query<{ key: string; app_id: string }>(
+          "SELECT key, app_id FROM roles WHERE key = ANY($1::text[]) AND deprecated_at IS NULL",
+          [[source, target]],
+        )
+      ).rows;
+      for (const key of [source, target]) {
+        if (!roles.some((r) => r.key === key)) throw new ApiError("role_not_found", `no active role "${key}"`);
+      }
+      const inserted = (
+        await c.query<{ id: string }>(
+          `INSERT INTO role_mappings (source_role, target_role, created_by) VALUES ($1, $2, $3)
+             ON CONFLICT (source_role, target_role) DO NOTHING RETURNING id`,
+          [source, target, actor],
+        )
+      ).rows[0];
+      if (!inserted) throw new ApiError("invalid_state", `${source} already maps to ${target}`);
+      const id = Number(inserted.id);
+      const targetApp = roles.find((r) => r.key === target)!.app_id;
+      await audit(c, actor, "role.mapped", targetApp, { id, source, target });
+      const holders = (
+        await c.query<{ subject: string }>(
+          "SELECT subject FROM role_grants WHERE role_key = $1 AND granted_by NOT LIKE 'mapping:%' ORDER BY subject",
+          [source],
+        )
+      ).rows;
+      let derived = 0;
+      for (const h of holders) {
+        const changes = await reconcile(c, h.subject);
+        derived += changes.filter((x) => x.action === "role.granted").length;
+        await auditDerived(c, changes);
+      }
+      return { id, source, target, derivedGrants: derived };
+    });
+  }
+
+  /** Admin: delete a mapping. Only grants derived from it go; another mapping's or a deliberate grant stays. */
+  async function deleteRoleMapping(id: number, actor: string) {
+    return inTx(async (c) => {
+      await lockMappings(c);
+      const m = (
+        await c.query<{ source_role: string; target_role: string; app_id: string }>(
+          `SELECT m.source_role, m.target_role, r.app_id FROM role_mappings m JOIN roles r ON r.key = m.target_role
+            WHERE m.id = $1 FOR UPDATE OF m`,
+          [id],
+        )
+      ).rows[0];
+      if (!m) throw new ApiError("not_found", `no role mapping ${id}`);
+      const subjects = await subjectsDerivedFrom(c, [id]);
+      await c.query("DELETE FROM role_mappings WHERE id = $1", [id]);
+      await audit(c, actor, "role.unmapped", m.app_id, { id, source: m.source_role, target: m.target_role });
+      let removed = 0;
+      for (const subject of subjects) {
+        const changes = await reconcile(c, subject);
+        removed += changes.filter((x) => x.action === "role.revoked").length;
+        await auditDerived(c, changes);
+      }
+      return { id, source: m.source_role, target: m.target_role, removedGrants: removed };
+    });
+  }
+
+  async function subjectsDerivedFrom(c: pg.PoolClient, ids: number[]): Promise<string[]> {
+    if (!ids.length) return [];
+    return (
+      await c.query<{ subject: string }>(
+        "SELECT DISTINCT subject FROM role_grants WHERE granted_by = ANY($1::text[]) ORDER BY subject",
+        [ids.map((i) => `mapping:${i}`)],
+      )
+    ).rows.map((r) => r.subject);
+  }
+
+  async function roleMappings() {
+    return listMappings(deps.pool);
   }
 
   async function get(appId: string) {
@@ -1118,6 +1280,9 @@ export function createRegistry(deps: RegistryDeps) {
     launcherForSubject,
     grantRole,
     revokeRole,
+    createRoleMapping,
+    deleteRoleMapping,
+    roleMappings,
   };
 }
 

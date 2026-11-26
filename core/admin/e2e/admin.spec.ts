@@ -7,6 +7,7 @@
  *   the Status page shows core-api, notes and the external-app fixture up (P6.1, #87) →
  *   grants notes.editor to the member → the member's launcher shows Notes and they can write →
  *   the admin deactivates notes → it disappears from the launcher and isn't polled any more →
+ *   a role mapping core.admin → notes.editor shows the derived holder without Revoke, and deleting it takes it away (#355) →
  *   every admin action is in the audit log under the admin's own name →
  *   removing a throwaway app needs its id typed into the dialog, then it shows as removed (#68) →
  *   keyboard, labels and light/dark checks on the console.
@@ -33,6 +34,11 @@ async function cli(method: string, path: string) {
 }
 const grant = (role: string, sub: string) => cli("PUT", `/admin/v1/roles/${role}/grants/${sub}`);
 const revoke = (role: string, sub: string) => cli("DELETE", `/admin/v1/roles/${role}/grants/${sub}`);
+/** Re-runnable: no role mappings left over from an earlier run (#355). */
+async function deleteAllMappings() {
+  const { body } = await cli("GET", "/admin/v1/role-mappings");
+  for (const m of (body.mappings ?? []) as { id: number }[]) await cli("DELETE", `/admin/v1/role-mappings/${m.id}`);
+}
 
 /** What notes (an app) gets from core-api's launcher endpoint for a person: the same signed call the SDK makes. */
 async function launcherFor(sub: string): Promise<string[]> {
@@ -92,6 +98,7 @@ test.beforeAll(async ({ browser }) => {
   await revoke("core.admin", "dev-member");
   await revoke("notes.editor", "dev-member");
   await revoke("notes.viewer", "dev-member");
+  await deleteAllMappings();
   await cli("POST", "/admin/v1/apps/notes/deactivate");
   startId =
     (
@@ -104,6 +111,7 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
+  await deleteAllMappings();
   await revoke("notes.viewer", "dev-admin");
   await revoke("notes.editor", "dev-member");
   await cli("POST", "/admin/v1/apps/notes/deactivate");
@@ -415,6 +423,34 @@ test("revoking asks first, then takes the role away", async () => {
   await page.close();
 });
 
+test("a role mapping gives its target to the source's holders, and deleting it takes that away", async () => {
+  const page = await adminCtx.newPage();
+  await page.goto(`${ADMIN}/admin/roles?app=notes`);
+  await expect(page.getByTestId("no-mappings")).toBeVisible();
+  const form = page.getByRole("form", { name: "Add a role mapping" });
+  await form.getByLabel("Whoever holds").selectOption("core.admin");
+  // A mapping never gives a core role: none is offered as a target.
+  await expect(form.getByLabel("also holds").locator("option", { hasText: /^core\./ })).toHaveCount(0);
+  await form.getByLabel("also holds").selectOption("notes.editor");
+  await form.getByRole("button", { name: "Add mapping" }).click();
+  await expect(page.getByTestId("flash-notice")).toContainText("Everyone who holds core.admin now holds notes.editor");
+  await expect(page.getByTestId("mapping-core.admin-notes.editor")).toBeVisible();
+  // dev-admin holds core.admin, so now notes.editor too: shown as derived, with no Revoke.
+  const derived = page.getByTestId("holder-notes.editor-dev-admin");
+  await expect(derived).toContainText("through core.admin");
+  await expect(page.getByRole("button", { name: "Revoke notes.editor from dev-admin" })).toHaveCount(0);
+  await page.screenshot({ path: `${SHOTS}/a8b-role-mapping.png`, fullPage: true });
+
+  await page.getByRole("button", { name: "Delete the mapping core.admin to notes.editor" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete the mapping core.admin → notes.editor?" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByTestId("flash-notice")).toContainText("1 derived grant removed");
+  await expect(page.getByTestId("holder-notes.editor-dev-admin")).toHaveCount(0);
+  await expect(page.getByTestId("no-mappings")).toBeVisible();
+  await page.close();
+});
+
 test("every admin action is in the audit log under the admin's own name", async () => {
   const page = await adminCtx.newPage();
   await page.goto(`${ADMIN}/admin/audit`);
@@ -435,11 +471,12 @@ test("every admin action is in the audit log under the admin's own name", async 
   const actors = await page.getByTestId("audit-actor").allTextContents();
   expect(actors.every((a) => a === "user:dev-admin")).toBe(true);
   const actions = await page.getByTestId("audit-action").allTextContents();
-  for (const wanted of ["app.activated", "role.granted", "app.deactivated", "role.revoked"])
+  for (const wanted of ["app.activated", "role.granted", "app.deactivated", "role.revoked", "role.mapped"])
     expect(actions).toContain(wanted);
   await page.screenshot({ path: `${SHOTS}/a9-audit.png` });
 
-  // And the log itself (core-api), exactly: since this run began, these four, in order, all by user:dev-admin.
+  // And the log itself (core-api), exactly: since this run began, these six, in order, all by user:dev-admin.
+  // (The mapping's own derived grant and revoke are written under mapping:<id>, not the admin.)
   const log = (await (
     await fetch(`${CORE_API}/admin/v1/audit?limit=200`, { headers: { authorization: `Bearer ${TOKEN}` } })
   ).json()) as {
@@ -451,6 +488,8 @@ test("every admin action is in the audit log under the admin's own name", async 
     "role.granted:notes", // the granted-twice request wrote nothing: a repeat grant changes nothing
     "app.deactivated:notes",
     "role.revoked:notes",
+    "role.mapped:notes",
+    "role.unmapped:notes",
   ]);
   await page.close();
 });

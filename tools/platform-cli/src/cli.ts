@@ -40,6 +40,8 @@
  *   pnpm platform role list [--app <id>] [--json]       every declared role, its holders and permissions; read-only
  *   pnpm platform role holders <role> [--json]          who holds a role; read-only
  *   pnpm platform role held-by <subject> [--json]       every role a person holds; read-only
+ *   pnpm platform role mappings [--json] | map <source> <target> | unmap <id>
+ *                                            admin role mappings: whoever holds source also holds target (#355)
  *   pnpm platform status [--alerts] [--json]  core-api's status board (and alert history); read-only,
  *                                            exits 1 unless every polled entry is live and ready
  *   pnpm platform audit [--app <id>] [--actor <text>] [--limit <n>] [--before <id>] [--json]
@@ -61,6 +63,7 @@ import { compileCommand, validateCommand } from "./manifest.ts";
 import { composeCommand } from "./compose.ts";
 import { retentionCommand } from "./retention.ts";
 import { roleReadCommand } from "./roles.ts";
+import { roleMappingCommand } from "./role-mappings.ts";
 import { statusCommand } from "./status.ts";
 import { reviewCommand } from "./review.ts";
 import { newAppCommand } from "./scaffold.ts";
@@ -97,6 +100,9 @@ const USAGE = [
   "  platform role list [--app <id>] [--json]            every declared role with its holders and permissions",
   "  platform role holders <role> [--json]               who holds a role",
   "  platform role held-by <subject> [--json]            every role a person (identity sub) holds",
+  "  platform role mappings [--json]                     the role mappings: whoever holds A also holds B",
+  "  platform role map <source> <target>                 create one (never into a core role)",
+  "  platform role unmap <id>                            delete one; only the grants derived from it go",
   "  platform status [--alerts] [--json]                 the status board (and alert history) from core-api;",
   "                                                      exits 1 unless every polled entry is live and ready",
   "  platform audit [--app <id>] [--actor <text>] [--limit <n>] [--before <id>] [--json]",
@@ -153,6 +159,8 @@ async function main(argv: string[]): Promise<number> {
     result = await eventsCommand(rest, findRepoRoot(cwd));
   } else if (command === "role" && (rest[0] === "list" || rest[0] === "holders" || rest[0] === "held-by")) {
     result = await roleReadCommand(rest, findRepoRoot(cwd));
+  } else if (command === "role" && (rest[0] === "mappings" || rest[0] === "map" || rest[0] === "unmap")) {
+    result = await roleMappingCommand(rest, findRepoRoot(cwd));
   } else if (command === "role") {
     result = await roleCommand(rest, findRepoRoot(cwd));
   } else if (command === "app" && rest[0] === "list") {

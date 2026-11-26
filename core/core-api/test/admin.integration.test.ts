@@ -565,6 +565,23 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
     expect((await as("dev-member", "POST", `/admin/v1/apps/${LOCAL}/remove`)).status).toBe(403);
     expect((await json(await cli("GET", `/admin/v1/apps/${LOCAL}`))).state).toBe("inactive");
 
+    // A mapping from its role (#355): dev-member also holds DOCS.viewer through it, until the removal.
+    const mapped = await cli("POST", "/admin/v1/role-mappings", {
+      source: `${LOCAL}.editor`,
+      target: `${DOCS}.viewer`,
+    });
+    expect(mapped.status).toBe(201);
+    const mappingId = (await json<{ id: number }>(mapped)).id;
+    const viewers = async () =>
+      (
+        await json<{ grants: { subject: string; granted_by: string }[] }>(
+          await cli("GET", `/admin/v1/roles/${DOCS}.viewer/grants`),
+        )
+      ).grants;
+    expect(await viewers()).toContainEqual(
+      expect.objectContaining({ subject: "dev-member", granted_by: `mapping:${mappingId}` }),
+    );
+
     const res = await as("dev-admin", "POST", `/admin/v1/apps/${LOCAL}/remove`);
     expect(res.status).toBe(200);
     expect(await json(res)).toMatchObject({
@@ -573,8 +590,10 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
       previous: "inactive",
       revokedCredentials: 1,
       removedGrants: [{ role: `${LOCAL}.editor`, subject: "dev-member" }],
+      removedRoleMappings: [{ id: mappingId, source: `${LOCAL}.editor`, target: `${DOCS}.viewer` }],
       stream: "no_bus",
     });
+    expect((await viewers()).filter((g) => g.granted_by.startsWith("mapping:"))).toEqual([]);
     const apps = (
       await json<{ apps: (AppRow & { waitingForPublisher: string[] })[] }>(await cli("GET", "/admin/v1/apps"))
     ).apps;

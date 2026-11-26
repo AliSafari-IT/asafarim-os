@@ -53,7 +53,30 @@ describe("admin changes", () => {
     expect(describeChange(change("something.new")).sentence).toBe("something.new on notes.");
   });
 
-  it("flags platform-admin grants, removals and purges as sensitive, nothing else", () => {
+  it("describes role mappings and the grants they make (#355)", () => {
+    expect(
+      describeChange(change("role.mapped", { id: 3, source: "core.admin", target: "notes.editor" })),
+    ).toMatchObject({
+      kind: "roles",
+      label: "Mapped",
+      sentence: "Mapped core.admin to notes.editor: everyone who holds the first also holds the second.",
+    });
+    expect(describeChange(change("role.unmapped", { source: "core.admin", target: "notes.editor" })).sentence).toBe(
+      "Deleted the mapping core.admin to notes.editor.",
+    );
+    expect(
+      describeChange(change("role.granted", { role: "notes.editor", subject: "dev-member", via: "mapping:3" }))
+        .sentence,
+    ).toBe("Granted notes.editor to dev-member (through mapping 3).");
+    expect(
+      describeChange(change("role.revoked", { role: "notes.editor", subject: "dev-member", via: "mapping:3" }))
+        .sentence,
+    ).toBe("Revoked notes.editor from dev-member (through mapping 3).");
+    expect(isSensitiveChange(change("role.mapped", { source: "a.b", target: "c.d" }))).toBe(true);
+    expect(isSensitiveChange(change("role.unmapped"))).toBe(false);
+  });
+
+  it("flags platform-admin grants, removals and purges as sensitive (and new mappings, below), nothing else", () => {
     expect(isSensitiveChange(change("role.granted", { role: "core.admin" }))).toBe(true);
     expect(isSensitiveChange(change("role.revoked", { role: "core.admin" }))).toBe(true);
     expect(isSensitiveChange(change("app.purged"))).toBe(true);

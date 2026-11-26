@@ -249,6 +249,24 @@ pnpm platform role grant notes.editor dev-member
 pnpm platform role revoke notes.editor dev-member
 ```
 
+### Role mappings (admin; #355, ADR 0004)
+
+An admin can say "whoever holds role A also holds role B": `POST /admin/v1/role-mappings` with `{source, target}` (201), `GET /admin/v1/role-mappings` lists them with how many people hold the target through each (`derivedGrants`), `DELETE /admin/v1/role-mappings/<id>` deletes one. The rules (each tested in `test/role-mappings.integration.test.ts`):
+
+- **Exact, existing, active role keys.** No wildcards; a role can't map to itself; a pair exists once (`409 invalid_state`). An unknown or deprecated role → `404 role_not_found`.
+- **Never into core.** The target can't be a `core.*` role (`400 bad_request`, and a database check). The source can: `core.admin → knowledge.author` is the motivating case.
+- **Not transitive.** Only a role someone was granted _directly_ counts as a source.
+- **Derived grants are ordinary `role_grants` rows** with `granted_by = mapping:<id>`, kept in step in the same transaction as any grant, revoke, or mapping change. Tokens already issued keep their claims until they expire.
+- **A deliberate grant is never removed by a mapping**, and granting a role someone holds through a mapping makes it deliberate. A derived grant can't be revoked directly (`409 invalid_state`, `details.via`): revoke the source role or delete the mapping.
+- **Removing an app deletes the mappings that name its roles**, and the grants they derived.
+- **Audited:** `role.mapped` / `role.unmapped` under the admin, and each derived `role.granted` / `role.revoked` under `mapping:<id>` with `via` in the detail.
+
+```bash
+pnpm platform role map core.admin knowledge.author
+pnpm platform role mappings
+pnpm platform role unmap 1
+```
+
 ## The gateway and the access token (P3.3a)
 
 The dev gateway (Caddy, `compose.dev.yml`) puts **every request to an app's host** through core-api's `GET /authz/check` (Caddy's `forward_auth`) and only then proxies it. Local and CI only; production sites are generated separately (ADR 0001 §7).
@@ -321,6 +339,7 @@ More endpoints, for the console (all read-only except where noted; every write i
 | `GET /admin/v1/apps`                               | every app with its state (`core` first, `system: true`)                                                                                                                                                                                                        |
 | `GET /admin/v1/roles[?app=<id>]`                   | roles with their permissions, holders, and **`migrationNeeded`**: a role that still grants a permission the app no longer declares (ADR 0001 §3.4)                                                                                                             |
 | `GET /admin/v1/roles/<role>/grants`                | who holds a role                                                                                                                                                                                                                                               |
+| `GET /admin/v1/role-mappings`                      | the admin-configured role mappings with `derivedGrants`; `POST` `{source, target}` adds one, `DELETE …/<id>` deletes one (see [Role mappings](#role-mappings-admin-355-adr-0004))                                                                              |
 | `GET /admin/v1/subjects/<sub>/grants`              | what a person holds, across apps                                                                                                                                                                                                                               |
 | `GET /admin/v1/audit[?app=&actor=&limit=&before=]` | the audit log, newest first (`actor` is a case-insensitive part; `next` pages); also `action` (exact, or a kind ending in `.`: `role.`), `involving` (a subject: they did it, or `detail.subject` names them), `since` / `until` (ISO 8601, `until` exclusive) |
 | `GET /admin/v1/audit/summary[?days=14]`            | the Admin overview's counts (1–90 days): per UTC day by kind, the 12 busiest actions, the 8 busiest actors; never details                                                                                                                                      |
@@ -409,7 +428,7 @@ Every non-2xx response is JSON `{ "error": "<code>", "message": "…", "details"
 | `invalid_manifest`          | 422       | fails manifest validation (`details`: path + message per problem)                                          |
 | `namespace_violation`       | 422       | declares something outside `<id>.*`                                                                        |
 | `already_installed`         | 409       | install of an installed app                                                                                |
-| `invalid_state`             | 409       | a lifecycle change not allowed from the current state (remove, purge included)                             |
+| `invalid_state`             | 409       | a lifecycle change not allowed now (remove, purge too); a duplicate role mapping; revoking a mapped grant  |
 | `role_not_found`            | 404       | a grant or revoke names a role that doesn't exist (or is deprecated, for a grant)                          |
 | `app_inactive`              | 503       | an access token was asked for an app that isn't `active`                                                   |
 | `bus_unavailable`           | 503       | install or registration, and the app's stream or consumers couldn't be set up (P4.1)                       |
