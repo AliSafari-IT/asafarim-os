@@ -56,7 +56,13 @@ interface EventRow {
 
 function manifest(
   id: string,
-  over: { launcher?: "public" | "authenticated"; database?: "none" | "postgres"; order?: number } = {},
+  over: {
+    launcher?: "public" | "authenticated";
+    database?: "none" | "postgres";
+    order?: number;
+    /** Leave the editor role out, as an upgrade that retires it would. */
+    noEditor?: boolean;
+  } = {},
 ) {
   return {
     id,
@@ -70,7 +76,7 @@ function manifest(
     permissions: [`${id}.notes.read`, `${id}.notes.write`].map((key) => ({ key, description: key })),
     roles: [
       { key: `${id}.viewer`, grants: [`${id}.notes.read`] },
-      { key: `${id}.editor`, grants: [`${id}.notes.read`, `${id}.notes.write`] },
+      ...(over.noEditor ? [] : [{ key: `${id}.editor`, grants: [`${id}.notes.read`, `${id}.notes.write`] }]),
     ],
     ui: {
       glyph: id.slice(0, 2).toUpperCase(),
@@ -556,6 +562,54 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
     });
   });
 
+  it("a role mapping follows registration: a retired source or target derives nothing, a restored one derives again (#355)", async () => {
+    const register = async (noEditor: boolean) => {
+      const body = JSON.stringify(manifest(DOCS, { launcher: "public", order: 20, noEditor }));
+      const headers = signRegistration({ appId: DOCS, credential: credentials.get(DOCS)!, body });
+      expect((await fetch(`${base}/registry/v1/apps/${DOCS}`, { method: "POST", headers, body })).status).toBe(200);
+    };
+    const holds = async (role: string, subject: string) =>
+      (
+        await pool.query<{ granted_by: string }>(
+          "SELECT granted_by FROM role_grants WHERE role_key = $1 AND subject = $2",
+          [role, subject],
+        )
+      ).rows[0]?.granted_by ?? null;
+    const map = async (source: string, target: string) =>
+      (await json<{ id: number }>(await cli("POST", "/admin/v1/role-mappings", { source, target }))).id;
+    // DOCS.editor is a source in one mapping and a target in another.
+    await cli("PUT", `/admin/v1/roles/${DOCS}.editor/grants/map-src`);
+    await cli("PUT", `/admin/v1/roles/${NOTES}.viewer/grants/map-tgt`);
+    const asSource = await map(`${DOCS}.editor`, `${LOCAL}.viewer`);
+    const asTarget = await map(`${NOTES}.viewer`, `${DOCS}.editor`);
+    expect(await holds(`${LOCAL}.viewer`, "map-src")).toBe(`mapping:${asSource}`);
+    expect(await holds(`${DOCS}.editor`, "map-tgt")).toBe(`mapping:${asTarget}`);
+
+    // An upgrade retires DOCS.editor: neither mapping gives anything any more; the deliberate grant stays.
+    await register(true);
+    expect(await holds(`${LOCAL}.viewer`, "map-src")).toBeNull();
+    expect(await holds(`${DOCS}.editor`, "map-tgt")).toBeNull();
+    expect(await holds(`${DOCS}.editor`, "map-src")).toBe("admin");
+    // A later one restores it: both derive again, without any grant or revoke in between.
+    await register(false);
+    expect(await holds(`${LOCAL}.viewer`, "map-src")).toBe(`mapping:${asSource}`);
+    expect(await holds(`${DOCS}.editor`, "map-tgt")).toBe(`mapping:${asTarget}`);
+    const audited = (
+      await pool.query<{ actor: string; action: string }>(
+        "SELECT actor, action FROM audit_events WHERE detail->>'subject' = 'map-tgt' AND actor LIKE 'mapping:%' ORDER BY id",
+      )
+    ).rows.map((r) => `${r.action}:${r.actor}`);
+    expect(audited).toEqual([
+      `role.granted:mapping:${asTarget}`,
+      `role.revoked:mapping:${asTarget}`,
+      `role.granted:mapping:${asTarget}`,
+    ]);
+
+    for (const id of [asSource, asTarget]) await cli("DELETE", `/admin/v1/role-mappings/${id}`);
+    await cli("DELETE", `/admin/v1/roles/${DOCS}.editor/grants/map-src`);
+    await cli("DELETE", `/admin/v1/roles/${NOTES}.viewer/grants/map-tgt`);
+  });
+
   it("remove (#68): not while active, not by a non-admin; then the app is listed as removed, the gateway drops it, its grants are gone", async () => {
     // LOCAL is active (the launcher tests) and dev-member holds LOCAL.editor.
     const active = await as("dev-admin", "POST", `/admin/v1/apps/${LOCAL}/remove`);
@@ -565,6 +619,23 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
     expect((await as("dev-member", "POST", `/admin/v1/apps/${LOCAL}/remove`)).status).toBe(403);
     expect((await json(await cli("GET", `/admin/v1/apps/${LOCAL}`))).state).toBe("inactive");
 
+    // A mapping from its role (#355): dev-member also holds DOCS.viewer through it, until the removal.
+    const mapped = await cli("POST", "/admin/v1/role-mappings", {
+      source: `${LOCAL}.editor`,
+      target: `${DOCS}.viewer`,
+    });
+    expect(mapped.status).toBe(201);
+    const mappingId = (await json<{ id: number }>(mapped)).id;
+    const viewers = async () =>
+      (
+        await json<{ grants: { subject: string; granted_by: string }[] }>(
+          await cli("GET", `/admin/v1/roles/${DOCS}.viewer/grants`),
+        )
+      ).grants;
+    expect(await viewers()).toContainEqual(
+      expect.objectContaining({ subject: "dev-member", granted_by: `mapping:${mappingId}` }),
+    );
+
     const res = await as("dev-admin", "POST", `/admin/v1/apps/${LOCAL}/remove`);
     expect(res.status).toBe(200);
     expect(await json(res)).toMatchObject({
@@ -573,8 +644,10 @@ describe.skipIf(!ADMIN_URL)("the admin API and the launcher (integration)", () =
       previous: "inactive",
       revokedCredentials: 1,
       removedGrants: [{ role: `${LOCAL}.editor`, subject: "dev-member" }],
+      removedRoleMappings: [{ id: mappingId, source: `${LOCAL}.editor`, target: `${DOCS}.viewer` }],
       stream: "no_bus",
     });
+    expect((await viewers()).filter((g) => g.granted_by.startsWith("mapping:"))).toEqual([]);
     const apps = (
       await json<{ apps: (AppRow & { waitingForPublisher: string[] })[] }>(await cli("GET", "/admin/v1/apps"))
     ).apps;

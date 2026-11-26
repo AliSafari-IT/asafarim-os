@@ -101,3 +101,28 @@ export async function revokeRole(formData: FormData) {
     return revoked ? `Revoked ${role} from ${subject}.` : `${subject} didn't hold ${role}.`;
   });
 }
+
+export async function mapRole(formData: FormData) {
+  const source = formData.get("source");
+  const target = formData.get("target");
+  await perform(formData, async (api) => {
+    if (!isRoleKey(source) || !isRoleKey(target))
+      throw new CoreApiError(400, "bad_request", "Pick a source role and a target role.");
+    const out = await api.createRoleMapping(source, target);
+    const n = out.derivedGrants;
+    return `Everyone who holds ${source} now holds ${target} too (${n} new derived grant${n === 1 ? "" : "s"}).`;
+  });
+}
+
+export async function unmapRole(formData: FormData) {
+  const id = Number(formData.get("id"));
+  await perform(formData, async (api) => {
+    if (!Number.isSafeInteger(id) || id < 1) throw new CoreApiError(400, "bad_request", "That isn't a mapping.");
+    const out = await api.deleteRoleMapping(id);
+    const n = out.removedGrants;
+    return (
+      `Deleted the mapping ${out.source} → ${out.target}: ${n} derived grant${n === 1 ? "" : "s"} removed.` +
+      " Grants an administrator made stay."
+    );
+  });
+}

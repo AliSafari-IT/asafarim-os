@@ -55,6 +55,8 @@ export const CHANGE_ACTIONS = [
   "event_schemas.updated",
   "role.granted",
   "role.revoked",
+  "role.mapped",
+  "role.unmapped",
 ] as const;
 
 /** The role that runs the whole platform: granting or revoking it always deserves a look. */
@@ -66,6 +68,9 @@ export function describeChange(e: Pick<AuditEvent, "action" | "appId" | "detail"
   const role = str(d.role);
   const full = str(d.subject);
   const subject = full && shortSubject(full);
+  // A grant or revoke a role mapping made (#355): detail.via is `mapping:<id>`.
+  const via = str(d.via);
+  const through = via ? ` (through ${via.replace(":", " ")})` : "";
   switch (e.action) {
     case "app.installed":
       return {
@@ -118,14 +123,28 @@ export function describeChange(e: Pick<AuditEvent, "action" | "appId" | "detail"
         kind: "roles",
         label: "Granted",
         tone: role === CORE_ADMIN ? "warn" : "good",
-        sentence: `Granted ${role ?? "a role"} to ${subject ?? "someone"}${role === CORE_ADMIN ? ": full platform administrator" : ""}.`,
+        sentence: `Granted ${role ?? "a role"} to ${subject ?? "someone"}${through}${role === CORE_ADMIN ? ": full platform administrator" : ""}.`,
       };
     case "role.revoked":
       return {
         kind: "roles",
         label: "Revoked",
         tone: role === CORE_ADMIN ? "warn" : "info",
-        sentence: `Revoked ${role ?? "a role"} from ${subject ?? "someone"}.`,
+        sentence: `Revoked ${role ?? "a role"} from ${subject ?? "someone"}${through}.`,
+      };
+    case "role.mapped":
+      return {
+        kind: "roles",
+        label: "Mapped",
+        tone: "warn",
+        sentence: `Mapped ${str(d.source) ?? "a role"} to ${str(d.target) ?? "a role"}: everyone who holds the first also holds the second.`,
+      };
+    case "role.unmapped":
+      return {
+        kind: "roles",
+        label: "Unmapped",
+        tone: "info",
+        sentence: `Deleted the mapping ${str(d.source) ?? "a role"} to ${str(d.target) ?? "a role"}.`,
       };
     default:
       return { kind: "other", label: e.action, tone: "info", sentence: `${e.action} on ${app}.` };
@@ -134,7 +153,8 @@ export function describeChange(e: Pick<AuditEvent, "action" | "appId" | "detail"
 
 /** Changes that deserve an administrator's second look: platform-admin grants, removals and purges. */
 export function isSensitiveChange(e: Pick<AuditEvent, "action" | "detail">): boolean {
-  if (e.action === "app.removed" || e.action === "app.purged") return true;
+  // A mapping gives a role to many people in one action (ADR 0004): it deserves a look too.
+  if (e.action === "app.removed" || e.action === "app.purged" || e.action === "role.mapped") return true;
   return (e.action === "role.granted" || e.action === "role.revoked") && e.detail?.role === CORE_ADMIN;
 }
 

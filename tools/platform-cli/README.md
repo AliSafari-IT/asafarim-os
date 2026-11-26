@@ -182,6 +182,20 @@ reply unchanged. They use the same `CORE_API_URL` and `CORE_API_ADMIN_TOKEN` as 
 answered, and 1 when it can't be reached, refuses or answers with something else. Control characters in the text
 are replaced.
 
+## Role mappings (`role mappings`, `role map`, `role unmap`; #355)
+
+A role mapping makes everyone who holds one role also hold another (ADR 0004; the rules are in core-api's README):
+
+- `role mappings [--json]` (`GET /admin/v1/role-mappings`): each mapping's id, source, target, how many people hold
+  the target through it, and who created it.
+- `role map <source> <target>` (`POST /admin/v1/role-mappings`): adds one and says how many people got the target.
+  The target can't be a `core.*` role; core-api refuses it (and a duplicate) and the CLI prints why.
+- `role unmap <id>` (`DELETE /admin/v1/role-mappings/<id>`): deletes one and says how many derived grants went.
+  Grants an admin made directly stay.
+
+`role holders` shows a derived grant as granted by `mapping:<id>`, and `role revoke` on one is refused: revoke the
+source role or unmap. Same environment and exit codes as the other `role` commands.
+
 ## New app (`app new <id>`)
 
 `app new` writes a minimal Next.js app to `<root>/apps/<id>/` from the files in `templates/app/`: a typed

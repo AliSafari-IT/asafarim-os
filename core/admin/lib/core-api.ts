@@ -187,6 +187,23 @@ export interface RoleGrant {
   granted_at: string;
 }
 
+/** One admin-configured role mapping (#355, ADR 0004; mirrors core-api's `RoleMapping`, src/role-mappings.ts). */
+export interface RoleMapping {
+  id: number;
+  source: string;
+  target: string;
+  createdBy: string;
+  createdAt: string;
+  /** How many people hold the target through this mapping now. */
+  derivedGrants: number;
+}
+
+/** A grant that a role mapping made (`granted_by = mapping:<id>`): it isn't revoked directly. */
+export const derivedFrom = (grantedBy: string): number | null => {
+  const m = /^mapping:(\d+)$/.exec(grantedBy);
+  return m ? Number(m[1]) : null;
+};
+
 const base = () => (process.env.CORE_API_URL ?? "http://localhost:4020").replace(/\/$/, "");
 
 /** How long a call may take. The backup check hashes every backup file, so it gets longer. */
@@ -275,5 +292,22 @@ export function coreApi(idToken: string) {
       call<{ granted: boolean }>(idToken, "PUT", `/admin/v1/roles/${enc(role)}/grants/${enc(subject)}`),
     revoke: (role: string, subject: string) =>
       call<{ revoked: boolean }>(idToken, "DELETE", `/admin/v1/roles/${enc(role)}/grants/${enc(subject)}`),
+    roleMappings: async () =>
+      (await call<{ mappings: RoleMapping[] }>(idToken, "GET", "/admin/v1/role-mappings")).mappings,
+    /** Whoever holds `source` (directly) also holds `target`. `target` can't be a core role. */
+    createRoleMapping: (source: string, target: string) =>
+      call<{ id: number; source: string; target: string; derivedGrants: number }>(
+        idToken,
+        "POST",
+        "/admin/v1/role-mappings",
+        { source, target },
+      ),
+    /** Only the grants derived from it go; deliberate grants stay. */
+    deleteRoleMapping: (id: number) =>
+      call<{ id: number; source: string; target: string; removedGrants: number }>(
+        idToken,
+        "DELETE",
+        `/admin/v1/role-mappings/${id}`,
+      ),
   };
 }

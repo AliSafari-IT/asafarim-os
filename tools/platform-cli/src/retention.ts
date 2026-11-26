@@ -121,7 +121,7 @@ type Reply =
 
 export async function request(
   { baseUrl, token }: Endpoint,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   route: string,
   fetchImpl: typeof fetch,
   body?: object,
