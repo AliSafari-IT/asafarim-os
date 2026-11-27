@@ -354,6 +354,31 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
     await expect(pool.query("UPDATE course_cards SET front = 'x'")).rejects.toThrow(/immutable/);
   });
 
+  it("sets, checks and removes a course's cover image, published with the revision", async () => {
+    const c = ok(await createCourse(pool, erin, { slug: "covered", title: "Covered" }));
+    const rev = await edit(erin, c.id, [
+      { op: "add_module", title: "A" },
+      { op: "add_lesson", module: 0, articleSlug: "intro" },
+      { op: "cover", url: " https://images.example.org/a.png#x ", alt: "  A   chart " },
+    ]);
+    expect((await getStudioCourse(pool, erin, c.id))!.cover).toEqual({
+      url: "https://images.example.org/a.png",
+      alt: "A chart",
+    });
+    ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev, publication: await shown(erin, c.id) }));
+    expect((await getPublishedCourse(pool, "covered"))!.cover.url).toBe("https://images.example.org/a.png");
+    expect((await listPublishedCourses(pool)).items.find((s) => s.slug === "covered")!.cover.alt).toBe("A chart");
+    for (const url of ["http://images.example.org/a.png", "https://127.0.0.1/a.png", "https://localhost/a.png"]) {
+      expect(
+        await editCourse(pool, erin, { id: c.id, expectedRevisionId: rev, edit: { op: "cover", url, alt: "" } }),
+      ).toEqual({ ok: false, error: "invalid_cover" });
+    }
+    await edit(erin, c.id, [{ op: "cover", url: "", alt: "ignored" }]);
+    expect((await getStudioCourse(pool, erin, c.id))!.cover).toEqual({ url: "", alt: "" });
+    // Guests keep the published cover until the next publish.
+    expect((await getPublishedCourse(pool, "covered"))!.cover.url).toBe("https://images.example.org/a.png");
+  });
+
   it("pages through course lists without repeating or skipping one", async () => {
     const all = (await listStudioCourses(pool, erin)).items.map((s) => s.id);
     const seen: string[] = [];

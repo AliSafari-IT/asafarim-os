@@ -566,6 +566,16 @@ CREATE TABLE course_cards (
 CREATE TRIGGER course_cards_immutable BEFORE UPDATE OR DELETE ON course_cards
   FOR EACH ROW EXECUTE FUNCTION knowledge_course_revisions_immutable();`,
   },
+  {
+    version: 16,
+    name: "course cover image: an optional https image and its alt text on each course revision",
+    sql: `
+-- The course page's cover image: an https address on another site (like an article's image without an upload), and
+-- its alt text. Part of the revision, so a new cover reaches guests on publish. '' = no cover.
+ALTER TABLE course_revisions
+  ADD COLUMN cover_url text NOT NULL DEFAULT '' CHECK (length(cover_url) <= 2048),
+  ADD COLUMN cover_alt text NOT NULL DEFAULT '' CHECK (length(cover_alt) <= 200);`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

@@ -10,6 +10,7 @@
  * (marked "I knew it") and course progress (lessons opened, the same numbers as the course page).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { StudyStats, readStored } from "@/components/StudyStats";
 import type { StudyCard } from "@/lib/courses";
 import { parseOpened, progressKey } from "@/lib/course-progress";
 import {
@@ -26,14 +27,6 @@ import {
   type DeckMode,
 } from "@/lib/study-cards";
 
-function readStored<T>(key: string, parse: (raw: string | null) => T): T {
-  try {
-    return parse(window.localStorage.getItem(key));
-  } catch {
-    return parse(null);
-  }
-}
-
 function store(key: string, value: unknown) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
@@ -43,22 +36,6 @@ function store(key: string, value: unknown) {
 }
 
 const readKnown = (key: string) => readStored(key, parseKnown);
-
-function StatTile({ icon, label, value, testid }: { icon: string; label: string; value: string; testid: string }) {
-  return (
-    <div className="stat-tile" data-testid={testid}>
-      <span className="stat-icon" aria-hidden="true">
-        {icon}
-      </span>
-      <span className="stat-text">
-        <span className="stat-label">{label}</span>
-        <span className="stat-value" data-testid={`${testid}-value`}>
-          {value}
-        </span>
-      </span>
-    </div>
-  );
-}
 
 const SWIPE_PX = 48;
 
@@ -84,6 +61,9 @@ export function StudyDeck({
   const [flipped, setFlipped] = useState(false);
   const [finished, setFinished] = useState(false);
   const cardRef = useRef<HTMLButtonElement>(null);
+  const deckRef = useRef<HTMLDivElement>(null);
+  /** Set when a control inside the deck had focus just before the change that replaces it. */
+  const keepFocus = useRef(false);
   const swipeFrom = useRef<{ x: number; y: number } | null>(null);
   const swiped = useRef(false);
 
@@ -96,6 +76,12 @@ export function StudyDeck({
     setDays(readStored(STREAK_KEY, parseDays));
     setToday(dayOf(new Date()));
     setOpened(readStored(progressKey(courseId), parseOpened));
+    // Marks made in another tab show up here too.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === key) setKnown(parseKnown(e.newValue));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, [key, courseId]);
 
   // Flipping a card counts as studying today.
@@ -116,15 +102,36 @@ export function StudyDeck({
     [key],
   );
 
+  /** Mark one card, on top of the marks stored now (another tab may have added some), or this tab's when blocked. */
+  const markCard = useCallback(
+    (cardId: string, isKnown: boolean) => {
+      let base = known;
+      try {
+        base = parseKnown(window.localStorage.getItem(key));
+      } catch {
+        // Storage blocked: this tab's marks are all there is.
+      }
+      save(withKnown(base, cardId, isKnown));
+    },
+    [key, known, save],
+  );
+
+  /** Remember whether the keyboard was in the deck, before a click or key replaces the focused control. */
+  const noteFocus = () => {
+    keepFocus.current = !!deckRef.current?.contains(document.activeElement);
+  };
+
   /** Start a round: the mode's cards, in course order or shuffled, from the first. */
   const startRound = useCallback(
     (nextMode: DeckMode, nextShuffle: boolean, marks: ReadonlySet<string> = knownSet) => {
       setMode(nextMode);
       setShuffle(nextShuffle);
-      setOrder(deckOrder(ids, { mode: nextMode, known: marks, shuffle: nextShuffle }));
+      const nextOrder = deckOrder(ids, { mode: nextMode, known: marks, shuffle: nextShuffle });
+      setOrder(nextOrder);
       setPos(0);
       setFlipped(false);
-      setFinished(false);
+      // A round with no cards (every card known) is over before it starts.
+      setFinished(nextOrder.length === 0);
     },
     [ids, knownSet],
   );
@@ -152,14 +159,19 @@ export function StudyDeck({
 
   const mark = (isKnown: boolean) => {
     if (!card) return;
-    save(withKnown(known, card.cardId, isKnown));
+    noteFocus();
+    markCard(card.cardId, isKnown);
     go(1);
   };
 
-  // Keep the keyboard on the card as it changes, so ← / → / Space keep working without a click.
+  // Keep the keyboard in the deck as its controls change ("Show answer" turns into the marking buttons, a mark moves
+  // on, a round ends), so ← / → / Space keep working without a click: on the card, or the first end-of-round action.
   useEffect(() => {
-    if (!finished && document.activeElement?.closest("[data-study-deck]")) cardRef.current?.focus();
-  }, [pos, finished]);
+    if (!keepFocus.current) return;
+    keepFocus.current = false;
+    if (finished) deckRef.current?.querySelector<HTMLButtonElement>(".study-done button")?.focus();
+    else cardRef.current?.focus();
+  }, [pos, finished, flipped]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (finished || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -198,17 +210,16 @@ export function StudyDeck({
   const pct = total ? Math.round(((finished ? total : pos + 1) / total) * 100) : 0;
 
   return (
-    <div className="study-deck" data-study-deck="" data-testid="study-deck" onKeyDown={onKeyDown}>
-      <div className="study-stats" role="group" aria-label="Your progress">
-        <StatTile
-          icon="◷"
-          label="Study streak"
-          value={`${streak} ${streak === 1 ? "day" : "days"}`}
-          testid="stat-streak"
-        />
-        <StatTile icon="✓" label="Cards mastered" value={`${knownNow} of ${ids.length}`} testid="stat-mastered" />
-        <StatTile icon="▧" label="Course progress" value={`${coursePct}%`} testid="stat-course" />
-      </div>
+    <div
+      ref={deckRef}
+      className="study-deck"
+      data-study-deck=""
+      data-testid="study-deck"
+      onKeyDown={onKeyDown}
+      onPointerDownCapture={noteFocus}
+      onKeyDownCapture={noteFocus}
+    >
+      <StudyStats streak={streak} mastered={knownNow} totalCards={ids.length} coursePct={coursePct} />
       <div className="study-toolbar">
         <div className="study-modes" role="group" aria-label="Which cards">
           <button
@@ -249,7 +260,7 @@ export function StudyDeck({
           aria-label="Cards gone through"
           aria-valuemin={0}
           aria-valuemax={total}
-          aria-valuenow={finished ? total : pos + 1}
+          aria-valuenow={finished ? total : Math.min(pos + 1, total)}
         >
           <span className="progress-fill" style={{ width: `${pct}%` }} />
         </div>

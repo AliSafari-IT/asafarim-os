@@ -93,7 +93,7 @@ export function CourseProgressProvider({
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
-function useCourseProgress(): Value {
+export function useCourseProgress(): Value {
   const v = useContext(Ctx);
   if (!v) throw new Error("CourseProgressProvider is missing");
   return v;
@@ -183,4 +183,19 @@ export function MarkLessonOpened({ lessonId }: { lessonId: string }) {
   const { markOpened } = useCourseProgress();
   useEffect(() => markOpened(lessonId), [lessonId, markOpened]);
   return null;
+}
+
+/** "2 of 3 opened" for one module's lessons, on its card in the course page's module grid. */
+export function ModuleProgress({ lessonIds }: { lessonIds: string[] }) {
+  const { progress } = useCourseProgress();
+  const done = lessonIds.filter((id) => progress.done.has(id)).length;
+  const pct = lessonIds.length ? Math.round((done / lessonIds.length) * 100) : 0;
+  return (
+    <span className="module-progress" data-testid="module-progress">
+      <span className="module-progress-track" aria-hidden="true">
+        <span className="progress-fill" style={{ width: `${pct}%` }} />
+      </span>
+      <span>{done === lessonIds.length && done > 0 ? "All opened" : `${done} of ${lessonIds.length} opened`}</span>
+    </span>
+  );
 }

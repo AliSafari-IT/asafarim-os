@@ -19,6 +19,7 @@ import type { Doc } from "./doc";
 import { canCreateCourse, canManageCourse, seesAllCourses, type Actor } from "./policy";
 import { PAGE_SIZE, pageOf, type Page, type RevisionFormat } from "./content";
 import { decodeCursor } from "./cursor";
+import { checkImageUrl } from "./media/validate";
 
 type Pool = Pick<pg.Pool, "connect" | "query">;
 type Client = Pick<pg.PoolClient, "query">;
@@ -31,6 +32,7 @@ export const COURSE_LIMITS = {
   cards: 200,
   cardFront: 300,
   cardBack: 1000,
+  coverAlt: 200,
 } as const;
 
 /** A study card: a prompt on the front, the answer on the back. Plain text; line breaks are kept. */
@@ -54,6 +56,13 @@ export interface CourseDraft {
   summary: string;
   modules: { title: string; lessons: LessonRef[] }[];
   cards: StudyCard[];
+  /** The cover image: an https address ('' = none) and its alt text. */
+  cover: CourseCover;
+}
+
+export interface CourseCover {
+  url: string;
+  alt: string;
 }
 
 export type CourseStatus = "draft" | "published" | "withdrawn";
@@ -77,7 +86,8 @@ export type CourseError =
   | "lesson_unavailable"
   | "too_many_cards"
   | "invalid_card"
-  | "unknown_card";
+  | "unknown_card"
+  | "invalid_cover";
 
 export type CourseResult<T> = ({ ok: true } & T) | { ok: false; error: CourseError; detail?: string };
 
@@ -149,9 +159,10 @@ async function readCards(c: Pick<Pool, "query">, revisionId: string): Promise<St
 /** A course revision as stored: its modules in order, each with its lessons in order. */
 async function readDraft(c: Pick<Pool, "query">, revisionId: string): Promise<CourseDraft> {
   const rev = (
-    await c.query<{ title: string; summary: string }>("SELECT title, summary FROM course_revisions WHERE id = $1", [
-      revisionId,
-    ])
+    await c.query<{ title: string; summary: string; cover_url: string; cover_alt: string }>(
+      "SELECT title, summary, cover_url, cover_alt FROM course_revisions WHERE id = $1",
+      [revisionId],
+    )
   ).rows[0]!;
   const modules = (
     await c.query<{ position: number; title: string }>(
@@ -170,6 +181,7 @@ async function readDraft(c: Pick<Pool, "query">, revisionId: string): Promise<Co
     title: rev.title,
     summary: rev.summary,
     cards: await readCards(c, revisionId),
+    cover: { url: rev.cover_url, alt: rev.cover_alt },
     modules: modules.map((m) => ({
       title: m.title,
       lessons: lessons
@@ -186,8 +198,9 @@ async function insertRevision(c: Client, courseId: string, draft: CourseDraft, a
   );
   const id = randomUUID();
   await c.query(
-    "INSERT INTO course_revisions (id, course_id, number, title, summary, author) VALUES ($1, $2, $3, $4, $5, $6)",
-    [id, courseId, rows[0]!.n + 1, draft.title, draft.summary, author],
+    `INSERT INTO course_revisions (id, course_id, number, title, summary, author, cover_url, cover_alt)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [id, courseId, rows[0]!.n + 1, draft.title, draft.summary, author, draft.cover.url, draft.cover.alt],
   );
   if (draft.modules.length) {
     await c.query(
@@ -263,6 +276,7 @@ export async function createCourse(
     summary: (input.summary ?? "").trim(),
     modules: [],
     cards: [],
+    cover: { url: "", alt: "" },
   };
   const bad = checkDraft(draft);
   if (bad) return { ok: false, error: bad };
@@ -293,7 +307,8 @@ export type CourseEdit =
   | { op: "add_card"; front: string; back: string }
   | { op: "edit_card"; cardId: string; front: string; back: string }
   | { op: "move_card"; cardId: string; delta: -1 | 1 }
-  | { op: "remove_card"; cardId: string };
+  | { op: "remove_card"; cardId: string }
+  | { op: "cover"; url: string; alt: string };
 
 const findLesson = (d: CourseDraft, lessonId: string) => {
   for (const [mi, m] of d.modules.entries()) {
@@ -379,6 +394,14 @@ async function applyEdit(c: Client, d: CourseDraft, edit: CourseEdit): Promise<C
       const to = at + edit.delta;
       if (to >= 0 && to < next.cards.length) [next.cards[at], next.cards[to]] = [next.cards[to]!, next.cards[at]!];
       return next;
+    }
+    case "cover": {
+      // An empty address removes the cover; otherwise an https image on a named host (lib/media/validate.ts).
+      if (!edit.url.trim()) return { ...next, cover: { url: "", alt: "" } };
+      const url = checkImageUrl(edit.url);
+      const alt = cleanTitle(edit.alt);
+      if (!url || alt.length > COURSE_LIMITS.coverAlt) return "invalid_cover";
+      return { ...next, cover: { url, alt } };
     }
     case "remove_card": {
       const at = cardAt(edit.cardId);
@@ -562,6 +585,7 @@ export interface StudioCourse {
   summary: string;
   modules: { title: string; lessons: StudioLesson[] }[];
   cards: StudyCard[];
+  cover: CourseCover;
 }
 
 export async function getStudioCourse(
@@ -616,6 +640,7 @@ export async function getStudioCourse(
     title: draft.title,
     summary: draft.summary,
     cards: draft.cards,
+    cover: draft.cover,
     modules: draft.modules.map((m) => ({
       title: m.title,
       lessons: m.lessons.map((l) => {
@@ -645,6 +670,7 @@ export interface PublishedCourseSummary {
   summary: string;
   publishedAt: Date;
   lessons: number;
+  cover: CourseCover;
 }
 
 /** Published courses, newest first, one page at a time (keyset on published_at, id). */
@@ -662,8 +688,10 @@ export async function listPublishedCourses(
     summary: string;
     published_at: Date;
     lessons: number;
+    cover_url: string;
+    cover_alt: string;
   }>(
-    `SELECT c.id, c.published_at::text AS at_key, c.slug, r.title, r.summary, c.published_at,
+    `SELECT c.id, c.published_at::text AS at_key, c.slug, r.title, r.summary, c.published_at, r.cover_url, r.cover_alt,
             (SELECT count(*)::int FROM course_lessons l JOIN content_items i ON i.id = l.item_id
              WHERE l.revision_id = r.id AND i.published_revision_id IS NOT NULL) AS lessons
      FROM courses c JOIN course_revisions r ON r.id = c.published_revision_id
@@ -675,7 +703,14 @@ export async function listPublishedCourses(
     rows,
     limit,
     (r) => r.at_key,
-    (r) => ({ slug: r.slug, title: r.title, summary: r.summary, publishedAt: r.published_at, lessons: r.lessons }),
+    (r) => ({
+      slug: r.slug,
+      title: r.title,
+      summary: r.summary,
+      publishedAt: r.published_at,
+      lessons: r.lessons,
+      cover: { url: r.cover_url, alt: r.cover_alt },
+    }),
   );
 }
 
@@ -700,6 +735,7 @@ export interface PublishedCourse {
   modules: { position: number; title: string; lessons: OutlineLesson[] }[];
   /** How many study cards the published revision has (read them with getPublishedCards). */
   cards: number;
+  cover: CourseCover;
 }
 
 interface OutlineRow {
@@ -716,6 +752,8 @@ interface OutlineRow {
   lesson_title: string | null;
   lesson_summary: string | null;
   cards: number;
+  cover_url: string;
+  cover_alt: string;
 }
 
 /** The published course and its outline: modules with at least one lesson a guest may open, in order. */
@@ -723,7 +761,8 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
   const { rows } = await pool.query<OutlineRow>(
     `SELECT c.id AS course_id, cr.id AS revision_id, c.slug AS course_slug, cr.title AS course_title, cr.summary AS course_summary, c.published_at,
             m.position AS module_position, m.title AS module_title, l.lesson_id, l.item_id, r.title AS lesson_title, r.summary AS lesson_summary,
-            (SELECT count(*)::int FROM course_cards k WHERE k.revision_id = cr.id) AS cards
+            (SELECT count(*)::int FROM course_cards k WHERE k.revision_id = cr.id) AS cards,
+            cr.cover_url, cr.cover_alt
      FROM courses c JOIN course_revisions cr ON cr.id = c.published_revision_id
      LEFT JOIN course_modules m ON m.revision_id = cr.id
      LEFT JOIN course_lessons l ON l.revision_id = cr.id AND l.module_position = m.position
@@ -759,6 +798,7 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
     publishedAt: first.published_at,
     modules,
     cards: first.cards,
+    cover: { url: first.cover_url, alt: first.cover_alt },
   };
 }
 

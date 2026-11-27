@@ -9,7 +9,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.5.3",
+  version: "0.5.4",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   // Live since #361. The dev gateway is generated from this; production routes it through

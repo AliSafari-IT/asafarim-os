@@ -159,6 +159,38 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
           </button>
         </form>
 
+        <form action={editCourseAction} className="card" data-testid="course-cover-form">
+          <h2>Cover image</h2>
+          <p className="muted">
+            Optional. Shown on the right of the course page header and on the courses list: an https address of an image
+            on another site. Leave the address empty to remove it.
+          </p>
+          <input type="hidden" name="id" value={course.id} />
+          <input type="hidden" name="revision" value={course.draftRevisionId} />
+          <input type="hidden" name="op" value="cover" />
+          {course.cover.url ? (
+            <img className="studio-cover-preview" src={course.cover.url} alt="" referrerPolicy="no-referrer" />
+          ) : null}
+          <label>
+            Image address
+            <input
+              name="url"
+              type="url"
+              inputMode="url"
+              placeholder="https://…"
+              defaultValue={course.cover.url}
+              maxLength={2000}
+            />
+          </label>
+          <label>
+            Alt text <span className="muted">(what the image shows, for screen readers)</span>
+            <input name="alt" defaultValue={course.cover.alt} maxLength={COURSE_LIMITS.coverAlt} />
+          </label>
+          <button type="submit" className="secondary" data-testid="save-cover">
+            Save cover
+          </button>
+        </form>
+
         <datalist id="lesson-choices">
           {choices.map((a) => (
             <option key={a.slug} value={a.slug}>
