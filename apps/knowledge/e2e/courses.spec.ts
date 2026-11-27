@@ -14,8 +14,16 @@ test("a guest follows a course from the list to its last lesson", async ({ page 
   await card.getByRole("link", { name: "Ship a web app" }).click();
 
   await expect(page.getByTestId("course-title")).toHaveText("Ship a web app");
-  await expect(page.getByTestId("outline-lesson")).toHaveText(["Plan the app", "Build the API", "Deploy it"]);
+  await expect(page.getByTestId("outline-lesson-title")).toHaveText(["Plan the app", "Build the API", "Deploy it"]);
+  await expect(page.getByTestId("module-title")).toHaveText(["Design", "Delivery"]);
+  await expect(page.getByTestId("course-facts")).toContainText("2 modules");
+  await expect(page.getByTestId("course-facts")).toContainText("3 lessons");
   await expect(page.getByText("Bonus: tuning")).toHaveCount(0);
+  // A fresh learner: one obvious first step, the first lesson flagged as next.
+  await expect(page.getByTestId("start")).toContainText("Start the course");
+  await expect(page.getByTestId("cta-next")).toHaveText("First up: Lesson 1 · Plan the app");
+  await expect(page.getByTestId("progress-text")).toHaveText("0 of 3 lessons opened");
+  await expect(page.getByTestId("lesson-marker").first()).toHaveAttribute("data-status", "next");
 
   await page.getByTestId("start").click();
   const lesson = page.getByTestId("lesson");
@@ -23,20 +31,32 @@ test("a guest follows a course from the list to its last lesson", async ({ page 
   await expect(lesson.getByRole("heading", { level: 1 })).toHaveText("Plan the app");
   await expect(lesson).toContainText("Write down what the app must do.");
   await expect(page.getByText("A draft nobody may see yet.")).toHaveCount(0);
-  await expect(page.getByTestId("lesson-context")).toHaveText("Ship a web app · Design");
+  await expect(page.getByTestId("lesson-context")).toHaveText("Ship a web app›Module 1: Design");
+  await expect(page.getByTestId("lesson-step")).toHaveText("Lesson 1 of 3");
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", /\/articles\/plan-the-app$/);
   await expect(page.getByTestId("prev")).toHaveCount(0);
+  await expect(page.getByTestId("next")).toContainText("Build the API");
 
-  await page.getByTestId("next").click();
+  // Back on the course page, the learner continues where they left off.
+  await page.goto("/courses/ship-a-web-app");
+  await expect(page.getByTestId("start")).toContainText("Continue");
+  await expect(page.getByTestId("cta-next")).toHaveText("Next: Lesson 2 · Build the API");
+  await expect(page.getByTestId("progress-text")).toHaveText("1 of 3 lessons opened");
+  await expect(page.getByTestId("lesson-marker").nth(0)).toHaveAttribute("data-status", "done");
+  await expect(page.getByTestId("lesson-marker").nth(1)).toHaveAttribute("data-status", "next");
+  await page.getByTestId("start").click();
   await expect(lesson.getByRole("heading", { level: 1 })).toHaveText("Build the API");
-  await expect(page.getByTestId("lesson-context")).toHaveText("Ship a web app · Delivery");
+  await expect(page.getByTestId("lesson-context")).toHaveText("Ship a web app›Module 2: Delivery");
+  await expect(page.getByTestId("lesson-step")).toHaveText("Lesson 2 of 3");
   await page.getByTestId("next").click();
   await expect(lesson.getByRole("heading", { level: 1 })).toHaveText("Deploy it");
   // The last visible lesson: the withdrawn one after it isn't offered.
   await expect(page.getByTestId("next")).toHaveCount(0);
-  await expect(page.getByTestId("prev")).toHaveText("← Build the API");
+  await expect(page.getByTestId("prev")).toContainText("Build the API");
   await page.getByTestId("finish").click();
   await expect(page).toHaveURL(/\/courses\/ship-a-web-app$/);
+  await expect(page.getByTestId("progress-text")).toHaveText("3 of 3 lessons opened");
+  await expect(page.getByTestId("start")).toContainText("Review from the start");
 
   // The lesson's article keeps its own address.
   await page.goto("/articles/deploy-it");

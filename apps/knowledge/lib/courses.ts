@@ -568,6 +568,8 @@ export interface OutlineLesson {
   itemId: string;
   lessonId: string;
   title: string;
+  /** The pinned article revision's summary: one line under the lesson's title in the outline ('' when none). */
+  summary: string;
 }
 
 export interface PublishedCourse {
@@ -595,13 +597,14 @@ interface OutlineRow {
   lesson_id: string | null;
   item_id: string;
   lesson_title: string | null;
+  lesson_summary: string | null;
 }
 
 /** The published course and its outline: modules with at least one lesson a guest may open, in order. */
 export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string): Promise<PublishedCourse | null> {
   const { rows } = await pool.query<OutlineRow>(
     `SELECT c.id AS course_id, cr.id AS revision_id, c.slug AS course_slug, cr.title AS course_title, cr.summary AS course_summary, c.published_at,
-            m.position AS module_position, m.title AS module_title, l.lesson_id, l.item_id, r.title AS lesson_title
+            m.position AS module_position, m.title AS module_title, l.lesson_id, l.item_id, r.title AS lesson_title, r.summary AS lesson_summary
      FROM courses c JOIN course_revisions cr ON cr.id = c.published_revision_id
      LEFT JOIN course_modules m ON m.revision_id = cr.id
      LEFT JOIN course_lessons l ON l.revision_id = cr.id AND l.module_position = m.position
@@ -621,7 +624,12 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
       current = { position: r.module_position, title: r.module_title!, lessons: [] };
       modules.push(current);
     }
-    current.lessons.push({ itemId: r.item_id, lessonId: r.lesson_id, title: r.lesson_title! });
+    current.lessons.push({
+      itemId: r.item_id,
+      lessonId: r.lesson_id,
+      title: r.lesson_title!,
+      summary: r.lesson_summary ?? "",
+    });
   }
   return {
     id: first.course_id,
@@ -682,7 +690,7 @@ export async function getPublishedLesson(
   const r = rows[0];
   if (!r) return null;
   const strip = (l: (typeof flat)[number] | undefined) =>
-    l ? { itemId: l.itemId, lessonId: l.lessonId, title: l.title } : null;
+    l ? { itemId: l.itemId, lessonId: l.lessonId, title: l.title, summary: l.summary } : null;
   return {
     course,
     lessonId,

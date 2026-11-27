@@ -12,7 +12,9 @@ import { articleUrl } from "@/lib/site";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CourseOutline } from "@/components/CourseOutline";
+import { CourseOutline, courseShape } from "@/components/CourseOutline";
+import { CourseProgressProvider, MarkLessonOpened, ProgressMeter } from "@/components/CourseProgress";
+import { orderLessons } from "@/lib/course-progress";
 import { DocView } from "@/components/DocView";
 import { Markdown } from "@/components/Markdown";
 import { TopBar } from "@/components/TopBar";
@@ -54,53 +56,73 @@ export default async function LessonPage({ params }: Props) {
   const doc = parsed?.ok ? parsed.doc : null;
   const href = (id: string) => `/courses/${slug}/lessons/${id}`;
   const counts = engagementEnabled() ? await courseCounts(await db(), lesson.course) : undefined;
+  const shape = courseShape(lesson.course);
+  const ordered = orderLessons(shape);
+  const place = ordered.find((l) => l.lessonId === lessonId)!;
   return (
     <>
       <TopBar next={href(lessonId)} />
-      <main className="lesson-layout">
-        <div>
-          <p className="muted" data-testid="lesson-context">
-            <Link href={`/courses/${slug}`}>{lesson.course.title}</Link> · {lesson.moduleTitle}
-          </p>
-          <article data-testid="lesson">
-            <h1>{lesson.title}</h1>
-            {lesson.summary ? <p className="lead">{lesson.summary}</p> : null}
-            <ArticleTags tags={lesson.tags} />
-            {lesson.format === "tiptap" && doc ? <DocView doc={doc} /> : <Markdown markdown={lesson.body} />}
-          </article>
-          <ShareBar slug={lesson.articleSlug} title={lesson.title} url={articleUrl(lesson.articleSlug)} />
-          <p className="muted">
-            Also published as an article:{" "}
-            <Link href={`/articles/${lesson.articleSlug}`} data-testid="canonical">
-              /articles/{lesson.articleSlug}
-            </Link>
-          </p>
-          <nav className="lesson-nav" aria-label="Lessons" data-testid="lesson-nav">
-            {lesson.prev ? (
-              <Link href={href(lesson.prev.lessonId)} rel="prev" data-testid="prev">
-                ← {lesson.prev.title}
+      <CourseProgressProvider courseId={lesson.course.id} slug={slug} course={shape} current={lessonId}>
+        <MarkLessonOpened lessonId={lessonId} />
+        <main className="lesson-layout">
+          <div>
+            <nav className="lesson-context" aria-label="Breadcrumb" data-testid="lesson-context">
+              <Link href={`/courses/${slug}`}>{lesson.course.title}</Link>
+              <span aria-hidden="true">›</span>
+              <span>
+                Module {place.module}: {lesson.moduleTitle}
+              </span>
+            </nav>
+            <p className="lesson-step" data-testid="lesson-step">
+              Lesson {place.number} of {ordered.length}
+            </p>
+            <article data-testid="lesson">
+              <h1>{lesson.title}</h1>
+              {lesson.summary ? <p className="lead">{lesson.summary}</p> : null}
+              <ArticleTags tags={lesson.tags} />
+              {lesson.format === "tiptap" && doc ? <DocView doc={doc} /> : <Markdown markdown={lesson.body} />}
+            </article>
+            <nav className="lesson-nav" aria-label="Lessons" data-testid="lesson-nav">
+              {lesson.prev ? (
+                <Link className="lesson-nav-prev" href={href(lesson.prev.lessonId)} rel="prev" data-testid="prev">
+                  <span className="lesson-nav-label">← Previous lesson</span>
+                  <span className="lesson-nav-title">{lesson.prev.title}</span>
+                </Link>
+              ) : (
+                <span />
+              )}
+              {lesson.next ? (
+                <Link className="lesson-nav-next" href={href(lesson.next.lessonId)} rel="next" data-testid="next">
+                  <span className="lesson-nav-label">Next lesson →</span>
+                  <span className="lesson-nav-title">{lesson.next.title}</span>
+                </Link>
+              ) : (
+                <Link className="lesson-nav-next" href={`/courses/${slug}`} data-testid="finish">
+                  <span className="lesson-nav-label">That was the last lesson</span>
+                  <span className="lesson-nav-title">Back to the course →</span>
+                </Link>
+              )}
+            </nav>
+            <ShareBar slug={lesson.articleSlug} title={lesson.title} url={articleUrl(lesson.articleSlug)} />
+            <p className="muted">
+              Also published as an article:{" "}
+              <Link href={`/articles/${lesson.articleSlug}`} data-testid="canonical">
+                /articles/{lesson.articleSlug}
               </Link>
-            ) : (
-              <span />
-            )}
-            {lesson.next ? (
-              <Link href={href(lesson.next.lessonId)} rel="next" data-testid="next">
-                {lesson.next.title} →
-              </Link>
-            ) : (
-              <Link href={`/courses/${slug}`} data-testid="finish">
-                Back to the course
-              </Link>
-            )}
-          </nav>
-          {counts ? (
-            <ArticleEngagement id={lesson.itemId} next={href(lessonId)} counts={countsOf(counts.lessons, lessonId)} />
-          ) : null}
-        </div>
-        <aside>
-          <CourseOutline course={lesson.course} current={lessonId} counts={counts} />
-        </aside>
-      </main>
+            </p>
+            {counts ? (
+              <ArticleEngagement id={lesson.itemId} next={href(lessonId)} counts={countsOf(counts.lessons, lessonId)} />
+            ) : null}
+          </div>
+          <aside className="lesson-aside" aria-label="This course">
+            <p className="aside-title">
+              <Link href={`/courses/${slug}`}>{lesson.course.title}</Link>
+            </p>
+            <ProgressMeter />
+            <CourseOutline course={lesson.course} current={lessonId} compact />
+          </aside>
+        </main>
+      </CourseProgressProvider>
     </>
   );
 }

@@ -633,17 +633,6 @@ del {
 .button-link:hover {
   background: var(--accent-hover);
 }
-.course-outline h2 {
-  font-size: 1rem;
-  margin: 16px 0 4px;
-}
-.course-outline ol {
-  margin: 0;
-  padding-left: 20px;
-}
-.course-outline li {
-  padding: 3px 0;
-}
 main.lesson-layout {
   max-width: 1080px;
   display: grid;
@@ -652,21 +641,13 @@ main.lesson-layout {
 }
 @media (min-width: 900px) {
   main.lesson-layout {
-    grid-template-columns: minmax(0, 1fr) 260px;
+    grid-template-columns: minmax(0, 1fr) 300px;
   }
   main.lesson-layout aside {
     position: sticky;
     top: 16px;
     align-self: start;
   }
-}
-.lesson-nav {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  margin: 24px 0;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
 }
 /* Phones: the top bar's links, theme toggle and sign-in still fit on one line at 360 px. */
 @media (max-width: 520px) {
@@ -1442,14 +1423,6 @@ main button.share-btn:hover {
 .lesson-like {
   margin: 1.5rem 0 0.5rem;
 }
-.course-engagement {
-  margin: -0.25rem 0 1rem;
-}
-.course-outline .outline-badge {
-  font-size: 0.75rem;
-  font-weight: normal;
-  margin-left: 0.35rem;
-}
 .inline-sign-in {
   display: inline;
 }
@@ -1493,4 +1466,394 @@ main button.share-btn:hover {
 .image-panel textarea {
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 0.85rem;
+}
+
+/* Course page and lesson navigation: numbered modules, numbered lessons, the learner's progress and one obvious
+   next step (components/CourseOutline.tsx, components/CourseProgress.tsx). */
+.back-link {
+  margin: 0 0 16px;
+}
+.eyebrow {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.course-hero h1 {
+  font-size: 2rem;
+}
+.course-hero .lead {
+  margin: 8px 0 12px;
+}
+.course-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.course-engagement {
+  margin-left: 6px;
+  font-weight: normal;
+}
+.course-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  padding: 20px;
+  border-left: 4px solid var(--accent);
+}
+.course-cta-action {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.course-cta-next {
+  margin: 0;
+  color: var(--muted);
+}
+.course-cta-next strong {
+  color: var(--ink);
+}
+.button-large {
+  align-self: flex-start;
+  font-size: 1.05rem;
+  padding: 12px 22px;
+  border-radius: 10px;
+}
+.button-link:focus-visible,
+.lesson-link:focus-visible,
+.lesson-nav a:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.progress-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+  flex: 0 1 240px;
+}
+.progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.progress-text {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.course-contents {
+  margin-top: 32px;
+}
+.course-contents > h2 {
+  font-size: 1.25rem;
+  margin-bottom: 12px;
+}
+.course-outline {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.module-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.module-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "number meta"
+    "title title";
+  gap: 2px 12px;
+  padding: 14px 16px 12px;
+  background: var(--card-2);
+  border-bottom: 1px solid var(--line);
+}
+.module-number {
+  grid-area: number;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.module-title {
+  grid-area: title;
+  margin: 0;
+  font-size: 1.15rem;
+  line-height: 1.3;
+}
+.module-meta {
+  grid-area: meta;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.lesson-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.lesson-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 12px;
+  border-top: 1px solid var(--line);
+}
+.lesson-row:first-child {
+  border-top: 0;
+}
+.lesson-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 4px 12px 16px;
+  color: var(--ink);
+  text-decoration: none;
+}
+a.lesson-link:hover .lesson-title {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.lesson-row:has(a.lesson-link:hover) {
+  background: var(--accent-soft);
+}
+.lesson-row:has([data-status="next"]) {
+  background: var(--accent-soft);
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+.lesson-row:has([aria-current="page"]) {
+  background: var(--accent-soft);
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+.lesson-marker {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--card);
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.lesson-marker[data-status="next"],
+.lesson-marker[data-status="current"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.lesson-marker[data-status="done"] {
+  border-color: var(--good);
+  color: var(--good);
+}
+.lesson-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.lesson-title {
+  font-weight: 600;
+  line-height: 1.35;
+}
+.lesson-summary {
+  font-size: 0.88rem;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lesson-flag {
+  flex: none;
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.outline-badge {
+  font-size: 0.75rem;
+  font-weight: normal;
+  white-space: nowrap;
+}
+/* The lesson page's sidebar: the same outline, tighter. */
+.lesson-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.aside-title {
+  margin: 0;
+  font-weight: 700;
+}
+.aside-title a {
+  color: var(--ink);
+  text-decoration: none;
+}
+.aside-title a:hover {
+  text-decoration: underline;
+}
+.lesson-aside .progress-meter {
+  flex: none;
+}
+.course-outline.compact {
+  gap: 10px;
+}
+.course-outline.compact .module-head {
+  padding: 8px 12px;
+}
+.course-outline.compact .module-title {
+  font-size: 0.95rem;
+}
+.course-outline.compact .module-number {
+  font-size: 0.7rem;
+}
+.course-outline.compact .lesson-link {
+  gap: 10px;
+  padding: 8px 4px 8px 12px;
+}
+.course-outline.compact .lesson-marker {
+  width: 24px;
+  height: 24px;
+  font-size: 0.75rem;
+}
+.course-outline.compact .lesson-title {
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+.course-outline.compact .lesson-flag {
+  display: none;
+}
+.lesson-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.lesson-step {
+  margin: 4px 0 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.lesson-nav {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 32px 0 24px;
+}
+.lesson-nav a {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  text-decoration: none;
+}
+.lesson-nav-prev {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+}
+.lesson-nav-prev:hover {
+  border-color: var(--accent);
+}
+.lesson-nav-next {
+  grid-column: 2;
+  text-align: right;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.lesson-nav-next:hover {
+  background: var(--accent-hover);
+}
+.lesson-nav-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.lesson-nav-title {
+  font-weight: 700;
+  line-height: 1.3;
+}
+@media (max-width: 520px) {
+  .course-hero h1 {
+    font-size: 1.6rem;
+  }
+  .course-cta {
+    padding: 16px;
+  }
+  .course-cta-action,
+  .progress-meter {
+    flex: 1 1 100%;
+  }
+  .button-large {
+    align-self: stretch;
+    text-align: center;
+  }
+  .lesson-row {
+    flex-wrap: wrap;
+    padding-bottom: 8px;
+  }
+  .lesson-row .outline-badge {
+    margin-left: 58px;
+  }
+  .lesson-link {
+    padding-bottom: 4px;
+  }
+  .lesson-nav {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .lesson-nav-next {
+    grid-column: 1;
+    grid-row: 1;
+  }
+}
+/* In the sidebar the lesson on screen is the one highlighted; the next one only gets an accent ring. */
+.course-outline.compact .lesson-row:has([data-status="next"]) {
+  background: none;
+  box-shadow: none;
+}
+.course-outline.compact .lesson-marker[data-status="next"] {
+  background: var(--card);
+  color: var(--accent);
+}
+.course-outline.compact [aria-current="page"] .lesson-title {
+  font-weight: 700;
 }
