@@ -10,6 +10,7 @@
  * (marked "I knew it") and course progress (lessons opened, the same numbers as the course page).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { StudyStats, readStored } from "@/components/StudyStats";
 import type { StudyCard } from "@/lib/courses";
 import { parseOpened, progressKey } from "@/lib/course-progress";
 import {
@@ -26,14 +27,6 @@ import {
   type DeckMode,
 } from "@/lib/study-cards";
 
-function readStored<T>(key: string, parse: (raw: string | null) => T): T {
-  try {
-    return parse(window.localStorage.getItem(key));
-  } catch {
-    return parse(null);
-  }
-}
-
 function store(key: string, value: unknown) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
@@ -43,22 +36,6 @@ function store(key: string, value: unknown) {
 }
 
 const readKnown = (key: string) => readStored(key, parseKnown);
-
-function StatTile({ icon, label, value, testid }: { icon: string; label: string; value: string; testid: string }) {
-  return (
-    <div className="stat-tile" data-testid={testid}>
-      <span className="stat-icon" aria-hidden="true">
-        {icon}
-      </span>
-      <span className="stat-text">
-        <span className="stat-label">{label}</span>
-        <span className="stat-value" data-testid={`${testid}-value`}>
-          {value}
-        </span>
-      </span>
-    </div>
-  );
-}
 
 const SWIPE_PX = 48;
 
@@ -199,16 +176,7 @@ export function StudyDeck({
 
   return (
     <div className="study-deck" data-study-deck="" data-testid="study-deck" onKeyDown={onKeyDown}>
-      <div className="study-stats" role="group" aria-label="Your progress">
-        <StatTile
-          icon="◷"
-          label="Study streak"
-          value={`${streak} ${streak === 1 ? "day" : "days"}`}
-          testid="stat-streak"
-        />
-        <StatTile icon="✓" label="Cards mastered" value={`${knownNow} of ${ids.length}`} testid="stat-mastered" />
-        <StatTile icon="▧" label="Course progress" value={`${coursePct}%`} testid="stat-course" />
-      </div>
+      <StudyStats streak={streak} mastered={knownNow} totalCards={ids.length} coursePct={coursePct} />
       <div className="study-toolbar">
         <div className="study-modes" role="group" aria-label="Which cards">
           <button

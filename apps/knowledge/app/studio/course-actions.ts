@@ -100,6 +100,9 @@ export async function editCourseAction(formData: FormData) {
     case "update_lesson":
       edit = { op: "update_lesson", lessonId };
       break;
+    case "cover":
+      edit = { op: "cover", url: field(formData, "url"), alt: field(formData, "alt") };
+      break;
     case "add_card":
       edit = { op: "add_card", front: field(formData, "front"), back: field(formData, "back") };
       break;

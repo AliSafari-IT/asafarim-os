@@ -549,7 +549,7 @@ END $$;`,
   },
   {
     version: 15,
-    name: "study cards: a course revision's flip cards, in order",
+    name: "study cards: a course revision's flip cards, in order; an optional course cover image",
     sql: `
 -- A course's study cards belong to its revisions like its modules and lessons: adding, editing or reordering a card
 -- writes a new course revision, and guests see the cards of the published revision only. card_id stays the same
@@ -564,7 +564,13 @@ CREATE TABLE course_cards (
   UNIQUE (revision_id, position)
 );
 CREATE TRIGGER course_cards_immutable BEFORE UPDATE OR DELETE ON course_cards
-  FOR EACH ROW EXECUTE FUNCTION knowledge_course_revisions_immutable();`,
+  FOR EACH ROW EXECUTE FUNCTION knowledge_course_revisions_immutable();
+
+-- The course page's cover image: an https address on another site (like an article's image without an upload), and
+-- its alt text. Part of the revision, so a new cover reaches guests on publish. '' = no cover.
+ALTER TABLE course_revisions
+  ADD COLUMN cover_url text NOT NULL DEFAULT '' CHECK (length(cover_url) <= 2048),
+  ADD COLUMN cover_alt text NOT NULL DEFAULT '' CHECK (length(cover_alt) <= 200);`,
   },
 ];
 
