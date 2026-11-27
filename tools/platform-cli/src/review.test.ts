@@ -867,7 +867,7 @@ describe("platform manifest review", () => {
     // Named in code (as a template literal too): no finding.
     put("apps/shop/lib/ship.ts", "send(`shop.order.sent.v1`); send('shop.order.lost.v1');");
     expect(kinds().filter((k) => k.startsWith("event-never-published"))).toEqual([]);
-  });
+  }, 30_000); // reviews the app several times; a busy CI runner can take over the default 5 s
 
   it("reports a manifest route with a permission that no route file or page serves with its methods", () => {
     writeApp(
@@ -1773,7 +1773,7 @@ describe("platform manifest review", () => {
     expect(reviews.map((r) => r.app)).toEqual(expect.arrayContaining(["docs", "flow", "notes"]));
     // Docs publishes every outcome Flow subscribes to (Flow PR 5): no findings at all.
     expect(reviews.flatMap((r) => r.findings)).toEqual([]);
-  });
+  }, 30_000); // reads every app's source in the workspace; a busy CI runner can take over the default 5 s
   it("reports code that reads DATABASE_URL when the manifest declares no database", () => {
     put("apps/shop/lib/x.ts", `"shop.orders.read"; "shop.orders.write";`);
     // no code names it, or only a comment, a test or a longer name does
