@@ -13,6 +13,7 @@ import { TopBar } from "@/components/TopBar";
 import { isUuid } from "@/lib/content";
 import { getPublishedLesson } from "@/lib/courses";
 import { parseDoc } from "@/lib/doc";
+import { feedAlternates } from "@/lib/feed";
 import { db } from "@/lib/db";
 import { isSlug } from "@/lib/validation";
 
@@ -31,7 +32,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     ? {
         title: `${lesson.title} · ${lesson.course.title}`,
         description: lesson.summary || undefined,
-        alternates: { canonical: `/articles/${lesson.articleSlug}` },
+        alternates: { canonical: `/articles/${lesson.articleSlug}`, types: feedAlternates() },
       }
     : {};
 }

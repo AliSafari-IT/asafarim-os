@@ -33,6 +33,7 @@
       "/search",
       "/topics/**",
       "/api/public/**",
+      "/feed.xml",
       "/media/**",
       "/health/live",
       "/health/ready"

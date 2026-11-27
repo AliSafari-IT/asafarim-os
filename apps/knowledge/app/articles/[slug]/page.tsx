@@ -17,6 +17,7 @@ import { ShareBar } from "@/components/ShareBar";
 import { TopBar } from "@/components/TopBar";
 import { getPublishedArticle, resolveSlugRedirect } from "@/lib/content";
 import { parseDoc } from "@/lib/doc";
+import { feedAlternates } from "@/lib/feed";
 import { db } from "@/lib/db";
 import { articleUrl } from "@/lib/site";
 import { isSlug } from "@/lib/validation";
@@ -40,7 +41,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return {
     title: article.title,
     description,
-    alternates: { canonical: url },
+    alternates: { canonical: url, types: feedAlternates() },
     openGraph: {
       type: "article",
       url,
