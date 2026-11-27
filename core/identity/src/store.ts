@@ -173,6 +173,64 @@ export interface AuditCounts {
 }
 
 /** `updated`: a pending request's apps or note changed. `already_connected`: connected, and no apps asked for. */
+/** Account state as the directory shows it: a revoked connection is a suspension (accounts.ts, accessOfPrincipal). */
+export type DirectoryState = "active" | "suspended";
+/** What the account may use: every app (a global connection), only the apps it was admitted to, or nothing yet. */
+export type AdmissionScope = "global" | "apps" | "none";
+
+export interface DirectorySearch {
+  /** An exact account id, or part of an email address, Google address or phone number (case-insensitive). */
+  q?: string;
+  state?: DirectoryState;
+  scope?: AdmissionScope;
+  /** The `next` cursor of the previous page. */
+  after?: string;
+  /** 1..100, default 25. */
+  limit?: number;
+}
+
+export interface DirectoryEntry {
+  id: string;
+  /** Its email, else its Google address, else its phone number; null if none. */
+  label: string | null;
+  /** The label when it is an email address. */
+  email: string | null;
+  /** Stored proof for `email` (see Principal.emailVerified); null when there is no email. */
+  emailVerified: boolean | null;
+  state: DirectoryState;
+  scope: AdmissionScope;
+  /** Clients a per-client public admission covers. */
+  admittedClients: string[];
+  isAdmin: boolean;
+  createdAt: Date;
+  lastLoginAt: Date | null;
+}
+
+export interface DirectoryIdentity {
+  method: IdentityMethod;
+  /** The email, phone number, or the Google account's email (never Google's internal subject). */
+  identifier: string | null;
+  verifiedAt: Date | null;
+  lastLoginAt: Date | null;
+  createdAt: Date;
+}
+
+export interface DirectoryProfile extends DirectoryEntry {
+  identities: DirectoryIdentity[];
+  passkeys: number;
+  /** The connection row, if any: when and by whom access was granted or revoked. */
+  connection: {
+    status: "active" | "revoked";
+    source: "admin" | "bootstrap" | "suspension" | null;
+    grantedAt: Date;
+    grantedBy: string | null;
+    revokedAt: Date | null;
+    revokedBy: string | null;
+  } | null;
+  admissions: { clientId: string; source: string; grantedAt: Date }[];
+  pendingRequest: PendingRequest | null;
+}
+
 export type RequestOutcome = "created" | "updated" | "already_pending" | "already_connected";
 
 export interface IdentityStore {
@@ -264,6 +322,103 @@ const methodsOf = (col: string) =>
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (s: string) => UUID.test(s);
+
+interface DirectoryRow {
+  id: string;
+  label: string | null;
+  email_verified: boolean;
+  state: DirectoryState;
+  scope: AdmissionScope;
+  admitted: string[];
+  is_admin: boolean;
+  created_at: Date;
+  last_login_at: Date | null;
+}
+
+/**
+ * Every principal with what the directory shows and sorts by. $1 is the lower-cased search text (for the exact-match
+ * rank; '' for none). A revoked connection is a suspension (beats every
+ * admission); an active one is global; otherwise per-client admissions, or nothing.
+ */
+const DIRECTORY_BASE = `
+  SELECT p.id, p.is_admin, p.created_at, l.label,
+         CASE WHEN c.status = 'revoked' THEN 'suspended' ELSE 'active' END AS state,
+         CASE WHEN c.status = 'revoked' THEN 'none' WHEN c.status = 'active' THEN 'global'
+              WHEN EXISTS (SELECT 1 FROM client_admissions a WHERE a.principal_id = p.id) THEN 'apps'
+              ELSE 'none' END AS scope,
+         (SELECT coalesce(array_agg(a.client_id ORDER BY a.client_id), '{}') FROM client_admissions a
+           WHERE a.principal_id = p.id) AS admitted,
+         (SELECT max(i.last_login_at) FROM identities i WHERE i.principal_id = p.id) AS last_login_at,
+         (position('@' in coalesce(l.label, '')) > 0 AND EXISTS (
+            SELECT 1 FROM identities i
+             WHERE i.principal_id = p.id AND i.verified_at IS NOT NULL
+               AND ((i.method = 'email' AND i.identifier = l.label) OR (i.method = 'google' AND i.email = l.label))
+          )) AS email_verified,
+         CASE WHEN $1::text <> '' AND (p.id::text = $1 OR EXISTS (
+                SELECT 1 FROM identities i WHERE i.principal_id = p.id
+                   AND ((i.method <> 'google' AND lower(i.identifier) = $1) OR lower(coalesce(i.email, '')) = $1)))
+              THEN 0 ELSE 1 END AS rank,
+         (l.label IS NULL) AS no_label,
+         lower(coalesce(l.label, '')) AS sort_label
+    FROM principals p
+    LEFT JOIN connections c ON c.principal_id = p.id
+    CROSS JOIN LATERAL (SELECT ${labelOf("p.id")} AS label) l`;
+
+function directoryEntry(r: DirectoryRow): DirectoryEntry {
+  const email = r.label && r.label.includes("@") ? r.label : null;
+  return {
+    id: r.id,
+    label: r.label,
+    email,
+    emailVerified: email ? r.email_verified === true : null,
+    state: r.state,
+    scope: r.scope,
+    admittedClients: r.admitted,
+    isAdmin: r.is_admin,
+    createdAt: r.created_at,
+    lastLoginAt: r.last_login_at,
+  };
+}
+
+interface DirectoryCursor {
+  r: number;
+  n: boolean;
+  l: string;
+  i: string;
+}
+
+const encodeDirectoryCursor = (c: DirectoryCursor) => Buffer.from(JSON.stringify(c)).toString("base64url");
+
+/** The cursor back, or undefined for none; throws on one that isn't ours (the API answers 400). */
+export function decodeDirectoryCursor(raw: string | undefined): DirectoryCursor | undefined {
+  if (!raw) return undefined;
+  let c: unknown;
+  try {
+    if (raw.length > 1000 || !/^[A-Za-z0-9_-]+$/.test(raw)) throw new Error("shape");
+    c = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+  } catch {
+    throw new DirectoryCursorError();
+  }
+  const x = c as Partial<DirectoryCursor>;
+  if (
+    (x.r !== 0 && x.r !== 1) ||
+    typeof x.n !== "boolean" ||
+    typeof x.l !== "string" ||
+    x.l.length > 400 ||
+    typeof x.i !== "string" ||
+    !isUuid(x.i)
+  ) {
+    throw new DirectoryCursorError();
+  }
+  return x as DirectoryCursor;
+}
+
+export class DirectoryCursorError extends Error {
+  constructor() {
+    super("the cursor isn't valid");
+    this.name = "DirectoryCursorError";
+  }
+}
 
 /** A pool or a client in a transaction. */
 interface Queryable {
@@ -579,6 +734,116 @@ export class PgIdentityStore implements IdentityStore {
       revokedAt: r.revoked_at,
       lastLoginAt: r.last_login_at,
     }));
+  }
+
+  /**
+   * The people directory for the Admin console: every principal, one page at a time. Exact matches (the account id,
+   * or a whole email address / phone number) come first; then by label, then id, so people with the same label page
+   * deterministically. The cursor is opaque to callers.
+   */
+  async directory(f: DirectorySearch = {}): Promise<{ users: DirectoryEntry[]; next: string | null }> {
+    const limit = Math.min(Math.max(Math.trunc(f.limit ?? 25), 1), 100);
+    const q = (f.q ?? "").trim().toLowerCase().slice(0, 200);
+    const after = decodeDirectoryCursor(f.after);
+    const values: unknown[] = [q];
+    const where: string[] = [];
+    if (q) {
+      if (isUuid(q)) where.push("b.id = $1::uuid");
+      else {
+        const like = `$${values.push(`%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`)}`;
+        // A Google identity's `identifier` is Google's internal subject: only its email is searched.
+        where.push(`EXISTS (SELECT 1 FROM identities i WHERE i.principal_id = b.id
+               AND ((i.method <> 'google' AND lower(i.identifier) LIKE ${like}) OR lower(coalesce(i.email, '')) LIKE ${like}))`);
+      }
+    }
+    if (f.state) where.push(`b.state = $${values.push(f.state)}`);
+    if (f.scope) where.push(`b.scope = $${values.push(f.scope)}`);
+    if (after) {
+      where.push(
+        `(b.rank, b.no_label, b.sort_label, b.id) > ($${values.push(after.r)}::int, $${values.push(after.n)}::boolean, $${values.push(after.l)}::text, $${values.push(after.i)}::uuid)`,
+      );
+    }
+    const { rows } = await this.pool.query<DirectoryRow & { rank: number; no_label: boolean; sort_label: string }>(
+      `WITH b AS (${DIRECTORY_BASE})
+       SELECT * FROM b ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+       ORDER BY b.rank, b.no_label, b.sort_label, b.id LIMIT $${values.push(limit + 1)}`,
+      values,
+    );
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      users: page.map(directoryEntry),
+      next:
+        rows.length > limit && last
+          ? encodeDirectoryCursor({ r: last.rank, n: last.no_label, l: last.sort_label, i: last.id })
+          : null,
+    };
+  }
+
+  /** One person for the Admin console's profile: the directory entry plus how they sign in and why they have access. */
+  async directoryProfile(id: string): Promise<DirectoryProfile | null> {
+    if (!isUuid(id)) return null;
+    const { rows } = await this.pool.query<DirectoryRow>(
+      `WITH b AS (${DIRECTORY_BASE}) SELECT * FROM b WHERE b.id = $2::uuid`,
+      ["", id.toLowerCase()],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const [identities, passkeys, connection, admissions, pendingRequest] = await Promise.all([
+      this.pool.query<{
+        method: IdentityMethod;
+        identifier: string | null;
+        verified_at: Date | null;
+        last_login_at: Date | null;
+        created_at: Date;
+      }>(
+        `SELECT method, CASE WHEN method = 'google' THEN email ELSE identifier END AS identifier, verified_at,
+                last_login_at, created_at
+           FROM identities WHERE principal_id = $1 ORDER BY ${LABEL_ORDER}`,
+        [row.id],
+      ),
+      this.pool.query<{ n: number }>("SELECT count(*)::int AS n FROM passkeys WHERE principal_id = $1", [row.id]),
+      this.pool.query<{
+        status: "active" | "revoked";
+        source: "admin" | "bootstrap" | "suspension" | null;
+        granted_at: Date;
+        granted_by: string | null;
+        revoked_at: Date | null;
+        revoked_by: string | null;
+      }>(
+        "SELECT status, source, granted_at, granted_by, revoked_at, revoked_by FROM connections WHERE principal_id = $1",
+        [row.id],
+      ),
+      this.pool.query<{ client_id: string; source: string; granted_at: Date }>(
+        "SELECT client_id, source, granted_at FROM client_admissions WHERE principal_id = $1 ORDER BY client_id",
+        [row.id],
+      ),
+      this.pendingRequest(row.id),
+    ]);
+    const c = connection.rows[0];
+    return {
+      ...directoryEntry(row),
+      identities: identities.rows.map((i) => ({
+        method: i.method,
+        identifier: i.identifier,
+        verifiedAt: i.verified_at,
+        lastLoginAt: i.last_login_at,
+        createdAt: i.created_at,
+      })),
+      passkeys: passkeys.rows[0]?.n ?? 0,
+      connection: c
+        ? {
+            status: c.status,
+            source: c.source,
+            grantedAt: c.granted_at,
+            grantedBy: c.granted_by,
+            revokedAt: c.revoked_at,
+            revokedBy: c.revoked_by,
+          }
+        : null,
+      admissions: admissions.rows.map((a) => ({ clientId: a.client_id, source: a.source, grantedAt: a.granted_at })),
+      pendingRequest,
+    };
   }
 
   async decideRequest(requestId: string, decision: "approved" | "rejected", actorId: string): Promise<string | null> {

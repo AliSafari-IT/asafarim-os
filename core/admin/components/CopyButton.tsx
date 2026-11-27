@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 
-/** Copies a value to the clipboard; says "Copied" for a moment. */
-export function CopyButton({ value }: { value: string }) {
+/** Copies a value to the clipboard; says "Copied" for a moment. `label`: the visible text (default "Copy"). */
+export function CopyButton({ value, label = "Copy" }: { value: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -17,7 +17,7 @@ export function CopyButton({ value }: { value: string }) {
         });
       }}
     >
-      {copied ? "Copied" : "Copy"}
+      {copied ? "Copied" : label}
     </button>
   );
 }

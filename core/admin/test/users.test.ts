@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadDirectory, parseDirectory, searchUsers } from "../lib/users";
+import { findPeople, fromIdentity, loadDirectory, parseDirectory, searchUsers } from "../lib/users";
 
 const SEED = JSON.stringify({
   _comment: "x",
@@ -33,5 +33,54 @@ describe("the seeded user directory", () => {
     expect(loadDirectory("/definitely/not/here.json")).toEqual([]);
     expect(() => parseDirectory("{nope")).toThrow();
     expect(parseDirectory("{}")).toEqual([]);
+  });
+});
+
+describe("finding people for the role picker", () => {
+  const person = {
+    id: "0190b6c4-0000-7000-8000-000000000001",
+    label: "ali@example.test",
+    email: "ali@example.test",
+    emailVerified: true,
+    state: "suspended" as const,
+    scope: "none" as const,
+    admittedClients: [],
+    isAdmin: false,
+    createdAt: "2026-11-01T00:00:00Z",
+    lastLoginAt: null,
+  };
+
+  it("asks identity's directory first, with the search text, and marks suspended people inactive", async () => {
+    const asked: unknown[] = [];
+    const identity = {
+      users: async (f: unknown) => (asked.push(f), { users: [person], next: null }),
+    } as unknown as NonNullable<NonNullable<Parameters<typeof findPeople>[3]>["identity"]>;
+    const r = await findPeople("token", "  ali ", 5, { identity, seed: () => parseDirectory(SEED) });
+    expect(asked).toEqual([{ q: "ali", limit: 5 }]);
+    expect(r).toEqual({
+      source: "identity",
+      people: [{ id: person.id, name: "ali@example.test", email: "ali@example.test", isActive: false }],
+    });
+  });
+
+  it("falls back to the seeded users when identity has no directory, and to nobody without them", async () => {
+    const identity = {
+      users: async () => {
+        throw new Error("404");
+      },
+    } as unknown as NonNullable<NonNullable<Parameters<typeof findPeople>[3]>["identity"]>;
+    const seeded = await findPeople("token", "member", 20, { identity, seed: () => parseDirectory(SEED) });
+    expect(seeded.source).toBe("seed");
+    expect(seeded.people.map((u) => u.id)).toEqual(["dev-member"]);
+    expect(await findPeople("token", "", 20, { identity, seed: () => [] })).toEqual({ people: [], source: "none" });
+  });
+
+  it("labels a person without an email by a shortened account id", () => {
+    expect(fromIdentity({ ...person, label: null, email: null, state: "active" })).toEqual({
+      id: person.id,
+      name: "Account 0190b6c4…",
+      email: "",
+      isActive: true,
+    });
   });
 });

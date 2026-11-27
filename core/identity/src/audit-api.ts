@@ -5,6 +5,10 @@
  *   GET /admin/v1/audit[?event=&method=&principal=&handle=&since=&until=&before=&limit=]   newest first;
  *       event: up to 16 comma-separated events (`login.granted`) or kinds (`otp.`, every event starting with it)
  *   GET /admin/v1/audit/summary[?days=14]   counts per day and event, open requests, active connections
+ *   GET /admin/v1/users[?q=&state=&scope=&after=&limit=]   the people directory, one page at a time: exact matches
+ *       (account id, whole email or phone) first, then by label and id; state: active|suspended,
+ *       scope: global|apps|none; `next` is an opaque cursor
+ *   GET /admin/v1/users/<id>   one person: identities, connection, admissions, an open request
  *
  * Who may read it: the console passes the signed-in person's ID token as `Bearer`, as it does to core-api.
  * Identity checks the token is its own (signature, issuer, ES256), issued to a reader client
@@ -21,8 +25,17 @@ import { createLocalJWKSet, jwtVerify, type JWK, type JWTVerifyGetKey } from "jo
 import type { HttpContext } from "./http.ts";
 import { queryValue } from "./http.ts";
 import type { Logger } from "./log.ts";
-import type { AuditCounts, AuditEntry, AuditSearch, AuditSearchRow, Principal } from "./store.ts";
-import { isUuid } from "./store.ts";
+import type {
+  AuditCounts,
+  AuditEntry,
+  AuditSearch,
+  AuditSearchRow,
+  DirectoryEntry,
+  DirectoryProfile,
+  DirectorySearch,
+  Principal,
+} from "./store.ts";
+import { DirectoryCursorError, isUuid } from "./store.ts";
 
 /** The slice of the store the API reads (PgIdentityStore; a fake in tests). */
 export interface AuditReader {
@@ -30,6 +43,8 @@ export interface AuditReader {
   searchAudit(f: AuditSearch): Promise<{ events: AuditSearchRow[]; next: number | null }>;
   auditCounts(since: Date): Promise<AuditCounts>;
   audit(entry: AuditEntry): Promise<void>;
+  directory(f: DirectorySearch): Promise<{ users: DirectoryEntry[]; next: string | null }>;
+  directoryProfile(id: string): Promise<DirectoryProfile | null>;
 }
 
 export interface AuditApiDeps {
@@ -45,7 +60,7 @@ export interface AuditApiDeps {
 }
 
 export interface AuditApi {
-  /** Handles /admin/v1/audit and /admin/v1/audit/summary; false for any other path. */
+  /** Handles /admin/v1/audit, /admin/v1/audit/summary and /admin/v1/users[/<id>]; false for any other path. */
   handle(ctx: HttpContext): Promise<boolean>;
 }
 
@@ -68,6 +83,24 @@ class Refused extends Error {
 /** The public half of a private EC JWK. */
 function publicJwk({ kty, crv, x, y, kid }: JWK): JWK {
   return { kty, crv, x, y, kid, alg: "ES256", use: "sig" } as JWK;
+}
+
+const iso = (d: Date | null) => (d ? d.toISOString() : null);
+
+/** A directory entry as JSON: dates as ISO strings, nothing else added or dropped. */
+function entryJson(e: DirectoryEntry) {
+  return {
+    id: e.id,
+    label: e.label,
+    email: e.email,
+    emailVerified: e.emailVerified,
+    state: e.state,
+    scope: e.scope,
+    admittedClients: e.admittedClients,
+    isAdmin: e.isAdmin,
+    createdAt: e.createdAt.toISOString(),
+    lastLoginAt: iso(e.lastLoginAt),
+  };
 }
 
 export function createAuditApi(d: AuditApiDeps): AuditApi {
@@ -98,7 +131,7 @@ export function createAuditApi(d: AuditApiDeps): AuditApi {
           .audit({ event: "admin.denied", principalId: principal.id, detail: { via: "audit_api" } })
           .catch(() => undefined);
       }
-      throw new Refused(403, "forbidden", "only an identity admin may read the sign-in trail");
+      throw new Refused(403, "forbidden", "only an identity admin may read the sign-in trail and the directory");
     }
     return principal;
   }
@@ -186,10 +219,71 @@ export function createAuditApi(d: AuditApiDeps): AuditApi {
     };
   }
 
+  async function users(ctx: HttpContext) {
+    const q = queryValue(ctx, "q");
+    if (q !== undefined && (q.length > 200 || [...q].some((ch) => ch.charCodeAt(0) < 32)))
+      throw new Refused(400, "bad_request", "q must be at most 200 characters");
+    const state = matching(ctx, "state", /^(active|suspended)$/) as DirectorySearch["state"];
+    const scope = matching(ctx, "scope", /^(global|apps|none)$/) as DirectorySearch["scope"];
+    const after = matching(ctx, "after", /^[A-Za-z0-9_-]{1,1000}$/);
+    const limit = whole(ctx, "limit", 100);
+    if (limit === 0) throw new Refused(400, "bad_request", "limit must be 1 to 100");
+    const f: DirectorySearch = {};
+    if (q) f.q = q;
+    if (state) f.state = state;
+    if (scope) f.scope = scope;
+    if (after) f.after = after;
+    if (limit) f.limit = limit;
+    let page: { users: DirectoryEntry[]; next: string | null };
+    try {
+      page = await d.store.directory(f);
+    } catch (err) {
+      if (err instanceof DirectoryCursorError) throw new Refused(400, "bad_request", "after isn't valid");
+      throw err;
+    }
+    return { users: page.users.map(entryJson), next: page.next };
+  }
+
+  async function user(id: string) {
+    const p = isUuid(id) ? await d.store.directoryProfile(id) : null;
+    if (!p) throw new Refused(404, "not_found", "no such account");
+    return {
+      ...entryJson(p),
+      identities: p.identities.map((i) => ({
+        method: i.method,
+        identifier: i.identifier,
+        verifiedAt: iso(i.verifiedAt),
+        lastLoginAt: iso(i.lastLoginAt),
+        createdAt: i.createdAt.toISOString(),
+      })),
+      passkeys: p.passkeys,
+      connection: p.connection
+        ? {
+            ...p.connection,
+            grantedAt: p.connection.grantedAt.toISOString(),
+            revokedAt: iso(p.connection.revokedAt),
+          }
+        : null,
+      admissions: p.admissions.map((a) => ({ ...a, grantedAt: a.grantedAt.toISOString() })),
+      pendingRequest: p.pendingRequest
+        ? { ...p.pendingRequest, createdAt: p.pendingRequest.createdAt.toISOString() }
+        : null,
+    };
+  }
+
   return {
     async handle(ctx) {
+      const one = /^\/admin\/v1\/users\/([^/]{1,64})$/.exec(ctx.path)?.[1];
       const route =
-        ctx.path === "/admin/v1/audit" ? search : ctx.path === "/admin/v1/audit/summary" ? summary : undefined;
+        ctx.path === "/admin/v1/audit"
+          ? search
+          : ctx.path === "/admin/v1/audit/summary"
+            ? summary
+            : ctx.path === "/admin/v1/users"
+              ? users
+              : one !== undefined
+                ? () => user(one)
+                : undefined;
       if (!route) return false;
       ctx.set("Cache-Control", "no-store");
       ctx.set("X-Content-Type-Options", "nosniff");
