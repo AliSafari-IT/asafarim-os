@@ -23,7 +23,23 @@ import { decodeCursor } from "./cursor";
 type Pool = Pick<pg.Pool, "connect" | "query">;
 type Client = Pick<pg.PoolClient, "query">;
 
-export const COURSE_LIMITS = { title: 200, summary: 500, modules: 20, lessons: 100 } as const;
+export const COURSE_LIMITS = {
+  title: 200,
+  summary: 500,
+  modules: 20,
+  lessons: 100,
+  cards: 200,
+  cardFront: 300,
+  cardBack: 1000,
+} as const;
+
+/** A study card: a prompt on the front, the answer on the back. Plain text; line breaks are kept. */
+export interface StudyCard {
+  /** Stable across the course's revisions, so a learner's marks survive other edits. */
+  cardId: string;
+  front: string;
+  back: string;
+}
 
 export interface LessonRef {
   /** Stable across the course's revisions: the lesson's URL. */
@@ -37,6 +53,7 @@ export interface CourseDraft {
   title: string;
   summary: string;
   modules: { title: string; lessons: LessonRef[] }[];
+  cards: StudyCard[];
 }
 
 export type CourseStatus = "draft" | "published" | "withdrawn";
@@ -57,7 +74,10 @@ export type CourseError =
   | "not_pinnable"
   | "duplicate_lesson"
   | "empty_course"
-  | "lesson_unavailable";
+  | "lesson_unavailable"
+  | "too_many_cards"
+  | "invalid_card"
+  | "unknown_card";
 
 export type CourseResult<T> = ({ ok: true } & T) | { ok: false; error: CourseError; detail?: string };
 
@@ -107,6 +127,25 @@ const lockCourse = async (c: Client, id: string) =>
 
 const cleanTitle = (s: string) => s.replace(/\s+/g, " ").trim();
 
+/** A card side: line breaks kept (normalised to \n, at most one blank line in a row), spaces tidied, ends trimmed. */
+export const cleanCardText = (s: string) =>
+  s
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t\f\v]+/g, " ").trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+/** A course revision's study cards, in order. */
+async function readCards(c: Pick<Pool, "query">, revisionId: string): Promise<StudyCard[]> {
+  const { rows } = await c.query<{ card_id: string; front: string; back: string }>(
+    "SELECT card_id, front, back FROM course_cards WHERE revision_id = $1 ORDER BY position",
+    [revisionId],
+  );
+  return rows.map((r) => ({ cardId: r.card_id, front: r.front, back: r.back }));
+}
+
 /** A course revision as stored: its modules in order, each with its lessons in order. */
 async function readDraft(c: Pick<Pool, "query">, revisionId: string): Promise<CourseDraft> {
   const rev = (
@@ -130,6 +169,7 @@ async function readDraft(c: Pick<Pool, "query">, revisionId: string): Promise<Co
   return {
     title: rev.title,
     summary: rev.summary,
+    cards: await readCards(c, revisionId),
     modules: modules.map((m) => ({
       title: m.title,
       lessons: lessons
@@ -172,6 +212,14 @@ async function insertRevision(c: Client, courseId: string, draft: CourseDraft, a
       ],
     );
   }
+  if (draft.cards.length) {
+    await c.query(
+      `INSERT INTO course_cards (revision_id, card_id, position, front, back)
+       SELECT $1, k.card_id, k.ord - 1, k.front, k.back
+       FROM unnest($2::text[], $3::text[], $4::text[]) WITH ORDINALITY AS k (card_id, front, back, ord)`,
+      [id, draft.cards.map((k) => k.cardId), draft.cards.map((k) => k.front), draft.cards.map((k) => k.back)],
+    );
+  }
   return id;
 }
 
@@ -184,6 +232,13 @@ function checkDraft(draft: CourseDraft): CourseError | null {
   const lessons = draft.modules.flatMap((m) => m.lessons);
   if (lessons.length > COURSE_LIMITS.lessons) return "too_many_lessons";
   if (new Set(lessons.map((l) => l.lessonId)).size !== lessons.length) return "duplicate_lesson";
+  if (draft.cards.length > COURSE_LIMITS.cards) return "too_many_cards";
+  if (
+    draft.cards.some(
+      (k) => !k.front || !k.back || k.front.length > COURSE_LIMITS.cardFront || k.back.length > COURSE_LIMITS.cardBack,
+    )
+  )
+    return "invalid_card";
   return null;
 }
 
@@ -203,7 +258,12 @@ export async function createCourse(
   input: { slug: string; title: string; summary?: string },
 ): Promise<CourseResult<{ id: string; revisionId: string }>> {
   if (!canCreateCourse(actor)) return { ok: false, error: "forbidden" };
-  const draft: CourseDraft = { title: cleanTitle(input.title), summary: (input.summary ?? "").trim(), modules: [] };
+  const draft: CourseDraft = {
+    title: cleanTitle(input.title),
+    summary: (input.summary ?? "").trim(),
+    modules: [],
+    cards: [],
+  };
   const bad = checkDraft(draft);
   if (bad) return { ok: false, error: bad };
   return inTransaction(pool, async (c) => {
@@ -229,7 +289,11 @@ export type CourseEdit =
   | { op: "add_lesson"; module: number; articleSlug: string }
   | { op: "move_lesson"; lessonId: string; delta: -1 | 1 }
   | { op: "remove_lesson"; lessonId: string }
-  | { op: "update_lesson"; lessonId: string };
+  | { op: "update_lesson"; lessonId: string }
+  | { op: "add_card"; front: string; back: string }
+  | { op: "edit_card"; cardId: string; front: string; back: string }
+  | { op: "move_card"; cardId: string; delta: -1 | 1 }
+  | { op: "remove_card"; cardId: string };
 
 const findLesson = (d: CourseDraft, lessonId: string) => {
   for (const [mi, m] of d.modules.entries()) {
@@ -240,7 +304,12 @@ const findLesson = (d: CourseDraft, lessonId: string) => {
 };
 
 async function applyEdit(c: Client, d: CourseDraft, edit: CourseEdit): Promise<CourseDraft | CourseError> {
-  const next: CourseDraft = { ...d, modules: d.modules.map((m) => ({ ...m, lessons: [...m.lessons] })) };
+  const next: CourseDraft = {
+    ...d,
+    modules: d.modules.map((m) => ({ ...m, lessons: [...m.lessons] })),
+    cards: [...d.cards],
+  };
+  const cardAt = (cardId: string) => next.cards.findIndex((k) => k.cardId === cardId);
   switch (edit.op) {
     case "meta":
       return { ...next, title: cleanTitle(edit.title), summary: edit.summary.trim() };
@@ -293,6 +362,28 @@ async function applyEdit(c: Client, d: CourseDraft, edit: CourseEdit): Promise<C
       const pin = await publicRevisionOf(c, { itemId: lesson.itemId });
       if (!pin) return "article_not_public";
       next.modules[at.mi]!.lessons[at.li] = { ...lesson, itemRevisionId: pin.revisionId };
+      return next;
+    }
+    case "add_card":
+      next.cards.push({ cardId: randomUUID(), front: cleanCardText(edit.front), back: cleanCardText(edit.back) });
+      return next;
+    case "edit_card": {
+      const at = cardAt(edit.cardId);
+      if (at < 0) return "unknown_card";
+      next.cards[at] = { cardId: edit.cardId, front: cleanCardText(edit.front), back: cleanCardText(edit.back) };
+      return next;
+    }
+    case "move_card": {
+      const at = cardAt(edit.cardId);
+      if (at < 0) return "unknown_card";
+      const to = at + edit.delta;
+      if (to >= 0 && to < next.cards.length) [next.cards[at], next.cards[to]] = [next.cards[to]!, next.cards[at]!];
+      return next;
+    }
+    case "remove_card": {
+      const at = cardAt(edit.cardId);
+      if (at < 0) return "unknown_card";
+      next.cards.splice(at, 1);
       return next;
     }
   }
@@ -463,11 +554,14 @@ export interface StudioCourse {
   draftIsPublished: boolean;
   /** Lessons guests see now (the published revision's lessons whose article is public); null when not published. */
   publishedLessons: number | null;
+  /** Study cards guests see now (the published revision's); null when not published. */
+  publishedCards: number | null;
   /** The publication state shown: publish and withdraw forms send it back, so a stale one is refused. */
   publication: number;
   title: string;
   summary: string;
   modules: { title: string; lessons: StudioLesson[] }[];
+  cards: StudyCard[];
 }
 
 export async function getStudioCourse(
@@ -502,6 +596,13 @@ export async function getStudioCourse(
         )
       ).rows[0]!.n
     : null;
+  const publishedCards = course.published_revision_id
+    ? (
+        await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM course_cards WHERE revision_id = $1", [
+          course.published_revision_id,
+        ])
+      ).rows[0]!.n
+    : null;
   return {
     id: course.id,
     slug: course.slug,
@@ -510,9 +611,11 @@ export async function getStudioCourse(
     publishedRevisionId: course.published_revision_id,
     draftIsPublished: course.published_revision_id === course.draft_revision_id,
     publishedLessons,
+    publishedCards,
     publication: course.publication,
     title: draft.title,
     summary: draft.summary,
+    cards: draft.cards,
     modules: draft.modules.map((m) => ({
       title: m.title,
       lessons: m.lessons.map((l) => {
@@ -595,6 +698,8 @@ export interface PublishedCourse {
   publishedAt: Date;
   /** `position` is the module's place in the revision: with the course id, the key of its engagement counts. */
   modules: { position: number; title: string; lessons: OutlineLesson[] }[];
+  /** How many study cards the published revision has (read them with getPublishedCards). */
+  cards: number;
 }
 
 interface OutlineRow {
@@ -610,13 +715,15 @@ interface OutlineRow {
   item_id: string;
   lesson_title: string | null;
   lesson_summary: string | null;
+  cards: number;
 }
 
 /** The published course and its outline: modules with at least one lesson a guest may open, in order. */
 export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string): Promise<PublishedCourse | null> {
   const { rows } = await pool.query<OutlineRow>(
     `SELECT c.id AS course_id, cr.id AS revision_id, c.slug AS course_slug, cr.title AS course_title, cr.summary AS course_summary, c.published_at,
-            m.position AS module_position, m.title AS module_title, l.lesson_id, l.item_id, r.title AS lesson_title, r.summary AS lesson_summary
+            m.position AS module_position, m.title AS module_title, l.lesson_id, l.item_id, r.title AS lesson_title, r.summary AS lesson_summary,
+            (SELECT count(*)::int FROM course_cards k WHERE k.revision_id = cr.id) AS cards
      FROM courses c JOIN course_revisions cr ON cr.id = c.published_revision_id
      LEFT JOIN course_modules m ON m.revision_id = cr.id
      LEFT JOIN course_lessons l ON l.revision_id = cr.id AND l.module_position = m.position
@@ -651,7 +758,20 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
     summary: first.course_summary,
     publishedAt: first.published_at,
     modules,
+    cards: first.cards,
   };
+}
+
+export interface PublishedCards {
+  course: PublishedCourse;
+  cards: StudyCard[];
+}
+
+/** A published course's study cards, from the same revision as its outline; null when the course isn't public. */
+export async function getPublishedCards(pool: Pick<Pool, "query">, slug: string): Promise<PublishedCards | null> {
+  const course = await getPublishedCourse(pool, slug);
+  if (!course) return null;
+  return { course, cards: await readCards(pool, course.revisionId) };
 }
 
 export interface PublishedLesson {

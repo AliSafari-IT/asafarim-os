@@ -68,6 +68,9 @@ export const ERRORS: Record<string, string> = {
   course_not_pinnable: "A lesson can only show the article's current published revision.",
   course_duplicate_lesson: "That lesson is already in the course.",
   course_empty_course: "Add at least one lesson before publishing.",
+  course_too_many_cards: "A course can have at most 200 study cards.",
+  course_invalid_card: "A card needs a front (up to 300 characters) and a back (up to 1,000).",
+  course_unknown_card: "That study card doesn't exist any more.",
   course_lesson_unavailable:
     "Some lessons' articles aren't public any more. Remove those lessons, or publish their articles again, then publish the course.",
   // Media (#359)
@@ -111,6 +114,7 @@ export const DONE: Record<string, string> = {
   tag_created: "Tag created.",
   course_created: "Course created. Add a module, then lessons from published articles.",
   course_saved: "Course saved as a new revision. Publish it to show the change to guests.",
+  course_card_saved: "Study cards saved as a new course revision. Publish it to show them to guests.",
   course_published: "Course published. Guests now see this revision.",
   course_withdrawn: "Course withdrawn. It is no longer public.",
 };

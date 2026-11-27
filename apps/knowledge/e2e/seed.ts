@@ -3,7 +3,7 @@
  * would write it. The guest journey (courses.spec.ts) then reads it through the production build.
  *
  * Seeded: four published articles; a published course "Ship a web app" with three lessons in two modules, plus a
- * fourth lesson whose article is withdrawn after the course was published; then a new draft of the first lesson's
+ * fourth lesson whose article is withdrawn after the course was published, and three study cards; then a new draft of the first lesson's
  * article, which the published course must not show. And an article with a YouTube video (#359).
  */
 import pg from "pg";
@@ -76,6 +76,17 @@ export default async function seed() {
       { op: "add_lesson", module: 1, articleSlug: "build-the-api" },
       { op: "add_lesson", module: 1, articleSlug: "deploy-it" },
       { op: "add_lesson", module: 1, articleSlug: "bonus-tuning" },
+      { op: "add_card", front: "What does a course lesson pin?", back: "One published revision of its article." },
+      {
+        op: "add_card",
+        front: "When do guests see a course change?",
+        back: "Only after the course is published again.",
+      },
+      {
+        op: "add_card",
+        front: "Where is a learner's progress kept?",
+        back: "In their own browser,\nnot on the server.",
+      },
     ];
     for (const edit of edits) {
       rev = ok(await editCourse(pool, author, { id: course.id, expectedRevisionId: rev, edit })).revisionId;

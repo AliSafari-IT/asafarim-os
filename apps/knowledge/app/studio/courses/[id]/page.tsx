@@ -8,7 +8,7 @@ import { notFound } from "next/navigation";
 import { editCourseAction, publishCourseAction, withdrawCourseAction } from "../../course-actions";
 import { Notices } from "@/components/Notices";
 import { TopBar } from "@/components/TopBar";
-import { getStudioCourse, listLessonChoices, type StudioLesson } from "@/lib/courses";
+import { COURSE_LIMITS, getStudioCourse, listLessonChoices, type StudioLesson } from "@/lib/courses";
 import { db } from "@/lib/db";
 import { one, type SearchParams } from "@/lib/params";
 import { requireStudio } from "@/lib/studio";
@@ -77,6 +77,9 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
   const pending = course.status === "published" && !course.draftIsPublished;
   const draftLessons = course.modules.reduce((n, m) => n + m.lessons.length, 0);
   const lessons = (n: number) => `${n} ${n === 1 ? "lesson" : "lessons"}`;
+  const cards = (n: number) => `${n} study ${n === 1 ? "card" : "cards"}`;
+  // A card change shows its notice next to the cards, where the author is.
+  const atCards = one(sp.at) === "cards";
   const modules = (n: number) => `${n} ${n === 1 ? "module" : "modules"}`;
   const publishForm = (testid: string) => (
     <form action={publishCourseAction} className="inline">
@@ -99,7 +102,7 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
         <h1 data-testid="course-title">
           {course.title} <span className={`badge ${course.status}`}>{course.status}</span>
         </h1>
-        <Notices error={one(sp.error)} done={one(sp.done)} detail={one(sp.detail)} />
+        {atCards ? null : <Notices error={one(sp.error)} done={one(sp.done)} detail={one(sp.detail)} />}
 
         <section
           className={pending ? "card publication-pending" : "card"}
@@ -113,8 +116,9 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
                 <>
                   {" "}
                   · <strong data-testid="unpublished-changes">Guests still see the previous version</strong> (
-                  {lessons(course.publishedLessons ?? 0)}). This draft has {lessons(draftLessons)} in{" "}
-                  {modules(course.modules.length)}: publish it to show your changes.
+                  {lessons(course.publishedLessons ?? 0)}, {cards(course.publishedCards ?? 0)}). This draft has{" "}
+                  {lessons(draftLessons)} in {modules(course.modules.length)} and {cards(course.cards.length)}: publish
+                  it to show your changes.
                 </>
               ) : (
                 "."
@@ -246,11 +250,101 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
             Add module
           </button>
         </form>
+        <section className="card" id="study-cards" data-testid="studio-cards">
+          <h2>
+            Study cards{" "}
+            <span className="muted">
+              ({course.cards.length} of {COURSE_LIMITS.cards})
+            </span>
+          </h2>
+          <p className="muted">
+            Flip cards learners study on the course page: a question or term on the front, the answer on the back. Line
+            breaks are kept. Like every change here, they reach guests when you publish.
+          </p>
+          {atCards ? <Notices error={one(sp.error)} done={one(sp.done)} detail={one(sp.detail)} /> : null}
+          {course.cards.length ? (
+            <ol className="studio-cards">
+              {course.cards.map((k, ki) => (
+                <li key={k.cardId} className="studio-card" data-testid="studio-card">
+                  <div className="studio-card-head">
+                    <strong>Card {ki + 1}</strong>
+                    <div className="actions">
+                      {ki > 0 ? <Op op="card_up" label="↑" title="Move up" fields={{ card: k.cardId }} /> : null}
+                      {ki < course.cards.length - 1 ? (
+                        <Op op="card_down" label="↓" title="Move down" fields={{ card: k.cardId }} />
+                      ) : null}
+                      <Op
+                        op="remove_card"
+                        label="Remove"
+                        fields={{ card: k.cardId }}
+                        className="secondary danger"
+                        testid="remove-card"
+                      />
+                    </div>
+                  </div>
+                  <form action={editCourseAction}>
+                    <input type="hidden" name="id" value={course.id} />
+                    <input type="hidden" name="revision" value={course.draftRevisionId} />
+                    <input type="hidden" name="op" value="edit_card" />
+                    <input type="hidden" name="card" value={k.cardId} />
+                    <div className="card-sides">
+                      <label>
+                        Front
+                        <textarea
+                          name="front"
+                          rows={2}
+                          maxLength={COURSE_LIMITS.cardFront}
+                          defaultValue={k.front}
+                          required
+                        />
+                      </label>
+                      <label>
+                        Back
+                        <textarea
+                          name="back"
+                          rows={3}
+                          maxLength={COURSE_LIMITS.cardBack}
+                          defaultValue={k.back}
+                          required
+                        />
+                      </label>
+                    </div>
+                    <button type="submit" className="secondary" data-testid="save-card">
+                      Save card
+                    </button>
+                  </form>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="muted">No study cards yet.</p>
+          )}
+          {course.cards.length < COURSE_LIMITS.cards ? (
+            <form action={editCourseAction} className="studio-card" data-testid="add-card">
+              <input type="hidden" name="id" value={course.id} />
+              <input type="hidden" name="revision" value={course.draftRevisionId} />
+              <input type="hidden" name="op" value="add_card" />
+              <div className="card-sides">
+                <label>
+                  New card: front <span className="muted">(question or term)</span>
+                  <textarea name="front" rows={2} maxLength={COURSE_LIMITS.cardFront} required />
+                </label>
+                <label>
+                  Back <span className="muted">(answer)</span>
+                  <textarea name="back" rows={3} maxLength={COURSE_LIMITS.cardBack} required />
+                </label>
+              </div>
+              <button type="submit">Add card</button>
+            </form>
+          ) : null}
+        </section>
+
         {pending ? (
           <div className="publish-bar" role="status" data-testid="publish-bar">
             <span>
-              Unpublished changes: guests see {lessons(course.publishedLessons ?? 0)}, the draft has{" "}
-              {lessons(draftLessons)}.
+              Unpublished changes: guests see {lessons(course.publishedLessons ?? 0)} and{" "}
+              {cards(course.publishedCards ?? 0)}, the draft has {lessons(draftLessons)} and{" "}
+              {cards(course.cards.length)}.
             </span>
             {publishForm("publish-bar-button")}
           </div>

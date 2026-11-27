@@ -547,6 +547,25 @@ DO $$ BEGIN
     ) counts GROUP BY entity_id;
 END $$;`,
   },
+  {
+    version: 15,
+    name: "study cards: a course revision's flip cards, in order",
+    sql: `
+-- A course's study cards belong to its revisions like its modules and lessons: adding, editing or reordering a card
+-- writes a new course revision, and guests see the cards of the published revision only. card_id stays the same
+-- across revisions, so a learner's "known" marks (kept in their browser) survive an edit elsewhere in the course.
+CREATE TABLE course_cards (
+  revision_id text NOT NULL REFERENCES course_revisions (id),
+  card_id     text NOT NULL,
+  position    integer NOT NULL CHECK (position >= 0),
+  front       text NOT NULL CHECK (length(front) BETWEEN 1 AND 300),
+  back        text NOT NULL CHECK (length(back) BETWEEN 1 AND 1000),
+  PRIMARY KEY (revision_id, card_id),
+  UNIQUE (revision_id, position)
+);
+CREATE TRIGGER course_cards_immutable BEFORE UPDATE OR DELETE ON course_cards
+  FOR EACH ROW EXECUTE FUNCTION knowledge_course_revisions_immutable();`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

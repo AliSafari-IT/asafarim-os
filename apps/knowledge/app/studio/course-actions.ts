@@ -100,10 +100,35 @@ export async function editCourseAction(formData: FormData) {
     case "update_lesson":
       edit = { op: "update_lesson", lessonId };
       break;
+    case "add_card":
+      edit = { op: "add_card", front: field(formData, "front"), back: field(formData, "back") };
+      break;
+    case "edit_card":
+      edit = {
+        op: "edit_card",
+        cardId: field(formData, "card"),
+        front: field(formData, "front"),
+        back: field(formData, "back"),
+      };
+      break;
+    case "card_up":
+    case "card_down":
+      edit = { op: "move_card", cardId: field(formData, "card"), delta: field(formData, "op") === "card_up" ? -1 : 1 };
+      break;
+    case "remove_card":
+      edit = { op: "remove_card", cardId: field(formData, "card") };
+      break;
     default:
       redirect(`${back}?error=course_unknown_lesson`);
   }
   const r = await editCourse(await db(), actor, { id, expectedRevisionId: field(formData, "revision"), edit });
+  // Card changes land back on the cards section (with their notice there), so a long course doesn't scroll the
+  // author to the top after each card.
+  if (edit.op.endsWith("_card")) {
+    const q = new URLSearchParams(r.ok ? { done: "course_card_saved" } : { error: `course_${r.error}` });
+    q.set("at", "cards");
+    redirect(`${back}?${q}#study-cards`);
+  }
   outcome(back, r, "course_saved");
 }
 
