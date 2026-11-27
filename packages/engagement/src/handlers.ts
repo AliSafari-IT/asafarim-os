@@ -86,6 +86,13 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   return parsed as Record<string, unknown>;
 }
 
+/** Remove trailing slashes in one linear pass (a regex like /\/+$/ backtracks quadratically on long runs of "/"). */
+function trimTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path.charCodeAt(end - 1) === 47) end--;
+  return path.slice(0, end);
+}
+
 function intParam(value: string | null): number | undefined {
   if (value === null || !/^\d{1,9}$/.test(value)) return undefined;
   return Number(value);
@@ -95,7 +102,7 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
   if (typeof options.salt !== "string" || options.salt.length < MIN_SALT_LENGTH) {
     throw new Error(`ENGAGEMENT_SALT must be set to at least ${MIN_SALT_LENGTH} characters`);
   }
-  const basePath = (options.basePath ?? "/api/engagement").replace(/\/+$/, "");
+  const basePath = trimTrailingSlashes(options.basePath ?? "/api/engagement");
   const log =
     options.log ??
     ((message, detail) =>
@@ -200,7 +207,7 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
 
     /** Dispatch a request under `basePath` to the handler above. */
     handle(request: Request): Promise<Response> {
-      const path = new URL(request.url).pathname.replace(/\/+$/, "");
+      const path = trimTrailingSlashes(new URL(request.url).pathname);
       const method = request.method.toUpperCase();
       const notFound = () => Promise.resolve(json({ error: { code: "not_found", message: "no such route" } }, 404));
       const notAllowed = (allow: string) =>
