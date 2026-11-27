@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { etagOf, excerpt, feedAlternates, matchesEtag, renderFeed, xmlEscape, type FeedItem } from "../lib/feed";
@@ -125,15 +123,11 @@ describe("the feed", () => {
     expect(doc.getElementsByTagName("script")).toHaveLength(0); // it stayed text; it never became an element
   });
 
-  it("passes an independent XML parser (xmllint)", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "feed-"));
-    try {
-      const file = path.join(dir, "feed.xml");
-      writeFileSync(file, feed([item(), item({ title: `Q&A <b> "x" ${String.fromCharCode(0)}` })]));
-      expect(() => execFileSync("xmllint", ["--noout", file], { stdio: "pipe" })).not.toThrow();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it("is well-formed XML for the awkward titles too, as a strict independent parser sees it", () => {
+    // jsdom's XML parser is a separate implementation from our serializer, and needs no system binary (CI has no xmllint).
+    const doc = parse(feed([item(), item({ title: `Q&A <b> "x" ${String.fromCharCode(0)}` })]));
+    expect(doc.getElementsByTagName("item")).toHaveLength(2);
+    expect(doc.getElementsByTagName("title")[2]!.textContent).toBe(`Q&A <b> "x" `);
   });
 });
 
