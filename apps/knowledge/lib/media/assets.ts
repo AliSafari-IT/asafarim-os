@@ -195,7 +195,8 @@ export async function checkRevisionMedia(
   const kinds = new Map(rows.map((r) => [r.id, r.kind]));
   const images = new Set<string>();
   const visit = (n: { type: string; attrs?: Record<string, unknown>; content?: unknown[] }) => {
-    if (n.type === "image") images.add(String(n.attrs?.asset));
+    // Only uploaded images: an image from an address or SVG code has no asset.
+    if (n.type === "image" && typeof n.attrs?.asset === "string") images.add(n.attrs.asset);
     for (const k of (n.content ?? []) as (typeof n)[]) visit(k);
   };
   visit(doc);

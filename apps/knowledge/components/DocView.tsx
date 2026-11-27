@@ -9,7 +9,7 @@ import { bundledLanguages, getSingletonHighlighter } from "shiki";
 import { MermaidDiagram } from "@/components/MermaidDiagram";
 import { VideoEmbed } from "@/components/VideoEmbed";
 import { headingIds, type Doc, type DocMark, type DocNode } from "@/lib/doc";
-import { isVideoId } from "@/lib/media/validate";
+import { svgDataUrl, isVideoId } from "@/lib/media/validate";
 
 const THEMES = { light: "github-light-default", dark: "github-dark-default" } as const;
 const PRELOADED = ["bash", "json", "yaml", "ts", "tsx", "js", "jsx", "sql", "diff", "css", "html", "python", "csharp"];
@@ -139,16 +139,20 @@ export async function DocView({ doc }: { doc: Doc }) {
           />
         );
       // Media (#359): served by /media/:id, which decides who may see it. Alt text is required by lib/doc.ts.
+      // An upload through /media/:id, an https address from its own site (no Referer sent), or SVG code as a data:
+      // URL in an <img>, where it runs no script and loads nothing (lib/media/validate.ts).
       case "image": {
         const caption = String(n.attrs?.caption ?? "");
+        const a = n.attrs ?? {};
+        const src =
+          typeof a.asset === "string" && a.asset
+            ? `/media/${a.asset}`
+            : typeof a.src === "string" && a.src
+              ? a.src
+              : svgDataUrl(typeof a.svg === "string" ? a.svg : "");
         return (
           <figure key={key} className="media-image">
-            <img
-              src={`/media/${String(n.attrs?.asset)}`}
-              alt={String(n.attrs?.alt ?? "")}
-              loading="lazy"
-              decoding="async"
-            />
+            <img src={src} alt={String(a.alt ?? "")} loading="lazy" decoding="async" referrerPolicy="no-referrer" />
             {caption ? <figcaption>{caption}</figcaption> : null}
           </figure>
         );

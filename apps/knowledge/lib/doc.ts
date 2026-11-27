@@ -6,7 +6,7 @@
  * sees a parsed document, so no author-supplied HTML, script, style or event handler can reach a page.
  */
 
-import { isAssetId, isVideoId, MEDIA_LIMITS } from "./media/validate";
+import { checkImageUrl, checkSvg, isAssetId, isVideoId, MEDIA_LIMITS } from "./media/validate";
 
 export const SCHEMA_VERSION = 1;
 
@@ -237,14 +237,29 @@ export function parseDoc(input: unknown): DocResult {
       }
       // Media (#359): an uploaded asset by id (whether it exists and may be used is checked when the revision is
       // saved), and a video as a provider and a validated id, never a URL or HTML.
+      // An image is exactly one of: an uploaded asset (#359), an https address on another site, or SVG code.
       case "image": {
-        if (!isAssetId(raw.asset)) throw new Invalid("media_invalid");
+        const sources = [raw.asset, raw.src, raw.svg].filter((v) => v !== undefined && v !== null && v !== "");
+        if (sources.length !== 1) throw new Invalid("media_invalid");
+        let source: { asset: string } | { src: string } | { svg: string };
+        if (raw.asset !== undefined && raw.asset !== null && raw.asset !== "") {
+          if (!isAssetId(raw.asset)) throw new Invalid("media_invalid");
+          source = { asset: raw.asset };
+        } else if (raw.src !== undefined && raw.src !== null && raw.src !== "") {
+          const src = checkImageUrl(raw.src);
+          if (!src) throw new Invalid("image_url_invalid");
+          source = { src };
+        } else {
+          const svg = checkSvg(raw.svg);
+          if (!svg.ok) throw new Invalid(svg.error);
+          source = { svg: svg.svg };
+        }
         const alt = typeof raw.alt === "string" ? raw.alt.replace(/\s+/g, " ").trim() : "";
         if (!alt) throw new Invalid("image_alt_required");
         const caption = typeof raw.caption === "string" ? raw.caption.replace(/\s+/g, " ").trim() : "";
         if (alt.length > MEDIA_LIMITS.alt || caption.length > MEDIA_LIMITS.caption)
           throw new Invalid("media_text_too_long");
-        return { asset: raw.asset, alt, caption };
+        return { ...source, alt, caption };
       }
       case "attachment": {
         if (!isAssetId(raw.asset)) throw new Invalid("media_invalid");

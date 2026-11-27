@@ -7,12 +7,13 @@
 import { mergeAttributes, Node } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type ReactNodeViewProps } from "@tiptap/react";
 import { finishUploadAction, requestUploadAction, type UploadDone } from "@/app/studio/media-actions";
-import { MEDIA_LIMITS, VIDEO_LABEL, isVideoId, type VideoProvider } from "./media/validate";
+import { MEDIA_LIMITS, VIDEO_LABEL, isVideoId, svgDataUrl, type VideoProvider } from "./media/validate";
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     media: {
-      insertImage: (attrs: { asset: string; alt?: string }) => ReturnType;
+      /** Exactly one source: an uploaded asset, an https address, or SVG code. */
+      insertImage: (attrs: ({ asset: string } | { src: string } | { svg: string }) & { alt?: string }) => ReturnType;
       insertAttachment: (attrs: { asset: string; label: string }) => ReturnType;
       insertVideo: (attrs: { provider: VideoProvider; videoId: string; title?: string }) => ReturnType;
     };
@@ -45,16 +46,44 @@ function Head({ label, editor, deleteNode }: Pick<ReactNodeViewProps, "editor" |
   );
 }
 
+/** Where an image node's picture comes from, as an <img> src (an SVG only ever as a data: URL). */
+export function imageSrc(attrs: Record<string, unknown>): string {
+  if (typeof attrs.asset === "string" && attrs.asset) return `/media/${attrs.asset}`;
+  if (typeof attrs.src === "string" && attrs.src) return attrs.src;
+  return svgDataUrl(typeof attrs.svg === "string" ? attrs.svg : "");
+}
+
 function ImageView({ node, updateAttributes, editor, deleteNode }: ReactNodeViewProps) {
   const alt = String(node.attrs.alt ?? "");
   const caption = String(node.attrs.caption ?? "");
+  const kind = node.attrs.asset ? "uploaded" : node.attrs.src ? "from another site" : "SVG";
   return (
     <NodeViewWrapper className="media-block" data-testid="image-block">
-      <Head label="Image" editor={editor} deleteNode={deleteNode} />
+      <Head label={`Image (${kind})`} editor={editor} deleteNode={deleteNode} />
       <div contentEditable={false}>
-        {/* The studio reads the draft image through /media/:id like a guest reads a published one. */}
-        <img src={`/media/${String(node.attrs.asset)}`} alt={alt} />
+        {/* An upload is read through /media/:id like a guest reads it; an address from that site; SVG as data:. */}
+        <img src={imageSrc(node.attrs)} alt={alt} referrerPolicy="no-referrer" />
       </div>
+      {node.attrs.src ? (
+        <p className="muted" style={{ overflowWrap: "anywhere" }}>
+          Loaded from <code>{String(node.attrs.src)}</code>: readers&apos; browsers fetch it from that site.
+        </p>
+      ) : null}
+      {/* A string, even emptied: clearing the code to paste new code must not take the field away. */}
+      {typeof node.attrs.svg === "string" ? (
+        <label>
+          SVG code
+          <textarea
+            value={String(node.attrs.svg)}
+            rows={4}
+            maxLength={MEDIA_LIMITS.svg}
+            readOnly={!editor.isEditable}
+            spellCheck={false}
+            onChange={(e) => updateAttributes({ svg: e.target.value })}
+            data-testid="image-svg"
+          />
+        </label>
+      ) : null}
       <label>
         Alt text (required: what the image shows, for readers who can&apos;t see it)
         <input
@@ -127,7 +156,13 @@ const atom = { group: "block", atom: true, selectable: true, draggable: false } 
 export const ImageNode = Node.create({
   name: "image",
   ...atom,
-  addAttributes: () => ({ asset: { default: null }, alt: { default: "" }, caption: { default: "" } }),
+  addAttributes: () => ({
+    asset: { default: null },
+    src: { default: null },
+    svg: { default: null },
+    alt: { default: "" },
+    caption: { default: "" },
+  }),
   parseHTML: () => [{ tag: "figure[data-image]" }],
   renderHTML: ({ HTMLAttributes }) => ["figure", mergeAttributes(HTMLAttributes, { "data-image": "" })],
   addNodeView: () => ReactNodeViewRenderer(ImageView),

@@ -4,6 +4,10 @@
  * Uploads: a short list of types, each with a size limit, and the file's first bytes must match the type it claims
  * (checked on the server after the upload, before the asset can be used). No SVG or HTML: both can carry script.
  *
+ * Images without an upload (they need no media store): an https address on another site, or SVG code pasted into the
+ * document. Both are only ever shown through an <img> element (an SVG as a data: URL), where a browser runs no script
+ * and loads nothing an SVG refers to; the SVG check also refuses script, event handlers and foreign HTML outright.
+ *
  * Videos: only YouTube and Vimeo, stored as a provider and a validated id, never as a URL or HTML. The page builds
  * the player address itself (youtube-nocookie.com, player.vimeo.com with dnt), and only after the reader asks for it.
  */
@@ -19,7 +23,15 @@ export const MEDIA_TYPES = {
 export type MediaType = keyof typeof MEDIA_TYPES;
 export type MediaKind = (typeof MEDIA_TYPES)[MediaType]["kind"];
 
-export const MEDIA_LIMITS = { filename: 200, alt: 300, caption: 300, label: 200, videoTitle: 200 } as const;
+export const MEDIA_LIMITS = {
+  filename: 200,
+  alt: 300,
+  caption: 300,
+  label: 200,
+  videoTitle: 200,
+  imageUrl: 2000,
+  svg: 100_000,
+} as const;
 
 export const isMediaType = (t: unknown): t is MediaType => typeof t === "string" && t in MEDIA_TYPES;
 
@@ -129,3 +141,192 @@ export const VIDEO_LABEL: Record<VideoProvider, string> = { youtube: "YouTube", 
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const isAssetId = (v: unknown): v is string => typeof v === "string" && UUID.test(v);
+
+/**
+ * An image address an author typed: https only, on a named host (no IP address, no localhost), no credentials, no
+ * fragment. Returns the normalised address, or null. Readers' browsers load it from that site, so it is the author's
+ * choice of host; the page sends no Referer with it.
+ */
+export function checkImageUrl(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const text = raw.trim();
+  if (!text || text.length > MEDIA_LIMITS.imageUrl || /[\s<>"'`\\]/.test(text)) return null;
+  let u: URL;
+  try {
+    u = new URL(text);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" || u.username || u.password) return null;
+  const host = u.hostname.toLowerCase();
+  if (!host.includes(".") || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal"))
+    return null;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.startsWith("[")) return null;
+  u.hash = "";
+  return u.href.length <= MEDIA_LIMITS.imageUrl ? u.href : null;
+}
+
+const SVG_FORBIDDEN = [
+  /<\s*script/i,
+  /<\s*foreignObject/i,
+  /<\s*iframe/i,
+  /<\s*(embed|object)\b/i,
+  /\son[a-z]+\s*=/i,
+  /javascript\s*:/i,
+  /<!ENTITY/i,
+];
+
+/**
+ * Where the root <svg> tag starts, after an optional XML declaration, then comments and at most one doctype (without
+ * an internal subset), in any order; -1 when the code doesn't start that way. A single forward scan with indexOf, so it
+ * runs in linear time whatever it is given (a regular expression here could backtrack exponentially on many comments).
+ */
+function svgRootStart(svg: string): number {
+  const isSpace = (c: string | undefined) => c === " " || c === "\n" || c === "\r" || c === "\t" || c === "\f";
+  const startsAt = (at: number, word: string) => svg.slice(at, at + word.length).toLowerCase() === word;
+  let at = 0;
+  const skipSpace = () => {
+    while (isSpace(svg[at])) at++;
+  };
+  if (startsAt(0, "<?xml")) {
+    const end = svg.indexOf("?>", 5);
+    if (end < 0) return -1;
+    at = end + 2;
+  }
+  let doctypes = 0;
+  for (;;) {
+    skipSpace();
+    if (startsAt(at, "<!--")) {
+      const end = svg.indexOf("-->", at + 4);
+      if (end < 0) return -1;
+      at = end + 3;
+    } else if (startsAt(at, "<!doctype")) {
+      const end = svg.indexOf(">", at + 9);
+      if (end < 0 || ++doctypes > 1 || svg.slice(at, end).includes("[")) return -1;
+      at = end + 1;
+    } else break;
+  }
+  const after = svg[at + 4];
+  return startsAt(at, "<svg") && (isSpace(after) || after === ">" || after === "/") ? at : -1;
+}
+
+/**
+ * SVG code an author pasted: one <svg> element (optionally after an XML declaration, comments and a doctype), at most
+ * 100 000 characters, with no script, event handler, foreign HTML or entity declaration. Gains the SVG namespace when
+ * it lacks one (an <img> shows nothing without it). Returns the code to store, or an error.
+ */
+export function checkSvg(
+  raw: unknown,
+): { ok: true; svg: string } | { ok: false; error: "svg_invalid" | "svg_too_large" | "svg_unsafe" } {
+  if (typeof raw !== "string") return { ok: false, error: "svg_invalid" };
+  let svg = raw.trim();
+  if (svg.length > MEDIA_LIMITS.svg) return { ok: false, error: "svg_too_large" };
+  if (svg.includes("\u0000")) return { ok: false, error: "svg_invalid" };
+  const rootStart = svgRootStart(svg);
+  if (rootStart < 0) return { ok: false, error: "svg_invalid" };
+  // Well-formed XML from the root to the very end (`svg` is trimmed): a browser shows nothing for anything else.
+  const root = scanSvgElement(svg, rootStart);
+  if (!root) return { ok: false, error: "svg_invalid" };
+  if (SVG_FORBIDDEN.some((re) => re.test(svg))) return { ok: false, error: "svg_unsafe" };
+  if (!root.attributes.has("xmlns")) {
+    svg = `${svg.slice(0, rootStart)}<svg xmlns="http://www.w3.org/2000/svg"${svg.slice(rootStart + 4)}`;
+    // The namespace counts towards the limit too: what is stored must pass this check again.
+    if (svg.length > MEDIA_LIMITS.svg) return { ok: false, error: "svg_too_large" };
+  }
+  return { ok: true, svg };
+}
+
+const XML_NAME_START = /[A-Za-z_:]/;
+const XML_NAME_CHAR = /[A-Za-z0-9_:.-]/;
+const XML_SPACE = (c: string | undefined) => c === " " || c === "\n" || c === "\r" || c === "\t";
+const XML_ENTITY = /^&(?:amp|lt|gt|quot|apos|#\d{1,7}|#x[0-9A-Fa-f]{1,6});/;
+
+/** Whether every `&` in `text` starts one of XML's own entities or a character reference (no other is defined). */
+function entitiesOk(text: string): boolean {
+  for (let i = text.indexOf("&"); i >= 0; i = text.indexOf("&", i + 1)) {
+    if (!XML_ENTITY.test(text.slice(i, i + 12))) return false;
+  }
+  return true;
+}
+
+/**
+ * Check that the document from `start` (where the root `<svg` begins) to the end is exactly one well-formed XML
+ * element: matched and properly nested tags, quoted attribute values without `<`, no duplicate attribute on a tag,
+ * only XML's own entities, and comments, CDATA and processing instructions closed. One forward pass with a stack of
+ * open tag names, so it is linear in the input. Returns the root's attribute names, or null.
+ */
+function scanSvgElement(svg: string, start: number): { attributes: Set<string> } | null {
+  const open: string[] = [];
+  let rootAttributes: Set<string> | null = null;
+  let i = start;
+  const n = svg.length;
+  const readName = (): string | null => {
+    if (!XML_NAME_START.test(svg[i] ?? "")) return null;
+    const from = i;
+    while (i < n && XML_NAME_CHAR.test(svg[i]!)) i++;
+    return svg.slice(from, i);
+  };
+  while (i < n) {
+    if (open.length === 0 && rootAttributes) return null; // something after the root closed
+    const lt = svg.indexOf("<", i);
+    if (lt < 0) return null; // text after the last tag, with the root still open
+    if (open.length > 0 && !entitiesOk(svg.slice(i, lt))) return null;
+    if (open.length === 0 && lt !== i) return null;
+    i = lt;
+    if (svg.startsWith("<!--", i)) {
+      const end = svg.indexOf("-->", i + 4);
+      if (end < 0 || open.length === 0) return null;
+      i = end + 3;
+    } else if (svg.startsWith("<![CDATA[", i)) {
+      const end = svg.indexOf("]]>", i + 9);
+      if (end < 0 || open.length === 0) return null;
+      i = end + 3;
+    } else if (svg.startsWith("<?", i)) {
+      const end = svg.indexOf("?>", i + 2);
+      if (end < 0 || open.length === 0) return null;
+      i = end + 2;
+    } else if (svg.startsWith("</", i)) {
+      i += 2;
+      const name = readName();
+      while (XML_SPACE(svg[i])) i++;
+      if (!name || svg[i] !== ">" || open.pop() !== name) return null;
+      i++;
+    } else if (svg[i + 1] === "!") {
+      return null; // a doctype or declaration inside the document
+    } else {
+      i++;
+      const name = readName();
+      if (!name || (open.length === 0 && rootAttributes) || (!rootAttributes && name !== "svg")) return null;
+      const attributes = new Set<string>();
+      for (;;) {
+        const before = i;
+        while (XML_SPACE(svg[i])) i++;
+        if (svg[i] === ">" || svg.startsWith("/>", i)) break;
+        if (i === before) return null; // attributes must be separated by space
+        const attr = readName();
+        if (!attr || attributes.has(attr)) return null;
+        attributes.add(attr);
+        while (XML_SPACE(svg[i])) i++;
+        if (svg[i] !== "=") return null;
+        i++;
+        while (XML_SPACE(svg[i])) i++;
+        const quote = svg[i];
+        if (quote !== '"' && quote !== "'") return null;
+        const end = svg.indexOf(quote, i + 1);
+        if (end < 0) return null;
+        const value = svg.slice(i + 1, end);
+        if (value.includes("<") || !entitiesOk(value)) return null;
+        i = end + 1;
+      }
+      if (!rootAttributes) rootAttributes = attributes;
+      if (svg[i] === ">") {
+        open.push(name);
+        i++;
+      } else i += 2; // "/>": an element with no content
+    }
+  }
+  return open.length === 0 && rootAttributes ? { attributes: rootAttributes } : null;
+}
+
+/** How stored SVG code is shown: as a data: URL in an <img>, never as markup in the page. */
+export const svgDataUrl = (svg: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;

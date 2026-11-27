@@ -15,7 +15,7 @@ import { AiPanel } from "@/components/AiPanel";
 import { Callout } from "@/lib/callout";
 import { Mermaid } from "@/lib/mermaid-node";
 import { AttachmentNode, ImageNode, uploadFile, VideoNode } from "@/lib/media-nodes";
-import { MEDIA_TYPES, parseVideoUrl } from "@/lib/media/validate";
+import { checkImageUrl, checkSvg, MEDIA_LIMITS, MEDIA_TYPES, parseVideoUrl } from "@/lib/media/validate";
 import { textExtensions } from "@/lib/editor-extensions";
 import { RichPaste } from "@/lib/rich-paste";
 import { safeHref, type Doc } from "@/lib/doc";
@@ -91,8 +91,9 @@ async function uploadAndInsert(editor: Editor, files: File[], say: (m: MediaMess
 }
 
 /**
- * Media tools (#359): upload an image or PDF (straight to the store, checked by the server, then inserted), and
- * embed a video by its YouTube or Vimeo address. Status and errors are announced in place, never in a dialog.
+ * Media tools (#359): an image (uploaded straight to the store when one is configured, else from an https address or
+ * pasted SVG code), a PDF upload, and a video by its YouTube or Vimeo address. Status and errors are announced in
+ * place, never in a dialog.
  */
 function MediaTools({
   editor,
@@ -112,6 +113,27 @@ function MediaTools({
   const fileInput = useRef<HTMLInputElement>(null);
   const [videoOpen, setVideoOpen] = useState(false);
   const [address, setAddress] = useState("");
+  const [imageOpen, setImageOpen] = useState(false);
+  const [imageUrl, setImageUrl] = useState("");
+  const [svgCode, setSvgCode] = useState("");
+
+  const addImageUrl = () => {
+    const src = checkImageUrl(imageUrl);
+    if (!src) return setMessage({ bad: true, text: ERRORS.image_url_invalid! });
+    editor.chain().focus().insertImage({ src }).run();
+    setImageUrl("");
+    setImageOpen(false);
+    setMessage({ bad: false, text: "Image added. Write its alt text below it." });
+  };
+
+  const addSvg = () => {
+    const r = checkSvg(svgCode);
+    if (!r.ok) return setMessage({ bad: true, text: ERRORS[r.error]! });
+    editor.chain().focus().insertImage({ svg: r.svg }).run();
+    setSvgCode("");
+    setImageOpen(false);
+    setMessage({ bad: false, text: "SVG added. Write its alt text below it." });
+  };
 
   const onFile = async (file: File | undefined) => {
     if (!file) return;
@@ -131,26 +153,93 @@ function MediaTools({
   return (
     <>
       {uploads ? (
-        <>
-          <input
-            ref={fileInput}
-            type="file"
-            style={{ display: "none" }}
-            accept={Object.keys(MEDIA_TYPES).join(",")}
-            onChange={(e) => onFile(e.target.files?.[0])}
-            data-testid="media-file"
-          />
-          <button
-            type="button"
-            className="tool"
-            disabled={busy}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => fileInput.current?.click()}
-            title="Upload an image (PNG, JPEG, GIF, WebP) or a PDF"
-          >
-            {busy ? "Uploading…" : "Image / file"}
-          </button>
-        </>
+        <input
+          ref={fileInput}
+          type="file"
+          style={{ display: "none" }}
+          accept={Object.keys(MEDIA_TYPES).join(",")}
+          onChange={(e) => onFile(e.target.files?.[0])}
+          data-testid="media-file"
+        />
+      ) : null}
+      <button
+        type="button"
+        className={imageOpen ? "tool active" : "tool"}
+        aria-expanded={imageOpen}
+        disabled={busy}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setImageOpen((o) => !o)}
+        title="Add an image: upload one, give its address, or paste SVG code"
+        data-testid="image-tool"
+      >
+        {busy ? "Uploading…" : "Image"}
+      </button>
+      {imageOpen ? (
+        <div className="image-panel" role="group" aria-label="Add an image" data-testid="image-panel">
+          {uploads ? (
+            <p>
+              <button
+                type="button"
+                className="tool"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setImageOpen(false);
+                  fileInput.current?.click();
+                }}
+                data-testid="image-upload"
+              >
+                Upload an image or PDF
+              </button>{" "}
+              <span className="muted">PNG, JPEG, GIF or WebP up to 10 MB; PDF up to 25 MB.</span>
+            </p>
+          ) : (
+            <p className="muted" data-testid="image-no-uploads">
+              Uploading files is off on this site (no media store is set up). Use an address or SVG code instead.
+            </p>
+          )}
+          <label>
+            Image address (https)
+            <span className="inline">
+              <input
+                value={imageUrl}
+                placeholder="https://example.com/picture.png"
+                maxLength={MEDIA_LIMITS.imageUrl}
+                onChange={(e) => setImageUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addImageUrl();
+                  }
+                }}
+                data-testid="image-url"
+              />
+              <button type="button" className="tool" onClick={addImageUrl} data-testid="image-url-add">
+                Add
+              </button>
+            </span>
+          </label>
+          <p className="muted">
+            Readers&apos; browsers load it from that site, so use one you trust to keep it online.
+          </p>
+          <label>
+            Or SVG code
+            <textarea
+              value={svgCode}
+              rows={4}
+              maxLength={MEDIA_LIMITS.svg}
+              spellCheck={false}
+              placeholder={'<svg viewBox="0 0 100 100">…</svg>'}
+              onChange={(e) => setSvgCode(e.target.value)}
+              data-testid="image-svg-input"
+            />
+          </label>
+          <p>
+            <button type="button" className="tool" onClick={addSvg} data-testid="image-svg-add">
+              Add SVG
+            </button>{" "}
+            <span className="muted">Stored in the article and shown as a picture; scripts in it never run.</span>
+          </p>
+        </div>
       ) : null}
       <button
         type="button"
@@ -366,7 +455,9 @@ export function EditorForm(props: EditorFormProps) {
           setMediaMessage({
             bad: false,
             text: `Formatting kept. ${n === 1 ? "1 image" : `${n} images`} from the other page can't be copied${
-              uploads ? ": save each one and add it with Image / file (or paste the image itself)." : "."
+              uploads
+                ? ": save each one and add it with Image (or paste the image itself)."
+                : ": add each one with Image, by its address."
             }`,
           }),
       }),
