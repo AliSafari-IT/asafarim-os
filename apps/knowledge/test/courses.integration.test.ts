@@ -138,6 +138,9 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
     // ...until its author updates the lesson to the latest and publishes the course again.
     const rev = await edit(alice, c.id, [{ op: "update_lesson", lessonId }]);
     expect((await getPublishedLesson(pool, "getting-started", lessonId))!.title).toBe("Setting up");
+    // The studio says guests still see the published version, and how many lessons it has.
+    const pending = (await getStudioCourse(pool, alice, c.id))!;
+    expect([pending.draftIsPublished, pending.publishedLessons]).toEqual([false, 3]);
     ok(await publishCourse(pool, alice, { id: c.id, revisionId: rev, publication: await shown(alice, c.id) }));
     const after = (await getPublishedLesson(pool, "getting-started", lessonId))!;
     expect([after.title, after.body]).toEqual(["Setting up (v2)", "Install the new tools."]);
