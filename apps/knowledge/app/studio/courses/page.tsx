@@ -7,13 +7,20 @@ import { createCourseAction } from "../course-actions";
 import { Notices } from "@/components/Notices";
 import { Pager } from "@/components/Pager";
 import { TopBar } from "@/components/TopBar";
-import { listStudioCourses } from "@/lib/courses";
+import { listStudioCourses, type CourseStatus } from "@/lib/courses";
 import { db } from "@/lib/db";
 import { one, type SearchParams } from "@/lib/params";
 import { canCreateCourse } from "@/lib/policy";
 import { requireStudio } from "@/lib/studio";
 
 export const dynamic = "force-dynamic";
+
+/** What a status means for a reader, shown when hovering a badge in the list. */
+const STATUS_HINT: Record<CourseStatus, string> = {
+  draft: "Not public yet: add a lesson, then publish it.",
+  published: "Public: guests see it on the Courses page.",
+  withdrawn: "Withdrawn: not public. Open it to publish again.",
+};
 
 type Props = { searchParams: Promise<SearchParams> };
 
@@ -73,28 +80,39 @@ export default async function StudioCourses({ searchParams }: Props) {
             No courses yet.
           </p>
         ) : (
-          <table className="studio-list" data-testid="studio-courses">
-            <thead>
-              <tr>
-                <th scope="col">Title</th>
-                <th scope="col">Status</th>
-                <th scope="col">Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {courses.map((c) => (
-                <tr key={c.id} data-testid="studio-course">
-                  <td>
-                    <Link href={`/studio/courses/${c.id}`}>{c.title}</Link>
-                  </td>
-                  <td>
-                    <span className={`badge ${c.status}`}>{c.status}</span>
-                  </td>
-                  <td className="muted">{c.updatedAt.toISOString().slice(0, 16).replace("T", " ")}</td>
+          <>
+            {courses.some((c) => c.status !== "published") ? (
+              <p className="notice" role="note" data-testid="courses-draft-hint">
+                Only <strong>published</strong> courses appear on the public Courses page. To publish a draft, open it,
+                add a module and at least one lesson (a published article), then press{" "}
+                <strong>Publish this version</strong>.
+              </p>
+            ) : null}
+            <table className="studio-list" data-testid="studio-courses">
+              <thead>
+                <tr>
+                  <th scope="col">Title</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Updated</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {courses.map((c) => (
+                  <tr key={c.id} data-testid="studio-course">
+                    <td>
+                      <Link href={`/studio/courses/${c.id}`}>{c.title}</Link>
+                    </td>
+                    <td>
+                      <span className={`badge ${c.status}`} title={STATUS_HINT[c.status]}>
+                        {c.status}
+                      </span>
+                    </td>
+                    <td className="muted">{c.updatedAt.toISOString().slice(0, 16).replace("T", " ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
         )}
         <Pager after={after} next={page.next} base="/studio/courses" label="Older courses" />
       </main>
