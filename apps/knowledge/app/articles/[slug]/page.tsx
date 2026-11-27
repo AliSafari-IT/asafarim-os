@@ -7,6 +7,9 @@
  * (canonical address, Open Graph and Twitter card, and the generated image beside this file) is what LinkedIn, X
  * and messaging apps show when the link is shared.
  */
+import { ArticleEngagement } from "@/components/ArticleEngagement";
+import { engagementEnabled } from "@/lib/engagement-config";
+import { articleCounts, countsOf } from "@/lib/engagement-rollups";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
@@ -70,6 +73,7 @@ export default async function ArticlePage({ params }: Props) {
   const parsed = article.doc ? parseDoc(article.doc) : null;
   const doc = parsed?.ok ? parsed.doc : null;
   const url = articleUrl(article.slug);
+  const counts = engagementEnabled() ? countsOf(await articleCounts(await db(), [article.id]), article.id) : null;
   return (
     <>
       <TopBar next={`/articles/${slug}`} />
@@ -99,6 +103,7 @@ export default async function ArticlePage({ params }: Props) {
         </article>
         <footer className="article-foot">
           <ShareBar url={url} title={article.title} slug={article.slug} heading="Found this useful? Share it" />
+          {counts ? <ArticleEngagement id={article.id} next={`/articles/${article.slug}`} counts={counts} /> : null}
           <p>
             <Link href="/">← All articles</Link>
           </p>

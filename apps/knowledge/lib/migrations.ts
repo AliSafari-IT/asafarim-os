@@ -511,6 +511,42 @@ ALTER TABLE courses
     // The platform's outbox DDL (@asafarim/events), unchanged: CREATE … IF NOT EXISTS, so it is safe to run once here.
     sql: OUTBOX_SQL,
   },
+  {
+    version: 14,
+    name: "share engagement across all appearances of an article",
+    sql: `
+ALTER TABLE engagement_rollups DROP CONSTRAINT engagement_rollups_entity_type_check;
+DELETE FROM engagement_rollups;
+ALTER TABLE engagement_rollups ADD CHECK (entity_type = 'article');
+ALTER TABLE courses DROP COLUMN likes_count, DROP COLUMN comments_count;
+-- Fresh installations create the engagement package tables after Knowledge migrations.
+DO $$ BEGIN
+  IF to_regclass('engagement_likes') IS NULL THEN RETURN; END IF;
+  LOCK TABLE engagement_likes, engagement_comments IN SHARE ROW EXCLUSIVE MODE;
+  CREATE TEMP TABLE lesson_articles ON COMMIT DROP AS SELECT DISTINCT lesson_id, item_id FROM course_lessons;
+  CREATE UNIQUE INDEX ON lesson_articles(lesson_id);
+  WITH ranked AS (
+    SELECT e.id,row_number() OVER (PARTITION BY a.item_id,e.user_id,e.visitor_hash ORDER BY e.created_at,e.id) AS n
+    FROM engagement_likes e JOIN lesson_articles a ON a.lesson_id=e.entity_id WHERE e.entity_type='lesson'
+  ) DELETE FROM engagement_likes WHERE id IN (SELECT id FROM ranked WHERE n>1);
+  UPDATE engagement_likes e SET entity_type='article',entity_id=a.item_id FROM lesson_articles a
+    WHERE e.entity_type='lesson' AND e.entity_id=a.lesson_id;
+  -- Move parents first so the reply integrity trigger always finds the canonical thread.
+  UPDATE engagement_comments e SET entity_type='article',entity_id=a.item_id FROM lesson_articles a
+    WHERE e.entity_type='lesson' AND e.entity_id=a.lesson_id AND e.parent_id IS NULL;
+  UPDATE engagement_comments e SET entity_type='article',entity_id=a.item_id FROM lesson_articles a
+    WHERE e.entity_type='lesson' AND e.entity_id=a.lesson_id AND e.parent_id IS NOT NULL;
+  IF EXISTS (SELECT 1 FROM engagement_likes WHERE entity_type='lesson') OR
+     EXISTS (SELECT 1 FROM engagement_comments WHERE entity_type='lesson') THEN
+    RAISE EXCEPTION 'Cannot identify the article for a legacy lesson thread';
+  END IF;
+  INSERT INTO engagement_rollups(entity_type,entity_id,likes_count,comments_count)
+    SELECT 'article',entity_id,sum(likes),sum(comments) FROM (
+      SELECT entity_id,count(*) AS likes,0 AS comments FROM engagement_likes WHERE entity_type='article' GROUP BY entity_id
+      UNION ALL SELECT entity_id,0,count(*) FROM engagement_comments WHERE entity_type='article' AND status='visible' GROUP BY entity_id
+    ) counts GROUP BY entity_id;
+END $$;`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

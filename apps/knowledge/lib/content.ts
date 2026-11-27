@@ -53,6 +53,7 @@ export interface StudioItem {
 }
 
 export interface PublishedArticle {
+  id: string;
   slug: string;
   language: string;
   format: RevisionFormat;
@@ -481,6 +482,7 @@ interface PublicRow {
 }
 
 const toPublished = (r: PublicRow): PublishedArticle => ({
+  id: r.id,
   slug: r.slug,
   language: r.language,
   format: r.format,
