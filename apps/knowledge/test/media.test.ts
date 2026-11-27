@@ -225,6 +225,19 @@ describe("images without an upload: an https address or SVG code", () => {
     expect(checkSvg(`<svg>${"x".repeat(100_001)}</svg>`)).toEqual({ ok: false, error: "svg_too_large" });
   });
 
+  it("checks SVG in linear time, even with thousands of comments (no regular-expression backtracking)", () => {
+    const evil = `<!--${"--><!--".repeat(14_000)}`; // what CodeQL flagged: no </svg>, many comment boundaries
+    const t0 = performance.now();
+    expect(checkSvg(evil)).toEqual({ ok: false, error: "svg_invalid" });
+    expect(checkSvg(`${evil}--><svg></svg>`)).toMatchObject({ ok: true });
+    expect(performance.now() - t0).toBeLessThan(200);
+    // A doctype with an internal subset, two doctypes, or text before the root are not SVG code.
+    expect(checkSvg("<!DOCTYPE svg [ ]><svg></svg>")).toEqual({ ok: false, error: "svg_invalid" });
+    expect(checkSvg("<!DOCTYPE svg><!DOCTYPE svg><svg></svg>")).toEqual({ ok: false, error: "svg_invalid" });
+    expect(checkSvg("<svgx></svgx>")).toEqual({ ok: false, error: "svg_invalid" });
+    expect(checkSvg('<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"><svg/></svg>')).toMatchObject({ ok: true });
+  });
+
   it("an image has exactly one source, and still needs alt text", () => {
     expect(parse({ type: "image", attrs: { alt: "x" } })).toMatchObject({ ok: false, error: "media_invalid" });
     expect(ok({ asset: ID, src: "https://example.com/a.png" })).toMatchObject({ ok: false, error: "media_invalid" });

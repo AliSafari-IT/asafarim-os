@@ -177,6 +177,40 @@ const SVG_FORBIDDEN = [
 ];
 
 /**
+ * Where the root <svg> tag starts, after an optional XML declaration, then comments and at most one doctype (without
+ * an internal subset), in any order; -1 when the code doesn't start that way. A single forward scan with indexOf, so it
+ * runs in linear time whatever it is given (a regular expression here could backtrack exponentially on many comments).
+ */
+function svgRootStart(svg: string): number {
+  const isSpace = (c: string | undefined) => c === " " || c === "\n" || c === "\r" || c === "\t" || c === "\f";
+  const startsAt = (at: number, word: string) => svg.slice(at, at + word.length).toLowerCase() === word;
+  let at = 0;
+  const skipSpace = () => {
+    while (isSpace(svg[at])) at++;
+  };
+  if (startsAt(0, "<?xml")) {
+    const end = svg.indexOf("?>", 5);
+    if (end < 0) return -1;
+    at = end + 2;
+  }
+  let doctypes = 0;
+  for (;;) {
+    skipSpace();
+    if (startsAt(at, "<!--")) {
+      const end = svg.indexOf("-->", at + 4);
+      if (end < 0) return -1;
+      at = end + 3;
+    } else if (startsAt(at, "<!doctype")) {
+      const end = svg.indexOf(">", at + 9);
+      if (end < 0 || ++doctypes > 1 || svg.slice(at, end).includes("[")) return -1;
+      at = end + 1;
+    } else break;
+  }
+  const after = svg[at + 4];
+  return startsAt(at, "<svg") && (isSpace(after) || after === ">" || after === "/") ? at : -1;
+}
+
+/**
  * SVG code an author pasted: one <svg> element (optionally after an XML declaration, comments and a doctype), at most
  * 100 000 characters, with no script, event handler, foreign HTML or entity declaration. Gains the SVG namespace when
  * it lacks one (an <img> shows nothing without it). Returns the code to store, or an error.
@@ -188,14 +222,11 @@ export function checkSvg(
   let svg = raw.trim();
   if (svg.length > MEDIA_LIMITS.svg) return { ok: false, error: "svg_too_large" };
   if (svg.includes("\u0000")) return { ok: false, error: "svg_invalid" };
-  const start =
-    /^(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>[]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg(?=[\s>/])/i.exec(
-      svg,
-    );
-  if (!start || !/<\/svg\s*>\s*$/i.test(svg)) return { ok: false, error: "svg_invalid" };
+  const rootStart = svgRootStart(svg);
+  // `svg` is trimmed, so the closing tag is at the very end.
+  if (rootStart < 0 || !/<\/svg\s*>$/i.test(svg)) return { ok: false, error: "svg_invalid" };
   if (SVG_FORBIDDEN.some((re) => re.test(svg))) return { ok: false, error: "svg_unsafe" };
   // The root element: add the namespace if it is missing.
-  const rootStart = start[0].length - 4;
   const rootEnd = svg.indexOf(">", rootStart);
   if (rootEnd < 0) return { ok: false, error: "svg_invalid" };
   const rootTag = svg.slice(rootStart, rootEnd);
