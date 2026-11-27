@@ -505,6 +505,40 @@ describe.skipIf(!DATABASE_URL)("engagement (Postgres)", () => {
       expect(await rows("engagement_likes", "user_id = 'user-alice' AND visitor_hash IS NULL")).toBe(1);
     });
 
+    it("GET /likes tells a guest and a signed-in person whether they liked, with the count", async () => {
+      const h = build();
+      const state = (o: Parameters<typeof call>[3] = {}) =>
+        call(h, "GET", "/api/engagement/likes?entityType=lesson&entityId=l1", o).then((r) => r.json());
+      expect(await state()).toEqual({ liked: false, count: 0 });
+      await toggle(h);
+      await toggle(h, { user: "alice" });
+      expect(await state()).toEqual({ liked: true, count: 2 });
+      expect(await state({ user: "alice" })).toEqual({ liked: true, count: 2 });
+      expect(await state({ user: "bob" })).toEqual({ liked: false, count: 2 });
+      expect(await state({ ip: "198.51.100.9" })).toEqual({ liked: false, count: 2 });
+      expect((await call(h, "GET", "/api/engagement/likes?entityType=lesson&entityId=ghost")).status).toBe(404);
+      expect((await call(h, "POST", "/api/engagement/likes", { body: lesson })).status).toBe(405);
+    });
+
+    it("caches the role authorRole gives for the entity, not the session's own", async () => {
+      const h = createEngagementHandlers({
+        service: service(),
+        salt: SALT,
+        limiter: createMemoryRateLimiter({ limit: 15, windowMs: 60_000 }),
+        entities: { lesson: {} },
+        resolveUser: () => ({ ...alice, role: "admin" }),
+        authorRole: (user, entity) => (entity.entityId === "l1" ? "instructor" : null),
+      });
+      const post = async (entityId: string) =>
+        (
+          (await (
+            await call(h, "POST", "/api/engagement/comments", { body: { entityType: "lesson", entityId, body: "hi" } })
+          ).json()) as { comment: { author: { role: string | null } } }
+        ).comment.author.role;
+      expect(await post("l1")).toBe("instructor");
+      expect(await post("l2")).toBeNull();
+    });
+
     it("refuses unknown entity types, unknown entities and bad bodies", async () => {
       const h = build();
       expect(

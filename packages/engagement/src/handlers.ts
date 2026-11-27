@@ -8,6 +8,7 @@
  *   export const POST = GET; export const PATCH = GET; export const DELETE = GET;
  *
  * Routes (under `basePath`, default /api/engagement):
+ *   GET    /likes           public; ?entityType=&entityId= -> { liked, count } for this person (or this guest)
  *   POST   /likes/toggle    public; rate limited per client address; a guest is told apart by a keyed visitor hash
  *   GET    /comments        public; ?entityType=&entityId=&limit=&offset=
  *   POST   /comments        signed in (and `canComment`, the app's permission check)
@@ -50,6 +51,11 @@ export interface EngagementHandlersOptions {
   resolveUser(request: Request): Promise<SessionUser | null> | SessionUser | null;
   /** The app's permission check for writing comments (e.g. `knowledge.comment.write`). Default: any signed-in person. */
   canComment?(user: SessionUser, request: Request): Promise<boolean> | boolean;
+  /**
+   * The badge cached with a new comment, when it depends on the entity (e.g. "instructor" on the course's own
+   * lessons). Return null for no badge. Without it, `user.role` is used.
+   */
+  authorRole?(user: SessionUser, entity: EntityRef): Promise<string | null> | string | null;
   basePath?: string;
   /** Where unexpected errors go. Default: one JSON line on stderr, never the request body. */
   log?(message: string, detail: Record<string, unknown>): void;
@@ -156,6 +162,15 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
         return json(await options.service.toggleLike(entity, actor));
       }, request),
 
+    likeState: (request: Request): Promise<Response> =>
+      guarded(async () => {
+        const q = new URL(request.url).searchParams;
+        const entity = await entityOf({ entityType: q.get("entityType"), entityId: q.get("entityId") });
+        const user = await options.resolveUser(request);
+        const actor = user ? { userId: user.id } : { visitorHash: visitorHashOf(request.headers, options.salt) };
+        return json(await options.service.likeState(entity, actor));
+      }, request),
+
     listComments: (request: Request): Promise<Response> =>
       guarded(async () => {
         const q = new URL(request.url).searchParams;
@@ -180,9 +195,10 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
         if (parentId !== undefined && parentId !== null && typeof parentId !== "string") {
           throw new EngagementError("invalid_parent", "parentId must be a comment id", 400);
         }
+        const author = options.authorRole ? { ...user, role: await options.authorRole(user, entity) } : user;
         const comment = await options.service.createComment({
           entity,
-          user,
+          user: author,
           body: body.body as string,
           parentId: parentId ?? null,
         });
@@ -215,6 +231,8 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
       if (!path.startsWith(`${basePath}/`)) return notFound();
       const route = path.slice(basePath.length);
 
+      if (route === "/likes")
+        return method === "GET" || method === "HEAD" ? handlers.likeState(request) : notAllowed("GET");
       if (route === "/likes/toggle") return method === "POST" ? handlers.toggleLike(request) : notAllowed("POST");
       if (route === "/comments") {
         if (method === "GET") return handlers.listComments(request);

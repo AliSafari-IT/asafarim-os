@@ -74,9 +74,15 @@ Lessons from building it (keep in mind):
 - Not done on purpose (record as hardening): the mutating handlers do not check `Origin`/CSRF; Auth.js session cookies are SameSite=Lax. Decide in Phase 3/4 whether the gateway or the handlers enforce it.
 - `status` `hidden`/`deleted` exist in the schema but nothing sets them yet (moderation is later). A moderated parent hides its replies from the list but their visible rows still count in `comments_count`; define that before adding moderation.
 
-### Phase 2 — client components (`packages/engagement/src/client`, export `./client`)
+### Phase 2 — client components (DONE; `packages/engagement/src/client`, export `./client`, `./styles.css`)
 
-- [ ] `<LikeButton />`, `<CommentSection />`, `<EngagementBadge />`.
+- [x] `<LikeButton />` (optimistic, rolled back on failure, explains a 429; guest's choice remembered in localStorage only as a hint), `<CommentSection />` (pinned first, 1-level replies, role badges, sign-in CTA for guests, "read only" note for a signed-in person without the permission, edit own, delete own / moderator with an inline confirmation, never `window.confirm`), `<EngagementBadge />` (plain markup, server-renderable).
+- [x] `src/client/api.ts`: fetch client + pure list helpers (`insertComment`, `replaceComment`, `removeComment`), `compactCount`, `likedHint`.
+- [x] New public route `GET /likes?entityType=&entityId=` (`likeState` for the person or guest) so the button can show "liked" on load.
+- [x] New handler option `authorRole(user, entity)`: the badge cached with a comment can depend on the entity (Knowledge: "instructor" on your own course).
+- [x] `styles.css` uses only `@asafarim/theme` tokens with fallbacks; every rule scoped to `.engagement-*`.
+- [x] Tests: `test/client.test.tsx` (jsdom, fake fetch) + integration tests for `GET /likes` and `authorRole`. 70 tests green with real Postgres 16 + Redis 7.
+- Version `0.1.0 → 0.2.0`. tsconfig gained `jsx: react-jsx` and the DOM lib.
 
 ### Phase 3 — integrate into `apps/knowledge`
 
