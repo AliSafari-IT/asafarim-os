@@ -10,6 +10,7 @@ import { createArticle, publishRevision, saveDraft, withdrawArticle } from "../l
 import {
   createCourse,
   editCourse,
+  getPublishedCards,
   getPublishedCourse,
   getPublishedLesson,
   getStudioCourse,
@@ -291,6 +292,66 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
       error: "conflict",
     });
     expect((await getPublishedCourse(pool, "two-tabs"))!.title).toBe("Two tabs, v2");
+  });
+
+  it("keeps study cards with the course revision: guests see the published cards until the next publish", async () => {
+    const c = ok(await createCourse(pool, erin, { slug: "flash", title: "Flash" }));
+    const rev = await edit(erin, c.id, [
+      { op: "add_module", title: "A" },
+      { op: "add_lesson", module: 0, articleSlug: "intro" },
+      { op: "add_card", front: "  What is   a pin?  ", back: "One article revision.\r\n\r\n\r\nNever moves." },
+      { op: "add_card", front: "Who sees drafts?", back: "Authors only." },
+    ]);
+    const studio = (await getStudioCourse(pool, erin, c.id))!;
+    expect(studio.cards.map((k) => [k.front, k.back])).toEqual([
+      ["What is a pin?", "One article revision.\n\nNever moves."],
+      ["Who sees drafts?", "Authors only."],
+    ]);
+    expect(studio.publishedCards).toBeNull();
+    expect(await getPublishedCards(pool, "flash")).toBeNull();
+    ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev, publication: await shown(erin, c.id) }));
+    const published = (await getPublishedCards(pool, "flash"))!;
+    expect(published.cards.map((k) => k.front)).toEqual(["What is a pin?", "Who sees drafts?"]);
+    expect(published.course.cards).toBe(2);
+
+    // Edit, reorder and remove: each a new draft revision; the card ids stay, guests keep the published two.
+    const [first, second] = studio.cards;
+    await edit(erin, c.id, [
+      { op: "edit_card", cardId: first!.cardId, front: "What is a lesson pin?", back: "A revision." },
+      { op: "move_card", cardId: second!.cardId, delta: -1 },
+      { op: "add_card", front: "Third", back: "Card" },
+    ]);
+    const third = (await getStudioCourse(pool, erin, c.id))!.cards[2]!;
+    await edit(erin, c.id, [{ op: "remove_card", cardId: third.cardId }]);
+    const draftNow = (await getStudioCourse(pool, erin, c.id))!;
+    expect(draftNow.cards.map((k) => [k.cardId, k.front])).toEqual([
+      [second!.cardId, "Who sees drafts?"],
+      [first!.cardId, "What is a lesson pin?"],
+    ]);
+    expect([draftNow.draftIsPublished, draftNow.publishedCards]).toEqual([false, 2]);
+    expect((await getPublishedCards(pool, "flash"))!.cards[0]!.front).toBe("What is a pin?");
+    ok(
+      await publishCourse(pool, erin, {
+        id: c.id,
+        revisionId: draftNow.draftRevisionId,
+        publication: await shown(erin, c.id),
+      }),
+    );
+    expect((await getPublishedCards(pool, "flash"))!.cards.map((k) => k.front)).toEqual([
+      "Who sees drafts?",
+      "What is a lesson pin?",
+    ]);
+
+    // Empty or oversized sides, and unknown cards, are refused; stored cards are immutable.
+    const head = draftNow.draftRevisionId;
+    const refused = (e: CourseEdit) => editCourse(pool, erin, { id: c.id, expectedRevisionId: head, edit: e });
+    expect(await refused({ op: "add_card", front: "   ", back: "x" })).toEqual({ ok: false, error: "invalid_card" });
+    expect(await refused({ op: "add_card", front: "x", back: "y".repeat(1001) })).toEqual({
+      ok: false,
+      error: "invalid_card",
+    });
+    expect(await refused({ op: "remove_card", cardId: "nope" })).toEqual({ ok: false, error: "unknown_card" });
+    await expect(pool.query("UPDATE course_cards SET front = 'x'")).rejects.toThrow(/immutable/);
   });
 
   it("pages through course lists without repeating or skipping one", async () => {

@@ -54,6 +54,12 @@ export default async function CoursePage({ params }: Props) {
               <span>{plural(course.modules.length, "module", "modules")}</span>
               <span aria-hidden="true">·</span>
               <span>{plural(lessons, "lesson", "lessons")}</span>
+              {course.cards > 0 ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>{plural(course.cards, "study card", "study cards")}</span>
+                </>
+              ) : null}
               {counts ? (
                 <span className="course-engagement" data-testid="course-engagement">
                   <EngagementBadge likes={counts.course.likes} comments={counts.course.comments} />
@@ -69,6 +75,20 @@ export default async function CoursePage({ params }: Props) {
               <p className="muted">No lessons are available right now.</p>
             )}
           </header>
+          {course.cards > 0 ? (
+            <section className="course-study card" aria-labelledby="study-heading" data-testid="course-study">
+              <div>
+                <h2 id="study-heading">Study cards</h2>
+                <p className="muted">
+                  {plural(course.cards, "card", "cards")} to test yourself: flip each one, keep the ones you still need
+                  to learn.
+                </p>
+              </div>
+              <Link className="button-link" href={`/courses/${slug}/cards`} data-testid="study-link">
+                Study the cards <span aria-hidden="true">→</span>
+              </Link>
+            </section>
+          ) : null}
           {lessons > 0 ? (
             <section className="course-contents" aria-labelledby="outline-heading">
               <h2 id="outline-heading">What you will go through</h2>

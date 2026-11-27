@@ -1882,3 +1882,280 @@ a.lesson-link:hover .lesson-title {
   box-shadow: var(--shadow);
   font-weight: 600;
 }
+/* Study cards (components/StudyDeck.tsx): one flip card at a time, its controls under it. */
+.course-study {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  margin-top: 16px;
+  padding: 18px 20px;
+}
+.course-study h2 {
+  margin: 0 0 2px;
+}
+.course-study p {
+  margin: 0;
+}
+.study-head {
+  margin-bottom: 16px;
+}
+.study-deck {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.study-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+.study-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+main button.study-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+main button.study-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--card);
+}
+main button.study-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.study-chip-count {
+  min-width: 1.6em;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--card-2);
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-align: center;
+}
+.study-chip.active .study-chip-count {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.study-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 12px;
+  align-items: center;
+}
+.study-progress .progress-track {
+  grid-column: 1 / -1;
+}
+.study-known {
+  text-align: right;
+}
+.flip-scene {
+  perspective: 1400px;
+}
+main button.flip-card {
+  display: block;
+  width: 100%;
+  min-height: 280px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  text-align: center;
+  font-weight: inherit;
+  cursor: pointer;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+main button.flip-card:hover {
+  background: none;
+}
+.flip-card:focus-visible {
+  outline: none;
+}
+.flip-card:focus-visible .flip-face {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+.flip-inner {
+  position: relative;
+  display: grid;
+  min-height: 280px;
+  transform-style: preserve-3d;
+  transition: transform 0.5s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.flip-card.flipped .flip-inner {
+  transform: rotateY(180deg);
+}
+.flip-face {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 28px 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  overflow-wrap: anywhere;
+}
+.flip-front {
+  border-top: 5px solid var(--accent);
+}
+.flip-back {
+  transform: rotateY(180deg);
+  border-top: 5px solid var(--good);
+  background: var(--card-2);
+}
+.flip-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.flip-back .flip-label {
+  color: var(--good);
+}
+.flip-text {
+  max-width: 34em;
+  font-size: 1.3rem;
+  font-weight: 600;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+.flip-back .flip-text {
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+.flip-hint {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.study-controls {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+.study-controls > button[data-testid="card-flip"] {
+  justify-self: center;
+}
+.study-mark {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.study-keys {
+  margin: 0;
+  text-align: center;
+}
+.study-keys kbd {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--card);
+  font:
+    0.78rem ui-monospace,
+    monospace;
+}
+.study-done {
+  text-align: center;
+  padding: 32px 20px;
+}
+.study-done-title {
+  margin: 0 0 4px;
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+.study-done .actions {
+  justify-content: center;
+  margin-top: 16px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .flip-inner {
+    transition: none;
+  }
+}
+@media (max-width: 520px) {
+  main button.flip-card,
+  .flip-inner {
+    min-height: 240px;
+  }
+  .flip-face {
+    padding: 22px 16px;
+  }
+  .flip-text {
+    font-size: 1.15rem;
+  }
+  .study-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+  .study-controls > button[data-testid="card-flip"],
+  .study-mark {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    justify-self: stretch;
+  }
+  .study-mark button {
+    flex: 1;
+  }
+  .study-keys {
+    display: none;
+  }
+  .course-study .button-link {
+    flex: 1 1 100%;
+    text-align: center;
+  }
+}
+/* Studio: the course's study cards, each one editable in place. */
+.studio-cards {
+  list-style: none;
+  margin: 8px 0 12px;
+  padding: 0;
+}
+.studio-card {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.studio-card:first-child {
+  border-top: 0;
+}
+.studio-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.card-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 12px;
+}
+@media (max-width: 620px) {
+  .card-sides {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
