@@ -8,7 +8,8 @@ import { EngagementBadge } from "@asafarim/engagement/client";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CourseOutline } from "@/components/CourseOutline";
+import { CourseOutline, courseShape } from "@/components/CourseOutline";
+import { CourseCallToAction, CourseProgressProvider, ProgressMeter } from "@/components/CourseProgress";
 import { TopBar } from "@/components/TopBar";
 import { getPublishedCourse } from "@/lib/courses";
 import { db } from "@/lib/db";
@@ -34,32 +35,47 @@ export default async function CoursePage({ params }: Props) {
   const course = await load(slug);
   if (!course) notFound();
   await recordPageView(viewKey.course(slug));
-  const first = course.modules[0]?.lessons[0];
+  const lessons = course.modules.reduce((n, m) => n + m.lessons.length, 0);
   const counts = engagementEnabled() ? await courseCounts(await db(), course) : undefined;
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   return (
     <>
       <TopBar next={`/courses/${slug}`} />
-      <main>
-        <p>
-          <Link href="/courses">← Courses</Link>
+      <main className="course-page">
+        <p className="back-link">
+          <Link href="/courses">← All courses</Link>
         </p>
-        <h1 data-testid="course-title">{course.title}</h1>
-        {counts ? (
-          <p className="course-engagement" data-testid="course-engagement">
-            <EngagementBadge likes={counts.course.likes} comments={counts.course.comments} />
-          </p>
-        ) : null}
-        {course.summary ? <p className="lead">{course.summary}</p> : null}
-        {first ? (
-          <p>
-            <Link className="button-link" href={`/courses/${slug}/lessons/${first.lessonId}`} data-testid="start">
-              Start the course
-            </Link>
-          </p>
-        ) : (
-          <p className="muted">No lessons are available right now.</p>
-        )}
-        <CourseOutline course={course} counts={counts} />
+        <CourseProgressProvider courseId={course.id} slug={slug} course={courseShape(course)}>
+          <header className="course-hero">
+            <p className="eyebrow">Course</p>
+            <h1 data-testid="course-title">{course.title}</h1>
+            {course.summary ? <p className="lead">{course.summary}</p> : null}
+            <p className="course-facts" data-testid="course-facts">
+              <span>{plural(course.modules.length, "module", "modules")}</span>
+              <span aria-hidden="true">·</span>
+              <span>{plural(lessons, "lesson", "lessons")}</span>
+              {counts ? (
+                <span className="course-engagement" data-testid="course-engagement">
+                  <EngagementBadge likes={counts.course.likes} comments={counts.course.comments} />
+                </span>
+              ) : null}
+            </p>
+            {lessons > 0 ? (
+              <div className="course-cta card">
+                <CourseCallToAction />
+                <ProgressMeter />
+              </div>
+            ) : (
+              <p className="muted">No lessons are available right now.</p>
+            )}
+          </header>
+          {lessons > 0 ? (
+            <section className="course-contents" aria-labelledby="outline-heading">
+              <h2 id="outline-heading">What you will go through</h2>
+              <CourseOutline course={course} counts={counts} />
+            </section>
+          ) : null}
+        </CourseProgressProvider>
       </main>
     </>
   );
