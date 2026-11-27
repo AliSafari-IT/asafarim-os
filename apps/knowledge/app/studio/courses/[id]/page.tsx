@@ -73,6 +73,22 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
     </form>
   );
 
+  // A published course whose draft differs: guests see the older version until it is published again.
+  const pending = course.status === "published" && !course.draftIsPublished;
+  const draftLessons = course.modules.reduce((n, m) => n + m.lessons.length, 0);
+  const lessons = (n: number) => `${n} ${n === 1 ? "lesson" : "lessons"}`;
+  const modules = (n: number) => `${n} ${n === 1 ? "module" : "modules"}`;
+  const publishForm = (testid: string) => (
+    <form action={publishCourseAction} className="inline">
+      <input type="hidden" name="id" value={course.id} />
+      <input type="hidden" name="revision" value={course.draftRevisionId} />
+      <input type="hidden" name="publication" value={course.publication} />
+      <button type="submit" data-testid={testid}>
+        {pending ? "Publish changes" : "Publish this version"}
+      </button>
+    </form>
+  );
+
   return (
     <>
       <TopBar next={`/studio/courses/${course.id}`} />
@@ -85,26 +101,30 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
         </h1>
         <Notices error={one(sp.error)} done={one(sp.done)} detail={one(sp.detail)} />
 
-        <section className="card" data-testid="course-publication">
+        <section
+          className={pending ? "card publication-pending" : "card"}
+          data-testid="course-publication"
+          id="publication"
+        >
           {course.status === "published" ? (
             <p>
               Public at <Link href={`/courses/${course.slug}`}>/courses/{course.slug}</Link>
-              {course.draftIsPublished ? "." : ". The draft has changes guests don't see yet."}
+              {pending ? (
+                <>
+                  {" "}
+                  · <strong data-testid="unpublished-changes">Guests still see the previous version</strong> (
+                  {lessons(course.publishedLessons ?? 0)}). This draft has {lessons(draftLessons)} in{" "}
+                  {modules(course.modules.length)}: publish it to show your changes.
+                </>
+              ) : (
+                "."
+              )}
             </p>
           ) : (
             <p className="muted">Not public. Its address will be /courses/{course.slug}.</p>
           )}
           <div className="actions">
-            {!course.draftIsPublished ? (
-              <form action={publishCourseAction} className="inline">
-                <input type="hidden" name="id" value={course.id} />
-                <input type="hidden" name="revision" value={course.draftRevisionId} />
-                <input type="hidden" name="publication" value={course.publication} />
-                <button type="submit" data-testid="publish-course">
-                  Publish this version
-                </button>
-              </form>
-            ) : null}
+            {!course.draftIsPublished ? publishForm("publish-course") : null}
             {course.status === "published" ? (
               <form action={withdrawCourseAction} className="inline">
                 <input type="hidden" name="id" value={course.id} />
@@ -226,6 +246,15 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
             Add module
           </button>
         </form>
+        {pending ? (
+          <div className="publish-bar" role="status" data-testid="publish-bar">
+            <span>
+              Unpublished changes: guests see {lessons(course.publishedLessons ?? 0)}, the draft has{" "}
+              {lessons(draftLessons)}.
+            </span>
+            {publishForm("publish-bar-button")}
+          </div>
+        ) : null}
       </main>
     </>
   );
