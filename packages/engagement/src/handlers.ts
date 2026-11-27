@@ -75,11 +75,32 @@ function errorResponse(err: EngagementError, headers: Record<string, string> = {
   return json({ error: { code: err.code, message: err.message } }, err.status, headers);
 }
 
-async function readJson(request: Request): Promise<Record<string, unknown>> {
+/**
+ * The body as text, read as a stream and stopped once it passes MAX_BODY_BYTES, so a request without (or lying
+ * about) Content-Length can never make the server buffer more than the limit.
+ */
+async function readCapped(request: Request): Promise<string> {
   const declared = Number(request.headers.get("content-length") ?? 0);
   if (declared > MAX_BODY_BYTES) throw new EngagementError("payload_too_large", "request body too large", 413);
-  const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) throw new EngagementError("payload_too_large", "request body too large", 413);
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new EngagementError("payload_too_large", "request body too large", 413);
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+async function readJson(request: Request): Promise<Record<string, unknown>> {
+  const text = await readCapped(request);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -208,6 +229,11 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
     editComment: (request: Request, id: string): Promise<Response> =>
       guarded(async () => {
         const user = await requireUser(request);
+        // Editing is writing: someone whose comment permission was taken away can't change what they wrote. (They
+        // may still delete their own comments.)
+        if (options.canComment && !(await options.canComment(user, request))) {
+          throw new EngagementError("forbidden", "you may not comment", 403);
+        }
         const body = await readJson(request);
         const comment = await options.service.editComment({ id, userId: user.id, body: body.body as string });
         return json({ comment });
