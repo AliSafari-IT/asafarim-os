@@ -62,6 +62,7 @@ export async function recordShare(pool: Pool, slug: string, target: ShareTarget,
  * string). A crawler or script is not counted.
  */
 export async function recordFeedFetch(pool: Pool, h: HeaderBag, at = new Date()): Promise<void> {
+  if (optedOut(h)) return;
   const reader = readerName(h.get("user-agent"));
   if (reader) await recordEvent(pool, "feed", "feed", reader, at);
 }
@@ -74,6 +75,30 @@ export async function purgeOldAnalytics(pool: Pool, now = new Date()): Promise<v
         OR (kind = 'search' AND day < ($1::timestamptz AT TIME ZONE 'utc')::date - $3::int)`,
     [now, RETENTION_DAYS, SEARCH_RETENTION_DAYS],
   );
+}
+
+/**
+ * The request body as text, or null when it is longer than `max` bytes. The declared length is checked first, and the
+ * stream is read only up to the limit, so an oversized (or unannounced chunked) body is never held in memory.
+ */
+async function readCapped(request: Request, max: number): Promise<string | null> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > max) return null;
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 /**
@@ -97,8 +122,8 @@ export async function handleShareRequest(pool: Pool, request: Request, at = new 
       return false;
     }
   }
-  const text = await request.text();
-  if (text.length > 512) return false;
+  const text = await readCapped(request, 512);
+  if (text === null) return false;
   let body: unknown;
   try {
     body = JSON.parse(text);
@@ -121,6 +146,8 @@ export interface Counted {
 export interface ArticleInsight {
   slug: string;
   title: string;
+  /** False once the article has been withdrawn: its history stays, but its public page is gone. */
+  published: boolean;
   views: number;
   shares: Partial<Record<ShareTarget, number>>;
   shareTotal: number;
@@ -173,13 +200,21 @@ export async function getInsights(
   const own = (alias: string) => (who.all ? "TRUE" : `${alias}.owner_subject = $3`);
   const ownParams = who.all ? [] : [who.subject];
 
+  // An article's events are stored under the address it had when they happened. Both its current address and every
+  // old one it keeps as a redirect lead to the same article, so a rename does not hide its history.
+  const NAMES = `names AS (
+    SELECT 'article:' || slug AS key, id FROM content_items
+    UNION ALL SELECT 'article:' || old_slug, item_id FROM slug_redirects
+  )`;
+
   const dailyRows = (
     await pool.query<{ day: string; views: string }>(
       who.all
         ? `SELECT to_char(day, 'YYYY-MM-DD') AS day, sum(count) AS views FROM analytics_daily
            WHERE kind = 'view' AND day BETWEEN $1 AND $2 GROUP BY day`
-        : `SELECT to_char(a.day, 'YYYY-MM-DD') AS day, sum(a.count) AS views FROM analytics_daily a
-           JOIN content_items i ON a.key = 'article:' || i.slug
+        : `WITH ${NAMES}
+           SELECT to_char(a.day, 'YYYY-MM-DD') AS day, sum(a.count) AS views FROM analytics_daily a
+           JOIN names n ON n.key = a.key JOIN content_items i ON i.id = n.id
            WHERE a.kind = 'view' AND a.day BETWEEN $1 AND $2 AND ${own("i")} GROUP BY a.day`,
       [...range, ...ownParams],
     )
@@ -187,44 +222,43 @@ export async function getInsights(
   const byDay = new Map(dailyRows.map((r) => [r.day, n(r.views)]));
   const daily = w.list.map((day) => ({ day, views: byDay.get(day) ?? 0 }));
 
-  const viewRows = (
-    await pool.query<{ slug: string; title: string; views: string }>(
-      `SELECT i.slug, r.title, sum(a.count) AS views
-       FROM analytics_daily a
-       JOIN content_items i ON a.key = 'article:' || i.slug
+  // Views and shares together, so an article that was only shared in this period still has a row.
+  const eventRows = (
+    await pool.query<{ slug: string; title: string; published: boolean; kind: string; dim: string; count: string }>(
+      `WITH ${NAMES}, ev AS (
+         SELECT n.id, a.kind, a.dim, sum(a.count) AS count
+         FROM analytics_daily a JOIN names n ON n.key = a.key
+         WHERE a.kind IN ('view', 'share') AND a.day BETWEEN $1 AND $2
+         GROUP BY n.id, a.kind, a.dim
+       )
+       SELECT i.slug, r.title, i.published_revision_id IS NOT NULL AS published, ev.kind, ev.dim, ev.count
+       FROM ev JOIN content_items i ON i.id = ev.id
        JOIN content_revisions r ON r.id = i.draft_revision_id
-       WHERE a.kind = 'view' AND a.day BETWEEN $1 AND $2 AND ${own("i")}
-       GROUP BY i.slug, r.title ORDER BY sum(a.count) DESC, r.title LIMIT 25`,
-      [...range, ...ownParams],
-    )
-  ).rows;
-  const shareRows = (
-    await pool.query<{ slug: string; dim: string; shares: string }>(
-      `SELECT i.slug, a.dim, sum(a.count) AS shares
-       FROM analytics_daily a JOIN content_items i ON a.key = 'article:' || i.slug
-       WHERE a.kind = 'share' AND a.day BETWEEN $1 AND $2 AND ${own("i")}
-       GROUP BY i.slug, a.dim`,
+       WHERE ${own("i")}`,
       [...range, ...ownParams],
     )
   ).rows;
 
-  const articles: ArticleInsight[] = viewRows.map((r) => ({
-    slug: r.slug,
-    title: r.title,
-    views: n(r.views),
-    shares: {},
-    shareTotal: 0,
-  }));
-  const bySlug = new Map(articles.map((a) => [a.slug, a]));
+  const bySlug = new Map<string, ArticleInsight>();
   let shares = 0;
-  for (const s of shareRows) {
-    shares += n(s.shares);
-    const a = bySlug.get(s.slug);
-    if (a && isShareTarget(s.dim)) {
-      a.shares[s.dim] = n(s.shares);
-      a.shareTotal += n(s.shares);
+  for (const e of eventRows) {
+    let a = bySlug.get(e.slug);
+    if (!a) {
+      a = { slug: e.slug, title: e.title, published: e.published, views: 0, shares: {}, shareTotal: 0 };
+      bySlug.set(e.slug, a);
+    }
+    if (e.kind === "view") a.views += n(e.count);
+    else {
+      shares += n(e.count);
+      if (isShareTarget(e.dim)) {
+        a.shares[e.dim] = (a.shares[e.dim] ?? 0) + n(e.count);
+        a.shareTotal += n(e.count);
+      }
     }
   }
+  const articles = [...bySlug.values()]
+    .sort((x, y) => y.views - x.views || y.shareTotal - x.shareTotal || x.title.localeCompare(y.title))
+    .slice(0, 25);
 
   const sum = async (sql: string, params: unknown[]): Promise<Counted[]> =>
     (await pool.query<{ label: string; count: string }>(sql, params)).rows.map((r) => ({

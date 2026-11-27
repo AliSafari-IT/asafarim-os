@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import manifest from "../platform.app";
-import { createArticle, publishRevision, withdrawArticle } from "../lib/content";
+import { changeSlug, createArticle, publishRevision, withdrawArticle } from "../lib/content";
 import {
   getInsights,
   handleShareRequest,
@@ -208,6 +208,26 @@ describe.skipIf(!ADMIN_URL)("analytics on PostgreSQL", () => {
       expect(await handleShareRequest(pool, bare("not a url"), TODAY)).toBe(false);
     });
 
+    it("never reads more than the limit of a body whose length was not announced", async () => {
+      let pulled = 0;
+      const chunk = new TextEncoder().encode("x".repeat(300));
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled++;
+          if (pulled > 50) controller.close();
+          else controller.enqueue(chunk);
+        },
+      });
+      const request = new Request("https://learn.asafarim.site/api/public/analytics/event", {
+        method: "POST",
+        body,
+        duplex: "half",
+        headers: { "user-agent": CHROME, "sec-fetch-site": "same-origin" },
+      } as RequestInit);
+      expect(await handleShareRequest(pool, request, TODAY)).toBe(false);
+      expect(pulled).toBeLessThan(10); // it stopped reading soon after 512 bytes, not after all 15 000
+    });
+
     it("is ignored from another site, a bot, an opted-out browser, or with a bad body", async () => {
       const before = await total("share", "article:bobs-article", "x");
       const cases: [string, Request][] = [
@@ -235,6 +255,17 @@ describe.skipIf(!ADMIN_URL)("analytics on PostgreSQL", () => {
 
   describe("feed fetches", () => {
     const ua = (value: string) => ({ get: (k: string) => (k.toLowerCase() === "user-agent" ? value : null) });
+
+    it("does not count a reader that sends Do Not Track or Global Privacy Control", async () => {
+      const before = await rows();
+      const feedly = "Feedly/1.0 (+http://www.feedly.com/fetcher.html; 12 subscribers)";
+      const withHeader = (name: string) => ({
+        get: (k: string) => (k.toLowerCase() === "user-agent" ? feedly : k.toLowerCase() === name ? "1" : null),
+      });
+      await recordFeedFetch(pool, withHeader("dnt"), daysAgo(200));
+      await recordFeedFetch(pool, withHeader("sec-gpc"), daysAgo(200));
+      expect(await rows()).toBe(before);
+    });
 
     it("counts by the reader's name, and not a crawler or script", async () => {
       await recordFeedFetch(pool, ua("Feedly/1.0 (+http://www.feedly.com/fetcher.html; 12 subscribers)"), TODAY);
@@ -392,6 +423,49 @@ describe.skipIf(!ADMIN_URL)("analytics on PostgreSQL", () => {
       expect(empty.totals.views).toBe(0);
       expect(empty.articles).toEqual([]);
       expect(empty.daily.map((d) => d.views)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+    });
+  });
+
+  describe("what Insights shows for an article that changed", () => {
+    const NOW = new Date("2028-03-15T10:00:00Z");
+    const ago = (n: number) => new Date(NOW.getTime() - n * 86_400_000);
+    const editor = { subject: "erin", all: true } as const;
+    const find = (i: Awaited<ReturnType<typeof getInsights>>, slug: string) => i.articles.find((a) => a.slug === slug);
+
+    it("keeps an article's history after its address changes, for an editor and for its author", async () => {
+      const id = await publish(alice, "react-intro", "React intro");
+      await recordEvent(pool, "view", "article:react-intro", "", ago(2));
+      await recordEvent(pool, "view", "article:react-intro", "", ago(2));
+      await recordEvent(pool, "share", "article:react-intro", "x", ago(2));
+      ok(await changeSlug(pool, alice, { id, slug: "react-basics" }));
+      await recordEvent(pool, "view", "article:react-basics", "", ago(1)); // after the rename
+      for (const who of [editor, { subject: "alice", all: false }]) {
+        const i = await getInsights(pool, who, 30, NOW);
+        expect(find(i, "react-intro"), who.subject).toBeUndefined(); // one article, listed once, under its address now
+        expect(find(i, "react-basics"), who.subject).toMatchObject({ views: 3, shareTotal: 1, shares: { x: 1 } });
+        expect(i.totals.shares, who.subject).toBe(1);
+        expect(
+          i.daily.reduce((t, d) => t + d.views, 0),
+          who.subject,
+        ).toBe(3);
+      }
+    });
+
+    it("lists an article that was only shared in the period, even with no views in it", async () => {
+      await publish(bob, "share-only", "Share only");
+      await recordEvent(pool, "view", "article:share-only", "", ago(60)); // read long ago
+      await recordEvent(pool, "share", "article:share-only", "linkedin", ago(1));
+      const i = await getInsights(pool, editor, 30, NOW);
+      expect(find(i, "share-only")).toMatchObject({ views: 0, shareTotal: 1, shares: { linkedin: 1 } });
+    });
+
+    it("marks a withdrawn article, so the page does not link to its missing public page", async () => {
+      const id = await publish(bob, "pulled", "Pulled");
+      await recordEvent(pool, "view", "article:pulled", "", ago(1));
+      expect(find(await getInsights(pool, editor, 30, NOW), "pulled")?.published).toBe(true);
+      ok(await withdrawArticle(pool, bob, { id }));
+      const after = find(await getInsights(pool, editor, 30, NOW), "pulled");
+      expect(after).toMatchObject({ views: 1, published: false });
     });
   });
 });

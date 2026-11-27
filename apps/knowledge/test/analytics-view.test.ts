@@ -14,8 +14,15 @@ const insights = (over: Partial<Insights> = {}): Insights => ({
   totals: { views: 1234, shares: 5, feedFetches: 17 },
   daily: w.list.map((day, i) => ({ day, views: i === 3 ? 0 : (i + 1) * 100 })),
   articles: [
-    { slug: "ai-apps", title: "Building AI-Powered Apps", views: 900, shares: { linkedin: 3, copy: 1 }, shareTotal: 4 },
-    { slug: "quiet", title: "A quiet article", views: 12, shares: {}, shareTotal: 0 },
+    {
+      slug: "ai-apps",
+      title: "Building AI-Powered Apps",
+      published: true,
+      views: 900,
+      shares: { linkedin: 3, copy: 1 },
+      shareTotal: 4,
+    },
+    { slug: "quiet", title: "A quiet article", published: true, views: 12, shares: {}, shareTotal: 0 },
   ],
   referrers: [{ label: "linkedin.com", count: 40 }],
   searches: [{ label: "react hooks", count: 5 }],
@@ -49,6 +56,17 @@ describe("the Insights view", () => {
     expect(text(d, "insights-share-targets")).toContain("LinkedIn");
     expect(text(d, "insights-readers")).toContain("Feedly");
     expect(d.body.textContent).not.toContain("You see the articles you own");
+  });
+
+  it("does not link a withdrawn article to its public page, which no longer exists", () => {
+    const d = render(
+      insights({ articles: [{ slug: "gone", title: "Gone", published: false, views: 3, shares: {}, shareTotal: 0 }] }),
+      true,
+    );
+    const row = d.querySelector('[data-testid="insights-article"]')!;
+    expect(row.querySelector("a")).toBeNull();
+    expect(row.textContent).toContain("Gone");
+    expect(row.textContent).toContain("withdrawn");
   });
 
   it("shows an author their articles only: no site-wide table, no feed card, and says so", () => {
@@ -137,7 +155,7 @@ describe("the Insights view", () => {
     const bad = `<img src=x onerror=alert(1)><script>alert(2)</script>`;
     const d = render(
       insights({
-        articles: [{ slug: "x", title: bad, views: 1, shares: {}, shareTotal: 0 }],
+        articles: [{ slug: "x", title: bad, published: true, views: 1, shares: {}, shareTotal: 0 }],
         searches: [{ label: bad, count: 9 }],
       }),
       true,

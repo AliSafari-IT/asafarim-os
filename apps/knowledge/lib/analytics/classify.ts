@@ -89,13 +89,14 @@ export function refererSource(referer: string | null, ownHosts: readonly string[
 /**
  * A search term fit to count, or null. Search text is typed by a person and can hold personal details, so anything that
  * looks like an email, an address, a web address or a run of digits (a phone, card or id number) is dropped, as is
- * anything very short or long. What remains is lower-cased and tidied; the Insights page also shows a term only once
+ * anything very short or long (over 60 characters or 4 words). What remains is lower-cased and tidied; the Insights page also shows a term only once
  * enough people searched it.
  */
 export function cleanSearchTerm(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const term = raw.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
   if (term.length < 2 || term.length > 60) return null;
+  if (term.split(" ").length > 4) return null; // a name or a street address runs longer than a search for a topic
   if (/\p{Cc}/u.test(term)) return null;
   if (/@|https?:|:\/\/|www\./.test(term)) return null;
   if (/\d{6,}/.test(term.replace(/[\s.\-()]/g, ""))) return null;

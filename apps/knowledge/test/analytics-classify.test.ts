@@ -168,6 +168,12 @@ describe("search terms", () => {
     }
   });
 
+  it("drops anything longer than four words, which is more likely a name or an address than a topic", () => {
+    expect(cleanSearchTerm("rue de la loi brussels")).toBeNull();
+    expect(cleanSearchTerm("how to deploy next js")).toBeNull();
+    expect(cleanSearchTerm("deploy next js app")).toBe("deploy next js app");
+  });
+
   it("keeps short digit runs (a version, a year, a port)", () => {
     expect(cleanSearchTerm("node 22.11")).toBe("node 22.11");
     expect(cleanSearchTerm("react 19")).toBe("react 19");
