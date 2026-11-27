@@ -1,4 +1,6 @@
 /** Published courses, for anyone (#358). */
+import { viewKey } from "@/lib/analytics/classify";
+import { recordPageView } from "@/lib/analytics/server";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Pager } from "@/components/Pager";
@@ -19,6 +21,7 @@ export default async function CoursesPage({ searchParams }: Props) {
   const after = one((await searchParams).after);
   const page = await listPublishedCourses(await db(), { after });
   const courses = page.items;
+  await recordPageView(viewKey.courses);
   // Authors get a way in from here; the studio checks the permission again, so this only decides what to show.
   const subject = (await auth())?.user?.id;
   const access = subject ? await describeAccess(subject) : null;

@@ -3,6 +3,7 @@
  * listPublished can read: published revisions. Short-lived caching plus an ETag, so feed readers polling every few
  * minutes get a 304 and no body.
  */
+import { recordFeedFetch } from "@/lib/analytics/store";
 import { listPublished } from "@/lib/content";
 import { db } from "@/lib/db";
 import { etagOf, excerpt, matchesEtag, renderFeed, type FeedItem } from "@/lib/feed";
@@ -21,8 +22,10 @@ const HEADERS = {
 
 export async function GET(request: Request): Promise<Response> {
   let articles;
+  const pool = await db().catch(() => null);
   try {
-    articles = (await listPublished(await db(), { limit: LIMIT })).items;
+    if (!pool) throw new Error("no database");
+    articles = (await listPublished(pool, { limit: LIMIT })).items;
   } catch {
     // Not a feed with no articles in it (a reader would think everything was deleted): an error, to try again.
     return new Response("The feed is unavailable right now.", {
@@ -48,6 +51,8 @@ export async function GET(request: Request): Promise<Response> {
     items,
   });
 
+  // How often, and by which kind of reader: a label from a short list, never the browser string.
+  await recordFeedFetch(pool, request.headers).catch(() => undefined);
   const etag = etagOf(body);
   if (matchesEtag(request.headers.get("if-none-match"), etag)) {
     return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": HEADERS["Cache-Control"] } });

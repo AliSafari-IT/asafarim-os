@@ -3,6 +3,8 @@
  * The article keeps its own canonical URL (/articles/:slug), which this page names as canonical and links to. A
  * lesson whose article isn't public now, or that isn't in the published course, is a 404.
  */
+import { viewKey } from "@/lib/analytics/classify";
+import { recordPageView } from "@/lib/analytics/server";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -41,6 +43,7 @@ export default async function LessonPage({ params }: Props) {
   const { slug, lessonId } = await params;
   const lesson = await load(slug, lessonId);
   if (!lesson) notFound();
+  await recordPageView(viewKey.lesson(slug));
   const parsed = lesson.doc ? parseDoc(lesson.doc) : null;
   const doc = parsed?.ok ? parsed.doc : null;
   const href = (id: string) => `/courses/${slug}/lessons/${id}`;

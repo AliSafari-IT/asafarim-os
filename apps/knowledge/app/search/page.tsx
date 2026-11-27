@@ -2,6 +2,8 @@
  * Public search (#357): a query and facet filters (topic, technology, level, language) over published articles
  * only. Rate limited per client like the API; the filters apply before ranking and paging (lib/search.ts).
  */
+import { viewKey } from "@/lib/analytics/classify";
+import { recordPageView } from "@/lib/analytics/server";
 import { one, type SearchParams } from "@/lib/params";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
@@ -28,6 +30,8 @@ export default async function SearchPage({ searchParams }: Props) {
     language: one(sp.language),
   });
   const asked = Boolean(q.trim() || filters.topic || filters.technology || filters.level || filters.language);
+
+  await recordPageView(viewKey.search, q.trim() && !one(sp.after) ? q : undefined);
 
   let page: SearchPage | null = null;
   let topics: Topic[] = [];
