@@ -4,6 +4,8 @@
  * transaction that writes. The public functions take no actor at all: they can only ever read the
  * revision an item's published pointer names, so a draft has no path to a guest.
  */
+import type { TagLink } from "@asafarim/tags";
+import { ARTICLE_TAGS_SQL } from "./public-tags";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { decodeCursor, encodeCursor } from "./cursor";
@@ -53,6 +55,7 @@ export interface StudioItem {
 }
 
 export interface PublishedArticle {
+  tags: TagLink[];
   id: string;
   slug: string;
   language: string;
@@ -456,7 +459,7 @@ export async function getStudioItem(
 
 // The public side. Each query joins on published_revision_id, the one pointer publish/withdraw change.
 const PUBLIC_SELECT = `
-  SELECT i.id, i.slug, i.language, i.published_at, i.published_at::text AS at_key, r.format, r.doc, r.title, r.summary,
+  SELECT ${ARTICLE_TAGS_SQL} AS tags, i.id, i.slug, i.language, i.published_at, i.published_at::text AS at_key, r.format, r.doc, r.title, r.summary,
          r.body, r.number, i.level, a.display_name AS author_name, t.slug AS topic_slug, t.name AS topic_name
   FROM content_items i JOIN content_revisions r ON r.id = i.published_revision_id AND r.item_id = i.id
        LEFT JOIN authors a ON a.subject = i.owner_subject
@@ -464,6 +467,7 @@ const PUBLIC_SELECT = `
   WHERE i.published_revision_id IS NOT NULL`;
 
 interface PublicRow {
+  tags: TagLink[];
   id: string;
   at_key: string;
   slug: string;
@@ -482,6 +486,7 @@ interface PublicRow {
 }
 
 const toPublished = (r: PublicRow): PublishedArticle => ({
+  tags: r.tags,
   id: r.id,
   slug: r.slug,
   language: r.language,

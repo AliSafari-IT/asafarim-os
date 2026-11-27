@@ -1,10 +1,17 @@
 /**
- * Topics, curated tags and an article's classification (#357). Topics form a small hierarchy (top level and one
- * level below). Tags are curated: only someone with knowledge.taxonomy.manage creates them, with aliases (js ->
- * javascript); authors choose from them by slug, name or alias, and an unknown tag is refused rather than created.
+ * Authors can create or reuse tags while classifying their articles. Taxonomy managers also curate aliases and kinds.
  * Classifying a published article updates its search projection in the same transaction.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  insertTag,
+  listTags as listCatalogTags,
+  resolveTags,
+  TAG_LIMITS,
+  isTagSlug,
+  type Tag as CatalogTag,
+} from "@asafarim/tags";
+export { resolveTags };
 import type pg from "pg";
 import { canEdit, canManageTaxonomy, canPublish, canView, type Actor } from "./policy";
 import { refreshSearchDocument } from "./search-index";
@@ -26,10 +33,9 @@ export const LANGUAGES = {
 export type Language = keyof typeof LANGUAGES;
 export const isLanguage = (s: string): s is Language => Object.hasOwn(LANGUAGES, s);
 export type TagKind = (typeof TAG_KINDS)[number];
-export const TAXONOMY_LIMITS = { slug: 64, topicName: 80, description: 300, tagName: 60, alias: 60, tagsPerItem: 12 };
+export const TAXONOMY_LIMITS = { ...TAG_LIMITS, topicName: 80, description: 300, tagsPerItem: 12 };
 
-const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-export const isTaxonomySlug = (s: string) => s.length <= TAXONOMY_LIMITS.slug && SLUG.test(s);
+export const isTaxonomySlug = isTagSlug;
 
 export interface Topic {
   id: string;
@@ -39,13 +45,7 @@ export interface Topic {
   parentId: string | null;
 }
 
-export interface Tag {
-  id: string;
-  slug: string;
-  name: string;
-  kind: TagKind;
-  aliases: string[];
-}
+export type Tag = CatalogTag<TagKind>;
 
 export interface Classification {
   topicId: string | null;
@@ -76,12 +76,12 @@ export type TaxonomyResult<T> =
       detail?: string;
     };
 
-async function inTransaction<T>(pool: Pool, fn: (c: Client) => Promise<T>): Promise<T> {
+async function inTransaction<T extends { ok: boolean }>(pool: Pool, fn: (c: Client) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const result = await fn(client);
-    await client.query("COMMIT");
+    await client.query(result.ok ? "COMMIT" : "ROLLBACK");
     return result;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -110,13 +110,7 @@ export async function getTopic(pool: Pick<Pool, "query">, slug: string): Promise
   return row ? toTopic(row) : null;
 }
 
-export async function listTags(pool: Pick<Pool, "query">): Promise<Tag[]> {
-  const { rows } = await pool.query<{ id: string; slug: string; name: string; kind: TagKind; aliases: string[] }>(
-    `SELECT t.id, t.slug, t.name, t.kind, coalesce(array_agg(a.alias ORDER BY a.alias) FILTER (WHERE a.alias IS NOT NULL), '{}') AS aliases
-     FROM tags t LEFT JOIN tag_aliases a ON a.tag_id = t.id GROUP BY t.id ORDER BY t.name, t.slug`,
-  );
-  return rows;
-}
+export const listTags = (pool: Client) => listCatalogTags<TagKind>(pool);
 
 export async function createTopic(
   pool: Pool,
@@ -151,66 +145,14 @@ export async function createTopic(
   });
 }
 
-/** Lower-case and trimmed, or null when it isn't a usable alias. */
-const aliasOf = (raw: string) => {
-  const a = raw.trim().toLowerCase();
-  return a && a.length <= TAXONOMY_LIMITS.alias ? a : null;
-};
-
 export async function createTag(
   pool: Pool,
   actor: Actor,
   input: { slug: string; name: string; kind: TagKind; aliases?: string[] },
 ): Promise<TaxonomyResult<{ id: string }>> {
   if (!canManageTaxonomy(actor)) return { ok: false, error: "forbidden" };
-  const name = input.name.trim();
-  if (!isTaxonomySlug(input.slug)) return { ok: false, error: "invalid_slug" };
-  if (!name || name.length > TAXONOMY_LIMITS.tagName) return { ok: false, error: "invalid_name" };
   if (!(TAG_KINDS as readonly string[]).includes(input.kind)) return { ok: false, error: "invalid_name" };
-  const entered = (input.aliases ?? []).map((a) => a.trim()).filter(Boolean);
-  const tooLong = entered.find((a) => !aliasOf(a));
-  if (tooLong) return { ok: false, error: "invalid_alias", detail: tooLong };
-  const aliases = [...new Set(entered.map((a) => aliasOf(a)!))].filter((a) => a !== input.slug);
-  return inTransaction(pool, async (c) => {
-    // One lock for every tag name, so a slug and an alias can't be claimed at once by two tags.
-    await c.query("SELECT pg_advisory_xact_lock(hashtext('knowledge.tags'))");
-    const clash = await c.query<{ name: string }>(
-      `SELECT slug AS name FROM tags WHERE slug = ANY($1::text[])
-       UNION SELECT alias FROM tag_aliases WHERE alias = ANY($1::text[])`,
-      [[input.slug, ...aliases]],
-    );
-    if (clash.rows.some((r) => r.name === input.slug)) return { ok: false, error: "slug_taken" } as const;
-    if (clash.rowCount) return { ok: false, error: "alias_taken", detail: clash.rows[0]!.name } as const;
-    const id = randomUUID();
-    await c.query("INSERT INTO tags (id, slug, name, kind) VALUES ($1,$2,$3,$4)", [id, input.slug, name, input.kind]);
-    if (aliases.length) {
-      await c.query("INSERT INTO tag_aliases (alias, tag_id) SELECT a, $2 FROM unnest($1::text[]) AS a", [aliases, id]);
-    }
-    return { ok: true, id } as const;
-  });
-}
-
-/** Tag ids for what an author typed (slugs, names or aliases, case-insensitive); the first unknown one is reported. */
-export async function resolveTags(
-  pool: Pick<Pool, "query">,
-  names: string[],
-): Promise<{ ok: true; ids: string[] } | { ok: false; error: "unknown_tag" | "ambiguous_tag"; key: string }> {
-  const wanted = [...new Set(names.map((n) => n.trim().toLowerCase()).filter(Boolean))];
-  if (!wanted.length) return { ok: true, ids: [] };
-  // Each word names exactly one tag: a slug or an alias first (both unique), else a display name only when one tag
-  // has it (names may repeat across kinds, e.g. a subject and a technology both called "Go").
-  const { rows } = await pool.query<{ key: string; id: string | null; names: number }>(
-    `SELECT w AS key,
-            coalesce((SELECT id FROM tags WHERE slug = w), (SELECT tag_id FROM tag_aliases WHERE alias = w),
-                     (SELECT min(id) FROM tags WHERE lower(name) = w HAVING count(*) = 1)) AS id,
-            (SELECT count(*)::int FROM tags WHERE lower(name) = w) AS names
-     FROM unnest($1::text[]) AS w`,
-    [wanted],
-  );
-  for (const r of rows) {
-    if (!r.id) return { ok: false, error: r.names > 1 ? "ambiguous_tag" : "unknown_tag", key: r.key };
-  }
-  return { ok: true, ids: [...new Set(rows.map((r) => r.id!))] };
+  return inTransaction(pool, (c) => insertTag(c, input, "knowledge.tags"));
 }
 
 export async function getClassification(pool: Pick<Pool, "query">, itemId: string): Promise<Classification> {
@@ -242,9 +184,6 @@ export async function classify(
   }
   if (input.language !== undefined && !isLanguage(input.language)) return { ok: false, error: "invalid_language" };
   if (input.tags.length > TAXONOMY_LIMITS.tagsPerItem) return { ok: false, error: "too_many_tags" };
-  const tags = await resolveTags(pool, input.tags);
-  if (!tags.ok) return { ok: false, error: tags.error, detail: tags.key };
-  if (tags.ids.length > TAXONOMY_LIMITS.tagsPerItem) return { ok: false, error: "too_many_tags" };
   return inTransaction(pool, async (c) => {
     const item = (
       await c.query<{
@@ -267,15 +206,41 @@ export async function classify(
         (await c.query<{ id: string }>("SELECT id FROM topics WHERE slug = $1", [input.topicSlug])).rows[0]?.id ?? null;
       if (!topicId) return { ok: false, error: "unknown_topic" } as const;
     }
+    const ids = new Set<string>();
+    if (input.tags.length) await c.query("SELECT pg_advisory_xact_lock(hashtext('knowledge.tags'))");
+    for (const raw of input.tags) {
+      const name = raw.trim();
+      if (!name) continue;
+      const existing = await resolveTags(c, [name]);
+      if (existing.ok) {
+        for (const id of existing.ids) ids.add(id);
+        continue;
+      }
+      if (existing.error === "ambiguous_tag")
+        return { ok: false, error: existing.error, detail: existing.key } as const;
+      const key = name.normalize("NFKC").toLowerCase();
+      const base = key
+        .normalize("NFKD")
+        .replace(/\p{M}/gu, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+      const suffix = createHash("sha256").update(key).digest("hex").slice(0, 12);
+      let slug = base.slice(0, 64).replace(/-$/, "");
+      if (!slug || (await resolveTags(c, [slug])).ok)
+        slug = (base.slice(0, 50).replace(/-$/, "") || "tag") + "-" + suffix;
+      const added = await insertTag(c, { name, slug, kind: "subject" }, "knowledge.tags");
+      if (!added.ok) return added;
+      ids.add(added.id);
+    }
     await c.query(
       "UPDATE content_items SET topic_id = $2, level = $3, language = coalesce($4, language), updated_at = now() WHERE id = $1",
       [item.id, topicId, input.level, input.language ?? null],
     );
     await c.query("DELETE FROM item_tags WHERE item_id = $1", [item.id]);
-    if (tags.ids.length) {
+    if (ids.size) {
       await c.query("INSERT INTO item_tags (item_id, tag_id) SELECT $1, t FROM unnest($2::text[]) AS t", [
         item.id,
-        tags.ids,
+        [...ids],
       ]);
     }
     await refreshSearchDocument(c, item.id);

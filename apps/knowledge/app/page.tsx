@@ -3,6 +3,7 @@
  * listPublished can only read the revision each item's published pointer names. Each card says who wrote the
  * article, when, and how long it takes to read; the newest one is featured.
  */
+import { ArticleTags } from "@/components/ArticleTags";
 import Link from "next/link";
 import { ArticleByline } from "@/components/ArticleByline";
 import { Pager } from "@/components/Pager";
@@ -81,6 +82,7 @@ export default async function Home({ searchParams }: Props) {
                     <Link href={`/articles/${a.slug}`}>{a.title}</Link>
                   </h2>
                   {a.summary ? <p className="article-summary">{a.summary}</p> : null}
+                  <ArticleTags tags={a.tags} />
                   <ArticleByline
                     authorName={a.authorName}
                     publishedAt={a.publishedAt}

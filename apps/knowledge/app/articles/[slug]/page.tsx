@@ -7,6 +7,7 @@
  * (canonical address, Open Graph and Twitter card, and the generated image beside this file) is what LinkedIn, X
  * and messaging apps show when the link is shared.
  */
+import { ArticleTags } from "@/components/ArticleTags";
 import { ArticleEngagement } from "@/components/ArticleEngagement";
 import { engagementEnabled } from "@/lib/engagement-config";
 import { articleCounts, countsOf } from "@/lib/engagement-rollups";
@@ -46,6 +47,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return {
     title: article.title,
     description,
+    keywords: article.tags.map((t) => t.name),
     alternates: { canonical: url, types: feedAlternates() },
     openGraph: {
       type: "article",
@@ -92,6 +94,7 @@ export default async function ArticlePage({ params }: Props) {
             ) : null}
             <h1>{article.title}</h1>
             {article.summary ? <p className="lead">{article.summary}</p> : null}
+            <ArticleTags tags={article.tags} />
             <ArticleByline
               authorName={article.authorName}
               publishedAt={article.publishedAt}

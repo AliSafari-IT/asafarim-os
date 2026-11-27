@@ -3,6 +3,7 @@
  * The article keeps its own canonical URL (/articles/:slug), which this page names as canonical and links to. A
  * lesson whose article isn't public now, or that isn't in the published course, is a 404.
  */
+import { ArticleTags } from "@/components/ArticleTags";
 import { viewKey } from "@/lib/analytics/classify";
 import { recordPageView } from "@/lib/analytics/server";
 import { ArticleEngagement } from "@/components/ArticleEngagement";
@@ -64,6 +65,7 @@ export default async function LessonPage({ params }: Props) {
           <article data-testid="lesson">
             <h1>{lesson.title}</h1>
             {lesson.summary ? <p className="lead">{lesson.summary}</p> : null}
+            <ArticleTags tags={lesson.tags} />
             {lesson.format === "tiptap" && doc ? <DocView doc={doc} /> : <Markdown markdown={lesson.body} />}
           </article>
           <ShareBar slug={lesson.articleSlug} title={lesson.title} url={articleUrl(lesson.articleSlug)} />

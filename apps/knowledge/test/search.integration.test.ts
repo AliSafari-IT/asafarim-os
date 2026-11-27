@@ -185,14 +185,24 @@ describe.skipIf(!ADMIN_URL)("search on PostgreSQL", () => {
     expect(slugs(await searchPublished(pool, { q: "ECONNRESET" }))).toEqual([]);
     expect(slugs(await searchPublished(pool, { q: "ERR_CONNECTION_RESET" }))).toEqual(["connection-reset"]);
 
-    // Classifying updates the public facets at once; an unknown tag is refused and changes nothing.
-    expect(
-      await classify(pool, alice, { id: hooks.id, topicSlug: "react", level: "beginner", tags: ["js", "cobol"] }),
-    ).toEqual({
-      ok: false,
-      error: "unknown_tag",
-      detail: "cobol",
-    });
+    // Two articles can share a tag created by an author in the editor.
+    await Promise.all(
+      [hooks, net].map(async (item) =>
+        ok(
+          await classify(pool, alice, {
+            id: item.id,
+            topicSlug: null,
+            level: null,
+            tags: ["Machine learning", "js"],
+          }),
+        ),
+      ),
+    );
+    expect(slugs(await searchPublished(pool, { filters: { tag: "machine-learning" } })).sort()).toEqual([
+      "connection-reset",
+      "react-hooks",
+    ]);
+    ok(await classify(pool, alice, { id: net.id, topicSlug: null, level: null, tags: [] }));
     ok(await classify(pool, alice, { id: hooks.id, topicSlug: "react", level: "beginner", tags: ["js"] }));
     expect(slugs(await searchPublished(pool, { q: "hooks", filters: { technology: "javascript" } }))).toEqual([
       "react-hooks",

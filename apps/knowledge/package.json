@@ -18,6 +18,7 @@
     "@asafarim/app-manifest": "workspace:*",
     "@asafarim/app-sdk": "workspace:*",
     "@asafarim/engagement": "workspace:*",
+    "@asafarim/tags": "workspace:*",
     "@asafarim/telemetry": "workspace:*",
     "@asafarim/theme": "workspace:*",
     "@tiptap/core": "3.32.2",

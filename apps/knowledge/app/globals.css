@@ -1453,3 +1453,13 @@ main button.share-btn:hover {
 .inline-sign-in {
   display: inline;
 }
+
+.article-tags {
+  list-style: none;
+  padding: 0;
+  flex-wrap: wrap;
+}
+.article-tags li {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
