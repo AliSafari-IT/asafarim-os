@@ -68,4 +68,22 @@ describe("the legal pages", () => {
       expect(text, `${name} is missing from the cookie policy`).toContain(name!);
     }
   });
+
+  // Anonymous visit counts: the policy states the retention periods, so they must match what the code enforces.
+  it("state the retention of the anonymous visit counts the Knowledge app really applies", () => {
+    const store = source("apps/knowledge/lib/analytics/store.ts");
+    const num = (name: string) => Number(new RegExp(`${name}\\s*=\\s*(\\d+)`).exec(store)?.[1]);
+    const totals = num("RETENTION_DAYS");
+    const terms = num("SEARCH_RETENTION_DAYS");
+    expect(totals, "RETENTION_DAYS moved: update this test").toBeGreaterThan(0);
+    expect(terms, "SEARCH_RETENTION_DAYS moved: update this test").toBeGreaterThan(0);
+    const text = JSON.stringify(docOf("privacy"));
+    expect(text).toContain(`${totals} days; search terms ${terms} days`);
+    expect(text).toContain("Anonymous visit counts");
+    expect(text).toContain("Global Privacy Control");
+  });
+
+  it("no longer claim there is no analytics at all", () => {
+    for (const doc of LEGAL_DOCS) expect(JSON.stringify(doc)).not.toMatch(/no analytics, no tracking/i);
+  });
 });
