@@ -3,6 +3,7 @@ import { LegalFooter } from "@asafarim/theme/react";
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import manifest from "../platform.app";
+import { feedAlternates } from "@/lib/feed";
 import { publicOrigin } from "@/lib/site";
 import "@asafarim/theme/theme.css";
 import "./globals.css";
@@ -14,6 +15,8 @@ export const metadata: Metadata = {
   description: "Write, learn, and share technical knowledge.",
   openGraph: { siteName: "ASafariM Knowledge", type: "website", locale: "en_GB" },
   twitter: { card: "summary_large_image" },
+  // Feed readers and browsers discover the feed from any page.
+  alternates: { types: feedAlternates() },
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {

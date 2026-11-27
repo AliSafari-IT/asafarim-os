@@ -34,6 +34,16 @@ export default async function Home({ searchParams }: Props) {
           <p className="eyebrow">ASafariM Knowledge</p>
           <h1>Articles</h1>
           <p className="lead">Write, learn, and share technical knowledge.</p>
+          <p className="home-actions">
+            {/* A plain link, not next/link: the feed is a file, not a page. */}
+            <a className="chip rss" href="/feed.xml" data-testid="rss-link">
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" fill="currentColor">
+                <circle cx="5" cy="19" r="2.4" />
+                <path d="M3 10.5v3.2a7.3 7.3 0 0 1 7.3 7.3h3.2A10.5 10.5 0 0 0 3 10.5Zm0-6.3v3.2A13.6 13.6 0 0 1 16.6 21h3.2A16.8 16.8 0 0 0 3 4.2Z" />
+              </svg>
+              RSS feed
+            </a>
+          </p>
         </header>
         {articles === null ? (
           <div className="notice bad" role="alert" data-testid="unavailable">

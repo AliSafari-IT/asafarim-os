@@ -47,6 +47,8 @@ export default defineApp({
       "/search",
       "/topics/**",
       "/api/public/**",
+      // The RSS feed of the newest published articles (app/feed.xml/route.ts).
+      "/feed.xml",
       // Uploaded media (#359): the app answers each request itself, public only while a public revision uses the
       // asset and otherwise only for a signed-in person who may see it (lib/media/assets.ts), 404 to anyone else.
       "/media/**",

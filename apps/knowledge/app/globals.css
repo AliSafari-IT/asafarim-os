@@ -1342,3 +1342,12 @@ main button.share-btn:hover {
     font-size: 1.45rem;
   }
 }
+.home-actions {
+  margin: 14px 0 0;
+}
+.chip.rss {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+}
