@@ -162,6 +162,22 @@ export function insertComment(threads: ClientThread[], comment: ClientComment): 
   return [...threads, { ...comment, replies: [] }];
 }
 
+/**
+ * Add a page of threads from the server to those already shown: no thread twice (the one already shown wins, it may
+ * have been edited here), in the server's order (pinned first, then oldest first). Needed because a comment posted
+ * here is shown at once, before the pages that sort ahead of it have been loaded.
+ */
+export function mergeThreads(shown: ClientThread[], incoming: ClientThread[]): ClientThread[] {
+  const seen = new Set(shown.map((t) => t.id));
+  const merged = [...shown, ...incoming.filter((t) => !seen.has(t.id))];
+  return merged.sort(
+    (a, b) =>
+      Number(b.isPinned) - Number(a.isPinned) ||
+      Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+}
+
 export function replaceComment(threads: ClientThread[], comment: ClientComment): ClientThread[] {
   return threads.map((t) =>
     t.id === comment.id

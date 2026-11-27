@@ -161,3 +161,11 @@ works.
 - Hook: lesson → module → course counter updates in the same transaction, for likes and comments.
 - Client: `LikeButton`, `CommentSection` (pinned first, 1-level replies, instructor/admin badges, sign-in CTA), `EngagementBadge` (`♥ 124 • 💬 18`).
 - Phase 4: guest→user like sync, event `…comment.created`, tests (anti-cheat duplicates, rollup math), CI checks.
+
+## Review findings fixed on PR #397 (rules to keep)
+
+- `deleteComment` must lock the visible rows it is going to remove (`SELECT id … FOR UPDATE`) **before** counting them and use that row count as the rollup delta. Counting without locking subtracts a concurrently deleted reply twice. Regression test: "never subtracts the reply twice" (holds a reply delete open, fails on the old code).
+- `editComment` must pass the same `canComment` check as `createComment` (`requireWriter` in `src/handlers.ts`): a revoked commenter may not rewrite old comments.
+- Request bodies are read as a stream and cancelled past 16 KiB (`readBounded`); never `request.text()` on public routes.
+- CSS: `--accent-ink` / `--bad-ink` are the text colours **on solid fills** only. Text on plain or tinted backgrounds uses `--accent`, `--bad`, `--ink`.
+- `CommentSection` pages by the server's offset (`serverOffset`), not by `threads.length`; a comment posted here is not part of the server's prefix. `mergeThreads` dedupes and keeps the server order.

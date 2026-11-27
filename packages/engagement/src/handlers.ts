@@ -75,11 +75,30 @@ function errorResponse(err: EngagementError, headers: Record<string, string> = {
   return json({ error: { code: err.code, message: err.message } }, err.status, headers);
 }
 
+/** Read a request body, giving up (and cancelling the stream) as soon as it passes `max` bytes. */
+async function readBounded(request: Request, max: number): Promise<string> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      throw new EngagementError("payload_too_large", "request body too large", 413);
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
 async function readJson(request: Request): Promise<Record<string, unknown>> {
   const declared = Number(request.headers.get("content-length") ?? 0);
   if (declared > MAX_BODY_BYTES) throw new EngagementError("payload_too_large", "request body too large", 413);
-  const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) throw new EngagementError("payload_too_large", "request body too large", 413);
+  // Not request.text(): a body sent without a length (chunked) would be buffered whole before any limit applied.
+  const text = await readBounded(request, MAX_BODY_BYTES);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -128,6 +147,15 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
   async function requireUser(request: Request): Promise<SessionUser> {
     const user = await options.resolveUser(request);
     if (!user) throw new EngagementError("unauthorized", "sign in first", 401);
+    return user;
+  }
+
+  /** A signed-in person the app lets write comments (`canComment`). */
+  async function requireWriter(request: Request): Promise<SessionUser> {
+    const user = await requireUser(request);
+    if (options.canComment && !(await options.canComment(user, request))) {
+      throw new EngagementError("forbidden", "you may not comment", 403);
+    }
     return user;
   }
 
@@ -185,10 +213,7 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
 
     createComment: (request: Request): Promise<Response> =>
       guarded(async () => {
-        const user = await requireUser(request);
-        if (options.canComment && !(await options.canComment(user, request))) {
-          throw new EngagementError("forbidden", "you may not comment", 403);
-        }
+        const user = await requireWriter(request);
         const body = await readJson(request);
         const entity = await entityOf(body);
         const parentId = body.parentId;
@@ -207,7 +232,8 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
 
     editComment: (request: Request, id: string): Promise<Response> =>
       guarded(async () => {
-        const user = await requireUser(request);
+        // Same permission as writing: someone whose right to comment was withdrawn may not rewrite old comments.
+        const user = await requireWriter(request);
         const body = await readJson(request);
         const comment = await options.service.editComment({ id, userId: user.id, body: body.body as string });
         return json({ comment });

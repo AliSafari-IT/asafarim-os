@@ -16,6 +16,7 @@ import {
   insertComment,
   LikeButton,
   likedHint,
+  mergeThreads,
   removeComment,
   replaceComment,
   type ClientComment,
@@ -111,6 +112,22 @@ describe("helpers", () => {
     expect(removeComment(list, "r").removed).toBe(1);
     expect(removeComment(list, "a")).toMatchObject({ removed: 2, threads: [{ id: "b" }] });
     expect(removeComment(list, "zzz").removed).toBe(0);
+  });
+
+  it("merges a page of threads without duplicates, in the server's order", () => {
+    const at = (s: number) => new Date(Date.UTC(2026, 10, 1, 10, 0, s)).toISOString();
+    const shown = [thread({ id: "a", createdAt: at(1) }), thread({ id: "z", createdAt: at(9), body: "posted here" })];
+    const incoming = [
+      thread({ id: "b", createdAt: at(2) }),
+      thread({ id: "z", createdAt: at(9), body: "from server" }),
+    ];
+    const merged = mergeThreads(shown, incoming);
+    expect(merged.map((t) => t.id)).toEqual(["a", "b", "z"]);
+    expect(merged[2]!.body).toBe("posted here");
+    expect(mergeThreads([thread({ id: "n" }), thread({ id: "p", isPinned: true })], []).map((t) => t.id)).toEqual([
+      "p",
+      "n",
+    ]);
   });
 
   it("maps an error answer to EngagementApiError with Retry-After", async () => {
@@ -315,5 +332,52 @@ describe("CommentSection", () => {
     expect(calls.find((c) => c.method === "DELETE")!.path).toBe("/api/engagement/comments/a");
     expect(qa("comment-body").map((e) => e.textContent)).toEqual(["Great lesson"]);
     expect(q("comments-heading")!.textContent).toContain("(1)");
+  });
+  it("shows every thread once when a comment is posted before the later pages are loaded", async () => {
+    const at = (s: number) => new Date(Date.UTC(2026, 10, 1, 10, 0, s)).toISOString();
+    const server: ClientThread[] = Array.from({ length: 51 }, (_, i) =>
+      thread({ id: `t${String(i + 1).padStart(2, "0")}`, body: `c${i + 1}`, createdAt: at(i) }),
+    );
+    const offsets: number[] = [];
+    const { fn } = fakeFetch((method, url, body) => {
+      if (method === "GET") {
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        offsets.push(offset);
+        return {
+          body: {
+            comments: server.slice(offset, offset + Number(url.searchParams.get("limit") ?? 50)),
+            total: server.length,
+          },
+        };
+      }
+      const posted = comment({ id: "t99", userId: "me", body: (body as { body: string }).body, createdAt: at(59) });
+      server.push({ ...posted, replies: [] });
+      return { status: 201, body: { comment: posted } };
+    });
+    act(() =>
+      root.render(
+        <CommentSection
+          entityType="lesson"
+          entityId="l1"
+          viewer={{ id: "me", canComment: true }}
+          client={createEngagementClient({ fetch: fn })}
+        />,
+      ),
+    );
+    await flush();
+    expect(qa("comment-body")).toHaveLength(50);
+    type(q("comment-input"), "mine");
+    await act(async () => {
+      q("comment-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    const more = [...host.querySelectorAll<HTMLElement>(".engagement-link")].find((b) =>
+      b.textContent?.startsWith("Show more"),
+    );
+    await click(more!);
+    await flush();
+    expect(offsets).toEqual([0, 50]); // the next page starts after what the server handed over, not after the list on screen
+    const bodies = qa("comment-body").map((e) => e.textContent);
+    expect(bodies).toEqual([...Array.from({ length: 51 }, (_, i) => `c${i + 1}`), "mine"]);
   });
 });

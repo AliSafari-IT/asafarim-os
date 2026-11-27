@@ -378,13 +378,16 @@ export function createEngagementService(options: EngagementServiceOptions) {
         if (row.user_id !== input.userId && !input.canModerate) {
           throw new EngagementError("forbidden", "you can only delete your own comments", 403);
         }
-        const visible = await tx.query<{ n: number }>(
-          `SELECT count(*)::int AS n FROM engagement_comments
-            WHERE (id = $1 OR parent_id = $1) AND status = 'visible'`,
+        // Lock the visible rows that will go (this comment and its replies) BEFORE counting them: a reply being
+        // deleted at the same moment holds its own row lock, so we wait for it, then do not see it, and its
+        // delete (which takes its own -1) is never counted a second time. removed = the rows we hold.
+        const visible = await tx.query(
+          `SELECT id FROM engagement_comments
+            WHERE (id = $1 OR parent_id = $1) AND status = 'visible' ORDER BY id FOR UPDATE`,
           [input.id],
         );
         await tx.query("DELETE FROM engagement_comments WHERE id = $1", [input.id]);
-        const removed = visible.rows[0]?.n ?? 0;
+        const removed = visible.rowCount ?? 0;
         await notify(tx, { entityType: row.entity_type, entityId: row.entity_id }, "comments", -removed);
         return { removed };
       });

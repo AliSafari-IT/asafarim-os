@@ -357,6 +357,34 @@ describe.skipIf(!DATABASE_URL)("engagement (Postgres)", () => {
       }
     });
 
+    it("deleting a comment while one of its replies is being deleted never subtracts the reply twice", async () => {
+      const top = await service().createComment({ entity: lesson, user: alice, body: "top" });
+      const reply = await service().createComment({ entity: lesson, user: bob, body: "r", parentId: top.id });
+      await service().createComment({ entity: lesson, user: bob, body: "unrelated" });
+      expect((await counts()).c1.c).toBe(3);
+      // The reply's own deletion, held open (uncommitted) with its -1 already applied to the rollups.
+      const other = await pool.connect();
+      try {
+        await other.query("BEGIN");
+        await other.query("DELETE FROM engagement_comments WHERE id = $1", [reply.id]);
+        for (const [t, id] of [
+          ["lessons", "l1"],
+          ["modules", "m1"],
+          ["courses", "c1"],
+        ] as const) {
+          await other.query(`UPDATE ${t} SET comments_count = comments_count - 1 WHERE id = $1`, [id]);
+        }
+        const parentDelete = service().deleteComment({ id: top.id, userId: alice.id });
+        await new Promise((r) => setTimeout(r, 200)); // the parent's delete is now waiting for the reply's row
+        await other.query("COMMIT");
+        expect(await parentDelete).toEqual({ removed: 1 }); // the reply was not counted again
+      } finally {
+        other.release();
+      }
+      expect(await rows("engagement_comments", "status = 'visible'")).toBe(1);
+      expect(await counts()).toMatchObject({ l1: { c: 1 }, m1: { c: 1 }, c1: { c: 1 } });
+    });
+
     it("only the author edits, and the edit is stored trimmed", async () => {
       const c = await service().createComment({ entity: lesson, user: alice, body: "old" });
       const edited = await service().editComment({ id: c.id, userId: alice.id, body: " new " });
@@ -592,6 +620,45 @@ describe.skipIf(!DATABASE_URL)("engagement (Postgres)", () => {
       expect((await call(h, "DELETE", path, { user: "admin" })).status).toBe(200);
       expect((await call(h, "DELETE", path, { user: "admin" })).status).toBe(404);
       expect((await counts()).c1.c).toBe(0);
+    });
+
+    it("a person whose permission to comment is withdrawn can no longer edit their old comments either", async () => {
+      const h = build();
+      const old = await service().createComment({
+        entity: lesson,
+        user: { id: "user-banned", name: "Banned" },
+        body: "before",
+      });
+      sessions.set("banned", { id: "user-banned", name: "Banned" });
+      const r = await call(h, "PATCH", `/api/engagement/comments/${old.id}`, {
+        body: { body: "after" },
+        user: "banned",
+      });
+      expect(r.status).toBe(403);
+      const stored = await pool.query("SELECT body FROM engagement_comments WHERE id = $1", [old.id]);
+      expect(stored.rows[0]!.body).toBe("before");
+    });
+
+    it("stops reading a body that has no declared length once it passes the limit", async () => {
+      const h = build();
+      let pulled = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled++;
+          controller.enqueue(new Uint8Array(1024).fill(120));
+          if (pulled >= 1000) controller.close();
+        },
+      });
+      const res = await h.handle(
+        new Request("http://app.test/api/engagement/likes/toggle", {
+          method: "POST",
+          headers: { "x-forwarded-for": "203.0.113.50", "user-agent": "t" },
+          body: stream,
+          duplex: "half",
+        } as RequestInit),
+      );
+      expect(res.status).toBe(413);
+      expect(pulled).toBeLessThan(100); // 1000 chunks were on offer; reading stopped near the 16 KiB limit
     });
 
     it("answers 404 for unknown routes and 405 for the wrong method", async () => {

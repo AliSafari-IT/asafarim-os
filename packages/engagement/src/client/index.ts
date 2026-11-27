@@ -12,6 +12,7 @@ export {
   EngagementApiError,
   insertComment,
   likedHint,
+  mergeThreads,
   removeComment,
   replaceComment,
   type ClientComment,

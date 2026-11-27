@@ -31,7 +31,7 @@
 .engagement-like-button[aria-pressed="true"] {
   border-color: var(--accent, #0e7490);
   background: var(--accent-soft, #e0f2f7);
-  color: var(--accent-ink, var(--ink, #111));
+  color: var(--accent, var(--ink, #111));
 }
 .engagement-like-button:disabled {
   cursor: progress;
@@ -72,7 +72,7 @@
   color: var(--muted, #555);
 }
 .engagement-error {
-  color: var(--bad-ink, var(--bad, #b42318));
+  color: var(--bad, #b42318);
   margin: 0.25rem 0;
 }
 .engagement-thread-list,
@@ -115,7 +115,7 @@
   display: inline-grid;
   place-items: center;
   background: var(--accent, #0e7490);
-  color: #fff;
+  color: var(--accent-ink, #fff);
   font-size: 0.8rem;
   font-weight: 600;
 }
@@ -125,7 +125,7 @@
   padding: 0.1rem 0.45rem;
   border-radius: 999px;
   border: 1px solid var(--accent, #0e7490);
-  color: var(--accent-ink, var(--accent, #0e7490));
+  color: var(--accent, #0e7490);
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -181,7 +181,7 @@
   font-variant-numeric: tabular-nums;
 }
 .engagement-over {
-  color: var(--bad-ink, var(--bad, #b42318));
+  color: var(--bad, #b42318);
 }
 .engagement-primary,
 .engagement-danger {
@@ -190,13 +190,14 @@
   border: 1px solid transparent;
   font: inherit;
   cursor: pointer;
-  color: #fff;
+  color: var(--accent-ink, #fff);
   background: var(--accent, #0e7490);
 }
 .engagement-primary:hover:not(:disabled) {
   background: var(--accent-hover, var(--accent, #0e7490));
 }
 .engagement-danger {
+  color: var(--bad-ink, #fff);
   background: var(--bad, #b42318);
 }
 .engagement-primary:disabled,
@@ -208,7 +209,7 @@
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent-ink, var(--accent, #0e7490));
+  color: var(--accent, #0e7490);
   font: inherit;
   cursor: pointer;
   text-decoration: underline;

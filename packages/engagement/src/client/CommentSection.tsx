@@ -10,6 +10,7 @@ import {
   createEngagementClient,
   EngagementApiError,
   insertComment,
+  mergeThreads,
   removeComment,
   replaceComment,
   type ClientComment,
@@ -279,6 +280,10 @@ export function CommentSection({
   const client = useMemo(() => given ?? createEngagementClient({ basePath }), [given, basePath]);
   const target = useMemo(() => ({ entityType, entityId }), [entityType, entityId]);
   const [threads, setThreads] = useState<ClientThread[]>([]);
+  // How many top-level threads the SERVER has handed over, in its order: the offset of the next page. It is not
+  // threads.length, which also counts comments posted here that the server sorts after pages not loaded yet.
+  const serverOffset = useRef(0);
+  const postedHere = useRef(new Set<string>());
   const [total, setTotal] = useState(0);
   const [count, setCount] = useState(Math.max(0, initialCount));
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -290,6 +295,8 @@ export function CommentSection({
     try {
       const page = await client.listComments(target, { limit: PAGE, offset: 0 });
       if (!alive.current) return;
+      serverOffset.current = page.comments.length;
+      postedHere.current.clear();
       setThreads(page.comments);
       setTotal(page.total);
       setCount((n) =>
@@ -315,10 +322,11 @@ export function CommentSection({
   async function more() {
     setLoadingMore(true);
     try {
-      const page = await client.listComments(target, { limit: PAGE, offset: threads.length });
+      const page = await client.listComments(target, { limit: PAGE, offset: serverOffset.current });
       if (!alive.current) return;
-      const seen = new Set(threads.map((t) => t.id));
-      setThreads((ts) => [...ts, ...page.comments.filter((t) => !seen.has(t.id))]);
+      serverOffset.current += page.comments.length;
+      for (const c of page.comments) postedHere.current.delete(c.id); // the server's list has it now
+      setThreads((ts) => mergeThreads(ts, page.comments));
       setTotal(page.total);
     } finally {
       if (alive.current) setLoadingMore(false);
@@ -328,7 +336,10 @@ export function CommentSection({
   async function create(body: string, parentId: string | null) {
     const { comment } = await client.createComment(target, body, parentId);
     setThreads((ts) => insertComment(ts, comment));
-    if (!parentId) setTotal((n) => n + 1);
+    if (!parentId) {
+      postedHere.current.add(comment.id);
+      setTotal((n) => n + 1);
+    }
     setCount((n) => n + 1);
     setReplyTo(null);
   }
@@ -341,7 +352,11 @@ export function CommentSection({
   async function remove(id: string, topLevel: boolean) {
     const { removed } = await client.deleteComment(id);
     setThreads((ts) => removeComment(ts, id).threads);
-    if (topLevel) setTotal((n) => Math.max(0, n - 1));
+    if (topLevel) {
+      // A thread the server had handed over leaves a gap in its list: the next page starts one earlier.
+      if (!postedHere.current.delete(id)) serverOffset.current = Math.max(0, serverOffset.current - 1);
+      setTotal((n) => Math.max(0, n - 1));
+    }
     setCount((n) => Math.max(0, n - removed));
   }
 
