@@ -3,9 +3,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Pager } from "@/components/Pager";
 import { TopBar } from "@/components/TopBar";
+import { auth } from "@/lib/auth";
 import { listPublishedCourses } from "@/lib/courses";
 import { db } from "@/lib/db";
+import { describeAccess } from "@/lib/gate";
 import { one, type SearchParams } from "@/lib/params";
+import { canCreateCourse } from "@/lib/policy";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Courses" };
@@ -16,11 +19,23 @@ export default async function CoursesPage({ searchParams }: Props) {
   const after = one((await searchParams).after);
   const page = await listPublishedCourses(await db(), { after });
   const courses = page.items;
+  // Authors get a way in from here; the studio checks the permission again, so this only decides what to show.
+  const subject = (await auth())?.user?.id;
+  const access = subject ? await describeAccess(subject) : null;
+  const canCreate =
+    !!subject && access?.state === "active" && canCreateCourse({ subject, permissions: access.permissions });
   return (
     <>
       <TopBar next="/courses" />
       <main>
-        <h1>Courses</h1>
+        <div className="page-head">
+          <h1>Courses</h1>
+          {canCreate ? (
+            <Link href="/studio/courses" className="button-link" data-testid="new-course-link">
+              New course
+            </Link>
+          ) : null}
+        </div>
         {courses.length === 0 && !after ? (
           <p className="muted" data-testid="no-courses">
             No courses have been published yet.
