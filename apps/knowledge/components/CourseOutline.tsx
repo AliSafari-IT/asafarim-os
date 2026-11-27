@@ -1,6 +1,6 @@
 import { EngagementBadge } from "@asafarim/engagement/client";
 import Link from "next/link";
-import { LessonFlag, LessonMarker } from "@/components/CourseProgress";
+import { LessonFlag, LessonMarker, ModuleProgress } from "@/components/CourseProgress";
 import type { PublishedCourse } from "@/lib/courses";
 import { countsOf, type CourseCounts } from "@/lib/engagement-rollups";
 
@@ -38,7 +38,12 @@ export function CourseOutline({
       data-testid="course-outline"
     >
       {course.modules.map((m, mi) => (
-        <section key={m.position} className="module-card" data-testid="outline-module">
+        <section
+          key={m.position}
+          className="module-card"
+          data-testid="outline-module"
+          id={compact ? undefined : `module-${mi + 1}`}
+        >
           <header className="module-head">
             <span className="module-number">Module {mi + 1}</span>
             <h3 className="module-title" data-testid="module-title">
@@ -88,5 +93,33 @@ export function CourseOutline({
         </section>
       ))}
     </nav>
+  );
+}
+
+const two = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * The course page's modules at a glance: a grid of cards (Module 01, its title, how many lessons, how far the learner
+ * got), each jumping to that module in the full outline below. Must sit inside a CourseProgressProvider.
+ */
+export function ModuleCards({ course }: { course: PublishedCourse }) {
+  return (
+    <ol className="module-grid" data-testid="module-grid">
+      {course.modules.map((m, mi) => (
+        <li key={m.position}>
+          <a className="module-tile" href={`#module-${mi + 1}`} data-testid="module-tile">
+            <span className="module-tile-head">
+              <span className="module-number">Module {two(mi + 1)}</span>
+              <span className="module-tile-badge" aria-hidden="true">
+                {mi + 1}
+              </span>
+            </span>
+            <span className="module-tile-title">{m.title}</span>
+            <span className="module-tile-meta">{plural(m.lessons.length, "lesson", "lessons")}</span>
+            <ModuleProgress lessonIds={m.lessons.map((l) => l.lessonId)} />
+          </a>
+        </li>
+      ))}
+    </ol>
   );
 }
