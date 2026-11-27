@@ -4,6 +4,7 @@
  * older selection-based copy where that isn't available, and says what happened (also to screen readers).
  */
 import { useEffect, useRef, useState } from "react";
+import { trackShare } from "@/lib/analytics/beacon";
 
 type State = "idle" | "copied" | "failed";
 
@@ -25,7 +26,7 @@ function legacyCopy(text: string): boolean {
   return ok;
 }
 
-export function CopyLinkButton({ url }: { url: string }) {
+export function CopyLinkButton({ url, slug }: { url: string; slug: string }) {
   const [state, setState] = useState<State>("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -39,6 +40,7 @@ export function CopyLinkButton({ url }: { url: string }) {
       ok = legacyCopy(url);
     }
     setState(ok ? "copied" : "failed");
+    if (ok) trackShare(slug, "copy");
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setState("idle"), 2500);
   }

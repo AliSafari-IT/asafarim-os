@@ -15,6 +15,8 @@ import { DocView } from "@/components/DocView";
 import { Markdown } from "@/components/Markdown";
 import { ShareBar } from "@/components/ShareBar";
 import { TopBar } from "@/components/TopBar";
+import { viewKey } from "@/lib/analytics/classify";
+import { recordPageView } from "@/lib/analytics/server";
 import { getPublishedArticle, resolveSlugRedirect } from "@/lib/content";
 import { parseDoc } from "@/lib/doc";
 import { feedAlternates } from "@/lib/feed";
@@ -63,6 +65,7 @@ export default async function ArticlePage({ params }: Props) {
     if (moved) permanentRedirect(`/articles/${moved}`);
     notFound();
   }
+  await recordPageView(viewKey.article(article.slug));
   // Validated again on the way out: the page renders only what lib/doc.ts accepts, whatever is in the database.
   const parsed = article.doc ? parseDoc(article.doc) : null;
   const doc = parsed?.ok ? parsed.doc : null;
@@ -90,12 +93,12 @@ export default async function ArticlePage({ params }: Props) {
               publishedAt={article.publishedAt}
               readingMinutes={article.readingMinutes}
             />
-            <ShareBar url={url} title={article.title} />
+            <ShareBar url={url} title={article.title} slug={article.slug} />
           </header>
           {article.format === "tiptap" && doc ? <DocView doc={doc} /> : <Markdown markdown={article.body} />}
         </article>
         <footer className="article-foot">
-          <ShareBar url={url} title={article.title} heading="Found this useful? Share it" />
+          <ShareBar url={url} title={article.title} slug={article.slug} heading="Found this useful? Share it" />
           <p>
             <Link href="/">← All articles</Link>
           </p>

@@ -7,6 +7,8 @@ import Link from "next/link";
 import { ArticleByline } from "@/components/ArticleByline";
 import { Pager } from "@/components/Pager";
 import { TopBar } from "@/components/TopBar";
+import { viewKey } from "@/lib/analytics/classify";
+import { recordPageView } from "@/lib/analytics/server";
 import { listPublished, type Page, type PublishedArticle } from "@/lib/content";
 import { db } from "@/lib/db";
 
@@ -18,6 +20,7 @@ const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export default async function Home({ searchParams }: Props) {
   const { after } = await searchParams;
+  await recordPageView(viewKey.home);
   let page: Page<PublishedArticle> | null;
   try {
     page = await listPublished(await db(), { after });

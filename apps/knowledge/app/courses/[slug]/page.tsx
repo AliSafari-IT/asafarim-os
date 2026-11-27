@@ -2,6 +2,8 @@
  * One published course and its outline (#358). Only lessons whose article is public now are listed; a course that
  * isn't published (a draft, withdrawn, or no such slug) is a 404, the same for every case.
  */
+import { viewKey } from "@/lib/analytics/classify";
+import { recordPageView } from "@/lib/analytics/server";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -28,6 +30,7 @@ export default async function CoursePage({ params }: Props) {
   const { slug } = await params;
   const course = await load(slug);
   if (!course) notFound();
+  await recordPageView(viewKey.course(slug));
   const first = course.modules[0]?.lessons[0];
   return (
     <>

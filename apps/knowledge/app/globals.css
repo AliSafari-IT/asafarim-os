@@ -1351,3 +1351,89 @@ main button.share-btn:hover {
   gap: 6px;
   padding: 3px 12px;
 }
+
+/* Insights. */
+.period {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0;
+}
+.period a {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.period a[aria-current="page"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.insights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 16px 18px;
+}
+.stat-value {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.stat-label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.chart-figure {
+  margin: 0;
+}
+.chart {
+  display: block;
+  width: 100%;
+  height: 140px;
+  border-bottom: 1px solid var(--line);
+}
+.chart-bar {
+  fill: var(--accent);
+}
+.chart-bar:hover {
+  fill: var(--accent-hover);
+}
+.chart-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.chart-numbers {
+  margin-top: 12px;
+}
+.chart-numbers summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.insights-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 0 16px;
+}
+.insights-note {
+  margin-top: 20px;
+}

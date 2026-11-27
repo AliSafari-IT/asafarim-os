@@ -2,6 +2,8 @@
  * A topic page (#357): the topic, its subtopics and the published articles in it (and in its subtopics), newest
  * first, from the search projection. An unknown topic is a 404.
  */
+import { viewKey } from "@/lib/analytics/classify";
+import { recordPageView } from "@/lib/analytics/server";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -30,6 +32,7 @@ export default async function TopicPage({ params, searchParams }: Props) {
   const pool = await db();
   const topic = await getTopic(pool, slug);
   if (!topic) notFound();
+  await recordPageView(viewKey.topic(topic.slug));
   const all = await listTopics(pool);
   const parent = topic.parentId ? all.find((t) => t.id === topic.parentId) : null;
   const children = all.filter((t) => t.parentId === topic.id);

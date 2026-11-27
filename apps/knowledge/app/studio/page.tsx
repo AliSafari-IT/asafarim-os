@@ -73,6 +73,9 @@ export default async function Studio({ searchParams }: Props) {
               Topics and tags
             </Link>
           ) : null}
+          <Link href="/studio/insights" data-testid="insights-link">
+            Insights
+          </Link>
         </nav>
 
         <div className="studio-grid">

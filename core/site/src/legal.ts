@@ -44,7 +44,7 @@ const privacy: LegalDoc = {
   title: "Privacy policy",
   description:
     "What personal data ASafariM OS uses, why, for how long, who else sees it, and your rights under the GDPR.",
-  lead: "ASafariM OS keeps as little about you as it can: what it needs to sign you in, to decide what you may open, and to keep the system secure. No ads, no analytics, no tracking.",
+  lead: "ASafariM OS keeps as little about you as it can: what it needs to sign you in, to decide what you may open, and to keep the system secure. No ads and no tracking. The only measuring is anonymous visit counts on ASafariM Knowledge, with no cookies and nothing that identifies you.",
   sections: [
     {
       id: "who",
@@ -91,6 +91,11 @@ const privacy: LegalDoc = {
               [
                 "Technical data a server always receives: IP address, browser, the page asked for, errors",
                 "To deliver pages, keep the service running and find faults. Kept briefly.",
+                "Legitimate interest (6(1)(f))",
+              ],
+              [
+                "Anonymous visit counts (ASafariM Knowledge only): a daily total per page, article, share button, feed or search term, plus the website a visit came from. No IP address, no cookie, no identifier, nothing per visitor. Search terms are cleaned of emails, numbers and long text, and shown only when several people searched them. Not counted when your browser sends Do Not Track or Global Privacy Control.",
+                "To see which writing is read and improve it.",
                 "Legitimate interest (6(1)(f))",
               ],
               [
@@ -144,6 +149,7 @@ const privacy: LegalDoc = {
             "<strong>Your notes:</strong> until you delete them or your account.",
             "<strong>Security log:</strong> kept for accountability. It cannot be changed afterwards, and it holds no email address or IP address in plain text.",
             "<strong>Server logs:</strong> a short time, then they are overwritten.",
+            "<strong>Anonymous visit counts:</strong> 800 days; search terms 90 days. They hold no personal data.",
           ],
         },
       ],
@@ -287,7 +293,7 @@ const cookies: LegalDoc = {
       id: "storage",
       heading: "Other storage on your device",
       blocks: [
-        "The OS's pages keep nothing in your browser's local storage or session storage, and load no third-party scripts, fonts or pixels.",
+        "The OS's pages keep nothing in your browser's local storage or session storage, and load no third-party scripts, fonts or pixels. Anonymous visit counting on ASafariM Knowledge uses neither cookies nor storage; see the <a href=\"/privacy\">privacy policy</a>.",
       ],
     },
     {

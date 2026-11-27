@@ -465,6 +465,25 @@ CREATE TABLE authors (
   updated_at   timestamptz NOT NULL DEFAULT now()
 );`,
   },
+  {
+    version: 11,
+    name: "analytics: daily counts with no personal data (page views, shares, feed fetches, searches)",
+    sql: `
+-- Privacy by construction: one row per day, kind, page and label, holding a number. There is no column for an IP
+-- address, a browser, a cookie, a session or a user, so a row cannot hold one (test/analytics.integration.test.ts
+-- fails if a column is added). 'dim' is the one small label that goes with a kind: the referring site's name for a
+-- view, the share button for a share, the feed reader's name for a feed fetch, empty for a search (whose key is
+-- the cleaned search term). Rows are deleted after a retention period (lib/analytics/store.ts).
+CREATE TABLE analytics_daily (
+  day   date   NOT NULL,
+  kind  text   NOT NULL CHECK (kind IN ('view', 'share', 'feed', 'search')),
+  key   text   NOT NULL CHECK (length(key) BETWEEN 1 AND 200),
+  dim   text   NOT NULL DEFAULT '' CHECK (length(dim) <= 100),
+  count bigint NOT NULL DEFAULT 0 CHECK (count >= 0),
+  PRIMARY KEY (day, kind, key, dim)
+);
+CREATE INDEX analytics_daily_kind_key ON analytics_daily (kind, key, day);`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

@@ -4,6 +4,7 @@
  */
 import { shareLinks, type ShareId } from "@/lib/share";
 import { CopyLinkButton } from "./CopyLinkButton";
+import { ShareLink } from "./ShareLink";
 
 // Brand marks from Simple Icons (CC0).
 const PATHS: Record<Exclude<ShareId, "email">, string> = {
@@ -39,7 +40,18 @@ function Icon({ id }: { id: ShareId }) {
   );
 }
 
-export function ShareBar({ url, title, heading = "Share" }: { url: string; title: string; heading?: string }) {
+export function ShareBar({
+  url,
+  title,
+  slug,
+  heading = "Share",
+}: {
+  url: string;
+  title: string;
+  /** The article's slug: what a click on a share button is counted against (lib/analytics). */
+  slug: string;
+  heading?: string;
+}) {
   const links = shareLinks({ url, title });
   if (links.length === 0) return null;
   return (
@@ -48,20 +60,20 @@ export function ShareBar({ url, title, heading = "Share" }: { url: string; title
       <ul>
         {links.map((l) => (
           <li key={l.id}>
-            <a
-              className="share-btn"
+            <ShareLink
               href={l.href}
-              {...(l.id === "email" ? {} : { target: "_blank", rel: "noopener noreferrer" })}
-              aria-label={l.id === "email" ? "Share by email" : `Share on ${l.label} (opens in a new tab)`}
-              data-testid={`share-${l.id}`}
+              id={l.id}
+              slug={slug}
+              label={l.id === "email" ? "Share by email" : `Share on ${l.label} (opens in a new tab)`}
+              external={l.id !== "email"}
             >
               <Icon id={l.id} />
               <span>{l.label}</span>
-            </a>
+            </ShareLink>
           </li>
         ))}
         <li>
-          <CopyLinkButton url={url} />
+          <CopyLinkButton url={url} slug={slug} />
         </li>
       </ul>
     </nav>
