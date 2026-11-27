@@ -1,10 +1,8 @@
 /**
- * Topics, curated tags and an article's classification (#357). Topics form a small hierarchy (top level and one
- * level below). Tags are curated: only someone with knowledge.taxonomy.manage creates them, with aliases (js ->
- * javascript); authors choose from them by slug, name or alias, and an unknown tag is refused rather than created.
+ * Authors can create or reuse tags while classifying their articles. Taxonomy managers also curate aliases and kinds.
  * Classifying a published article updates its search projection in the same transaction.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   insertTag,
   listTags as listCatalogTags,
@@ -78,12 +76,12 @@ export type TaxonomyResult<T> =
       detail?: string;
     };
 
-async function inTransaction<T>(pool: Pool, fn: (c: Client) => Promise<T>): Promise<T> {
+async function inTransaction<T extends { ok: boolean }>(pool: Pool, fn: (c: Client) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const result = await fn(client);
-    await client.query("COMMIT");
+    await client.query(result.ok ? "COMMIT" : "ROLLBACK");
     return result;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -186,9 +184,6 @@ export async function classify(
   }
   if (input.language !== undefined && !isLanguage(input.language)) return { ok: false, error: "invalid_language" };
   if (input.tags.length > TAXONOMY_LIMITS.tagsPerItem) return { ok: false, error: "too_many_tags" };
-  const tags = await resolveTags(pool, input.tags);
-  if (!tags.ok) return { ok: false, error: tags.error, detail: tags.key };
-  if (tags.ids.length > TAXONOMY_LIMITS.tagsPerItem) return { ok: false, error: "too_many_tags" };
   return inTransaction(pool, async (c) => {
     const item = (
       await c.query<{
@@ -211,15 +206,41 @@ export async function classify(
         (await c.query<{ id: string }>("SELECT id FROM topics WHERE slug = $1", [input.topicSlug])).rows[0]?.id ?? null;
       if (!topicId) return { ok: false, error: "unknown_topic" } as const;
     }
+    const ids = new Set<string>();
+    if (input.tags.length) await c.query("SELECT pg_advisory_xact_lock(hashtext('knowledge.tags'))");
+    for (const raw of input.tags) {
+      const name = raw.trim();
+      if (!name) continue;
+      const existing = await resolveTags(c, [name]);
+      if (existing.ok) {
+        for (const id of existing.ids) ids.add(id);
+        continue;
+      }
+      if (existing.error === "ambiguous_tag")
+        return { ok: false, error: existing.error, detail: existing.key } as const;
+      const key = name.normalize("NFKC").toLowerCase();
+      const base = key
+        .normalize("NFKD")
+        .replace(/\p{M}/gu, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+      const suffix = createHash("sha256").update(key).digest("hex").slice(0, 12);
+      let slug = base.slice(0, 64).replace(/-$/, "");
+      if (!slug || (await resolveTags(c, [slug])).ok)
+        slug = (base.slice(0, 50).replace(/-$/, "") || "tag") + "-" + suffix;
+      const added = await insertTag(c, { name, slug, kind: "subject" }, "knowledge.tags");
+      if (!added.ok) return added;
+      ids.add(added.id);
+    }
     await c.query(
       "UPDATE content_items SET topic_id = $2, level = $3, language = coalesce($4, language), updated_at = now() WHERE id = $1",
       [item.id, topicId, input.level, input.language ?? null],
     );
     await c.query("DELETE FROM item_tags WHERE item_id = $1", [item.id]);
-    if (tags.ids.length) {
+    if (ids.size) {
       await c.query("INSERT INTO item_tags (item_id, tag_id) SELECT $1, t FROM unnest($2::text[]) AS t", [
         item.id,
-        tags.ids,
+        [...ids],
       ]);
     }
     await refreshSearchDocument(c, item.id);

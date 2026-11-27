@@ -166,9 +166,10 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
                 </label>
               </div>
               <label>
-                Tags <span className="muted">(comma-separated; curated tags only, by name, slug or alias)</span>
+                Tags <span className="muted">(choose existing tags or type new ones, separated by commas)</span>
                 <input
                   name="tags"
+                  placeholder="Machine learning, AI training"
                   defaultValue={classification.tags.map((t) => t.slug).join(", ")}
                   list="known-tags"
                   data-testid="tags-input"
@@ -182,7 +183,7 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
                 ))}
               </datalist>
               <button type="submit" className="secondary" data-testid="classify">
-                Save classification
+                Save tags and classification
               </button>
               {item.status !== "draft" ? <span className="muted"> Applies to the public article at once.</span> : null}
             </form>

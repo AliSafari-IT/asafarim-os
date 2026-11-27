@@ -1,6 +1,5 @@
 /**
- * Topics and curated tags (#357), for holders of knowledge.taxonomy.manage (editors). Authors classify articles
- * with what is created here; nothing creates a tag implicitly.
+ * Manage topics, tag kinds and aliases. Authors can also create subject tags on their articles.
  */
 import Link from "next/link";
 import { forbidden } from "next/navigation";
