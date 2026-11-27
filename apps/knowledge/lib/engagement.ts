@@ -1,17 +1,17 @@
 /**
- * Likes and comments on lessons (@asafarim/engagement), mounted at /api/engagement/** (app/api/engagement/[...path]).
+ * Likes and comments on published content (@asafarim/engagement), mounted at /api/engagement/** (app/api/engagement/[...path]).
  *
- * - Anyone may like a lesson, guests too (told apart by a keyed visitor hash), 15 toggles a minute per address.
+ * - Anyone may like a published article, guests too (told apart by a keyed visitor hash), 15 toggles a minute per address.
  * - Anyone may read comments. Writing one needs `knowledge.comment.write`; deleting someone else's needs
  *   `knowledge.comment.moderate`. Both are checked here, by the app, on every request, never left to the gateway:
  *   the gateway answers a POST whose 60 s access token expired with 401 and no renewal (#363), which would drop a
  *   comment a reader took a minute to write.
- * - Only a lesson of a published course whose article is public can be engaged with.
- * - The counts roll up to the module and the course in the same transaction (lib/engagement-rollups.ts).
+ * - Engagement belongs to a published article, including every lesson that presents it.
+ * - Course and module totals read the distinct articles in their published outlines (lib/engagement-rollups.ts).
  *
- * - A new comment publishes knowledge.comment.created.v1 through the outbox (lib/events.ts), in its transaction.
+ * - A new comment publishes knowledge.comment.created.v2 through the outbox (lib/events.ts), in its transaction.
  * - Writes from another site are refused (Origin / Sec-Fetch-Site), and a signed-in person's guest likes move to
- *   their account (POST /likes/sync, sent by <GuestLikeSync> on the lesson page).
+ *   their account (POST /likes/sync, sent by <GuestLikeSync> in either view).
  *
  * ENGAGEMENT_SALT is required: without it the routes answer 503 and the pages show no like or comment UI.
  */
@@ -26,7 +26,7 @@ import {
 import { visitorOrigin } from "@asafarim/app-sdk";
 import { auth } from "./auth";
 import { db } from "./db";
-import { applyCountChange, isEngageableLesson, lessonCourseOwner } from "./engagement-rollups";
+import { applyCountChange, isPublicArticle, resolveLessonArticle } from "./engagement-rollups";
 import { publishCommentCreated } from "./events";
 import { engagementSalt } from "./engagement-config";
 import { describeAccess, gate } from "./gate";
@@ -72,7 +72,7 @@ async function build(s: string): Promise<EngagementHandlers> {
   const service = createEngagementService({
     pool,
     onCountChange: (type, id, metric, delta, tx) => applyCountChange(tx, type, id, metric, delta),
-    // knowledge.comment.created.v1, in the comment's own transaction (identifiers only, never the text).
+    // knowledge.comment.created.v2, in the comment's own transaction (identifiers only, never the text).
     onCommentCreated: (comment, tx) => publishCommentCreated(tx, comment),
   });
   return createEngagementHandlers({
@@ -80,7 +80,10 @@ async function build(s: string): Promise<EngagementHandlers> {
     salt: s,
     // One Knowledge instance (as for search, lib/rate-limit.ts): an in-process limit is enough.
     limiter: createMemoryRateLimiter({ limit: 15, windowMs: 60_000 }),
-    entities: { lesson: { exists: (id) => isEngageableLesson(pool, id) } },
+    entities: {
+      lesson: { resolve: (id) => resolveLessonArticle(pool, id) },
+      article: { exists: (id) => isPublicArticle(pool, id) },
+    },
     basePath: ENGAGEMENT_BASE_PATH,
     // Writes from another site are refused (CSRF): the visitor's origin, as the gateway forwards it.
     siteOrigin: (request) => visitorOrigin(request.headers),
@@ -88,9 +91,12 @@ async function build(s: string): Promise<EngagementHandlers> {
     // The app's own check: signed in, the app active, the permission held (from core-api, as for the studio).
     canComment: async () => (await gate(PERMISSIONS.commentWrite)).ok,
     authorRole: async (user, entity) => {
-      if (entity.entityType === "lesson" && (await lessonCourseOwner(pool, entity.entityId)) === user.id) {
-        return "instructor";
-      }
+      const owner = await pool.query(
+        `SELECT 1 FROM courses c JOIN course_lessons l ON l.revision_id=c.published_revision_id
+         WHERE l.item_id=$1 AND c.owner_subject=$2 LIMIT 1`,
+        [entity.entityId, user.id],
+      );
+      if (owner.rowCount) return "instructor";
       return user.canModerate ? "moderator" : null;
     },
     log: (message, detail) =>

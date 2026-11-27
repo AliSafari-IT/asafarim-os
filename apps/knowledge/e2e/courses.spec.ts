@@ -67,8 +67,15 @@ test("a guest likes a lesson, sees it counted on the course, and is asked to sig
   await page.goto("/courses/ship-a-web-app");
   await expect(page.getByTestId("course-engagement")).toContainText("♥ 1");
 
-  // Undo, so the journey can run again on the same database.
+  // The homepage article sees the lesson like. Undo there, then revisit the lesson.
+  await page.goto("/");
+  await page.getByRole("link", { name: "Plan the app", exact: true }).click();
+  await expect(like).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("comments-empty")).toBeVisible();
+  await like.click();
+  await expect(like).toHaveAttribute("aria-pressed", "false");
+  await page.goto("/courses/ship-a-web-app");
   await page.getByTestId("start").click();
-  await page.getByTestId("like-button").click();
-  await expect(page.getByTestId("like-button")).toHaveAttribute("aria-pressed", "false");
+  await expect(like).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("like-count")).toHaveText("0");
 });

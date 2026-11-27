@@ -31,6 +31,8 @@ import {
 
 /** What the app knows about one entity type. */
 export interface EntityRule {
+  /** Resolve a public alias to the shared discussion, or null when the alias is unavailable. */
+  resolve?(entityId: string): Promise<EntityRef | null>;
   /** Does this entity exist (and may be engaged with)? Without it, any id of the type is accepted. */
   exists?(entityId: string): Promise<boolean> | boolean;
 }
@@ -151,6 +153,12 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
     if (!rule) throw new EngagementError("invalid_entity", "unknown entityType", 400);
     if (rule.exists && !(await rule.exists(ref.entityId))) {
       throw new EngagementError("not_found", "entity not found", 404);
+    }
+    if (rule.resolve) {
+      const resolved = await rule.resolve(ref.entityId);
+      if (!resolved) throw new EngagementError("not_found", "entity not found", 404);
+      validateEntity(resolved);
+      return resolved;
     }
     return ref;
   }

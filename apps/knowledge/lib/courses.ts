@@ -14,7 +14,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { Doc } from "./doc";
-import { recountCourseEngagement } from "./engagement-rollups";
 import { canCreateCourse, canManageCourse, seesAllCourses, type Actor } from "./policy";
 import { PAGE_SIZE, pageOf, type Page, type RevisionFormat } from "./content";
 import { decodeCursor } from "./cursor";
@@ -383,8 +382,6 @@ export async function publishCourse(
        WHERE id = $1`,
       [course.id, input.revisionId],
     );
-    // The course and module like/comment counts follow the lessons of the revision now public (lib/engagement.ts).
-    await recountCourseEngagement(c, course.id, input.revisionId);
     await audit(c, actor, "course.published", course.id, input.revisionId);
     return { ok: true, revisionId: input.revisionId } as const;
   });
@@ -566,6 +563,7 @@ export async function listPublishedCourses(
 }
 
 export interface OutlineLesson {
+  itemId: string;
   lessonId: string;
   title: string;
 }
@@ -593,6 +591,7 @@ interface OutlineRow {
   module_position: number | null;
   module_title: string | null;
   lesson_id: string | null;
+  item_id: string;
   lesson_title: string | null;
 }
 
@@ -600,7 +599,7 @@ interface OutlineRow {
 export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string): Promise<PublishedCourse | null> {
   const { rows } = await pool.query<OutlineRow>(
     `SELECT c.id AS course_id, cr.id AS revision_id, c.slug AS course_slug, cr.title AS course_title, cr.summary AS course_summary, c.published_at,
-            m.position AS module_position, m.title AS module_title, l.lesson_id, r.title AS lesson_title
+            m.position AS module_position, m.title AS module_title, l.lesson_id, l.item_id, r.title AS lesson_title
      FROM courses c JOIN course_revisions cr ON cr.id = c.published_revision_id
      LEFT JOIN course_modules m ON m.revision_id = cr.id
      LEFT JOIN course_lessons l ON l.revision_id = cr.id AND l.module_position = m.position
@@ -620,7 +619,7 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
       current = { position: r.module_position, title: r.module_title!, lessons: [] };
       modules.push(current);
     }
-    current.lessons.push({ lessonId: r.lesson_id, title: r.lesson_title! });
+    current.lessons.push({ itemId: r.item_id, lessonId: r.lesson_id, title: r.lesson_title! });
   }
   return {
     id: first.course_id,
@@ -634,6 +633,7 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
 }
 
 export interface PublishedLesson {
+  itemId: string;
   course: PublishedCourse;
   lessonId: string;
   moduleTitle: string;
@@ -677,10 +677,12 @@ export async function getPublishedLesson(
   );
   const r = rows[0];
   if (!r) return null;
-  const strip = (l: (typeof flat)[number] | undefined) => (l ? { lessonId: l.lessonId, title: l.title } : null);
+  const strip = (l: (typeof flat)[number] | undefined) =>
+    l ? { itemId: l.itemId, lessonId: l.lessonId, title: l.title } : null;
   return {
     course,
     lessonId,
+    itemId: flat[at]!.itemId,
     moduleTitle: flat[at]!.moduleTitle,
     articleSlug: r.slug,
     title: r.title,

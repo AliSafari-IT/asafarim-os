@@ -9,7 +9,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.3.0",
+  version: "0.4.0",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   // Live since #361. The dev gateway is generated from this; production routes it through
@@ -136,7 +136,10 @@ export default defineApp({
   ],
   // Published through the outbox in the same transaction as the comment (lib/engagement.ts, lib/events.ts).
   events: {
-    publishes: [{ type: "knowledge.comment.created.v1", schema: "./events/knowledge.comment.created.v1.json" }],
+    publishes: [
+      { type: "knowledge.comment.created.v1", schema: "./events/knowledge.comment.created.v1.json" },
+      { type: "knowledge.comment.created.v2", schema: "./events/knowledge.comment.created.v2.json" },
+    ],
   },
   // Names only: values never appear in a manifest. Optional: without the first the AI assistance is off (#360);
   // without the media store's keys uploads are off (#359).

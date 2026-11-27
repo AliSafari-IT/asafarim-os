@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "asafarim://knowledge/events/knowledge.comment.created.v2.json",
+  "title": "knowledge.comment.created.v2",
+  "description": "A comment or reply on a published article, including its lesson views.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["commentId", "parentId", "author", "createdAt", "articleId"],
+  "properties": {
+    "commentId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "The comment id"
+    },
+    "parentId": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "The comment this replies to, or null for a top-level comment"
+    },
+    "author": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "The subject (person) who wrote it"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "articleId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Stable content item ID"
+    }
+  }
+}

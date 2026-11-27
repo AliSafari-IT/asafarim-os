@@ -1,112 +1,7 @@
-/**
- * Like and comment counts for lessons, modules and courses (the engagement module, @asafarim/engagement).
- *
- * People like and comment on LESSONS (entity type "lesson", id = the lesson id, stable across a course's revisions).
- * The counts roll up: a lesson's own counts live in `engagement_rollups` ('lesson', lessonId), its module's in
- * `engagement_rollups` ('module', "<courseId>:<modulePosition>") and its course's in `courses.likes_count` /
- * `courses.comments_count`. Course revisions are immutable (DB triggers), so none of this can live on them.
- *
- * The invariant: a module's and a course's counts are the sums of the lesson counts of the lessons in the course's
- * PUBLISHED revision. `onCountChange` keeps it for every like and comment, inside the write's own transaction, and
- * `recountCourseEngagement` restores it when another revision is published (lessons moved, added or removed).
- * Every write to a course's rollups holds that course's row lock, so a like and a publish can't interleave.
- */
 import type pg from "pg";
+import type { PublishedCourse } from "./courses";
 
-type Client = Pick<pg.PoolClient, "query">;
-
-export type Metric = "likes" | "comments";
-
-/** Only these two column names are ever interpolated into SQL. */
-const COLUMN: Record<Metric, "likes_count" | "comments_count"> = {
-  likes: "likes_count",
-  comments: "comments_count",
-};
-
-export const moduleKey = (courseId: string, position: number) => `${courseId}:${position}`;
-
-async function bump(c: Client, entityType: "lesson" | "module", entityId: string, metric: Metric, delta: number) {
-  const col = COLUMN[metric];
-  await c.query(
-    `INSERT INTO engagement_rollups (entity_type, entity_id, ${col}) VALUES ($1, $2, GREATEST($3::int, 0))
-     ON CONFLICT (entity_type, entity_id)
-     DO UPDATE SET ${col} = GREATEST(engagement_rollups.${col} + $3::int, 0), updated_at = now()`,
-    [entityType, entityId, delta],
-  );
-}
-
-/**
- * The `onCountChange` hook: called by @asafarim/engagement inside the like's or comment's transaction. Throwing
- * rolls the like or comment back, so it only throws when the database does.
- */
-export async function applyCountChange(
-  c: Client,
-  entityType: string,
-  entityId: string,
-  metric: Metric,
-  delta: number,
-): Promise<void> {
-  if (entityType !== "lesson" || delta === 0) return;
-  // The course a lesson belongs to never changes (its id is minted for one course), so any revision names it.
-  const owner = await c.query<{ course_id: string }>(
-    `SELECT cr.course_id FROM course_lessons l JOIN course_revisions cr ON cr.id = l.revision_id
-     WHERE l.lesson_id = $1 LIMIT 1`,
-    [entityId],
-  );
-  const courseId = owner.rows[0]?.course_id;
-  if (!courseId) {
-    await bump(c, "lesson", entityId, metric, delta);
-    return;
-  }
-  // Lock the course first: a publish (which recounts) waits for this, or this waits for it and then sees the
-  // revision it published.
-  const course = await c.query<{ published_revision_id: string | null }>(
-    "SELECT published_revision_id FROM courses WHERE id = $1 FOR UPDATE",
-    [courseId],
-  );
-  await bump(c, "lesson", entityId, metric, delta);
-  const revisionId = course.rows[0]?.published_revision_id;
-  if (!revisionId) return; // withdrawn: the course and modules are recounted when it is published again
-  const at = await c.query<{ module_position: number }>(
-    "SELECT module_position FROM course_lessons WHERE revision_id = $1 AND lesson_id = $2",
-    [revisionId, entityId],
-  );
-  const position = at.rows[0]?.module_position;
-  if (position === undefined) return; // not in the published revision: it doesn't count towards the course
-  await bump(c, "module", moduleKey(courseId, position), metric, delta);
-  const col = COLUMN[metric];
-  await c.query(`UPDATE courses SET ${col} = GREATEST(${col} + $2::int, 0) WHERE id = $1`, [courseId, delta]);
-}
-
-/**
- * Make the course's and its modules' counts the sums of the lesson counts of `revisionId` (the revision being
- * published). Call it in the publishing transaction, with the course row locked.
- */
-export async function recountCourseEngagement(c: Client, courseId: string, revisionId: string): Promise<void> {
-  await c.query("DELETE FROM engagement_rollups WHERE entity_type = 'module' AND starts_with(entity_id, $1)", [
-    `${courseId}:`,
-  ]);
-  await c.query(
-    `INSERT INTO engagement_rollups (entity_type, entity_id, likes_count, comments_count)
-     SELECT 'module', $1 || ':' || l.module_position, sum(r.likes_count), sum(r.comments_count)
-     FROM course_lessons l
-     JOIN engagement_rollups r ON r.entity_type = 'lesson' AND r.entity_id = l.lesson_id
-     WHERE l.revision_id = $2
-     GROUP BY l.module_position`,
-    [courseId, revisionId],
-  );
-  await c.query(
-    `UPDATE courses SET
-       likes_count = COALESCE(x.likes, 0), comments_count = COALESCE(x.comments, 0)
-     FROM (SELECT sum(r.likes_count)::int AS likes, sum(r.comments_count)::int AS comments
-           FROM course_lessons l
-           JOIN engagement_rollups r ON r.entity_type = 'lesson' AND r.entity_id = l.lesson_id
-           WHERE l.revision_id = $2) x
-     WHERE courses.id = $1`,
-    [courseId, revisionId],
-  );
-}
-
+type Client = Pick<pg.Pool, "query">;
 export interface Counts {
   likes: number;
   comments: number;
@@ -123,66 +18,68 @@ export interface CourseCounts {
 const ZERO: Counts = { likes: 0, comments: 0 };
 export const countsOf = <K>(m: Map<K, Counts>, k: K): Counts => m.get(k) ?? ZERO;
 
-/** The counts a published course page shows: the course's, each module's and each lesson's. */
-export async function courseCounts(
-  pool: Pick<pg.Pool, "query">,
-  course: { id: string; modules: { lessons: { lessonId: string }[] }[] },
-): Promise<CourseCounts> {
-  const lessonIds = course.modules.flatMap((m) => m.lessons.map((l) => l.lessonId));
-  const [own, rows] = await Promise.all([
-    pool.query<{ likes_count: number; comments_count: number }>(
-      "SELECT likes_count, comments_count FROM courses WHERE id = $1",
-      [course.id],
-    ),
-    pool.query<{ entity_type: string; entity_id: string; likes_count: number; comments_count: number }>(
-      `SELECT entity_type, entity_id, likes_count, comments_count FROM engagement_rollups
-       WHERE (entity_type = 'lesson' AND entity_id = ANY($1::text[]))
-          OR (entity_type = 'module' AND starts_with(entity_id, $2))`,
-      [lessonIds, `${course.id}:`],
-    ),
-  ]);
-  const modules = new Map<number, Counts>();
-  const lessons = new Map<string, Counts>();
-  for (const r of rows.rows) {
-    const counts = { likes: r.likes_count, comments: r.comments_count };
-    if (r.entity_type === "lesson") lessons.set(r.entity_id, counts);
-    else {
-      const position = Number(r.entity_id.slice(course.id.length + 1));
-      if (Number.isInteger(position)) modules.set(position, counts);
+/** One indexed read for all distinct articles in the outline. */
+export async function articleCounts(pool: Client, ids: string[]): Promise<Map<string, Counts>> {
+  const result = await pool.query<{ entity_id: string; likes: number; comments: number }>(
+    `SELECT entity_id, likes_count AS likes, comments_count AS comments
+     FROM engagement_rollups WHERE entity_type = 'article' AND entity_id = ANY($1::text[])`,
+    [ids],
+  );
+  return new Map(result.rows.map((row) => [row.entity_id, { likes: row.likes, comments: row.comments }]));
+}
+
+export async function applyCountChange(
+  pool: Client,
+  type: string,
+  id: string,
+  metric: "likes" | "comments",
+  delta: number,
+) {
+  if (type !== "article" || !delta) return;
+  const col = metric === "likes" ? "likes_count" : "comments_count";
+  await pool.query(
+    `INSERT INTO engagement_rollups(entity_type,entity_id,${col}) VALUES ('article',$1,GREATEST($2::int,0))
+     ON CONFLICT(entity_type,entity_id) DO UPDATE SET ${col}=GREATEST(0,engagement_rollups.${col}+$2::int),updated_at=now()`,
+    [id, delta],
+  );
+}
+
+export async function courseCounts(pool: Client, course: PublishedCourse): Promise<CourseCounts> {
+  const ids = new Set(course.modules.flatMap((m) => m.lessons.map((l) => l.itemId)));
+  const articles = await articleCounts(pool, [...ids]);
+  const sum = (keys: Set<string>) => {
+    const total = { likes: 0, comments: 0 };
+    for (const id of keys) {
+      const counts = countsOf(articles, id);
+      total.likes += counts.likes;
+      total.comments += counts.comments;
     }
+    return total;
+  };
+  const lessons = new Map<string, Counts>();
+  const modules = new Map<number, Counts>();
+  for (const module of course.modules) {
+    for (const lesson of module.lessons) lessons.set(lesson.lessonId, countsOf(articles, lesson.itemId));
+    modules.set(module.position, sum(new Set(module.lessons.map((l) => l.itemId))));
   }
-  const c = own.rows[0];
-  return { course: c ? { likes: c.likes_count, comments: c.comments_count } : ZERO, modules, lessons };
+  return { course: sum(ids), modules, lessons };
 }
 
-/** Whether a lesson may be liked or commented on: it is in a published course and its article is public. */
-export async function isEngageableLesson(pool: Pick<pg.Pool, "query">, lessonId: string): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `SELECT 1 FROM courses c
-     JOIN course_lessons l ON l.revision_id = c.published_revision_id AND l.lesson_id = $1
-     JOIN content_items i ON i.id = l.item_id AND i.published_revision_id IS NOT NULL
-     LIMIT 1`,
-    [lessonId],
-  );
-  return (rowCount ?? 0) > 0;
+export async function isPublicArticle(pool: Client, id: string) {
+  const result = await pool.query("SELECT 1 FROM content_items WHERE id=$1 AND published_revision_id IS NOT NULL", [
+    id,
+  ]);
+  return !!result.rowCount;
 }
 
-/** The course a lesson belongs to (any revision names it: a lesson id is minted for one course), or null. */
-export async function lessonCourseId(c: Pick<pg.Pool, "query">, lessonId: string): Promise<string | null> {
-  const { rows } = await c.query<{ course_id: string }>(
-    "SELECT cr.course_id FROM course_lessons l JOIN course_revisions cr ON cr.id = l.revision_id WHERE l.lesson_id = $1 LIMIT 1",
-    [lessonId],
+/** Existing lesson API clients reach the same thread while the lesson is public. */
+export async function resolveLessonArticle(pool: Client, id: string) {
+  const result = await pool.query<{ item_id: string }>(
+    `SELECT l.item_id FROM courses c JOIN course_lessons l ON l.revision_id=c.published_revision_id
+     JOIN content_items i ON i.id=l.item_id AND i.published_revision_id IS NOT NULL
+     WHERE l.lesson_id=$1 LIMIT 1`,
+    [id],
   );
-  return rows[0]?.course_id ?? null;
-}
-
-/** The owner of the course a lesson belongs to (for the "instructor" badge), or null. */
-export async function lessonCourseOwner(pool: Pick<pg.Pool, "query">, lessonId: string): Promise<string | null> {
-  const { rows } = await pool.query<{ owner_subject: string }>(
-    `SELECT c.owner_subject FROM course_lessons l
-     JOIN course_revisions cr ON cr.id = l.revision_id JOIN courses c ON c.id = cr.course_id
-     WHERE l.lesson_id = $1 LIMIT 1`,
-    [lessonId],
-  );
-  return rows[0]?.owner_subject ?? null;
+  const item = result.rows[0];
+  return item ? { entityType: "article", entityId: item.item_id } : null;
 }

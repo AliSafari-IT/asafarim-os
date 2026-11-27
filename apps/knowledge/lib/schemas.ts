@@ -5,6 +5,9 @@
  */
 import commentCreated from "../events/knowledge.comment.created.v1.json";
 
+import articleComment from "../events/knowledge.comment.created.v2.json";
+
 export const EVENT_SCHEMAS: Record<string, object> = {
+  "./events/knowledge.comment.created.v2.json": articleComment,
   "./events/knowledge.comment.created.v1.json": commentCreated,
 };
