@@ -46,7 +46,21 @@ export default async function CoursesPage({ searchParams }: Props) {
         ) : (
           <ul className="article-list" data-testid="courses">
             {courses.map((c) => (
-              <li key={c.slug} className="card" data-testid="course-card">
+              <li
+                key={c.slug}
+                className={c.cover.url ? "card course-card has-cover" : "card"}
+                data-testid="course-card"
+              >
+                {c.cover.url ? (
+                  <img
+                    className="course-card-cover"
+                    src={c.cover.url}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : null}
                 <h2>
                   <Link href={`/courses/${c.slug}`}>{c.title}</Link>
                 </h2>

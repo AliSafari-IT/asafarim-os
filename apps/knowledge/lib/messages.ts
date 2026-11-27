@@ -71,6 +71,8 @@ export const ERRORS: Record<string, string> = {
   course_too_many_cards: "A course can have at most 200 study cards.",
   course_invalid_card: "A card needs a front (up to 300 characters) and a back (up to 1,000).",
   course_unknown_card: "That study card doesn't exist any more.",
+  course_invalid_cover:
+    "The cover needs an https image address on a named site (no IP address or localhost), and alt text of at most 200 characters.",
   course_lesson_unavailable:
     "Some lessons' articles aren't public any more. Remove those lessons, or publish their articles again, then publish the course.",
   // Media (#359)
