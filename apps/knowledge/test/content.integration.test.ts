@@ -75,7 +75,7 @@ describe.skipIf(!ADMIN_URL)("knowledge content on PostgreSQL", () => {
     pool.on("error", () => undefined);
     const c = await pool.connect();
     try {
-      expect(await migrate(c)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(await migrate(c)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
       expect(await migrate(c)).toEqual([]); // idempotent
     } finally {
       c.release();

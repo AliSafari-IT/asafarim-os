@@ -253,7 +253,7 @@ export async function searchStudio(
   actor: { subject: string; seesAll: boolean },
   q: string,
   limit = 50,
-): Promise<{ id: string; slug: string; title: string; status: string; updatedAt: Date }[]> {
+): Promise<{ id: string; slug: string; title: string; status: string; updatedAt: Date; ownerSubject: string }[]> {
   const words = q.trim().toLowerCase().slice(0, SEARCH_LIMITS.query);
   if (!words) return [];
   const { rows } = await pool.query<{
@@ -263,8 +263,9 @@ export async function searchStudio(
     published_revision_id: string | null;
     withdrawn_at: Date | null;
     updated_at: Date;
+    owner_subject: string;
   }>(
-    `SELECT i.id, i.slug, r.title, i.published_revision_id, i.withdrawn_at, i.updated_at
+    `SELECT i.id, i.slug, r.title, i.published_revision_id, i.withdrawn_at, i.updated_at, i.owner_subject
      FROM content_items i JOIN content_revisions r ON r.id = i.draft_revision_id
      WHERE ($1::boolean OR i.owner_subject = $2)
        AND (lower(r.title) LIKE $3 ESCAPE '\\' OR i.slug LIKE $3 ESCAPE '\\' OR word_similarity($4, lower(r.title)) > 0.5)
@@ -277,5 +278,6 @@ export async function searchStudio(
     title: r.title,
     status: r.published_revision_id ? "published" : r.withdrawn_at ? "withdrawn" : "draft",
     updatedAt: r.updated_at,
+    ownerSubject: r.owner_subject,
   }));
 }

@@ -1082,6 +1082,24 @@ main.studio .studio-new button:disabled {
   }
 }
 
+/* Deleting a draft: the row menu entry, the editor link and the confirmation button. */
+.row-menu li a.danger,
+.danger-link {
+  color: var(--bad);
+}
+button.danger-solid {
+  background: var(--bad);
+  color: var(--bad-ink, #fff);
+}
+main button.danger-solid:hover {
+  background: var(--bad);
+  filter: brightness(0.92);
+}
+.confirm-actions {
+  gap: 16px;
+  margin-top: 12px;
+}
+
 /* A page title with an action beside it (the public Courses page's "New course"). */
 .page-head {
   display: flex;

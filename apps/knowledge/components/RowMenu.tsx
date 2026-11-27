@@ -9,6 +9,8 @@ import { useEffect, useRef } from "react";
 export interface RowMenuLink {
   href: string;
   label: string;
+  /** Draws the link as a destructive one. */
+  danger?: boolean;
 }
 
 export function RowMenu({ title, links }: { title: string; links: RowMenuLink[] }) {
@@ -41,7 +43,9 @@ export function RowMenu({ title, links }: { title: string; links: RowMenuLink[] 
       <ul onClick={() => ref.current?.removeAttribute("open")}>
         {links.map((l) => (
           <li key={l.href}>
-            <Link href={l.href}>{l.label}</Link>
+            <Link href={l.href} className={l.danger ? "danger" : undefined}>
+              {l.label}
+            </Link>
           </li>
         ))}
       </ul>

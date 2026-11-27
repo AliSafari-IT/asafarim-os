@@ -11,6 +11,7 @@ import {
   autosaveDraft,
   changeSlug,
   createArticle,
+  deleteDraftArticle,
   discardAutosave,
   getStudioItem,
   isUuid,
@@ -99,6 +100,19 @@ export async function saveDraftAction(_prev: SaveState, formData: FormData): Pro
   }
   revalidatePath(back);
   redirect(`${back}?done=saved`);
+}
+
+/** Permanently delete a never-published draft, after the confirmation page (lib/content.ts: deleteDraftArticle). */
+export async function deleteArticleAction(formData: FormData) {
+  const id = field(formData, "id");
+  if (!isUuid(id)) redirect("/studio?error=not_found");
+  const back = `/studio/content/${id}/delete`;
+  const actor = await actorOrRedirect(back);
+  const r = await deleteDraftArticle(await db(), actor, { id });
+  // An article that isn't there (or isn't theirs) has no confirmation page to go back to.
+  if (!r.ok) fail(r.error === "not_found" ? "/studio" : back, r);
+  revalidatePath("/studio");
+  redirect("/studio?done=deleted");
 }
 
 export async function publishAction(formData: FormData) {
