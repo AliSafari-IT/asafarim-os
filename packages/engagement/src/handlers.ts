@@ -10,6 +10,7 @@
  * Routes (under `basePath`, default /api/engagement):
  *   GET    /likes           public; ?entityType=&entityId= -> { liked, count } for this person (or this guest)
  *   POST   /likes/toggle    public; rate limited per client address; a guest is told apart by a keyed visitor hash
+ *   POST   /likes/sync      signed in; moves this browser's guest likes to the account (no double count)
  *   GET    /comments        public; ?entityType=&entityId=&limit=&offset=
  *   POST   /comments        signed in (and `canComment`, the app's permission check)
  *   PATCH  /comments/:id    the author
@@ -57,6 +58,14 @@ export interface EngagementHandlersOptions {
    */
   authorRole?(user: SessionUser, entity: EntityRef): Promise<string | null> | string | null;
   basePath?: string;
+  /**
+   * This site's origin as the visitor sees it (e.g. "https://learn.asafarim.site"), for the cross-site check on
+   * every POST, PATCH and DELETE: a request whose `Origin` names another site, or that the browser marks
+   * `Sec-Fetch-Site: cross-site`, is refused with 403 before anything is read. A request without either header (not
+   * a browser) is let through: it carries no ambient session to abuse. Without this option, only Sec-Fetch-Site is
+   * checked.
+   */
+  siteOrigin?(request: Request): string | null | undefined;
   /** Where unexpected errors go. Default: one JSON line on stderr, never the request body. */
   log?(message: string, detail: Record<string, unknown>): void;
 }
@@ -152,8 +161,21 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
     return user;
   }
 
+  /** Refuse a write a browser sent from another site (CSRF), before reading anything. */
+  function sameSite(request: Request): void {
+    if (request.method === "GET" || request.method === "HEAD") return;
+    if (request.headers.get("sec-fetch-site") === "cross-site") {
+      throw new EngagementError("forbidden", "cross-site request refused", 403);
+    }
+    const origin = request.headers.get("origin");
+    if (!origin || !options.siteOrigin) return;
+    const expected = options.siteOrigin(request);
+    if (expected && origin !== expected) throw new EngagementError("forbidden", "cross-site request refused", 403);
+  }
+
   async function guarded(fn: () => Promise<Response>, request: Request): Promise<Response> {
     try {
+      sameSite(request);
       return await fn();
     } catch (err) {
       if (err instanceof EngagementError) return errorResponse(err);
@@ -181,6 +203,19 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
         const user = await options.resolveUser(request);
         const actor = user ? { userId: user.id } : { visitorHash: visitorHashOf(request.headers, options.salt) };
         return json(await options.service.toggleLike(entity, actor));
+      }, request),
+
+    syncLikes: (request: Request): Promise<Response> =>
+      guarded(async () => {
+        const user = await requireUser(request);
+        // Same budget as toggling: a sync is cheap for a visitor with no guest likes, bounded for one with many.
+        const limit = await options.limiter.hit(`likes-sync:${clientAddress(request.headers)}`);
+        if (!limit.ok) {
+          return errorResponse(new EngagementError("rate_limited", "too many requests, slow down", 429), {
+            "retry-after": String(limit.retryAfterSeconds),
+          });
+        }
+        return json(await options.service.syncGuestLikes(visitorHashOf(request.headers, options.salt), user.id));
       }, request),
 
     likeState: (request: Request): Promise<Response> =>
@@ -259,6 +294,7 @@ export function createEngagementHandlers(options: EngagementHandlersOptions) {
 
       if (route === "/likes")
         return method === "GET" || method === "HEAD" ? handlers.likeState(request) : notAllowed("GET");
+      if (route === "/likes/sync") return method === "POST" ? handlers.syncLikes(request) : notAllowed("POST");
       if (route === "/likes/toggle") return method === "POST" ? handlers.toggleLike(request) : notAllowed("POST");
       if (route === "/comments") {
         if (method === "GET") return handlers.listComments(request);

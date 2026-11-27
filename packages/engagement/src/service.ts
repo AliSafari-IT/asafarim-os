@@ -183,7 +183,17 @@ function toComment(r: CommentRow): Comment {
 export interface EngagementServiceOptions {
   pool: Pool;
   onCountChange?: OnCountChange;
+  /**
+   * Called inside the transaction of a new comment or reply, after the count hook: publish an event through the
+   * app's outbox here (e.g. `knowledge.comment.created.v1`). Throwing rolls the comment back.
+   */
+  onCommentCreated?: (comment: Comment, tx: PoolClient) => Promise<void> | void;
 }
+
+/** At most this many guest likes move to an account in one sync (a guest liking more is not a person). */
+export const MAX_SYNC_LIKES = 500;
+
+const likeLockKey = (entity: EntityRef, who: string) => `${entity.entityType}\n${entity.entityId}\n${who}`;
 
 async function withTransaction<T>(pool: Pool, fn: (tx: PoolClient) => Promise<T>): Promise<T> {
   const tx = await pool.connect();
@@ -232,9 +242,7 @@ export function createEngagementService(options: EngagementServiceOptions) {
       return withTransaction(pool, async (tx) => {
         // One toggle at a time per (entity, actor): requests racing for the same like would otherwise keep
         // undoing each other. Other actors do not wait for this one. The unique indexes stay as the backstop.
-        await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-          `${entity.entityType}\n${entity.entityId}\n${who}`,
-        ]);
+        await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [likeLockKey(entity, who)]);
         const removed =
           "userId" in actor
             ? await tx.query(
@@ -267,6 +275,60 @@ export function createEngagementService(options: EngagementServiceOptions) {
         }
         await notify(tx, entity, "likes", 1);
         return { liked: true, count: await countLikes(tx, entity) };
+      });
+    },
+
+    /**
+     * Give a person the likes they made as a guest (the same visitor hash) before signing in. A like they had
+     * already made signed in is not counted twice: the guest one is dropped (count -1); any other becomes theirs
+     * (count unchanged). Runs under the same per-(entity, actor) locks as toggleLike, so a toggle racing it cannot
+     * double count either. Returns how many likes were moved and how many were merged into an existing one.
+     */
+    async syncGuestLikes(visitorHash: string, userId: string): Promise<{ moved: number; merged: number }> {
+      validateActor({ visitorHash });
+      validateActor({ userId });
+      return withTransaction(pool, async (tx) => {
+        // One sync per visitor at a time (a second tab signing in at once waits, then finds nothing left).
+        await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`sync\n${visitorHash}`]);
+        const { rows } = await tx.query<{ entity_type: string; entity_id: string }>(
+          `SELECT entity_type, entity_id FROM engagement_likes WHERE visitor_hash = $1 AND user_id IS NULL
+            ORDER BY entity_type, entity_id LIMIT $2`,
+          [visitorHash, MAX_SYNC_LIKES],
+        );
+        if (rows.length === 0) return { moved: 0, merged: 0 };
+        const entities = rows.map((r) => ({ entityType: r.entity_type, entityId: r.entity_id }));
+        // The same locks toggleLike takes, in one sorted order, so two syncs of one person can't deadlock.
+        const keys = entities
+          .flatMap((e) => [likeLockKey(e, `u:${userId}`), likeLockKey(e, `v:${visitorHash}`)])
+          .sort();
+        for (const key of keys) await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [key]);
+        let moved = 0;
+        let merged = 0;
+        for (const entity of entities) {
+          const own = await tx.query(
+            "SELECT 1 FROM engagement_likes WHERE entity_type = $1 AND entity_id = $2 AND user_id = $3",
+            [entity.entityType, entity.entityId, userId],
+          );
+          if ((own.rowCount ?? 0) > 0) {
+            const gone = await tx.query(
+              `DELETE FROM engagement_likes WHERE entity_type = $1 AND entity_id = $2 AND visitor_hash = $3
+                 AND user_id IS NULL`,
+              [entity.entityType, entity.entityId, visitorHash],
+            );
+            if (gone.rowCount === 1) {
+              merged++;
+              await notify(tx, entity, "likes", -1);
+            }
+          } else {
+            const moves = await tx.query(
+              `UPDATE engagement_likes SET user_id = $4, visitor_hash = NULL
+                WHERE entity_type = $1 AND entity_id = $2 AND visitor_hash = $3 AND user_id IS NULL`,
+              [entity.entityType, entity.entityId, visitorHash, userId],
+            );
+            moved += moves.rowCount ?? 0;
+          }
+        }
+        return { moved, merged };
       });
     },
 
@@ -339,7 +401,9 @@ export function createEngagementService(options: EngagementServiceOptions) {
           ],
         );
         await notify(tx, input.entity, "comments", 1);
-        return toComment(rows[0]!);
+        const comment = toComment(rows[0]!);
+        await options.onCommentCreated?.(comment, tx);
+        return comment;
       });
     },
 

@@ -13,6 +13,7 @@ import {
   createEngagementClient,
   EngagementApiError,
   EngagementBadge,
+  GuestLikeSync,
   insertComment,
   LikeButton,
   likedHint,
@@ -411,5 +412,26 @@ describe("CommentSection paging", () => {
     const bodies = qa("comment-body").map((e) => e.textContent);
     expect(bodies).toEqual(expect.arrayContaining(["comment 51", "comment 52"]));
     expect(bodies).toHaveLength(51);
+  });
+});
+
+describe("GuestLikeSync", () => {
+  it("asks nothing when this browser never liked, syncs once when it did, and not again for the same person", async () => {
+    const { fn, calls } = fakeFetch(() => ({ body: { moved: 1, merged: 0 } }));
+    const client = createEngagementClient({ fetch: fn });
+    act(() => root.render(<GuestLikeSync userId="u1" client={client} />));
+    await flush();
+    expect(calls).toHaveLength(0);
+
+    likedHint.write({ entityType: "lesson", entityId: "l1" }, true);
+    act(() => root.render(<GuestLikeSync userId="u2" client={client} />));
+    await flush();
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["POST /api/engagement/likes/sync"]);
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    act(() => root.render(<GuestLikeSync userId="u2" client={client} />));
+    await flush();
+    expect(calls).toHaveLength(1);
   });
 });

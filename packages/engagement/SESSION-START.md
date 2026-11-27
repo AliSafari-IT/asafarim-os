@@ -3,7 +3,7 @@
 Read this first when you pick the work up in a new session or on another account. Then read
 `git log --oneline -15` on the work branch and run the checks in "Verify before continuing".
 
-- Status (2026-11-27): Phases 1–3 done and pushed to the PR; Phase 4 next.
+- Status (2026-11-27): Phases 1–4 done (#397, #399, then the Phase 4 PR).
 - Repo: `AliSafari-IT/asafarim-os` (the OS). Not `asafarim-platform` (a different, Next.js/Prisma monorepo;
   nothing was changed there for this work).
 - Work branch: `claude/serene-darwin-1d44kb` (push there; open a **draft** PR into `main`; `main` takes no direct pushes).
@@ -133,18 +133,28 @@ Lessons from building it (keep in mind):
 - [x] `styles.css`: `--accent-ink` / `--bad-ink` only on their solid fills; text on the page uses `--accent` / `--bad`
       / `--ink` (all pairs ≥ 5:1 in both themes).
 
-### Phase 4 — hardening
+### Phase 4 — hardening (DONE; engagement `0.3.0 → 0.4.0`, knowledge `0.2.0 → 0.3.0`)
 
-- [ ] `POST /api/engagement/likes/sync` (guest → user migration without double counting).
-- [ ] Publish `knowledge.comment.created.v1` through the outbox (schema in the manifest).
-- [ ] Optional nightly reconciliation (recount likes/comments, heal rollups) — owner was asked; default yes. With the
-      Phase 3 design it is: recount `engagement_rollups` lesson rows from `engagement_likes/comments`, then
-      `recountCourseEngagement` for every published course.
-- [ ] Origin/CSRF check on the mutating routes (see "Lessons" above). SameSite=Lax already keeps cross-site POSTs
-      from carrying the session; decide whether to add an explicit Origin check.
-- [ ] Redis limiter for Knowledge if it ever runs more than one instance (`createRedisRateLimiter`; Knowledge has no
-      `ioredis` today).
-- [ ] CI: `pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm platform:sync:check && pnpm env:check`.
+- [x] `POST /api/engagement/likes/sync` + `service.syncGuestLikes(visitorHash, userId)`: a guest like becomes the
+      person's; one they already had signed in is merged (guest row dropped, count −1). Same per-(entity, actor)
+      advisory locks as `toggleLike`, taken in sorted order; at most `MAX_SYNC_LIKES` (500) per call. Client:
+      `<GuestLikeSync userId>` (lesson page, signed in) posts once per person and browser, and only if localStorage
+      remembers a like. Limitation: the visitor hash includes the address and User-Agent, so likes made on another
+      network or browser can't be found.
+- [x] `knowledge.comment.created.v1`: Knowledge migration 13 = the platform outbox (`OUTBOX_SQL`); schema
+      `apps/knowledge/events/knowledge.comment.created.v1.json` (ids only, never the text or a name); published by the
+      new `onCommentCreated(comment, tx)` service hook inside the comment's transaction (`lib/events.ts`); relay started
+      in `instrumentation.ts` and woken after a 201; schemas uploaded for the Admin catalog (`lib/platform.ts`).
+      Production: `ASAFARIM_NATS_URL: ${OS_NATS_URL:-}` added to os-knowledge (as Flow); the relay signs in with
+      `ASAFARIM_REGISTRY_CREDENTIAL`, which Knowledge already has. No subscriber exists yet.
+- [x] Nightly reconciliation: `lib/engagement-reconcile.ts` recounts lesson rows from `engagement_likes` / visible
+      `engagement_comments`, then `recountCourseEngagement` for every published course, in one transaction under
+      `pg_try_advisory_xact_lock`. Scheduled once a day from `instrumentation.ts` when `ENGAGEMENT_SALT` is set.
+- [x] CSRF: handler option `siteOrigin(request)`; POST/PATCH/DELETE with a foreign `Origin` or
+      `Sec-Fetch-Site: cross-site` get 403 before anything is read. Knowledge passes `visitorOrigin(headers)`.
+- [x] CI already runs format, typecheck, lint, test, `platform sync --check`, manifest review and `env:check`.
+- Not done (only if needed): a Redis limiter for Knowledge (one instance today); moderation statuses
+  (`hidden`/`deleted` exist in the schema, nothing sets them) and pinning UI.
 
 ## Verify before continuing
 

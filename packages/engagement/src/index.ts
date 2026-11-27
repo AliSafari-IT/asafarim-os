@@ -21,6 +21,7 @@ export {
   EngagementError,
   isUuid,
   MAX_COMMENT_LENGTH,
+  MAX_SYNC_LIKES,
   normalizeBody,
   snapshotOf,
   validateEntity,

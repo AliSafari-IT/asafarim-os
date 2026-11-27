@@ -262,6 +262,44 @@ describe.skipIf(!DATABASE_URL)("engagement (Postgres)", () => {
     });
   });
 
+  describe("guest likes after sign-in", () => {
+    const guest = "a".repeat(64);
+    it("moves a guest's likes to the account, merging one already made signed in, and counts each like once", async () => {
+      const svc = service();
+      await svc.toggleLike(lesson, { visitorHash: guest });
+      await svc.toggleLike(lesson2, { visitorHash: guest });
+      await svc.toggleLike(lesson, { userId: alice.id }); // alice liked l1 signed in too: one person, two rows
+      expect((await counts()).c1.l).toBe(3);
+      expect(await svc.syncGuestLikes(guest, alice.id)).toEqual({ moved: 1, merged: 1 });
+      expect(await rows("engagement_likes", "user_id IS NULL")).toBe(0);
+      expect(await rows("engagement_likes", `user_id = '${alice.id}'`)).toBe(2);
+      const n = await counts();
+      expect([n.l1.l, n.l2.l, n.c1.l]).toEqual([1, 1, 2]);
+      expect(await svc.likeState(lesson, { userId: alice.id })).toEqual({ liked: true, count: 1 });
+      expect(await svc.syncGuestLikes(guest, alice.id)).toEqual({ moved: 0, merged: 0 }); // idempotent
+    });
+
+    it("never double counts when several syncs and toggles of the same person race", async () => {
+      const svc = service();
+      for (const e of [lesson, lesson2]) await svc.toggleLike(e, { visitorHash: guest });
+      await svc.toggleLike(lesson, { userId: bob.id });
+      await Promise.all([
+        ...Array.from({ length: 5 }, () => svc.syncGuestLikes(guest, bob.id)),
+        svc.toggleLike(lesson2, { userId: bob.id }),
+      ]);
+      const n = await counts();
+      expect(n.c1.l).toBe(await rows("engagement_likes"));
+      expect(n.l1.l).toBe(await rows("engagement_likes", "entity_id = 'l1'"));
+      expect(n.l2.l).toBe(await rows("engagement_likes", "entity_id = 'l2'"));
+      expect(await rows("engagement_likes", "user_id IS NULL")).toBe(0);
+    });
+
+    it("refuses a malformed visitor hash or user", async () => {
+      await expect(service().syncGuestLikes("nope", alice.id)).rejects.toMatchObject({ status: 400 });
+      await expect(service().syncGuestLikes(guest, "")).rejects.toMatchObject({ status: 401 });
+    });
+  });
+
   describe("comments and the rollup", () => {
     it("a comment and a reply each count once, up to the course", async () => {
       const top = await service().createComment({ entity: lesson, user: alice, body: "  First!  " });
@@ -295,6 +333,31 @@ describe.skipIf(!DATABASE_URL)("engagement (Postgres)", () => {
           code: "invalid_body",
         });
       }
+    });
+
+    it("calls onCommentCreated in the comment's transaction, and rolls the comment back when it throws", async () => {
+      const seen: string[] = [];
+      const ok = createEngagementService({
+        pool,
+        onCountChange: rollup,
+        onCommentCreated: async (c, tx) => {
+          // Inside the transaction: the row is visible to tx before commit.
+          const { rowCount } = await tx.query("SELECT 1 FROM engagement_comments WHERE id = $1", [c.id]);
+          seen.push(`${c.body}:${rowCount}`);
+        },
+      });
+      await ok.createComment({ entity: lesson, user: alice, body: "hello" });
+      expect(seen).toEqual(["hello:1"]);
+      const failing = createEngagementService({
+        pool,
+        onCountChange: rollup,
+        onCommentCreated: () => {
+          throw new Error("outbox down");
+        },
+      });
+      await expect(failing.createComment({ entity: lesson, user: alice, body: "lost" })).rejects.toThrow("outbox down");
+      expect(await rows("engagement_comments")).toBe(1);
+      expect((await counts()).l1.c).toBe(1);
     });
 
     it("rolls the comment back when the hook fails", async () => {
@@ -672,6 +735,46 @@ describe.skipIf(!DATABASE_URL)("engagement (Postgres)", () => {
       expect(res.status).toBe(413);
       expect(pulled).toBeLessThan(64 * 1024);
       expect(await rows("engagement_likes")).toBe(0);
+    });
+
+    it("POST /likes/sync needs a signed-in person and moves this browser's guest likes", async () => {
+      const h = build();
+      await toggle(h); // as a guest
+      expect((await call(h, "POST", "/api/engagement/likes/sync")).status).toBe(401);
+      const res = await call(h, "POST", "/api/engagement/likes/sync", { user: "bob" });
+      expect(await res.json()).toEqual({ moved: 1, merged: 0 });
+      expect(await rows("engagement_likes", "user_id = 'user-bob'")).toBe(1);
+      expect((await counts()).c1.l).toBe(1);
+    });
+
+    it("refuses a write from another site, by Origin or Sec-Fetch-Site, and lets reads and same-site writes through", async () => {
+      const h = createEngagementHandlers({
+        service: service(),
+        salt: SALT,
+        limiter: createMemoryRateLimiter({ limit: 15, windowMs: 60_000 }),
+        entities: { lesson: {} },
+        resolveUser: () => null,
+        siteOrigin: () => "https://learn.test",
+      });
+      const like = (headers: Record<string, string>) =>
+        h.handle(
+          new Request("http://internal:3000/api/engagement/likes/toggle", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.80", ...headers },
+            body: JSON.stringify(lesson),
+          }),
+        );
+      expect((await like({ origin: "https://evil.example" })).status).toBe(403);
+      expect((await like({ "sec-fetch-site": "cross-site" })).status).toBe(403);
+      expect(await rows("engagement_likes")).toBe(0);
+      expect((await like({ origin: "https://learn.test", "sec-fetch-site": "same-origin" })).status).toBe(200);
+      expect((await like({})).status).toBe(200); // not a browser: no ambient session to abuse
+      const read = await h.handle(
+        new Request("http://internal:3000/api/engagement/likes?entityType=lesson&entityId=l1", {
+          headers: { origin: "https://evil.example", "sec-fetch-site": "cross-site" },
+        }),
+      );
+      expect(read.status).toBe(200);
     });
 
     it("answers 404 for unknown routes and 405 for the wrong method", async () => {

@@ -5,7 +5,7 @@
  */
 import { viewKey } from "@/lib/analytics/classify";
 import { recordPageView } from "@/lib/analytics/server";
-import { CommentSection, LikeButton } from "@asafarim/engagement/client";
+import { CommentSection, GuestLikeSync, LikeButton } from "@asafarim/engagement/client";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -68,6 +68,10 @@ export default async function LessonPage({ params }: Props) {
             {lesson.summary ? <p className="lead">{lesson.summary}</p> : null}
             {lesson.format === "tiptap" && doc ? <DocView doc={doc} /> : <Markdown markdown={lesson.body} />}
           </article>
+          {engagement?.viewer ? (
+            // Likes made here as a guest before signing in become this person's (once per browser).
+            <GuestLikeSync userId={engagement.viewer.id} basePath={ENGAGEMENT_BASE_PATH} />
+          ) : null}
           {engagement && own ? (
             <div className="lesson-like" data-testid="lesson-like">
               <LikeButton

@@ -9,6 +9,10 @@
  * - Only a lesson of a published course whose article is public can be engaged with.
  * - The counts roll up to the module and the course in the same transaction (lib/engagement-rollups.ts).
  *
+ * - A new comment publishes knowledge.comment.created.v1 through the outbox (lib/events.ts), in its transaction.
+ * - Writes from another site are refused (Origin / Sec-Fetch-Site), and a signed-in person's guest likes move to
+ *   their account (POST /likes/sync, sent by <GuestLikeSync> on the lesson page).
+ *
  * ENGAGEMENT_SALT is required: without it the routes answer 503 and the pages show no like or comment UI.
  */
 import "server-only";
@@ -16,28 +20,21 @@ import {
   createEngagementHandlers,
   createEngagementService,
   createMemoryRateLimiter,
-  MIN_SALT_LENGTH,
   type EngagementHandlers,
   type SessionUser,
 } from "@asafarim/engagement";
+import { visitorOrigin } from "@asafarim/app-sdk";
 import { auth } from "./auth";
 import { db } from "./db";
 import { applyCountChange, isEngageableLesson, lessonCourseOwner } from "./engagement-rollups";
+import { publishCommentCreated } from "./events";
+import { engagementSalt } from "./engagement-config";
 import { describeAccess, gate } from "./gate";
 import { PERMISSIONS } from "./policy";
 
 export const ENGAGEMENT_BASE_PATH = "/api/engagement";
 
-/** The salt, when it is usable. */
-function salt(): string | null {
-  const s = process.env.ENGAGEMENT_SALT;
-  return s && s.length >= MIN_SALT_LENGTH ? s : null;
-}
-
-/** Whether likes and comments are switched on (ENGAGEMENT_SALT is set). Pages hide their UI otherwise. */
-export function engagementEnabled(): boolean {
-  return salt() !== null;
-}
+export { engagementEnabled } from "./engagement-config";
 
 /** The signed-in person as the engagement routes see them, or null for a guest. */
 async function sessionUser(): Promise<SessionUser | null> {
@@ -75,6 +72,8 @@ async function build(s: string): Promise<EngagementHandlers> {
   const service = createEngagementService({
     pool,
     onCountChange: (type, id, metric, delta, tx) => applyCountChange(tx, type, id, metric, delta),
+    // knowledge.comment.created.v1, in the comment's own transaction (identifiers only, never the text).
+    onCommentCreated: (comment, tx) => publishCommentCreated(tx, comment),
   });
   return createEngagementHandlers({
     service,
@@ -83,6 +82,8 @@ async function build(s: string): Promise<EngagementHandlers> {
     limiter: createMemoryRateLimiter({ limit: 15, windowMs: 60_000 }),
     entities: { lesson: { exists: (id) => isEngageableLesson(pool, id) } },
     basePath: ENGAGEMENT_BASE_PATH,
+    // Writes from another site are refused (CSRF): the visitor's origin, as the gateway forwards it.
+    siteOrigin: (request) => visitorOrigin(request.headers),
     resolveUser: () => sessionUser(),
     // The app's own check: signed in, the app active, the permission held (from core-api, as for the studio).
     canComment: async () => (await gate(PERMISSIONS.commentWrite)).ok,
@@ -99,7 +100,7 @@ async function build(s: string): Promise<EngagementHandlers> {
 
 /** The handlers, built once per process; null when ENGAGEMENT_SALT is missing. */
 export function engagementHandlers(): Promise<EngagementHandlers> | null {
-  const s = salt();
+  const s = engagementSalt();
   if (!s) return null;
   if (g.knowledgeEngagement?.salt !== s) {
     const handlers = build(s);

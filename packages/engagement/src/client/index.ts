@@ -5,6 +5,7 @@
 export { LikeButton, type LikeButtonProps } from "./LikeButton.tsx";
 export { CommentSection, type CommentSectionProps, type CommentViewer } from "./CommentSection.tsx";
 export { EngagementBadge, type EngagementBadgeProps } from "./EngagementBadge.tsx";
+export { GuestLikeSync, SYNC_DONE_KEY, type GuestLikeSyncProps } from "./GuestLikeSync.tsx";
 export {
   compactCount,
   createEngagementClient,
