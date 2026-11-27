@@ -461,6 +461,8 @@ export interface StudioCourse {
   draftRevisionId: string;
   publishedRevisionId: string | null;
   draftIsPublished: boolean;
+  /** Lessons guests see now (the published revision's lessons whose article is public); null when not published. */
+  publishedLessons: number | null;
   /** The publication state shown: publish and withdraw forms send it back, so a stale one is refused. */
   publication: number;
   title: string;
@@ -491,6 +493,15 @@ export async function getStudioCourse(
     [course.draft_revision_id, ids],
   );
   const byId = new Map(rows.map((r) => [r.lesson_id, r]));
+  const publishedLessons = course.published_revision_id
+    ? (
+        await pool.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM course_lessons l JOIN content_items i ON i.id = l.item_id
+           WHERE l.revision_id = $1 AND i.published_revision_id IS NOT NULL`,
+          [course.published_revision_id],
+        )
+      ).rows[0]!.n
+    : null;
   return {
     id: course.id,
     slug: course.slug,
@@ -498,6 +509,7 @@ export async function getStudioCourse(
     draftRevisionId: course.draft_revision_id,
     publishedRevisionId: course.published_revision_id,
     draftIsPublished: course.published_revision_id === course.draft_revision_id,
+    publishedLessons,
     publication: course.publication,
     title: draft.title,
     summary: draft.summary,
