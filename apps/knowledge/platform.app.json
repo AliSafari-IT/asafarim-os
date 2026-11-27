@@ -118,30 +118,36 @@
     },
     {
       "key": "knowledge.learner",
-      "grants": ["knowledge.comment.write"],
+      "grants": [
+        "knowledge.comment.write"
+      ],
       "description": "Comments on lessons (anyone may read them and like a lesson)"
     }
   ],
   "routes": [
     {
       "path": "/studio/**",
-      "methods": ["GET", "HEAD"],
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
       "permission": "knowledge.content.create"
     }
   ],
   "events": {
     "publishes": [
       {
-        "type": "knowledge.comment.created.v1",
-        "schema": "./events/knowledge.comment.created.v1.json"
-      },
-      {
         "type": "knowledge.comment.created.v2",
         "schema": "./events/knowledge.comment.created.v2.json"
       }
     ]
   },
-  "secrets": ["KNOWLEDGE_AI_API_KEY", "KNOWLEDGE_MEDIA_ACCESS_KEY", "KNOWLEDGE_MEDIA_SECRET_KEY", "ENGAGEMENT_SALT"],
+  "secrets": [
+    "KNOWLEDGE_AI_API_KEY",
+    "KNOWLEDGE_MEDIA_ACCESS_KEY",
+    "KNOWLEDGE_MEDIA_SECRET_KEY",
+    "ENGAGEMENT_SALT"
+  ],
   "ui": {
     "glyph": "KN",
     "color": "#0e7490",

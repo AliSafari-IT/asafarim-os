@@ -137,7 +137,6 @@ export default defineApp({
   // Published through the outbox in the same transaction as the comment (lib/engagement.ts, lib/events.ts).
   events: {
     publishes: [
-      { type: "knowledge.comment.created.v1", schema: "./events/knowledge.comment.created.v1.json" },
       { type: "knowledge.comment.created.v2", schema: "./events/knowledge.comment.created.v2.json" },
     ],
   },
