@@ -47,6 +47,59 @@ export interface SignInSummary {
   activeConnections: number;
 }
 
+/** Account state as identity reports it: a revoked connection is a suspension. */
+export type AccountState = "active" | "suspended";
+/** Every app (a global connection), only the apps it was admitted to, or nothing yet. */
+export type AdmissionScope = "global" | "apps" | "none";
+
+/** One person in identity's directory (core/identity `GET /admin/v1/users`). */
+export interface DirectoryPerson {
+  /** The stable account id (`sub`): the join key everywhere. Email and labels can change. */
+  id: string;
+  /** Their email, else Google address, else phone number; null if none. */
+  label: string | null;
+  email: string | null;
+  /** true: stored proof; false: an address without proof; null: no email to verify. */
+  emailVerified: boolean | null;
+  state: AccountState;
+  scope: AdmissionScope;
+  /** Clients (apps) a per-app public admission covers. */
+  admittedClients: string[];
+  isAdmin: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+export interface DirectoryFilter {
+  q?: string;
+  state?: AccountState;
+  scope?: AdmissionScope;
+  after?: string;
+  limit?: number;
+}
+
+/** One person's profile (`GET /admin/v1/users/<id>`). */
+export interface PersonProfile extends DirectoryPerson {
+  identities: {
+    method: "phone" | "email" | "google";
+    identifier: string | null;
+    verifiedAt: string | null;
+    lastLoginAt: string | null;
+    createdAt: string;
+  }[];
+  passkeys: number;
+  connection: {
+    status: "active" | "revoked";
+    source: "admin" | "bootstrap" | "suspension" | null;
+    grantedAt: string;
+    grantedBy: string | null;
+    revokedAt: string | null;
+    revokedBy: string | null;
+  } | null;
+  admissions: { clientId: string; source: string; grantedAt: string }[];
+  pendingRequest: { id: string; apps: string[]; note: string | null; createdAt: string } | null;
+}
+
 /** identity's public URL: the console's OIDC issuer. */
 export const identityBase = () => (process.env.OIDC_ISSUER ?? "http://localhost:4010").replace(/\/$/, "");
 
@@ -85,10 +138,25 @@ export function identityApi(idToken: string) {
       return call<{ events: SignInEvent[]; next: number | null }>(idToken, `/admin/v1/audit?${q}`);
     },
     summary: (days = 14) => call<SignInSummary>(idToken, `/admin/v1/audit/summary?days=${days}`),
+    /** The people directory, one page at a time. */
+    users: (f: DirectoryFilter = {}) => {
+      const q = new URLSearchParams();
+      if (f.q) q.set("q", f.q);
+      if (f.state) q.set("state", f.state);
+      if (f.scope) q.set("scope", f.scope);
+      if (f.after) q.set("after", f.after);
+      if (f.limit) q.set("limit", String(f.limit));
+      return call<{ users: DirectoryPerson[]; next: string | null }>(idToken, `/admin/v1/users?${q}`);
+    },
+    /** One person; CoreApiError 404 when identity has no such account. */
+    user: (id: string) => call<PersonProfile>(idToken, `/admin/v1/users/${encodeURIComponent(id)}`),
   };
 }
 
 export type TrailState = "ok" | "not-admin" | "unavailable";
+
+/** Why the directory couldn't be read, in the page's terms (the same rules as the trail). */
+export const directoryState = (err: unknown): Exclude<TrailState, "ok"> => trailState(err);
 
 /** Why the trail couldn't be read, in the page's terms. */
 export function trailState(err: unknown): Exclude<TrailState, "ok"> {

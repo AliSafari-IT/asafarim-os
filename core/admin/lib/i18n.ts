@@ -8,7 +8,7 @@ import type { Locale } from "@asafarim/locale";
 export interface Messages {
   skipToContent: string;
   adminNav: string;
-  nav: { apps: string; status: string; events: string; roles: string; audit: string };
+  nav: { apps: string; status: string; events: string; users: string; roles: string; audit: string };
   signOut: string;
   signInIntro: string;
   signIn: string;
@@ -20,7 +20,7 @@ export interface Messages {
 const EN: Messages = {
   skipToContent: "Skip to content",
   adminNav: "Admin",
-  nav: { apps: "Apps", status: "Status", events: "Events", roles: "Roles & grants", audit: "Audit" },
+  nav: { apps: "Apps", status: "Status", events: "Events", users: "Users", roles: "Roles & grants", audit: "Audit" },
   signOut: "Sign out",
   signInIntro: "Sign in with your ASafariM account. Only platform administrators can use the console.",
   signIn: "Sign in",
@@ -32,7 +32,14 @@ const EN: Messages = {
 const NL: Messages = {
   skipToContent: "Ga naar de inhoud",
   adminNav: "Beheer",
-  nav: { apps: "Apps", status: "Status", events: "Gebeurtenissen", roles: "Rollen & rechten", audit: "Audit" },
+  nav: {
+    apps: "Apps",
+    status: "Status",
+    events: "Gebeurtenissen",
+    users: "Gebruikers",
+    roles: "Rollen & rechten",
+    audit: "Audit",
+  },
   signOut: "Afmelden",
   signInIntro: "Meld je aan met je ASafariM-account. Alleen platformbeheerders kunnen de console gebruiken.",
   signIn: "Aanmelden",
@@ -44,7 +51,14 @@ const NL: Messages = {
 const FR: Messages = {
   skipToContent: "Aller au contenu",
   adminNav: "Administration",
-  nav: { apps: "Applications", status: "État", events: "Événements", roles: "Rôles et droits", audit: "Audit" },
+  nav: {
+    apps: "Applications",
+    status: "État",
+    events: "Événements",
+    users: "Utilisateurs",
+    roles: "Rôles et droits",
+    audit: "Audit",
+  },
   signOut: "Se déconnecter",
   signInIntro:
     "Connectez-vous avec votre compte ASafariM. Seuls les administrateurs de la plateforme peuvent utiliser la console.",
@@ -57,7 +71,14 @@ const FR: Messages = {
 const DE: Messages = {
   skipToContent: "Zum Inhalt springen",
   adminNav: "Administration",
-  nav: { apps: "Apps", status: "Status", events: "Ereignisse", roles: "Rollen & Rechte", audit: "Audit" },
+  nav: {
+    apps: "Apps",
+    status: "Status",
+    events: "Ereignisse",
+    users: "Benutzer",
+    roles: "Rollen & Rechte",
+    audit: "Audit",
+  },
   signOut: "Abmelden",
   signInIntro: "Melden Sie sich mit Ihrem ASafariM-Konto an. Nur Plattform-Administratoren können die Konsole nutzen.",
   signIn: "Anmelden",

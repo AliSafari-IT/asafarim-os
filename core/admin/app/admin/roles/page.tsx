@@ -1,11 +1,13 @@
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Flash } from "@/components/Flash";
 import { coreApi, derivedFrom } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
-import { loadDirectory, searchUsers } from "@/lib/users";
-import { formatTime, isAppId } from "@/lib/util";
-import { grantRole, mapRole, revokeRole, unmapRole } from "../actions";
+import { identityApi } from "@/lib/identity-api";
+import { findPeople, ROLES_QUERY_COOKIE } from "@/lib/users";
+import { formatTime, isAppId, isSubject } from "@/lib/util";
+import { grantRole, mapRole, revokeRole, searchRolePeople, unmapRole } from "../actions";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Roles & grants · Admin · ASafariM OS" };
@@ -25,7 +27,11 @@ export default async function RolesPage({
     isAppId(params.app) && apps.some((a) => a.id === params.app)
       ? params.app
       : (apps.find((a) => a.roles > 0)?.id ?? apps[0]?.id);
-  const q = (params.q ?? "").slice(0, 100);
+  // The search text can be an email address: it is kept in a cookie (searchRolePeople), never in the URL. `?q=` still
+  // works for links made before.
+  const q = ((await cookies()).get(ROLES_QUERY_COOKIE)?.value ?? params.q ?? "").slice(0, 100);
+  // Opened from a person's profile (/admin/users/<id>): that person is chosen, and named, before anything is granted.
+  const chosen = isSubject(params.subject) ? params.subject : undefined;
 
   const [roles, allRoles, mappings] = await Promise.all([
     appId ? api.roles(appId) : Promise.resolve([]),
@@ -38,8 +44,18 @@ export default async function RolesPage({
   const sources = allRoles.filter((r) => !r.deprecated);
   const targets = sources.filter((r) => !r.key.startsWith("core."));
   const grantable = roles.filter((r) => !r.deprecated);
-  const people = searchUsers(loadDirectory(), q);
-  const here = `/admin/roles?${new URLSearchParams({ ...(appId ? { app: appId } : {}), ...(q ? { q } : {}) })}`;
+  const [{ people, source }, chosenPerson, chosenGrants] = await Promise.all([
+    findPeople(admin.idToken, q),
+    chosen
+      ? identityApi(admin.idToken)
+          .user(chosen)
+          .catch(() => null)
+      : Promise.resolve(null),
+    chosen ? api.subjectGrants(chosen) : Promise.resolve([]),
+  ]);
+  const here = `/admin/roles?${new URLSearchParams({ ...(appId ? { app: appId } : {}), ...(chosen ? { subject: chosen } : {}) })}`;
+  const chosenName = chosenPerson?.label ?? chosen;
+  const chosenHere = chosenGrants.filter((g) => g.appId === appId).map((g) => g.role);
 
   return (
     <>
@@ -55,7 +71,7 @@ export default async function RolesPage({
           {apps.map((a) => (
             <li key={a.id}>
               <Link
-                href={`/admin/roles?app=${a.id}`}
+                href={`/admin/roles?${new URLSearchParams({ app: a.id, ...(chosen ? { subject: chosen } : {}) })}`}
                 aria-current={a.id === appId ? "page" : undefined}
                 style={a.id === appId ? { fontWeight: 700 } : undefined}
               >
@@ -147,10 +163,60 @@ export default async function RolesPage({
         })
       )}
 
+      {chosen && grantable.length > 0 ? (
+        <section className="card" aria-labelledby="chosen-h" data-testid="chosen-person">
+          <h3 id="chosen-h" style={{ marginTop: 0 }}>
+            Granting to <span style={{ overflowWrap: "anywhere" }}>{chosenName}</span>
+          </h3>
+          <p className="muted mono" style={{ overflowWrap: "anywhere" }}>
+            Account ID {chosen}
+            {chosenPerson?.state === "suspended" ? (
+              <span className="badge removed">suspended: can&apos;t sign in</span>
+            ) : null}
+          </p>
+          <p>
+            {chosenHere.length ? (
+              <>
+                Holds in {appId}:{" "}
+                {chosenHere.map((r) => (
+                  <code key={r} style={{ marginRight: 8 }}>
+                    {r}
+                  </code>
+                ))}
+              </>
+            ) : (
+              <span className="muted">Holds no role in {appId} yet.</span>
+            )}
+          </p>
+          <form action={grantRole} className="row" aria-label={`Grant a role to ${chosenName}`}>
+            <input type="hidden" name="subject" value={chosen} />
+            <input type="hidden" name="next" value={here} />
+            <div>
+              <label htmlFor="chosen-role">Role in {appId}</label>
+              <select id="chosen-role" name="role">
+                {grantable.map((r) => (
+                  <option key={r.key} value={r.key}>
+                    {r.key}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button type="submit" data-testid="chosen-grant">
+              Grant to {chosenName}
+            </button>
+          </form>
+          <p style={{ marginBottom: 0 }}>
+            <Link href={`/admin/users/${encodeURIComponent(chosen)}`}>Back to this person</Link>
+            {" · "}
+            <Link href={`/admin/roles?${new URLSearchParams(appId ? { app: appId } : {})}`}>Choose someone else</Link>
+          </p>
+        </section>
+      ) : null}
+
       {grantable.length > 0 ? (
         <>
           <h3>Grant a role in {appId}</h3>
-          <form method="get" className="row" aria-label="Find a person">
+          <form action={searchRolePeople} className="row" aria-label="Find a person">
             {appId ? <input type="hidden" name="app" value={appId} /> : null}
             <div>
               <label htmlFor="user-q">Find a person</label>
@@ -163,13 +229,19 @@ export default async function RolesPage({
 
           {people.length === 0 ? (
             <p className="muted">
-              {q ? `Nobody matches "${q}".` : "No people directory is configured here."} You can still grant by subject
-              id below.
+              {q
+                ? `Nobody matches "${q}".`
+                : source === "none"
+                  ? "No people directory is available here."
+                  : "Nobody yet."}{" "}
+              You can still grant by subject id below.
             </p>
           ) : (
             <div className="table-wrap os-table-wrap">
               <table className="os-table os-table--stack">
-                <caption>People (the seeded local users)</caption>
+                <caption>
+                  {source === "identity" ? "People (from identity)" : "People (the seeded local users)"}
+                </caption>
                 <thead>
                   <tr>
                     <th scope="col">Person</th>

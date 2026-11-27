@@ -5,9 +5,11 @@
  * still an administrator, then calls core-api's admin API with their identity token. core-api
  * does the real authorisation (core.admin, live) and writes the audit event under their name.
  */
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { CoreApiError, coreApi } from "@/lib/core-api";
 import { requireAdmin } from "@/lib/session";
+import { ROLES_QUERY_COOKIE } from "@/lib/users";
 import { confirmsRemoval, formatTime, isAppId, isRoleKey, isSubject, safeAdminPath, withMessage } from "@/lib/util";
 
 /** Run `work`, then go back to `next` with the outcome. redirect() throws, so it stays outside the try. */
@@ -125,4 +127,25 @@ export async function unmapRole(formData: FormData) {
       " Grants an administrator made stay."
     );
   });
+}
+
+/** The Roles page's person search: kept in a short-lived cookie scoped to /admin/roles, never in the URL. */
+export async function searchRolePeople(formData: FormData) {
+  await requireAdmin();
+  const raw = formData.get("q");
+  const q = typeof raw === "string" ? raw.trim().slice(0, 100) : "";
+  const app = formData.get("app");
+  const jar = await cookies();
+  if (q) {
+    jar.set(ROLES_QUERY_COOKIE, q, {
+      httpOnly: true,
+      sameSite: "strict",
+      secure: process.env.NODE_ENV === "production",
+      path: "/admin/roles",
+      maxAge: 30 * 60,
+    });
+  } else {
+    jar.delete({ name: ROLES_QUERY_COOKIE, path: "/admin/roles" });
+  }
+  redirect(isAppId(app) ? `/admin/roles?app=${app}` : "/admin/roles");
 }

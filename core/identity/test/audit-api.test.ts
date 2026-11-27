@@ -8,7 +8,17 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createAuditApi, type AuditReader } from "../src/audit-api.ts";
 import type { HttpContext } from "../src/http.ts";
 import { createLogger } from "../src/log.ts";
-import type { AuditCounts, AuditEntry, AuditSearch, AuditSearchRow, Principal } from "../src/store.ts";
+import type {
+  AuditCounts,
+  AuditEntry,
+  AuditSearch,
+  AuditSearchRow,
+  DirectoryEntry,
+  DirectoryProfile,
+  DirectorySearch,
+  Principal,
+} from "../src/store.ts";
+import { DirectoryCursorError } from "../src/store.ts";
 
 const ISSUER = "https://id.example.test";
 const ADMIN = "0190b6c4-0000-7000-8000-000000000001";
@@ -77,7 +87,52 @@ class Reader implements AuditReader {
   async audit(entry: AuditEntry) {
     this.audits.push(entry);
   }
+  readonly directorySearches: DirectorySearch[] = [];
+  async directory(f: DirectorySearch): Promise<{ users: DirectoryEntry[]; next: string | null }> {
+    this.directorySearches.push(f);
+    if (f.after === "bad-cursor") throw new DirectoryCursorError();
+    return { users: [ENTRY], next: "cursor-2" };
+  }
+  async directoryProfile(id: string): Promise<DirectoryProfile | null> {
+    if (id !== MEMBER) return null;
+    return {
+      ...ENTRY,
+      identities: [
+        {
+          method: "email",
+          identifier: "m@example.test",
+          verifiedAt: new Date("2026-10-01T00:00:00Z"),
+          lastLoginAt: null,
+          createdAt: new Date("2026-10-01T00:00:00Z"),
+        },
+      ],
+      passkeys: 1,
+      connection: {
+        status: "active",
+        source: "admin",
+        grantedAt: new Date("2026-10-02T00:00:00Z"),
+        grantedBy: ADMIN,
+        revokedAt: null,
+        revokedBy: null,
+      },
+      admissions: [],
+      pendingRequest: null,
+    };
+  }
 }
+
+const ENTRY: DirectoryEntry = {
+  id: MEMBER,
+  label: "m@example.test",
+  email: "m@example.test",
+  emailVerified: true,
+  state: "active",
+  scope: "global",
+  admittedClients: [],
+  isAdmin: false,
+  createdAt: new Date("2026-10-01T00:00:00Z"),
+  lastLoginAt: new Date("2026-10-25T09:00:00Z"),
+};
 
 let signingJwk: JWK;
 let sign: (claims: Record<string, unknown>, opts?: { iss?: string; exp?: string }) => Promise<string>;
@@ -262,5 +317,89 @@ describe("summary", () => {
     });
     expect((await get("/admin/v1/audit/summary", await adminToken())).body.days).toBe(14);
     expect((await get("/admin/v1/audit/summary?days=91", await adminToken())).status).toBe(400);
+  });
+});
+
+describe("the people directory (GET /admin/v1/users)", () => {
+  const admin = () => sign({ sub: ADMIN, aud: "core-admin" });
+
+  it("lists a page for an identity admin, uncached, with dates as ISO strings and an opaque cursor", async () => {
+    const { get, store } = setup();
+    const r = await get(
+      "/admin/v1/users?q=m%40example&state=active&scope=global&limit=10&after=abc_DEF-1",
+      await admin(),
+    );
+    expect(r.status).toBe(200);
+    expect(r.headers["cache-control"]).toBe("no-store");
+    expect(store.directorySearches).toEqual([
+      { q: "m@example", state: "active", scope: "global", limit: 10, after: "abc_DEF-1" },
+    ]);
+    expect(r.body).toEqual({
+      users: [
+        {
+          id: MEMBER,
+          label: "m@example.test",
+          email: "m@example.test",
+          emailVerified: true,
+          state: "active",
+          scope: "global",
+          admittedClients: [],
+          isAdmin: false,
+          createdAt: "2026-10-01T00:00:00.000Z",
+          lastLoginAt: "2026-10-25T09:00:00.000Z",
+        },
+      ],
+      next: "cursor-2",
+    });
+  });
+
+  it("reveals nothing without a token (401) or to someone who isn't an active identity admin (403)", async () => {
+    const { get, store } = setup();
+    expect((await get("/admin/v1/users")).status).toBe(401);
+    expect((await get(`/admin/v1/users/${MEMBER}`)).status).toBe(401);
+    const member = await sign({ sub: MEMBER, aud: "core-admin" });
+    const r = await get("/admin/v1/users", member);
+    expect(r.status).toBe(403);
+    expect(JSON.stringify(r.body)).not.toContain("m@example.test");
+    expect((await get(`/admin/v1/users/${MEMBER}`, await sign({ sub: REVOKED_ADMIN, aud: "core-admin" }))).status).toBe(
+      403,
+    );
+    expect(store.directorySearches).toHaveLength(0);
+  });
+
+  it("refuses malformed filters with 400 before reading anything", async () => {
+    const { get, store } = setup();
+    const token = await admin();
+    for (const q of [
+      "state=deleted",
+      "scope=everything",
+      "limit=0",
+      "limit=101",
+      `q=${"x".repeat(201)}`,
+      "q=a%0Ab",
+      "after=not%20a%20cursor",
+    ]) {
+      expect((await get(`/admin/v1/users?${q}`, token)).status, q).toBe(400);
+    }
+    expect(store.directorySearches).toHaveLength(0);
+    expect((await get("/admin/v1/users?after=bad-cursor", token)).status).toBe(400);
+    expect((await get("/admin/v1/users", token, "POST")).status).toBe(405);
+  });
+
+  it("one person by id: their identities, connection and admissions; 404 for anyone else", async () => {
+    const { get } = setup();
+    const token = await admin();
+    const r = await get(`/admin/v1/users/${MEMBER}`, token);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      id: MEMBER,
+      identities: [{ method: "email", identifier: "m@example.test", verifiedAt: "2026-10-01T00:00:00.000Z" }],
+      passkeys: 1,
+      connection: { status: "active", source: "admin", grantedBy: ADMIN, grantedAt: "2026-10-02T00:00:00.000Z" },
+      admissions: [],
+      pendingRequest: null,
+    });
+    expect((await get("/admin/v1/users/0190b6c4-0000-7000-8000-00000000ffff", token)).status).toBe(404);
+    expect((await get("/admin/v1/users/not-an-id", token)).status).toBe(404);
   });
 });

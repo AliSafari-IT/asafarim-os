@@ -181,6 +181,15 @@ export interface AlertHistory {
   alerts: AlertRecord[];
 }
 
+/** One role a person holds (core-api `GET /admin/v1/subjects/<sub>/grants`). */
+export interface SubjectGrant {
+  role: string;
+  appId: string;
+  /** Who granted it, or `mapping:<id>` for a grant a role mapping made (see derivedFrom). */
+  granted_by: string;
+  granted_at: string;
+}
+
 export interface RoleGrant {
   subject: string;
   granted_by: string;
@@ -257,6 +266,15 @@ export function coreApi(idToken: string) {
     alerts: () => call<AlertHistory>(idToken, "GET", "/admin/v1/alerts"),
     roles: async (app?: string) =>
       (await call<{ roles: AdminRole[] }>(idToken, "GET", `/admin/v1/roles${app ? `?app=${enc(app)}` : ""}`)).roles,
+    /** Every role a person holds, across apps (direct grants and grants a mapping made). */
+    subjectGrants: async (subject: string) =>
+      (
+        await call<{ subject: string; grants: SubjectGrant[] }>(
+          idToken,
+          "GET",
+          `/admin/v1/subjects/${enc(subject)}/grants`,
+        )
+      ).grants,
     roleGrants: async (role: string) =>
       (await call<{ grants: RoleGrant[] }>(idToken, "GET", `/admin/v1/roles/${enc(role)}/grants`)).grants,
     audit: (f: AuditFilter = {}) => {
