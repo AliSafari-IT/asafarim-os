@@ -408,6 +408,50 @@ CREATE TABLE media_audit_events (
 );
 CREATE INDEX media_audit_events_asset ON media_audit_events (asset_id, at);`,
   },
+  {
+    version: 9,
+    name: "deleting a never-published draft: a narrow delete path, and logs that outlive the article",
+    sql: `
+-- Revisions are immutable (a save is a new revision), and stay so: this is the one exception. A DELETE of a
+-- revision (or of the media links written with it) is allowed only when
+--   1. the transaction has named the article: set_config('knowledge.deleting_draft', <item id>, true), which lasts
+--      for that transaction only, and
+--   2. that article has never been published: no public revision and not withdrawn (a withdrawn article was public).
+-- The trigger checks (2) itself, so a caller that sets the name for a published article still gets the refusal.
+-- Anything else, including every UPDATE, is refused exactly as before.
+CREATE OR REPLACE FUNCTION knowledge_revisions_immutable() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE
+  item text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF TG_TABLE_NAME = 'content_revisions' THEN
+      item := OLD.item_id;
+    ELSE
+      SELECT r.item_id INTO item FROM content_revisions r WHERE r.id = OLD.revision_id;
+    END IF;
+    IF item IS NOT NULL
+       AND item = current_setting('knowledge.deleting_draft', true)
+       AND EXISTS (
+         SELECT 1 FROM content_items i
+         WHERE i.id = item AND i.published_revision_id IS NULL AND i.withdrawn_at IS NULL
+       )
+    THEN
+      RETURN OLD;
+    END IF;
+  END IF;
+  RAISE EXCEPTION 'content_revisions are immutable: save a new revision';
+END $fn$;
+
+-- The audit log and the AI job log record who did what to which article (identifiers and token counts, never any
+-- text). They must outlive a deleted draft, so they stop being foreign keys to content_items: an id that no longer
+-- names an article is exactly what a deleted one leaves behind.
+ALTER TABLE audit_events DROP CONSTRAINT audit_events_item_id_fkey;
+ALTER TABLE ai_jobs DROP CONSTRAINT ai_jobs_item_id_fkey;
+ALTER TABLE audit_events DROP CONSTRAINT audit_events_action_check;
+ALTER TABLE audit_events ADD CONSTRAINT audit_events_action_check CHECK (
+  action IN ('content.created', 'content.saved', 'content.published', 'content.withdrawn', 'content.slug_changed', 'content.deleted')
+);`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

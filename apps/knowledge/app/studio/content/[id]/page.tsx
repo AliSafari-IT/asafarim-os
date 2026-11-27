@@ -108,6 +108,14 @@ export default async function StudioItemPage({ params, searchParams }: Props) {
             </Link>{" "}
             <span className="muted">(only you and editors can open it)</span>
           </p>
+          {item.status === "draft" && editable ? (
+            <p>
+              <Link href={`/studio/content/${item.id}/delete`} className="danger-link" data-testid="delete-link">
+                Delete this draft…
+              </Link>{" "}
+              <span className="muted">(permanent; only a draft that was never published can be deleted)</span>
+            </p>
+          ) : null}
           {item.status === "published" && publishable ? (
             <form action={withdrawAction}>
               <input type="hidden" name="id" value={item.id} />

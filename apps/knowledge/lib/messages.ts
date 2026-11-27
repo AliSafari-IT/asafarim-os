@@ -3,6 +3,9 @@ export const ERRORS: Record<string, string> = {
   forbidden: "You don't have permission to do that with this article.",
   not_found: "That article doesn't exist, or it isn't yours.",
   slug_taken: "Another article already uses that address. Choose a different slug.",
+  not_deletable:
+    "Only a draft that was never published can be deleted. A published article can be withdrawn from the public site instead.",
+  in_course: "That article is a lesson in a course, so it can't be deleted. Remove the lesson first.",
   conflict:
     "Someone saved a newer revision while you were editing. Nothing was overwritten: your text is still in the form. Compare it with the newest revision in the history, then save again to put your text on top of it.",
   unauthenticated: "Your session ended. Sign in again; your text is still in the form, so copy it first.",
@@ -94,6 +97,7 @@ export const DONE: Record<string, string> = {
   saved: "Draft saved as a new revision.",
   published: "Published. Guests now see this revision.",
   withdrawn: "Withdrawn. The article is no longer public.",
+  deleted: "Draft deleted permanently.",
   slug_changed: "Address changed. If the article has been public, its old address now redirects here.",
   autosave_discarded: "Unsaved changes discarded.",
   classified: "Classification saved. If the article is published, search and topic pages show it now.",

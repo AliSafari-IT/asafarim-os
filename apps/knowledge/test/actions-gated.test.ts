@@ -24,6 +24,7 @@ describe("studio server actions", () => {
         "withdrawCourseAction",
         "createTagAction",
         "createTopicAction",
+        "deleteArticleAction",
         "discardAutosaveAction",
         "publishAction",
         "saveDraftAction",

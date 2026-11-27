@@ -12,7 +12,7 @@ import { Pager } from "@/components/Pager";
 import { RowMenu } from "@/components/RowMenu";
 import { TopBar } from "@/components/TopBar";
 import { listStudioItems } from "@/lib/content";
-import { canCreateCourse, canManageTaxonomy, seesAll, seesAllCourses, type Actor } from "@/lib/policy";
+import { canCreateCourse, canEdit, canManageTaxonomy, seesAll, seesAllCourses, type Actor } from "@/lib/policy";
 import { searchStudio } from "@/lib/search";
 import { db } from "@/lib/db";
 import { requireStudio } from "@/lib/studio";
@@ -119,6 +119,7 @@ async function StudioList({ actor, query, after }: { actor: Actor; query: string
     ? found.map((f) => ({
         id: f.id,
         slug: f.slug,
+        ownerSubject: f.ownerSubject,
         status: f.status,
         updatedAt: f.updatedAt,
         draft: { title: f.title },
@@ -173,6 +174,10 @@ async function StudioList({ actor, query, after }: { actor: Actor; query: string
                         { href: `/studio/content/${i.id}/preview`, label: "Preview" },
                         ...(i.status === "published"
                           ? [{ href: `/articles/${i.slug}`, label: "View public page" }]
+                          : []),
+                        // Only a never-published draft can be deleted, and only by someone who may edit it.
+                        ...(i.status === "draft" && canEdit(actor, i)
+                          ? [{ href: `/studio/content/${i.id}/delete`, label: "Delete draft…", danger: true }]
                           : []),
                       ]}
                     />

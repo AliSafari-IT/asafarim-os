@@ -78,6 +78,8 @@ export type Failure =
   | { ok: false; error: "conflict"; currentRevisionId: string }
   | { ok: false; error: "unknown_revision" }
   | { ok: false; error: "not_published" }
+  | { ok: false; error: "not_deletable" }
+  | { ok: false; error: "in_course" }
   | { ok: false; error: "invalid_slug" }
   | { ok: false; error: "media_unavailable" };
 
@@ -287,6 +289,47 @@ export async function withdrawArticle(pool: Pool, actor: Actor, input: { id: str
     // The public search projection changes in the same transaction (#357).
     await refreshSearchDocument(c, item.id);
     await audit(c, actor, "content.withdrawn", item.id, item.published_revision_id);
+    return { ok: true } as const;
+  });
+}
+
+/**
+ * Permanently delete an article that was never published (status "draft": no public revision and never withdrawn,
+ * since a withdrawn article was public once). Whoever may edit it may delete it. A published or withdrawn article
+ * is refused: it has been public, so it is withdrawn, not deleted.
+ *
+ * Gone with it: every revision and the media links written with them, the autosave, its tag links and any old
+ * addresses, so its slug is free again. Kept: the audit log and the AI job log (they hold identifiers and token
+ * counts, never text, and since migration 9 they don't point at the article), and the uploaded files, which stay in
+ * the media library. One transaction, so a failure leaves the article exactly as it was.
+ *
+ * The revision tables are immutable; migration 9 lets a DELETE through only while this transaction has named this
+ * article (the set_config below) and the database itself finds it never published.
+ */
+export async function deleteDraftArticle(pool: Pool, actor: Actor, input: { id: string }): Promise<Result<object>> {
+  return inTransaction(pool, async (c) => {
+    const item = await lockItem(c, input.id);
+    if (!item || !canView(actor, ownerOf(item))) return { ok: false, error: "not_found" } as const;
+    if (!canEdit(actor, ownerOf(item))) return { ok: false, error: "forbidden" } as const;
+    if (statusOf(item) !== "draft") return { ok: false, error: "not_deletable" } as const;
+    // A course lesson pins a published revision, so a never-published article can't be one; check anyway, since the
+    // lesson rows are immutable and would otherwise surface as a foreign-key error half way through.
+    const lesson = await c.query("SELECT 1 FROM course_lessons WHERE item_id = $1 LIMIT 1", [item.id]);
+    if (lesson.rowCount) return { ok: false, error: "in_course" } as const;
+
+    await c.query("SELECT set_config('knowledge.deleting_draft', $1, true)", [item.id]);
+    // Everything that points at the article or its revisions, then the revisions, then the article.
+    await c.query("DELETE FROM search_documents WHERE item_id = $1", [item.id]);
+    await c.query("DELETE FROM draft_autosaves WHERE item_id = $1", [item.id]);
+    await c.query("DELETE FROM item_tags WHERE item_id = $1", [item.id]);
+    await c.query("DELETE FROM slug_redirects WHERE item_id = $1", [item.id]);
+    await c.query(
+      "DELETE FROM content_revision_media WHERE revision_id IN (SELECT id FROM content_revisions WHERE item_id = $1)",
+      [item.id],
+    );
+    await c.query("DELETE FROM content_revisions WHERE item_id = $1", [item.id]);
+    await c.query("DELETE FROM content_items WHERE id = $1", [item.id]);
+    await audit(c, actor, "content.deleted", item.id, null);
     return { ok: true } as const;
   });
 }
