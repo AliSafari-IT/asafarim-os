@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { decodeCursor, encodeCursor } from "./cursor";
 import { checkRevisionMedia, recordRevisionMedia } from "./media/assets";
+import { readingMinutes } from "./reading-time";
 import { refreshSearchDocument } from "./search-index";
 import { canCreate, canEdit, canPublish, canView, seesAll, type Actor } from "./policy";
 import type { Doc } from "./doc";
@@ -61,6 +62,12 @@ export interface PublishedArticle {
   body: string;
   publishedAt: Date;
   revisionNumber: number;
+  /** The article owner's display name (lib/authors.ts), or null until they have signed in to the studio since it existed. */
+  authorName: string | null;
+  /** Minutes to read, from the text. At least 1. */
+  readingMinutes: number;
+  topic: { slug: string; name: string } | null;
+  level: string | null;
 }
 
 /** One page of a list, newest first, and the cursor of the next (older) page, or null on the last one. */
@@ -449,8 +456,10 @@ export async function getStudioItem(
 // The public side. Each query joins on published_revision_id, the one pointer publish/withdraw change.
 const PUBLIC_SELECT = `
   SELECT i.id, i.slug, i.language, i.published_at, i.published_at::text AS at_key, r.format, r.doc, r.title, r.summary,
-         r.body, r.number
+         r.body, r.number, i.level, a.display_name AS author_name, t.slug AS topic_slug, t.name AS topic_name
   FROM content_items i JOIN content_revisions r ON r.id = i.published_revision_id AND r.item_id = i.id
+       LEFT JOIN authors a ON a.subject = i.owner_subject
+       LEFT JOIN topics t ON t.id = i.topic_id
   WHERE i.published_revision_id IS NOT NULL`;
 
 interface PublicRow {
@@ -465,6 +474,10 @@ interface PublicRow {
   summary: string;
   body: string;
   number: number;
+  level: string | null;
+  author_name: string | null;
+  topic_slug: string | null;
+  topic_name: string | null;
 }
 
 const toPublished = (r: PublicRow): PublishedArticle => ({
@@ -477,6 +490,10 @@ const toPublished = (r: PublicRow): PublishedArticle => ({
   body: r.body,
   publishedAt: r.published_at,
   revisionNumber: r.number,
+  authorName: r.author_name,
+  readingMinutes: readingMinutes(r.body),
+  topic: r.topic_slug && r.topic_name ? { slug: r.topic_slug, name: r.topic_name } : null,
+  level: r.level,
 });
 
 /** Published articles, newest first, one page at a time (keyset on published_at, id): what a guest may list. */
