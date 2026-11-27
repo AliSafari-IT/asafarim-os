@@ -180,7 +180,13 @@ export function InsightsView({ insights, siteWide }: { insights: Insights; siteW
               {insights.articles.map((a) => (
                 <tr key={a.slug} data-testid="insights-article">
                   <td>
-                    <Link href={`/articles/${a.slug}`}>{a.title}</Link>
+                    {a.published ? (
+                      <Link href={`/articles/${a.slug}`}>{a.title}</Link>
+                    ) : (
+                      <>
+                        {a.title} <span className="muted">(withdrawn)</span>
+                      </>
+                    )}
                   </td>
                   <td>{nf.format(a.views)}</td>
                   <td>
