@@ -452,6 +452,19 @@ ALTER TABLE audit_events ADD CONSTRAINT audit_events_action_check CHECK (
   action IN ('content.created', 'content.saved', 'content.published', 'content.withdrawn', 'content.slug_changed', 'content.deleted')
 );`,
   },
+  {
+    version: 10,
+    name: "authors: the display name each author's sign-in presented, for bylines",
+    sql: `
+-- One row per author: the name their own sign-in presented, refreshed whenever they use the studio (lib/authors.ts).
+-- It is public (a byline), so it holds a name only: never an email address, and the code refuses anything that
+-- looks like one. An article without a row here shows the site's name as its byline until its author next signs in.
+CREATE TABLE authors (
+  subject      text PRIMARY KEY,
+  display_name text NOT NULL CHECK (length(display_name) BETWEEN 1 AND 80),
+  updated_at   timestamptz NOT NULL DEFAULT now()
+);`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

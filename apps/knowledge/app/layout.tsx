@@ -3,12 +3,17 @@ import { LegalFooter } from "@asafarim/theme/react";
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import manifest from "../platform.app";
+import { publicOrigin } from "@/lib/site";
 import "@asafarim/theme/theme.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  // Relative addresses in metadata (the share image) resolve against the real site, not the request's Host.
+  metadataBase: new URL(publicOrigin()),
   title: { default: "ASafariM Knowledge", template: "%s · ASafariM Knowledge" },
   description: "Write, learn, and share technical knowledge.",
+  openGraph: { siteName: "ASafariM Knowledge", type: "website", locale: "en_GB" },
+  twitter: { card: "summary_large_image" },
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {

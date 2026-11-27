@@ -4,6 +4,9 @@
  * the Actor it returns carries the person's Knowledge permissions for the per-item policy.
  */
 import { forbidden, unauthorized } from "next/navigation";
+import { auth } from "./auth";
+import { rememberAuthor } from "./authors";
+import { db } from "./db";
 import { gate } from "./gate";
 import { PERMISSIONS, type Actor } from "./policy";
 
@@ -12,7 +15,28 @@ export type StudioGate = { ok: true; actor: Actor } | { ok: false; status: 401 |
 export async function studioGate(): Promise<StudioGate> {
   const g = await gate(PERMISSIONS.create);
   if (!g.ok) return { ok: false, status: g.status, error: g.body.error };
+  await rememberSignedInAuthor(g.subject);
   return { ok: true, actor: { subject: g.subject, permissions: g.permissions } };
+}
+
+/**
+ * Keep the author's display name current for bylines (lib/authors.ts). Cosmetic, so it can never stop the studio:
+ * any failure is logged and ignored. An unchanged name writes nothing.
+ */
+async function rememberSignedInAuthor(subject: string): Promise<void> {
+  try {
+    const name = (await auth())?.user?.name;
+    if (name) await rememberAuthor(await db(), subject, name);
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        app: "knowledge",
+        level: "warn",
+        msg: "authors.remember_failed",
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
 }
 
 /** For pages: 401 and 403 render app/unauthorized.tsx and app/forbidden.tsx; 503 is returned for the page to explain. */
