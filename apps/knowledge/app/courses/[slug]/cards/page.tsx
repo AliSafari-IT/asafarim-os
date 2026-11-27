@@ -47,7 +47,11 @@ export default async function CourseCardsPage({ params }: Props) {
             went: the cards you knew drop out of “To learn”.
           </p>
         </header>
-        <StudyDeck courseId={course.id} cards={cards} />
+        <StudyDeck
+          courseId={course.id}
+          cards={cards}
+          lessonIds={course.modules.flatMap((m) => m.lessons.map((l) => l.lessonId))}
+        />
       </main>
     </>
   );

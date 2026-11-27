@@ -30,6 +30,10 @@ test("a guest studies a course's flip cards", async ({ page }) => {
   await expect(page.getByTestId("study-position")).toHaveText("Card 2 of 3");
   await expect(card).toHaveAttribute("data-side", "front");
   await expect(page.getByTestId("study-known")).toHaveText("1 of 3 known");
+  // The tiles: a one-day streak (a card was flipped today), one card mastered, no lesson opened yet.
+  await expect(page.getByTestId("stat-streak-value")).toHaveText("1 day");
+  await expect(page.getByTestId("stat-mastered-value")).toHaveText("1 of 3");
+  await expect(page.getByTestId("stat-course-value")).toHaveText("0%");
 
   // The keyboard: Space flips the focused card, arrows move.
   await card.focus();

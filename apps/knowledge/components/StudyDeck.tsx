@@ -5,22 +5,73 @@
  * move, and after flipping, "Still learning" or "I knew it" to mark the card and go on. Marks are kept in this
  * browser (lib/study-cards.ts), so "Review the cards to learn" can go through only the ones not known yet. Shuffle
  * reorders the round. Before the browser's marks are read (and on the server) nothing is marked known.
+ *
+ * Above the deck, three tiles: the study streak (days in a row with a card flipped, any course), cards mastered
+ * (marked "I knew it") and course progress (lessons opened, the same numbers as the course page).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import type { StudyCard } from "@/lib/courses";
-import { deckOrder, knownCount, knownKey, parseKnown, withKnown, type DeckMode } from "@/lib/study-cards";
+import { parseOpened, progressKey } from "@/lib/course-progress";
+import {
+  STREAK_KEY,
+  dayOf,
+  deckOrder,
+  knownCount,
+  knownKey,
+  parseDays,
+  parseKnown,
+  streakOf,
+  withDay,
+  withKnown,
+  type DeckMode,
+} from "@/lib/study-cards";
 
-function readKnown(key: string): string[] {
+function readStored<T>(key: string, parse: (raw: string | null) => T): T {
   try {
-    return parseKnown(window.localStorage.getItem(key));
+    return parse(window.localStorage.getItem(key));
   } catch {
-    return [];
+    return parse(null);
   }
+}
+
+function store(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage blocked (private mode, site data off): it just isn't remembered.
+  }
+}
+
+const readKnown = (key: string) => readStored(key, parseKnown);
+
+function StatTile({ icon, label, value, testid }: { icon: string; label: string; value: string; testid: string }) {
+  return (
+    <div className="stat-tile" data-testid={testid}>
+      <span className="stat-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="stat-text">
+        <span className="stat-label">{label}</span>
+        <span className="stat-value" data-testid={`${testid}-value`}>
+          {value}
+        </span>
+      </span>
+    </div>
+  );
 }
 
 const SWIPE_PX = 48;
 
-export function StudyDeck({ courseId, cards }: { courseId: string; cards: StudyCard[] }) {
+export function StudyDeck({
+  courseId,
+  cards,
+  lessonIds,
+}: {
+  courseId: string;
+  cards: StudyCard[];
+  /** The course's visible lessons, for the progress tile. */
+  lessonIds: string[];
+}) {
   const key = knownKey(courseId);
   const ids = useMemo(() => cards.map((c) => c.cardId), [cards]);
   const byId = useMemo(() => new Map(cards.map((c) => [c.cardId, c])), [cards]);
@@ -36,15 +87,30 @@ export function StudyDeck({ courseId, cards }: { courseId: string; cards: StudyC
   const swipeFrom = useRef<{ x: number; y: number } | null>(null);
   const swiped = useRef(false);
 
-  useEffect(() => setKnown(readKnown(key)), [key]);
+  const [days, setDays] = useState<string[]>([]);
+  const [today, setToday] = useState("");
+  const [opened, setOpened] = useState<string[]>([]);
+
+  useEffect(() => {
+    setKnown(readKnown(key));
+    setDays(readStored(STREAK_KEY, parseDays));
+    setToday(dayOf(new Date()));
+    setOpened(readStored(progressKey(courseId), parseOpened));
+  }, [key, courseId]);
+
+  // Flipping a card counts as studying today.
+  useEffect(() => {
+    if (!flipped) return;
+    const day = dayOf(new Date());
+    const next = withDay(readStored(STREAK_KEY, parseDays), day);
+    store(STREAK_KEY, next);
+    setDays(next);
+    setToday(day);
+  }, [flipped]);
 
   const save = useCallback(
     (next: string[]) => {
-      try {
-        window.localStorage.setItem(key, JSON.stringify(next));
-      } catch {
-        // Storage blocked (private mode, site data off): marks just aren't remembered.
-      }
+      store(key, next);
       setKnown(next);
     },
     [key],
@@ -67,6 +133,10 @@ export function StudyDeck({ courseId, cards }: { courseId: string; cards: StudyC
   const card = byId.get(order[pos] ?? "");
   const knownNow = knownCount(ids, knownSet);
   const toLearn = ids.length - knownNow;
+  const streak = today ? streakOf(days, today) : 0;
+  const lessonSet = new Set(lessonIds);
+  const openedCount = new Set(opened.filter((id) => lessonSet.has(id))).size;
+  const coursePct = lessonIds.length ? Math.round((openedCount / lessonIds.length) * 100) : 0;
 
   const go = useCallback(
     (delta: -1 | 1) => {
@@ -129,6 +199,16 @@ export function StudyDeck({ courseId, cards }: { courseId: string; cards: StudyC
 
   return (
     <div className="study-deck" data-study-deck="" data-testid="study-deck" onKeyDown={onKeyDown}>
+      <div className="study-stats" role="group" aria-label="Your progress">
+        <StatTile
+          icon="◷"
+          label="Study streak"
+          value={`${streak} ${streak === 1 ? "day" : "days"}`}
+          testid="stat-streak"
+        />
+        <StatTile icon="✓" label="Cards mastered" value={`${knownNow} of ${ids.length}`} testid="stat-mastered" />
+        <StatTile icon="▧" label="Course progress" value={`${coursePct}%`} testid="stat-course" />
+      </div>
       <div className="study-toolbar">
         <div className="study-modes" role="group" aria-label="Which cards">
           <button

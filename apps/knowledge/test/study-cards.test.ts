@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { deckOrder, knownCount, knownKey, parseKnown, withKnown } from "../lib/study-cards";
+import {
+  dayOf,
+  deckOrder,
+  knownCount,
+  knownKey,
+  parseDays,
+  parseKnown,
+  streakOf,
+  withDay,
+  withKnown,
+} from "../lib/study-cards";
 
 describe("study cards in the browser", () => {
   it("keys marks by course id and reads anything unexpected as no marks", () => {
@@ -27,5 +37,20 @@ describe("study cards in the browser", () => {
     expect([...shuffled].sort()).toEqual(ids);
     expect(ids).toEqual(["a", "b", "c", "d"]);
     expect(knownCount(ids, known)).toBe(1);
+  });
+});
+
+describe("study streak", () => {
+  it("counts days in a row ending today, or yesterday when today has no study yet", () => {
+    expect(dayOf(new Date(2026, 0, 5))).toBe("2026-01-05");
+    const days = withDay(withDay(withDay([], "2026-02-28"), "2026-03-01"), "2026-02-27");
+    expect(days).toEqual(["2026-02-27", "2026-02-28", "2026-03-01"]);
+    expect(withDay(days, "2026-03-01")).toEqual(days);
+    expect(streakOf(days, "2026-03-01")).toBe(3);
+    expect(streakOf(days, "2026-03-02")).toBe(3);
+    expect(streakOf(days, "2026-03-03")).toBe(0);
+    expect(streakOf([], "2026-03-03")).toBe(0);
+    expect(parseDays('["2026-01-02", "bad", 3, "2026-01-01"]')).toEqual(["2026-01-01", "2026-01-02"]);
+    expect(parseDays("{")).toEqual([]);
   });
 });
