@@ -1577,6 +1577,8 @@ main button.share-btn:hover {
   border-radius: 12px;
   box-shadow: var(--shadow);
   overflow: hidden;
+  /* A long identifier in a title wraps instead of being clipped. */
+  overflow-wrap: anywhere;
 }
 .module-head {
   display: grid;
