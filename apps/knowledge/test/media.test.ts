@@ -235,7 +235,53 @@ describe("images without an upload: an https address or SVG code", () => {
     expect(checkSvg("<!DOCTYPE svg [ ]><svg></svg>")).toEqual({ ok: false, error: "svg_invalid" });
     expect(checkSvg("<!DOCTYPE svg><!DOCTYPE svg><svg></svg>")).toEqual({ ok: false, error: "svg_invalid" });
     expect(checkSvg("<svgx></svgx>")).toEqual({ ok: false, error: "svg_invalid" });
-    expect(checkSvg('<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"><svg/></svg>')).toMatchObject({ ok: true });
+    expect(checkSvg('<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"><svg/>')).toMatchObject({ ok: true });
+  });
+
+  it("accepts only well-formed SVG a browser can show (Devin Review)", () => {
+    for (const bad of [
+      "<svg><g></svg>", // a child left open
+      "<svg><g></h></g></svg>", // mismatched close
+      "<svg></svg><svg></svg>", // two roots
+      "<svg/></svg>", // closed twice
+      '<svg width=10 height="1"></svg>', // unquoted attribute
+      '<svg a="1" a="2"></svg>', // duplicate attribute
+      '<svg title="a < b"></svg>', // < in an attribute value
+      "<svg><text>&nbsp;</text></svg>", // an entity XML doesn't define
+      "<svg><text>A & B</text></svg>", // a bare ampersand
+      "<svg><!-- open </svg>", // unclosed comment
+      "<SVG></SVG>", // XML names are case-sensitive
+    ]) {
+      expect(checkSvg(bad), bad).toEqual({ ok: false, error: "svg_invalid" });
+    }
+    for (const good of [
+      '<svg><g><rect width="1" height="1"/></g><text>A &amp; B &#169; &#x263A;</text></svg>',
+      "<svg><![CDATA[ <not> a tag ]]><!-- a comment --><g/></svg>",
+      "<svg\n  viewBox='0 0 1 1'\n></svg>",
+    ]) {
+      expect(checkSvg(good), good).toMatchObject({ ok: true });
+    }
+  });
+
+  it("reads the root's attributes properly: a quoted > never makes a second namespace", () => {
+    const svg = '<svg data-label="x > y" xmlns="http://www.w3.org/2000/svg"></svg>';
+    expect(checkSvg(svg)).toEqual({ ok: true, svg });
+    const added = checkSvg('<svg data-label="x > y"></svg>');
+    expect(added).toEqual({ ok: true, svg: '<svg xmlns="http://www.w3.org/2000/svg" data-label="x > y"></svg>' });
+  });
+
+  it("what it stores passes the same check again, also at the size limit (the namespace counts)", () => {
+    const pad = (len: number) => `<svg>${"x".repeat(len - 11)}</svg>`;
+    const near = pad(100_000 - 10); // fits only without the 35 characters of namespace
+    expect(near.length).toBe(99_990);
+    expect(checkSvg(near)).toEqual({ ok: false, error: "svg_too_large" });
+    const fits = pad(100_000 - 40);
+    const r = checkSvg(fits);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.svg.length).toBeLessThanOrEqual(100_000);
+      expect(checkSvg(r.svg)).toEqual(r);
+    }
   });
 
   it("an image has exactly one source, and still needs alt text", () => {

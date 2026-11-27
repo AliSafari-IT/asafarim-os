@@ -69,7 +69,8 @@ function ImageView({ node, updateAttributes, editor, deleteNode }: ReactNodeView
           Loaded from <code>{String(node.attrs.src)}</code>: readers&apos; browsers fetch it from that site.
         </p>
       ) : null}
-      {node.attrs.svg ? (
+      {/* A string, even emptied: clearing the code to paste new code must not take the field away. */}
+      {typeof node.attrs.svg === "string" ? (
         <label>
           SVG code
           <textarea
