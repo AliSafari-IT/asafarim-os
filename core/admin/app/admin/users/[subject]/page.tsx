@@ -5,13 +5,26 @@
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { CopyButton } from "@/components/CopyButton";
-import { accessByApp, admissionText, personLabel, SCOPE_TEXT, STATE_TEXT, type IdentityFacts } from "@/lib/access";
+import { Flash } from "@/components/Flash";
+import {
+  accessByApp,
+  accountAction,
+  admissionText,
+  personLabel,
+  reactivateEffect,
+  SCOPE_TEXT,
+  STATE_TEXT,
+  suspendEffect,
+  type IdentityFacts,
+} from "@/lib/access";
 import { coreApi, CoreApiError, type RoleMapping, type SubjectGrant } from "@/lib/core-api";
 import { safeBack } from "@/lib/directory";
 import { identityAdminUrl, identityApi, type PersonProfile, type SignInEvent } from "@/lib/identity-api";
 import { requireAdmin } from "@/lib/session";
 import { formatTime, isSubject } from "@/lib/util";
+import { reactivatePerson, suspendPerson } from "../actions";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "User · Admin · ASafariM OS" };
@@ -42,7 +55,8 @@ export default async function UserPage({
   const admin = await requireAdmin();
   const subject = decodeURIComponent((await params).subject);
   if (!isSubject(subject)) notFound();
-  const back = safeBack((await searchParams).back);
+  const query = await searchParams;
+  const back = safeBack(query.back);
   const api = coreApi(admin.idToken);
   const identity = identityApi(admin.idToken);
 
@@ -88,6 +102,7 @@ export default async function UserPage({
       <h2 style={{ overflowWrap: "anywhere" }} data-testid="user-title">
         {title}
       </h2>
+      <Flash notice={query.notice} error={query.error} />
 
       {person?.state === "suspended" ? (
         <div className="notice warn" role="alert" data-testid="user-suspended">
@@ -294,11 +309,70 @@ export default async function UserPage({
             </a>
           ) : null}
         </div>
+        {person ? <AccountAction person={person} viewerId={admin.subject} grants={grants} /> : null}
         <p className="muted" style={{ marginBottom: 0 }}>
-          Suspending, reconnecting and approving access happen in identity administration; roles in Roles &amp; grants,
-          which opens with this person already chosen.
+          Suspending and reactivating are done by identity, which ends a suspended person&apos;s sessions and records
+          who did it. Approving access requests happens in identity administration; roles in Roles &amp; grants, which
+          opens with this person already chosen.
         </p>
       </section>
     </>
+  );
+}
+
+/** Suspend or Reactivate, confirmed in a dialog that names the person and says exactly what will happen. */
+function AccountAction({
+  person,
+  viewerId,
+  grants,
+}: {
+  person: PersonProfile;
+  viewerId: string;
+  grants: readonly SubjectGrant[];
+}) {
+  const who = personLabel(person);
+  const action = accountAction(person, viewerId);
+  if (action === "none-self") {
+    return (
+      <p className="muted" data-testid="account-action-self">
+        This is your own account: you can&apos;t suspend yourself here.
+      </p>
+    );
+  }
+  if (action === "none-no-access") {
+    return (
+      <p className="muted" data-testid="account-action-none">
+        Nothing to suspend: this account can&apos;t sign in to any app yet.
+      </p>
+    );
+  }
+  const privileged = person.isAdmin || grants.some((g) => g.role === "core.admin");
+  return (
+    <div className="row" data-testid={`account-action-${action}`}>
+      {action === "suspend" ? (
+        <ConfirmDialog
+          triggerLabel="Suspend access"
+          triggerAriaLabel={`Suspend ${who}'s access`}
+          title={`Suspend ${who}?`}
+          description={suspendEffect(person, grants)}
+          confirmLabel="Suspend"
+          danger
+          action={suspendPerson}
+          fields={{ subject: person.id }}
+          // An administrator's suspension is typed out, so it can't be a slip.
+          {...(privileged ? { typeToConfirm: person.label ?? person.id } : {})}
+        />
+      ) : (
+        <ConfirmDialog
+          triggerLabel="Reactivate"
+          triggerAriaLabel={`Reactivate ${who}`}
+          title={`Reactivate ${who}?`}
+          description={reactivateEffect(person, person.connection?.source ?? null)}
+          confirmLabel="Reactivate"
+          action={reactivatePerson}
+          fields={{ subject: person.id }}
+        />
+      )}
+    </div>
   );
 }

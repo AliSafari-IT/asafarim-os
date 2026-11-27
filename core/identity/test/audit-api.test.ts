@@ -17,6 +17,8 @@ import type {
   DirectoryProfile,
   DirectorySearch,
   Principal,
+  ReactivateOutcome,
+  SuspendOutcome,
 } from "../src/store.ts";
 import { DirectoryCursorError } from "../src/store.ts";
 
@@ -93,6 +95,17 @@ class Reader implements AuditReader {
     if (f.after === "bad-cursor") throw new DirectoryCursorError();
     return { users: [ENTRY], next: "cursor-2" };
   }
+  suspendOutcome: SuspendOutcome = "suspended";
+  reactivateOutcome: ReactivateOutcome = "reconnected";
+  readonly actions: string[] = [];
+  async adminSuspend(principalId: string, actorId: string): Promise<SuspendOutcome> {
+    this.actions.push(`suspend ${principalId} by ${actorId}`);
+    return this.suspendOutcome;
+  }
+  async adminReactivate(principalId: string, actorId: string): Promise<ReactivateOutcome> {
+    this.actions.push(`reactivate ${principalId} by ${actorId}`);
+    return this.reactivateOutcome;
+  }
   async directoryProfile(id: string): Promise<DirectoryProfile | null> {
     if (id !== MEMBER) return null;
     return {
@@ -160,11 +173,13 @@ beforeAll(async () => {
 function setup(now = new Date("2026-10-26T12:00:00Z")) {
   const store = new Reader();
   const lines: string[] = [];
+  const ended: string[] = [];
   const api = createAuditApi({
     issuer: ISSUER,
     jwks: { keys: [signingJwk] },
     readers: ["core-admin"],
     store,
+    endSessions: async (id) => (ended.push(id), 2),
     log: createLogger((l) => lines.push(l)),
     now: () => now,
   });
@@ -186,7 +201,7 @@ function setup(now = new Date("2026-10-26T12:00:00Z")) {
     const handled = await api.handle(ctx);
     return { handled, status: ctx.status, body: ctx.body as Record<string, unknown>, headers };
   }
-  return { store, get, lines };
+  return { store, get, lines, ended };
 }
 
 const adminToken = () => sign({ sub: ADMIN, aud: "core-admin" });
@@ -401,5 +416,70 @@ describe("the people directory (GET /admin/v1/users)", () => {
     });
     expect((await get("/admin/v1/users/0190b6c4-0000-7000-8000-00000000ffff", token)).status).toBe(404);
     expect((await get("/admin/v1/users/not-an-id", token)).status).toBe(404);
+  });
+});
+
+describe("account actions (POST /admin/v1/users/<id>/suspend|reactivate)", () => {
+  const admin = () => sign({ sub: ADMIN, aud: "core-admin" });
+
+  it("an identity admin suspends someone: their sessions end, and the fresh entry comes back", async () => {
+    const { get, store, ended } = setup();
+    const r = await get(`/admin/v1/users/${MEMBER}/suspend`, await admin(), "POST");
+    expect(r.status).toBe(200);
+    expect(r.headers["cache-control"]).toBe("no-store");
+    expect(r.body).toMatchObject({ outcome: "suspended", changed: true, sessionsEnded: 2, user: { id: MEMBER } });
+    expect(store.actions).toEqual([`suspend ${MEMBER} by ${ADMIN}`]);
+    expect(ended).toEqual([MEMBER]);
+  });
+
+  it("a retry changes nothing and ends no sessions", async () => {
+    const { get, store, ended } = setup();
+    store.suspendOutcome = "already";
+    const r = await get(`/admin/v1/users/${MEMBER}/suspend`, await admin(), "POST");
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ outcome: "already", changed: false, sessionsEnded: 0 });
+    expect(ended).toEqual([]);
+  });
+
+  it("refuses self-suspension, the last identity admin and an account with no access (409), an unknown one (404)", async () => {
+    for (const [outcome, status] of [
+      ["self", 409],
+      ["last_admin", 409],
+      ["no_access", 409],
+      ["unknown", 404],
+    ] as const) {
+      const { get, store, ended } = setup();
+      store.suspendOutcome = outcome;
+      const r = await get(`/admin/v1/users/${MEMBER}/suspend`, await admin(), "POST");
+      expect(r.status, outcome).toBe(status);
+      expect(r.body.error, outcome).toBe(outcome);
+      expect(ended).toEqual([]);
+    }
+  });
+
+  it("reactivates: reconnected or admissions restored; not suspended is a harmless retry", async () => {
+    for (const [outcome, changed] of [
+      ["reconnected", true],
+      ["admissions_restored", true],
+      ["not_suspended", false],
+    ] as const) {
+      const { get, store } = setup();
+      store.reactivateOutcome = outcome;
+      const r = await get(`/admin/v1/users/${MEMBER}/reactivate`, await admin(), "POST");
+      expect(r.status, outcome).toBe(200);
+      expect(r.body).toMatchObject({ outcome, changed });
+    }
+  });
+
+  it("only an active identity admin, only POST, only an account id", async () => {
+    const { get, store } = setup();
+    expect((await get(`/admin/v1/users/${MEMBER}/suspend`, undefined, "POST")).status).toBe(401);
+    expect(
+      (await get(`/admin/v1/users/${MEMBER}/suspend`, await sign({ sub: MEMBER, aud: "core-admin" }), "POST")).status,
+    ).toBe(403);
+    expect((await get(`/admin/v1/users/${MEMBER}/suspend`, await admin(), "GET")).status).toBe(405);
+    expect((await get("/admin/v1/users/not-an-id/suspend", await admin(), "POST")).status).toBe(404);
+    expect((await get(`/admin/v1/users/${MEMBER}/delete`, await admin(), "POST")).handled).toBe(false);
+    expect(store.actions).toEqual([]);
   });
 });

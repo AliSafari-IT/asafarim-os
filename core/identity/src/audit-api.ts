@@ -9,6 +9,10 @@
  *       (account id, whole email or phone) first, then by label and id; state: active|suspended,
  *       scope: global|apps|none; `next` is an opaque cursor
  *   GET /admin/v1/users/<id>   one person: identities, connection, admissions, an open request
+ *   POST /admin/v1/users/<id>/suspend      suspend their access (and end their sessions); never yourself, never
+ *       the last identity admin with access (409); a retry changes nothing
+ *   POST /admin/v1/users/<id>/reactivate   lift a suspension (a global connection again, or only their admissions
+ *       for a public-only person); a retry changes nothing
  *
  * Who may read it: the console passes the signed-in person's ID token as `Bearer`, as it does to core-api.
  * Identity checks the token is its own (signature, issuer, ES256), issued to a reader client
@@ -34,6 +38,8 @@ import type {
   DirectoryProfile,
   DirectorySearch,
   Principal,
+  ReactivateOutcome,
+  SuspendOutcome,
 } from "./store.ts";
 import { DirectoryCursorError, isUuid } from "./store.ts";
 
@@ -45,6 +51,8 @@ export interface AuditReader {
   audit(entry: AuditEntry): Promise<void>;
   directory(f: DirectorySearch): Promise<{ users: DirectoryEntry[]; next: string | null }>;
   directoryProfile(id: string): Promise<DirectoryProfile | null>;
+  adminSuspend(principalId: string, actorId: string): Promise<SuspendOutcome>;
+  adminReactivate(principalId: string, actorId: string): Promise<ReactivateOutcome>;
 }
 
 export interface AuditApiDeps {
@@ -54,13 +62,18 @@ export interface AuditApiDeps {
   /** The OIDC clients whose ID tokens may read the trail. */
   readers: readonly string[];
   store: AuditReader;
+  /**
+   * End every session of a person who was just suspended: identity's own and the provider's, with every token issued
+   * under them (what identity's admin page does). Returns how many provider sessions ended.
+   */
+  endSessions?: (principalId: string) => Promise<number>;
   log: Logger;
   /** Tests only. */
   now?: () => Date;
 }
 
 export interface AuditApi {
-  /** Handles /admin/v1/audit, /admin/v1/audit/summary and /admin/v1/users[/<id>]; false for any other path. */
+  /** Handles /admin/v1/audit, /admin/v1/audit/summary and /admin/v1/users[/<id>[/suspend|/reactivate]]; false otherwise. */
   handle(ctx: HttpContext): Promise<boolean>;
 }
 
@@ -271,8 +284,53 @@ export function createAuditApi(d: AuditApiDeps): AuditApi {
     };
   }
 
+  const SUSPEND_STATUS: Record<SuspendOutcome, number> = {
+    suspended: 200,
+    already: 200,
+    no_access: 409,
+    self: 409,
+    last_admin: 409,
+    unknown: 404,
+  };
+  const SUSPEND_MESSAGE: Partial<Record<SuspendOutcome, string>> = {
+    no_access: "this account has no access to suspend",
+    self: "you can't suspend your own account",
+    last_admin: "this is the last identity admin with access: make someone else an admin first",
+    unknown: "no such account",
+  };
+
+  async function act(ctx: HttpContext, actor: Principal, id: string, action: "suspend" | "reactivate") {
+    if (!isUuid(id)) throw new Refused(404, "not_found", "no such account");
+    if (action === "suspend") {
+      const outcome = await d.store.adminSuspend(id.toLowerCase(), actor.id);
+      if (SUSPEND_STATUS[outcome] !== 200)
+        throw new Refused(SUSPEND_STATUS[outcome], outcome, SUSPEND_MESSAGE[outcome]!);
+      let sessionsEnded = 0;
+      if (outcome === "suspended" && d.endSessions) {
+        // The suspension is committed: a failure here leaves sessions an app can no longer use (the account no
+        // longer resolves at its next token, refresh or userinfo call), so it is logged, not undone.
+        sessionsEnded = await d.endSessions(id.toLowerCase()).catch((err: unknown) => {
+          d.log.error("admin_api.end_sessions_failed", { errorCode: (err as Error).name });
+          return 0;
+        });
+      }
+      d.log.info("admin_api.suspend", { outcome, sessionsEnded });
+      return { outcome, changed: outcome === "suspended", sessionsEnded, user: await profileOf(id) };
+    }
+    const outcome = await d.store.adminReactivate(id.toLowerCase(), actor.id);
+    if (outcome === "unknown") throw new Refused(404, "not_found", "no such account");
+    d.log.info("admin_api.reactivate", { outcome });
+    return { outcome, changed: outcome !== "not_suspended", user: await profileOf(id) };
+  }
+
+  async function profileOf(id: string) {
+    const p = await d.store.directoryProfile(id);
+    return p ? entryJson(p) : null;
+  }
+
   return {
     async handle(ctx) {
+      const action = /^\/admin\/v1\/users\/([^/]{1,64})\/(suspend|reactivate)$/.exec(ctx.path);
       const one = /^\/admin\/v1\/users\/([^/]{1,64})$/.exec(ctx.path)?.[1];
       const route =
         ctx.path === "/admin/v1/audit"
@@ -284,18 +342,21 @@ export function createAuditApi(d: AuditApiDeps): AuditApi {
               : one !== undefined
                 ? () => user(one)
                 : undefined;
-      if (!route) return false;
+      if (!route && !action) return false;
       ctx.set("Cache-Control", "no-store");
       ctx.set("X-Content-Type-Options", "nosniff");
       try {
-        if (ctx.method !== "GET") throw new Refused(405, "method_not_allowed", "GET only");
-        await reader(ctx);
+        const method = action ? "POST" : "GET";
+        if (ctx.method !== method) throw new Refused(405, "method_not_allowed", `${method} only`);
+        const actor = await reader(ctx);
         ctx.status = 200;
         ctx.type = "json";
-        ctx.body = await route(ctx);
+        ctx.body = action
+          ? await act(ctx, actor, action[1]!, action[2] as "suspend" | "reactivate")
+          : await route!(ctx);
       } catch (err) {
         if (!(err instanceof Refused)) d.log.error("audit_api.failed", { errorCode: (err as Error).name });
-        const r = err instanceof Refused ? err : new Refused(500, "internal", "the trail can't be read right now");
+        const r = err instanceof Refused ? err : new Refused(500, "internal", "that can't be done right now");
         ctx.status = r.status;
         ctx.type = "json";
         ctx.body = { error: r.code, message: r.message };
