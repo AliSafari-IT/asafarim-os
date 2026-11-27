@@ -5,6 +5,15 @@
  * Classifying a published article updates its search projection in the same transaction.
  */
 import { randomUUID } from "node:crypto";
+import {
+  insertTag,
+  listTags as listCatalogTags,
+  resolveTags,
+  TAG_LIMITS,
+  isTagSlug,
+  type Tag as CatalogTag,
+} from "@asafarim/tags";
+export { resolveTags };
 import type pg from "pg";
 import { canEdit, canManageTaxonomy, canPublish, canView, type Actor } from "./policy";
 import { refreshSearchDocument } from "./search-index";
@@ -26,10 +35,9 @@ export const LANGUAGES = {
 export type Language = keyof typeof LANGUAGES;
 export const isLanguage = (s: string): s is Language => Object.hasOwn(LANGUAGES, s);
 export type TagKind = (typeof TAG_KINDS)[number];
-export const TAXONOMY_LIMITS = { slug: 64, topicName: 80, description: 300, tagName: 60, alias: 60, tagsPerItem: 12 };
+export const TAXONOMY_LIMITS = { ...TAG_LIMITS, topicName: 80, description: 300, tagsPerItem: 12 };
 
-const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-export const isTaxonomySlug = (s: string) => s.length <= TAXONOMY_LIMITS.slug && SLUG.test(s);
+export const isTaxonomySlug = isTagSlug;
 
 export interface Topic {
   id: string;
@@ -39,13 +47,7 @@ export interface Topic {
   parentId: string | null;
 }
 
-export interface Tag {
-  id: string;
-  slug: string;
-  name: string;
-  kind: TagKind;
-  aliases: string[];
-}
+export type Tag = CatalogTag<TagKind>;
 
 export interface Classification {
   topicId: string | null;
@@ -110,13 +112,7 @@ export async function getTopic(pool: Pick<Pool, "query">, slug: string): Promise
   return row ? toTopic(row) : null;
 }
 
-export async function listTags(pool: Pick<Pool, "query">): Promise<Tag[]> {
-  const { rows } = await pool.query<{ id: string; slug: string; name: string; kind: TagKind; aliases: string[] }>(
-    `SELECT t.id, t.slug, t.name, t.kind, coalesce(array_agg(a.alias ORDER BY a.alias) FILTER (WHERE a.alias IS NOT NULL), '{}') AS aliases
-     FROM tags t LEFT JOIN tag_aliases a ON a.tag_id = t.id GROUP BY t.id ORDER BY t.name, t.slug`,
-  );
-  return rows;
-}
+export const listTags = (pool: Client) => listCatalogTags<TagKind>(pool);
 
 export async function createTopic(
   pool: Pool,
@@ -151,66 +147,14 @@ export async function createTopic(
   });
 }
 
-/** Lower-case and trimmed, or null when it isn't a usable alias. */
-const aliasOf = (raw: string) => {
-  const a = raw.trim().toLowerCase();
-  return a && a.length <= TAXONOMY_LIMITS.alias ? a : null;
-};
-
 export async function createTag(
   pool: Pool,
   actor: Actor,
   input: { slug: string; name: string; kind: TagKind; aliases?: string[] },
 ): Promise<TaxonomyResult<{ id: string }>> {
   if (!canManageTaxonomy(actor)) return { ok: false, error: "forbidden" };
-  const name = input.name.trim();
-  if (!isTaxonomySlug(input.slug)) return { ok: false, error: "invalid_slug" };
-  if (!name || name.length > TAXONOMY_LIMITS.tagName) return { ok: false, error: "invalid_name" };
   if (!(TAG_KINDS as readonly string[]).includes(input.kind)) return { ok: false, error: "invalid_name" };
-  const entered = (input.aliases ?? []).map((a) => a.trim()).filter(Boolean);
-  const tooLong = entered.find((a) => !aliasOf(a));
-  if (tooLong) return { ok: false, error: "invalid_alias", detail: tooLong };
-  const aliases = [...new Set(entered.map((a) => aliasOf(a)!))].filter((a) => a !== input.slug);
-  return inTransaction(pool, async (c) => {
-    // One lock for every tag name, so a slug and an alias can't be claimed at once by two tags.
-    await c.query("SELECT pg_advisory_xact_lock(hashtext('knowledge.tags'))");
-    const clash = await c.query<{ name: string }>(
-      `SELECT slug AS name FROM tags WHERE slug = ANY($1::text[])
-       UNION SELECT alias FROM tag_aliases WHERE alias = ANY($1::text[])`,
-      [[input.slug, ...aliases]],
-    );
-    if (clash.rows.some((r) => r.name === input.slug)) return { ok: false, error: "slug_taken" } as const;
-    if (clash.rowCount) return { ok: false, error: "alias_taken", detail: clash.rows[0]!.name } as const;
-    const id = randomUUID();
-    await c.query("INSERT INTO tags (id, slug, name, kind) VALUES ($1,$2,$3,$4)", [id, input.slug, name, input.kind]);
-    if (aliases.length) {
-      await c.query("INSERT INTO tag_aliases (alias, tag_id) SELECT a, $2 FROM unnest($1::text[]) AS a", [aliases, id]);
-    }
-    return { ok: true, id } as const;
-  });
-}
-
-/** Tag ids for what an author typed (slugs, names or aliases, case-insensitive); the first unknown one is reported. */
-export async function resolveTags(
-  pool: Pick<Pool, "query">,
-  names: string[],
-): Promise<{ ok: true; ids: string[] } | { ok: false; error: "unknown_tag" | "ambiguous_tag"; key: string }> {
-  const wanted = [...new Set(names.map((n) => n.trim().toLowerCase()).filter(Boolean))];
-  if (!wanted.length) return { ok: true, ids: [] };
-  // Each word names exactly one tag: a slug or an alias first (both unique), else a display name only when one tag
-  // has it (names may repeat across kinds, e.g. a subject and a technology both called "Go").
-  const { rows } = await pool.query<{ key: string; id: string | null; names: number }>(
-    `SELECT w AS key,
-            coalesce((SELECT id FROM tags WHERE slug = w), (SELECT tag_id FROM tag_aliases WHERE alias = w),
-                     (SELECT min(id) FROM tags WHERE lower(name) = w HAVING count(*) = 1)) AS id,
-            (SELECT count(*)::int FROM tags WHERE lower(name) = w) AS names
-     FROM unnest($1::text[]) AS w`,
-    [wanted],
-  );
-  for (const r of rows) {
-    if (!r.id) return { ok: false, error: r.names > 1 ? "ambiguous_tag" : "unknown_tag", key: r.key };
-  }
-  return { ok: true, ids: [...new Set(rows.map((r) => r.id!))] };
+  return inTransaction(pool, (c) => insertTag(c, input, "knowledge.tags"));
 }
 
 export async function getClassification(pool: Pick<Pool, "query">, itemId: string): Promise<Classification> {

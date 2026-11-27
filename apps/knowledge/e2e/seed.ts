@@ -10,6 +10,7 @@ import pg from "pg";
 import { createArticle, publishRevision, saveDraft, withdrawArticle } from "../lib/content";
 import { createCourse, editCourse, publishCourse, type CourseEdit } from "../lib/courses";
 import { parseDoc } from "../lib/doc";
+import { classify, createTag } from "../lib/taxonomy";
 import { migrate } from "../lib/migrations";
 import type { Actor } from "../lib/policy";
 import { E2E_DATABASE_URL } from "../playwright.config";
@@ -53,6 +54,12 @@ export default async function seed() {
     await article("build-the-api", "Build the API", "Expose the data over HTTP.");
     await article("deploy-it", "Deploy it", "Ship the container to the server.");
     const extra = await article("bonus-tuning", "Bonus: tuning", "Make it fast.");
+
+    const editor = { ...author, permissions: [...author.permissions, "knowledge.taxonomy.manage"] };
+    ok(await createTag(pool, editor, { slug: "planning", name: "Planning", kind: "subject", aliases: ["plans"] }));
+    ok(await createTag(pool, editor, { slug: "tuning", name: "Tuning", kind: "subject" }));
+    ok(await classify(pool, author, { id: plan.id, topicSlug: null, level: null, tags: ["plans"] }));
+    ok(await classify(pool, author, { id: extra.id, topicSlug: null, level: null, tags: ["tuning"] }));
 
     const course = ok(
       await createCourse(pool, author, {

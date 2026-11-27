@@ -11,6 +11,8 @@
  * publishing the course. Like lib/content.ts, every mutation re-checks the policy against the locked row in the
  * transaction that writes; the public reads take no actor and only follow published pointers.
  */
+import type { TagLink } from "@asafarim/tags";
+import { ARTICLE_TAGS_SQL } from "./public-tags";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { Doc } from "./doc";
@@ -633,6 +635,7 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
 }
 
 export interface PublishedLesson {
+  tags: TagLink[];
   itemId: string;
   course: PublishedCourse;
   lessonId: string;
@@ -660,6 +663,7 @@ export async function getPublishedLesson(
   const at = flat.findIndex((l) => l.lessonId === lessonId);
   if (at < 0) return null;
   const { rows } = await pool.query<{
+    tags: TagLink[];
     slug: string;
     title: string;
     summary: string;
@@ -668,7 +672,7 @@ export async function getPublishedLesson(
     body: string;
   }>(
     // The course revision the outline came from, so a publish in between can't mix two revisions on one page.
-    `SELECT i.slug, r.title, r.summary, r.format, r.doc, r.body
+    `SELECT ${ARTICLE_TAGS_SQL} AS tags, i.slug, r.title, r.summary, r.format, r.doc, r.body
      FROM course_lessons l
      JOIN content_items i ON i.id = l.item_id AND i.published_revision_id IS NOT NULL
      JOIN content_revisions r ON r.id = l.item_revision_id
@@ -684,6 +688,7 @@ export async function getPublishedLesson(
     lessonId,
     itemId: flat[at]!.itemId,
     moduleTitle: flat[at]!.moduleTitle,
+    tags: r.tags,
     articleSlug: r.slug,
     title: r.title,
     summary: r.summary,
