@@ -233,7 +233,8 @@ export function StudyDeck({ courseId, cards }: { courseId: string; cards: StudyC
               onPointerDown={onPointerDown}
               onPointerUp={onPointerUp}
               onPointerCancel={() => (swipeFrom.current = null)}
-              aria-label={flipped ? "Answer. Press to show the question" : "Question. Press to show the answer"}
+              // No aria-label: the button's name is the visible face (the hidden one is aria-hidden), so a screen reader
+              // reads the question, or the answer once flipped.
               data-testid="flip-card"
               data-side={flipped ? "back" : "front"}
             >
@@ -256,6 +257,9 @@ export function StudyDeck({ courseId, cards }: { courseId: string; cards: StudyC
             </button>
           </div>
 
+          <p className="visually-hidden" aria-live="polite" data-testid="card-announce">
+            {flipped ? `Answer: ${card.back}` : ""}
+          </p>
           <div className="study-controls">
             <button
               type="button"

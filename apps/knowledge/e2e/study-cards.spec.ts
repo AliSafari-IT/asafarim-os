@@ -16,12 +16,16 @@ test("a guest studies a course's flip cards", async ({ page }) => {
   await expect(page.getByTestId("study-position")).toHaveText("Card 1 of 3");
   await expect(page.getByTestId("card-front")).toHaveText("What does a course lesson pin?");
   await expect(card).toHaveAttribute("data-side", "front");
+  await expect(card).toHaveAccessibleName(/^Question\s*What does a course lesson pin\?/);
   await expect(page.getByTestId("card-prev")).toBeDisabled();
 
   // Tap to flip, then "I knew it" marks it and moves on.
   await card.click();
   await expect(card).toHaveAttribute("data-side", "back");
   await expect(page.getByTestId("card-back")).toHaveText("One published revision of its article.");
+  // Screen readers get the visible face as the card's name, and hear the answer when it flips.
+  await expect(card).toHaveAccessibleName(/^Answer\s*One published revision of its article\./);
+  await expect(page.getByTestId("card-announce")).toHaveText("Answer: One published revision of its article.");
   await page.getByTestId("mark-known").click();
   await expect(page.getByTestId("study-position")).toHaveText("Card 2 of 3");
   await expect(card).toHaveAttribute("data-side", "front");
