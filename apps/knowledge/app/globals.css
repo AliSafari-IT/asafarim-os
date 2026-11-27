@@ -1081,3 +1081,16 @@ main.studio .studio-new button:disabled {
     display: none;
   }
 }
+
+/* A page title with an action beside it (the public Courses page's "New course"). */
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.page-head h1 {
+  margin: 0;
+}

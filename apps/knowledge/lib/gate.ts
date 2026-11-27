@@ -6,6 +6,7 @@
  */
 import { ACCESS_COOKIE_NAME, isAccessUnavailableError, isForbiddenError } from "@asafarim/app-sdk";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import { auth } from "./auth";
 import { getPlatform } from "./platform";
 
@@ -63,8 +64,11 @@ export async function gate(permission: string): Promise<GateResult> {
   }
 }
 
-/** The app's state and the subject's permissions, for the page (no permission required). */
-export async function describeAccess(subject: string) {
+/**
+ * The app's state and the subject's permissions, for the page (no permission required). Cached per request, so
+ * the top bar and the page that asks the same question make one core-api call between them.
+ */
+export const describeAccess = cache(async (subject: string) => {
   try {
     return {
       available: true as const,
@@ -73,4 +77,4 @@ export async function describeAccess(subject: string) {
   } catch {
     return { available: false as const, state: "unknown", roles: [] as string[], permissions: [] as string[] };
   }
-}
+});
