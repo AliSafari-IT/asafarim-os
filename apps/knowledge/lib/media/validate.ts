@@ -212,8 +212,9 @@ function svgRootStart(svg: string): number {
 
 /**
  * SVG code an author pasted: one <svg> element (optionally after an XML declaration, comments and a doctype), at most
- * 100 000 characters, with no script, event handler, foreign HTML or entity declaration. Gains the SVG namespace when
- * it lacks one (an <img> shows nothing without it). Returns the code to store, or an error.
+ * 100 000 characters, with no script, event handler, foreign HTML or entity declaration. Gets the SVG namespace when
+ * it lacks one or names another (a mangled copy such as "http://w3.org" is common): an <img> shows nothing for an SVG
+ * outside that namespace. Returns the code to store, or an error.
  */
 export function checkSvg(
   raw: unknown,
@@ -228,13 +229,21 @@ export function checkSvg(
   const root = scanSvgElement(svg, rootStart);
   if (!root) return { ok: false, error: "svg_invalid" };
   if (SVG_FORBIDDEN.some((re) => re.test(svg))) return { ok: false, error: "svg_unsafe" };
-  if (!root.attributes.has("xmlns")) {
-    svg = `${svg.slice(0, rootStart)}<svg xmlns="http://www.w3.org/2000/svg"${svg.slice(rootStart + 4)}`;
-    // The namespace counts towards the limit too: what is stored must pass this check again.
-    if (svg.length > MEDIA_LIMITS.svg) return { ok: false, error: "svg_too_large" };
+  const ns = root.attributes.get("xmlns");
+  if (!ns) {
+    svg = `${svg.slice(0, rootStart)}<svg xmlns="${SVG_NAMESPACE}"${svg.slice(rootStart + 4)}`;
+  } else if (svg.slice(ns.from, ns.to) !== SVG_NAMESPACE) {
+    svg = `${svg.slice(0, ns.from)}${SVG_NAMESPACE}${svg.slice(ns.to)}`;
   }
+  // The namespace counts towards the limit too: what is stored must pass this check again.
+  if (svg.length > MEDIA_LIMITS.svg) return { ok: false, error: "svg_too_large" };
   return { ok: true, svg };
 }
+
+export const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+/** Where an attribute's value sits in the code (between its quotes). */
+type ValueSpan = { from: number; to: number };
 
 const XML_NAME_START = /[A-Za-z_:]/;
 const XML_NAME_CHAR = /[A-Za-z0-9_:.-]/;
@@ -253,11 +262,11 @@ function entitiesOk(text: string): boolean {
  * Check that the document from `start` (where the root `<svg` begins) to the end is exactly one well-formed XML
  * element: matched and properly nested tags, quoted attribute values without `<`, no duplicate attribute on a tag,
  * only XML's own entities, and comments, CDATA and processing instructions closed. One forward pass with a stack of
- * open tag names, so it is linear in the input. Returns the root's attribute names, or null.
+ * open tag names, so it is linear in the input. Returns the root's attributes (where each value sits), or null.
  */
-function scanSvgElement(svg: string, start: number): { attributes: Set<string> } | null {
+function scanSvgElement(svg: string, start: number): { attributes: Map<string, ValueSpan> } | null {
   const open: string[] = [];
-  let rootAttributes: Set<string> | null = null;
+  let rootAttributes: Map<string, ValueSpan> | null = null;
   let i = start;
   const n = svg.length;
   const readName = (): string | null => {
@@ -297,7 +306,7 @@ function scanSvgElement(svg: string, start: number): { attributes: Set<string> }
       i++;
       const name = readName();
       if (!name || (open.length === 0 && rootAttributes) || (!rootAttributes && name !== "svg")) return null;
-      const attributes = new Set<string>();
+      const attributes = new Map<string, ValueSpan>();
       for (;;) {
         const before = i;
         while (XML_SPACE(svg[i])) i++;
@@ -305,7 +314,6 @@ function scanSvgElement(svg: string, start: number): { attributes: Set<string> }
         if (i === before) return null; // attributes must be separated by space
         const attr = readName();
         if (!attr || attributes.has(attr)) return null;
-        attributes.add(attr);
         while (XML_SPACE(svg[i])) i++;
         if (svg[i] !== "=") return null;
         i++;
@@ -316,6 +324,7 @@ function scanSvgElement(svg: string, start: number): { attributes: Set<string> }
         if (end < 0) return null;
         const value = svg.slice(i + 1, end);
         if (value.includes("<") || !entitiesOk(value)) return null;
+        attributes.set(attr, { from: i + 1, to: end });
         i = end + 1;
       }
       if (!rootAttributes) rootAttributes = attributes;

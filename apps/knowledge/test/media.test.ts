@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { mediaAssetIds, parseDoc } from "@/lib/doc";
 import {
@@ -282,6 +284,34 @@ describe("images without an upload: an https address or SVG code", () => {
       expect(r.svg.length).toBeLessThanOrEqual(100_000);
       expect(checkSvg(r.svg)).toEqual(r);
     }
+  });
+
+  it("corrects a root namespace that isn't SVG's (a mangled copy like http://w3.org), keeping everything else", () => {
+    const ns = 'xmlns="http://www.w3.org/2000/svg"';
+    expect(checkSvg('<svg xmlns="http://w3.org" viewBox="0 0 1 1"></svg>')).toEqual({
+      ok: true,
+      svg: `<svg ${ns} viewBox="0 0 1 1"></svg>`,
+    });
+    expect(checkSvg("<svg xmlns='https://www.w3.org/2000/svg'></svg>")).toEqual({
+      ok: true,
+      svg: "<svg xmlns='http://www.w3.org/2000/svg'></svg>",
+    });
+    // The right namespace, and other namespaces (xlink), are left alone.
+    const right = `<svg ${ns} xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="#a"/></svg>`;
+    expect(checkSvg(right)).toEqual({ ok: true, svg: right });
+  });
+
+  it('the diagram an author pasted with xmlns="http://w3.org" is stored with SVG\'s namespace, unchanged otherwise', () => {
+    const pasted = readFileSync(path.join(import.meta.dirname, "fixtures/ai-training.svg"), "utf8");
+    const r = checkSvg(pasted);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 440"')).toBe(true);
+    expect(r.svg).toBe(pasted.trim().replace('xmlns="http://w3.org"', 'xmlns="http://www.w3.org/2000/svg"'));
+    expect(checkSvg(r.svg)).toEqual(r); // what is stored passes again, unchanged
+    // A draft saved before this fix (with the wrong namespace) renders right: the document is checked when read.
+    const doc = parse({ type: "image", attrs: { svg: pasted, alt: "The training lifecycle" } });
+    expect(doc.ok && doc.doc.content[0]!.attrs?.svg).toBe(r.svg);
   });
 
   it("an image has exactly one source, and still needs alt text", () => {

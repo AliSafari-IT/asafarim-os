@@ -1,0 +1,107 @@
+<svg xmlns="http://w3.org" viewBox="0 0 760 440" width="760" height="440">
+  <defs>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#22c55e"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="760" height="440" rx="12" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <!-- Title -->
+  <text x="380" y="34" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="700" fill="#0f172a">
+    How Modern AI Models Are Trained
+  </text>
+
+  <!-- Step 1: Data Collection -->
+  <rect x="40" y="75" width="145" height="68" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="112.5" y="102" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#1e40af">1. Data Collection</text>
+  <text x="112.5" y="120" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#1e3a8a">Text, code &amp; images</text>
+  <text x="112.5" y="133" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#1e3a8a">(cleaned &amp; tokenized)</text>
+
+  <!-- Connector 1 -> 2 -->
+  <path d="M 185 109 L 222 109" stroke="#64748b" stroke-width="1.8" fill="none" marker-end="url(#arrow-gray)"/>
+
+  <!-- Step 2: Pretraining Box (Outer container for the learning loop) -->
+  <rect x="230" y="55" width="295" height="175" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <text x="377.5" y="74" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#b45309">2. Pretraining (The Learning Loop)</text>
+
+  <!-- Neural Network Node -->
+  <rect x="250" y="90" width="115" height="44" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="307.5" y="109" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#92400e">Neural Network</text>
+  <text x="307.5" y="123" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#92400e">Predicts next token</text>
+
+  <!-- Arrow NN -> Loss -->
+  <path d="M 365 112 L 392 112" stroke="#f59e0b" stroke-width="1.6" fill="none" marker-end="url(#arrow-orange)"/>
+
+  <!-- Loss Function Node -->
+  <rect x="400" y="90" width="108" height="44" rx="6" fill="#fce7f3" stroke="#ec4899" stroke-width="1.5"/>
+  <text x="454" y="109" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#9d174d">Calculate Error</text>
+  <text x="454" y="123" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#9d174d">Compare vs. actual</text>
+
+  <!-- Backpropagation Node -->
+  <rect x="315" y="165" width="130" height="44" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="380" y="184" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#92400e">Adjust Weights</text>
+  <text x="380" y="198" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#92400e">(Backpropagation)</text>
+
+  <!-- Curved Arrows for Loop -->
+  <path d="M 454 134 Q 454 187 448 187" stroke="#f59e0b" stroke-width="1.6" fill="none" marker-end="url(#arrow-orange)"/>
+  <path d="M 315 187 Q 307.5 187 307.5 138" stroke="#f59e0b" stroke-width="1.6" fill="none" marker-end="url(#arrow-orange)"/>
+  <text x="380" y="222" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="9.5" font-style="italic" fill="#b45309">Repeated billions of times</text>
+
+  <!-- Connector 2 -> 3 -->
+  <path d="M 525 142 L 567 142" stroke="#64748b" stroke-width="1.8" fill="none" marker-end="url(#arrow-gray)"/>
+
+  <!-- Step 3: Base Model -->
+  <rect x="575" y="108" width="145" height="68" rx="8" fill="#f3e8ff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="647.5" y="135" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#6b21a8">3. Base Model</text>
+  <text x="647.5" y="152" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#581c87">Knows language &amp; facts,</text>
+  <text x="647.5" y="165" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#581c87">not yet an assistant</text>
+
+  <!-- Connector 3 -> 4 (Curves down to row 2) -->
+  <path d="M 647.5 176 L 647.5 268" stroke="#64748b" stroke-width="1.8" fill="none" marker-end="url(#arrow-gray)"/>
+
+  <!-- Step 4: Supervised Fine-Tuning (SFT) -->
+  <rect x="555" y="276" width="165" height="68" rx="8" fill="#f3e8ff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="637.5" y="302" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#6b21a8">4. Fine-Tuning (SFT)</text>
+  <text x="637.5" y="319" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#581c87">Trained on curated Q&amp;A</text>
+  <text x="637.5" y="332" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#581c87">to follow instructions</text>
+
+  <!-- Connector 4 -> 5 -->
+  <path d="M 555 310 L 508 310" stroke="#64748b" stroke-width="1.8" fill="none" marker-end="url(#arrow-gray)"/>
+
+  <!-- Step 5: Alignment / RLHF -->
+  <rect x="305" y="276" width="195" height="68" rx="8" fill="#f3e8ff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="402.5" y="302" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#6b21a8">5. Alignment (RLHF)</text>
+  <text x="402.5" y="319" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#581c87">Humans rank best answers;</text>
+  <text x="402.5" y="332" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#581c87">reward model guides safety</text>
+
+  <!-- Connector 5 -> 6 -->
+  <path d="M 305 310 L 258 310" stroke="#22c55e" stroke-width="2" fill="none" marker-end="url(#arrow-green)"/>
+
+  <!-- Step 6: Deployed AI -->
+  <rect x="40" y="276" width="210" height="68" rx="8" fill="#d1fae5" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="145" y="302" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="700" fill="#166534">6. Deployed AI Assistant</text>
+  <text x="145" y="319" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#14532d">Ready for real-world prompts</text>
+  <text x="145" y="332" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#14532d">&amp; continuous evaluation</text>
+
+  <!-- Legend / Footer Note -->
+  <rect x="40" y="372" width="680" height="44" rx="6" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+  <circle cx="65" cy="394" r="5" fill="#3b82f6"/>
+  <text x="77" y="398" font-family="system-ui, -apple-system, sans-serif" font-size="10.5" fill="#475569">Data Input</text>
+
+  <circle cx="165" cy="394" r="5" fill="#f59e0b"/>
+  <text x="177" y="398" font-family="system-ui, -apple-system, sans-serif" font-size="10.5" fill="#475569">Compute-Heavy Learning</text>
+
+  <circle cx="345" cy="394" r="5" fill="#a855f7"/>
+  <text x="357" y="398" font-family="system-ui, -apple-system, sans-serif" font-size="10.5" fill="#475569">Model Refinement &amp; Safety</text>
+
+  <circle cx="535" cy="394" r="5" fill="#22c55e"/>
+  <text x="547" y="398" font-family="system-ui, -apple-system, sans-serif" font-size="10.5" fill="#475569">Production Output</text>
+</svg>

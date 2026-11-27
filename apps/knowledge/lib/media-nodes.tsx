@@ -7,7 +7,7 @@
 import { mergeAttributes, Node } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type ReactNodeViewProps } from "@tiptap/react";
 import { finishUploadAction, requestUploadAction, type UploadDone } from "@/app/studio/media-actions";
-import { MEDIA_LIMITS, VIDEO_LABEL, isVideoId, svgDataUrl, type VideoProvider } from "./media/validate";
+import { MEDIA_LIMITS, VIDEO_LABEL, checkSvg, isVideoId, svgDataUrl, type VideoProvider } from "./media/validate";
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
@@ -50,7 +50,11 @@ function Head({ label, editor, deleteNode }: Pick<ReactNodeViewProps, "editor" |
 export function imageSrc(attrs: Record<string, unknown>): string {
   if (typeof attrs.asset === "string" && attrs.asset) return `/media/${attrs.asset}`;
   if (typeof attrs.src === "string" && attrs.src) return attrs.src;
-  return svgDataUrl(typeof attrs.svg === "string" ? attrs.svg : "");
+  // The preview shows the code as saving will store it (namespace corrected), so what the author sees is what
+  // readers get; code that doesn't pass the check is shown as typed (and refused on save, with the reason).
+  const svg = typeof attrs.svg === "string" ? attrs.svg : "";
+  const checked = checkSvg(svg);
+  return svgDataUrl(checked.ok ? checked.svg : svg);
 }
 
 function ImageView({ node, updateAttributes, editor, deleteNode }: ReactNodeViewProps) {
