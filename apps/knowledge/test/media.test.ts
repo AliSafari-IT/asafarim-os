@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { mediaAssetIds, parseDoc } from "@/lib/doc";
-import { checkUploadRequest, cleanFilename, parseVideoUrl, sniffMatches, videoEmbedUrl } from "@/lib/media/validate";
+import {
+  checkImageUrl,
+  checkSvg,
+  checkUploadRequest,
+  cleanFilename,
+  parseVideoUrl,
+  sniffMatches,
+  svgDataUrl,
+  videoEmbedUrl,
+} from "@/lib/media/validate";
 import { mediaConfigFromEnv } from "@/lib/media/store";
 
 const ID = "3f2a6c1e-8b4d-4e2f-9a1b-0c3d5e7f9a1b";
@@ -155,5 +164,78 @@ describe("uploads (#359)", () => {
       accessKeyId: "k",
       secretAccessKey: "s",
     });
+  });
+});
+
+describe("images without an upload: an https address or SVG code", () => {
+  const ok = (attrs: Record<string, unknown>) => parse({ type: "image", attrs: { alt: "A chart", ...attrs } });
+
+  it("keeps an https image address, normalised and without its fragment", () => {
+    const r = ok({ src: "  https://Example.com/a/chart.png?x=1#top " });
+    expect(r.ok && r.doc.content[0]).toEqual({
+      type: "image",
+      attrs: { src: "https://example.com/a/chart.png?x=1", alt: "A chart", caption: "" },
+    });
+    expect(r.ok && mediaAssetIds(r.doc)).toEqual([]);
+  });
+
+  it("refuses addresses that aren't https on a named host", () => {
+    for (const src of [
+      "http://example.com/a.png",
+      "javascript:alert(1)",
+      "data:image/png;base64,AAAA",
+      "https://user:pw@example.com/a.png",
+      "https://localhost/a.png",
+      "https://10.0.0.1/a.png",
+      "https://[::1]/a.png",
+      "https://intranet/a.png",
+      'https://example.com/a.png" onerror="x',
+      `https://example.com/${"a".repeat(2000)}`,
+    ]) {
+      expect(checkImageUrl(src), src).toBeNull();
+      expect(ok({ src }), src).toMatchObject({ ok: false, error: "image_url_invalid" });
+    }
+  });
+
+  it("keeps SVG code, adding the namespace an <img> needs", () => {
+    const r = ok({ svg: '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>' });
+    expect(r.ok && r.doc.content[0]!.attrs).toEqual({
+      svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>',
+      alt: "A chart",
+      caption: "",
+    });
+    const withDecl = '<?xml version="1.0"?>\n<!-- made by hand -->\n<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+    expect(checkSvg(withDecl)).toEqual({ ok: true, svg: withDecl });
+  });
+
+  it("refuses SVG with script, handlers, foreign HTML or entities, and anything that isn't one <svg>", () => {
+    const unsafe = [
+      "<svg><script>alert(1)</script></svg>",
+      '<svg onload="alert(1)"></svg>',
+      '<svg><a href="javascript:alert(1)"><text>x</text></a></svg>',
+      "<svg><foreignObject><div>x</div></foreignObject></svg>",
+      '<!DOCTYPE svg [<!ENTITY x "y">]><svg></svg>',
+      '<svg><iframe src="https://evil.example"></iframe></svg>',
+    ];
+    for (const svg of unsafe) expect(checkSvg(svg), svg).toMatchObject({ ok: false });
+    expect(checkSvg('<svg onload="x"></svg>')).toEqual({ ok: false, error: "svg_unsafe" });
+    for (const svg of ["<div>no</div>", "<svg>unclosed", "text <svg></svg>", 42]) {
+      expect(checkSvg(svg), String(svg)).toEqual({ ok: false, error: "svg_invalid" });
+    }
+    expect(checkSvg(`<svg>${"x".repeat(100_001)}</svg>`)).toEqual({ ok: false, error: "svg_too_large" });
+  });
+
+  it("an image has exactly one source, and still needs alt text", () => {
+    expect(parse({ type: "image", attrs: { alt: "x" } })).toMatchObject({ ok: false, error: "media_invalid" });
+    expect(ok({ asset: ID, src: "https://example.com/a.png" })).toMatchObject({ ok: false, error: "media_invalid" });
+    expect(ok({ src: "https://example.com/a.png", svg: "<svg></svg>" })).toMatchObject({ ok: false });
+    expect(parse({ type: "image", attrs: { src: "https://example.com/a.png", alt: " " } })).toMatchObject({
+      ok: false,
+      error: "image_alt_required",
+    });
+  });
+
+  it("shows SVG only as a data: URL", () => {
+    expect(svgDataUrl("<svg></svg>")).toBe("data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C%2Fsvg%3E");
   });
 });

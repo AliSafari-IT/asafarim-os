@@ -46,6 +46,25 @@ describe("structured article rendering", () => {
     expect(html).toContain("<td><p><span>cell</span></p></td>");
   });
 
+  it("renders an image from an address and from SVG code, both as <img>, never as inline markup", async () => {
+    const html = await render({
+      type: "doc",
+      content: [
+        { type: "image", attrs: { src: "https://example.com/a.png", alt: "A chart", caption: "Figure 1" } },
+        { type: "image", attrs: { svg: '<svg viewBox="0 0 1 1"><rect width="1" height="1"/></svg>', alt: "A square" } },
+      ],
+    });
+    expect(html).toContain(
+      '<img src="https://example.com/a.png" alt="A chart" loading="lazy" decoding="async" referrerPolicy="no-referrer"/>',
+    );
+    expect(html).toContain("<figcaption>Figure 1</figcaption>");
+    expect(html).toContain('src="data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D');
+    expect(html).toContain('alt="A square"');
+    // The SVG never appears as markup in the page.
+    expect(html).not.toContain("<svg");
+    expect(html).not.toContain("<rect");
+  });
+
   it("escapes text that looks like HTML and never emits script or handlers", async () => {
     const html = await render({
       type: "doc",

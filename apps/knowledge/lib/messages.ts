@@ -86,6 +86,12 @@ export const ERRORS: Record<string, string> = {
   media_text_too_long:
     "An image's alt text or caption, a file's label or a video's title is too long (at most 300, 300, 200 and 200 characters).",
   image_alt_required: "Every image needs alt text: describe what it shows for readers who can't see it.",
+  image_url_invalid:
+    "That image address can't be used: it must start with https:// and name a website (not an IP address or localhost).",
+  svg_invalid: "That isn't SVG code: it must be one <svg>…</svg> element.",
+  svg_too_large: "That SVG code is too long (at most 100 000 characters). Simplify or optimise it first.",
+  svg_unsafe:
+    "That SVG contains script, an event handler (onclick…), embedded HTML or an entity declaration. Remove them and paste it again.",
   attachment_label_required: "Every attached file needs a label.",
   video_invalid: "Only YouTube and Vimeo videos can be embedded, by their address.",
   video_title_required: "Every video needs a title.",
