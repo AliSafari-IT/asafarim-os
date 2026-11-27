@@ -317,3 +317,99 @@ describe("CommentSection", () => {
     expect(q("comments-heading")!.textContent).toContain("(1)");
   });
 });
+
+describe("CommentSection paging", () => {
+  it("after posting on a partly loaded list, Show more still brings every older comment, each once", async () => {
+    // A server with 51 top-level comments, oldest first, pages of 50.
+    const server: ClientThread[] = Array.from({ length: 51 }, (_, i) =>
+      thread({ id: `c${String(i + 1).padStart(2, "0")}`, body: `comment ${i + 1}` }),
+    );
+    const { fn, calls } = fakeFetch((method, url, body) => {
+      if (method === "POST") {
+        const c = comment({ id: "mine", userId: "me", body: (body as { body: string }).body });
+        server.push({ ...c, replies: [] });
+        return { status: 201, body: { comment: c } };
+      }
+      if (method === "DELETE") {
+        const id = url.pathname.split("/").pop()!;
+        server.splice(
+          server.findIndex((t) => t.id === id),
+          1,
+        );
+        return { body: { removed: 1 } };
+      }
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      const limit = Number(url.searchParams.get("limit") ?? 50);
+      return { body: { comments: server.slice(offset, offset + limit), total: server.length } };
+    });
+    act(() =>
+      root.render(
+        <CommentSection
+          entityType="lesson"
+          entityId="l1"
+          viewer={{ id: "me", canComment: true }}
+          client={createEngagementClient({ fetch: fn })}
+        />,
+      ),
+    );
+    await flush();
+    expect(qa("comment")).toHaveLength(50);
+    expect(q("comments-more")!.textContent).toContain("(1)");
+
+    const forms = qa("comment-form");
+    type(forms[0]!.querySelector("textarea"), "mine");
+    await act(async () => {
+      forms[0]!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(q("comments-more")!.textContent).toContain("(1)"); // still one older comment to load, not two
+
+    await click(q("comments-more"));
+    await flush();
+    const bodies = qa("comment-body").map((e) => e.textContent);
+    expect(bodies).toContain("comment 51");
+    expect(bodies).toHaveLength(52);
+    expect(new Set(bodies).size).toBe(52);
+    expect(q("comments-more")).toBeNull();
+    expect(
+      calls.filter((c) => c.method === "GET").map((c) => new URL(c.path, "http://x").searchParams.get("offset")),
+    ).toEqual(["0", "50"]);
+  });
+
+  it("deleting a loaded comment doesn't make Show more skip the next one", async () => {
+    const server: ClientThread[] = Array.from({ length: 52 }, (_, i) =>
+      thread({ id: `d${String(i + 1).padStart(2, "0")}`, userId: "me", body: `comment ${i + 1}` }),
+    );
+    const { fn } = fakeFetch((method, url) => {
+      if (method === "DELETE") {
+        const id = url.pathname.split("/").pop()!;
+        server.splice(
+          server.findIndex((t) => t.id === id),
+          1,
+        );
+        return { body: { removed: 1 } };
+      }
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      return { body: { comments: server.slice(offset, offset + 50), total: server.length } };
+    });
+    act(() =>
+      root.render(
+        <CommentSection
+          entityType="lesson"
+          entityId="l1"
+          viewer={{ id: "me", canComment: true }}
+          client={createEngagementClient({ fetch: fn })}
+        />,
+      ),
+    );
+    await flush();
+    await click(qa("comment-delete")[0]!);
+    await click(q("comment-delete-confirm"));
+    await flush();
+    await click(q("comments-more"));
+    await flush();
+    const bodies = qa("comment-body").map((e) => e.textContent);
+    expect(bodies).toEqual(expect.arrayContaining(["comment 51", "comment 52"]));
+    expect(bodies).toHaveLength(51);
+  });
+});

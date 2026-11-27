@@ -357,6 +357,41 @@ describe.skipIf(!DATABASE_URL)("engagement (Postgres)", () => {
       }
     });
 
+    it("deleting a parent while its reply is being deleted takes the reply off once, not twice", async () => {
+      // The reply's delete is held open inside its transaction (in the hook) while the parent's delete runs.
+      let hold: (() => void) | null = null;
+      let entered: () => void = () => undefined;
+      const held$ = new Promise<void>((r) => (entered = r));
+      let held = false;
+      const svc = createEngagementService({
+        pool,
+        onCountChange: async (type, id, metric, delta, tx) => {
+          if (!held) {
+            held = true;
+            entered();
+            await new Promise<void>((release) => (hold = release));
+          }
+          await rollup(type, id, metric, delta, tx);
+        },
+      });
+      await service().createComment({ entity: lesson, user: bob, body: "unrelated" });
+      const top = await service().createComment({ entity: lesson, user: alice, body: "parent" });
+      const reply = await service().createComment({ entity: lesson, user: bob, body: "reply", parentId: top.id });
+      expect((await counts()).l1.c).toBe(3);
+
+      const replyDelete = svc.deleteComment({ id: reply.id, userId: bob.id });
+      await held$;
+      const parentDelete = service().deleteComment({ id: top.id, userId: alice.id });
+      await new Promise((r) => setTimeout(r, 150)); // let the parent's delete reach the reply's lock
+      hold!();
+      const [r1, r2] = await Promise.all([replyDelete, parentDelete]);
+      expect(r1).toEqual({ removed: 1 });
+      expect(r2).toEqual({ removed: 1 });
+      expect(await rows("engagement_comments", "status = 'visible'")).toBe(1);
+      expect((await counts()).l1.c).toBe(1);
+      expect((await counts()).c1.c).toBe(1);
+    });
+
     it("only the author edits, and the edit is stored trimmed", async () => {
       const c = await service().createComment({ entity: lesson, user: alice, body: "old" });
       const edited = await service().editComment({ id: c.id, userId: alice.id, body: " new " });
@@ -592,6 +627,51 @@ describe.skipIf(!DATABASE_URL)("engagement (Postgres)", () => {
       expect((await call(h, "DELETE", path, { user: "admin" })).status).toBe(200);
       expect((await call(h, "DELETE", path, { user: "admin" })).status).toBe(404);
       expect((await counts()).c1.c).toBe(0);
+    });
+
+    it("an author whose comment permission was taken away can't edit, but can still delete their own", async () => {
+      let allowed = true;
+      const h = createEngagementHandlers({
+        service: service(),
+        salt: SALT,
+        limiter: createMemoryRateLimiter({ limit: 15, windowMs: 60_000 }),
+        entities: { lesson: {} },
+        resolveUser: (req) => sessions.get(req.headers.get("x-test-user") ?? "") ?? null,
+        canComment: () => allowed,
+      });
+      const created = await call(h, "POST", "/api/engagement/comments", {
+        body: { ...lesson, body: "mine" },
+        user: "alice",
+      });
+      const path = `/api/engagement/comments/${((await created.json()) as { comment: { id: string } }).comment.id}`;
+      allowed = false;
+      expect((await call(h, "PATCH", path, { body: { body: "changed" }, user: "alice" })).status).toBe(403);
+      expect(await rows("engagement_comments", "body = 'mine'")).toBe(1);
+      expect((await call(h, "DELETE", path, { user: "alice" })).status).toBe(200);
+    });
+
+    it("stops reading a body without Content-Length once it passes 16 KiB", async () => {
+      const h = build();
+      let pulled = 0;
+      const chunk = new Uint8Array(4096).fill(32);
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += chunk.byteLength;
+          if (pulled > 8 * 1024 * 1024) controller.close();
+          else controller.enqueue(chunk);
+        },
+      });
+      const res = await h.handle(
+        new Request("http://app.test/api/engagement/likes/toggle", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.70", "user-agent": "t" },
+          body,
+          duplex: "half",
+        } as RequestInit),
+      );
+      expect(res.status).toBe(413);
+      expect(pulled).toBeLessThan(64 * 1024);
+      expect(await rows("engagement_likes")).toBe(0);
     });
 
     it("answers 404 for unknown routes and 405 for the wrong method", async () => {

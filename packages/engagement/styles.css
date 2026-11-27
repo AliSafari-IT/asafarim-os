@@ -2,6 +2,9 @@
  * @asafarim/engagement/styles.css: the like button, the counts badge and the comment section, drawn with the
  * @asafarim/theme tokens (--ink, --muted, --line, --card, --accent, --bad, ...) so they follow light and dark.
  * Every rule is scoped to an .engagement-* class.
+ *
+ * --accent-ink and --bad-ink are the text colours ON a solid --accent / --bad fill (white in light, near-black in
+ * dark), so they are used only there. Text on the page, a card or a tint uses --accent, --bad or --ink.
  */
 .engagement-like {
   display: inline-flex;
@@ -31,7 +34,7 @@
 .engagement-like-button[aria-pressed="true"] {
   border-color: var(--accent, #0e7490);
   background: var(--accent-soft, #e0f2f7);
-  color: var(--accent-ink, var(--ink, #111));
+  color: var(--ink, #111);
 }
 .engagement-like-button:disabled {
   cursor: progress;
@@ -72,7 +75,7 @@
   color: var(--muted, #555);
 }
 .engagement-error {
-  color: var(--bad-ink, var(--bad, #b42318));
+  color: var(--bad, #b42318);
   margin: 0.25rem 0;
 }
 .engagement-thread-list,
@@ -115,7 +118,7 @@
   display: inline-grid;
   place-items: center;
   background: var(--accent, #0e7490);
-  color: #fff;
+  color: var(--accent-ink, #fff);
   font-size: 0.8rem;
   font-weight: 600;
 }
@@ -125,7 +128,7 @@
   padding: 0.1rem 0.45rem;
   border-radius: 999px;
   border: 1px solid var(--accent, #0e7490);
-  color: var(--accent-ink, var(--accent, #0e7490));
+  color: var(--accent, #0e7490);
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -181,7 +184,7 @@
   font-variant-numeric: tabular-nums;
 }
 .engagement-over {
-  color: var(--bad-ink, var(--bad, #b42318));
+  color: var(--bad, #b42318);
 }
 .engagement-primary,
 .engagement-danger {
@@ -190,7 +193,7 @@
   border: 1px solid transparent;
   font: inherit;
   cursor: pointer;
-  color: #fff;
+  color: var(--accent-ink, #fff);
   background: var(--accent, #0e7490);
 }
 .engagement-primary:hover:not(:disabled) {
@@ -198,6 +201,7 @@
 }
 .engagement-danger {
   background: var(--bad, #b42318);
+  color: var(--bad-ink, #fff);
 }
 .engagement-primary:disabled,
 .engagement-danger:disabled {
@@ -208,7 +212,7 @@
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent-ink, var(--accent, #0e7490));
+  color: var(--accent, #0e7490);
   font: inherit;
   cursor: pointer;
   text-decoration: underline;

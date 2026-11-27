@@ -122,6 +122,17 @@ Lessons from building it (keep in mind):
 - Grant `knowledge.learner` to readers (Admin console) for them to comment; anyone signed in without it sees
   "can read comments but not write them yet".
 
+### After merge: Devin Review fixes on #397 (`0.2.0 → 0.3.0`)
+
+- [x] `deleteComment` locks the parent's visible replies (`FOR UPDATE`) and counts only those, so a reply deleted at
+      the same moment is not subtracted twice (regression test holds the reply's delete open in the hook).
+- [x] `PATCH /comments/:id` checks `canComment` too: an author whose permission was revoked can't edit (may still delete).
+- [x] Bodies are read as a stream and stopped past 16 KiB, with or without `Content-Length`.
+- [x] `CommentSection` pages by what the server returned (`fetched`) and tracks comments posted locally separately, so
+      "Show more" no longer skips an older comment after you post.
+- [x] `styles.css`: `--accent-ink` / `--bad-ink` only on their solid fills; text on the page uses `--accent` / `--bad`
+      / `--ink` (all pairs ≥ 5:1 in both themes).
+
 ### Phase 4 — hardening
 
 - [ ] `POST /api/engagement/likes/sync` (guest → user migration without double counting).

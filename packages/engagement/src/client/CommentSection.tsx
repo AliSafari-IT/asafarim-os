@@ -285,11 +285,17 @@ export function CommentSection({
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const alive = useRef(true);
+  // Paging follows what the SERVER returned, not what is on screen: a comment posted here is shown at once at the
+  // end, but the server sorts it after older comments not loaded yet, so counting it would skip one of those.
+  const fetched = useRef(0); // top-level comments the server has returned so far (the next offset)
+  const local = useRef(new Set<string>()); // top-level comments posted here that no page has returned yet
 
   const load = useCallback(async () => {
     try {
       const page = await client.listComments(target, { limit: PAGE, offset: 0 });
       if (!alive.current) return;
+      fetched.current = page.comments.length;
+      local.current.clear();
       setThreads(page.comments);
       setTotal(page.total);
       setCount((n) =>
@@ -315,10 +321,14 @@ export function CommentSection({
   async function more() {
     setLoadingMore(true);
     try {
-      const page = await client.listComments(target, { limit: PAGE, offset: threads.length });
+      const page = await client.listComments(target, { limit: PAGE, offset: fetched.current });
       if (!alive.current) return;
-      const seen = new Set(threads.map((t) => t.id));
-      setThreads((ts) => [...ts, ...page.comments.filter((t) => !seen.has(t.id))]);
+      fetched.current += page.comments.length;
+      for (const t of page.comments) local.current.delete(t.id); // now counted in `fetched`
+      setThreads((ts) => {
+        const seen = new Set(ts.map((t) => t.id));
+        return [...ts, ...page.comments.filter((t) => !seen.has(t.id))];
+      });
       setTotal(page.total);
     } finally {
       if (alive.current) setLoadingMore(false);
@@ -328,7 +338,10 @@ export function CommentSection({
   async function create(body: string, parentId: string | null) {
     const { comment } = await client.createComment(target, body, parentId);
     setThreads((ts) => insertComment(ts, comment));
-    if (!parentId) setTotal((n) => n + 1);
+    if (!parentId) {
+      local.current.add(comment.id);
+      setTotal((n) => n + 1);
+    }
     setCount((n) => n + 1);
     setReplyTo(null);
   }
@@ -341,11 +354,17 @@ export function CommentSection({
   async function remove(id: string, topLevel: boolean) {
     const { removed } = await client.deleteComment(id);
     setThreads((ts) => removeComment(ts, id).threads);
-    if (topLevel) setTotal((n) => Math.max(0, n - 1));
+    if (topLevel) {
+      // One the server had returned: everything after it moves up one place on the server's side too.
+      if (!local.current.delete(id)) fetched.current = Math.max(0, fetched.current - 1);
+      setTotal((n) => Math.max(0, n - 1));
+    }
     setCount((n) => Math.max(0, n - removed));
   }
 
   const canWrite = viewer?.canComment === true;
+  // Top-level comments on the server that aren't on screen yet.
+  const unread = Math.max(0, total - fetched.current - local.current.size);
 
   return (
     <section className="engagement-comments" aria-labelledby={`engagement-h-${entityType}-${entityId}`}>
@@ -425,9 +444,15 @@ export function CommentSection({
         </ol>
       )}
 
-      {state === "ready" && threads.length < total ? (
-        <button type="button" className="engagement-link" onClick={() => void more()} disabled={loadingMore}>
-          {loadingMore ? "Loading…" : `Show more comments (${total - threads.length})`}
+      {state === "ready" && unread > 0 ? (
+        <button
+          type="button"
+          className="engagement-link"
+          onClick={() => void more()}
+          disabled={loadingMore}
+          data-testid="comments-more"
+        >
+          {loadingMore ? "Loading…" : `Show more comments (${unread})`}
         </button>
       ) : null}
     </section>

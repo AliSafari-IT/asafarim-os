@@ -369,8 +369,8 @@ export function createEngagementService(options: EngagementServiceOptions) {
       if (!isUuid(input.id)) throw new EngagementError("not_found", "comment not found", 404);
       return withTransaction(pool, async (tx) => {
         // FOR UPDATE serialises with a reply being added (which takes FOR SHARE on this row).
-        const { rows } = await tx.query<Pick<CommentRow, "user_id" | "entity_type" | "entity_id">>(
-          "SELECT user_id, entity_type, entity_id FROM engagement_comments WHERE id = $1 FOR UPDATE",
+        const { rows } = await tx.query<Pick<CommentRow, "user_id" | "entity_type" | "entity_id" | "status">>(
+          "SELECT user_id, entity_type, entity_id, status FROM engagement_comments WHERE id = $1 FOR UPDATE",
           [input.id],
         );
         const row = rows[0];
@@ -378,13 +378,15 @@ export function createEngagementService(options: EngagementServiceOptions) {
         if (row.user_id !== input.userId && !input.canModerate) {
           throw new EngagementError("forbidden", "you can only delete your own comments", 403);
         }
-        const visible = await tx.query<{ n: number }>(
-          `SELECT count(*)::int AS n FROM engagement_comments
-            WHERE (id = $1 OR parent_id = $1) AND status = 'visible'`,
+        // Lock the replies that will go with it and count only those: a reply being deleted by someone else at the
+        // same moment holds its row, so this waits for that delete and then no longer sees the reply. Counting
+        // without the lock counted that reply in both deletes, and the rollups lost one comment too many.
+        const replies = await tx.query(
+          "SELECT id FROM engagement_comments WHERE parent_id = $1 AND status = 'visible' FOR UPDATE",
           [input.id],
         );
         await tx.query("DELETE FROM engagement_comments WHERE id = $1", [input.id]);
-        const removed = visible.rows[0]?.n ?? 0;
+        const removed = (row.status === "visible" ? 1 : 0) + (replies.rowCount ?? 0);
         await notify(tx, { entityType: row.entity_type, entityId: row.entity_id }, "comments", -removed);
         return { removed };
       });
