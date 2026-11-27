@@ -94,8 +94,10 @@ test("a guest likes a lesson, sees it counted on the course, and is asked to sig
   await expect(page.getByTestId("comments-empty")).toBeVisible();
   await like.click();
   await expect(like).toHaveAttribute("aria-pressed", "false");
+  // Back to the same lesson from the outline (the call to action now points at the next lesson).
   await page.goto("/courses/ship-a-web-app");
-  await page.getByTestId("start").click();
+  await page.getByTestId("outline-lesson").filter({ hasText: "Plan the app" }).getByRole("link").click();
+  await expect(page.getByTestId("lesson").getByRole("heading", { level: 1 })).toHaveText("Plan the app");
   await expect(like).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByTestId("like-count")).toHaveText("0");
 });
