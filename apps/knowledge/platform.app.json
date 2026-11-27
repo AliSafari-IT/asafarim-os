@@ -1,7 +1,7 @@
 {
   "id": "knowledge",
   "name": "ASafariM Knowledge",
-  "version": "0.1.10",
+  "version": "0.2.0",
   "platform": ">=0.1 <1",
   "owner": "ASafariM Digital",
   "domains": {
@@ -34,6 +34,7 @@
       "/topics/**",
       "/api/public/**",
       "/feed.xml",
+      "/api/engagement/**",
       "/media/**",
       "/health/live",
       "/health/ready"
@@ -73,6 +74,14 @@
       "description": "Edit, publish and withdraw any course"
     },
     {
+      "key": "knowledge.comment.write",
+      "description": "Write comments and replies on lessons, and edit or delete your own"
+    },
+    {
+      "key": "knowledge.comment.moderate",
+      "description": "Delete anyone's comments on lessons"
+    },
+    {
       "key": "knowledge.ai.use",
       "description": "Ask the AI for proposals (outline, rewrite, summary, diagram) on articles you may edit"
     }
@@ -85,7 +94,8 @@
         "knowledge.content.edit.own",
         "knowledge.content.publish.own",
         "knowledge.courses.manage.own",
-        "knowledge.ai.use"
+        "knowledge.ai.use",
+        "knowledge.comment.write"
       ],
       "description": "Writes, publishes and withdraws their own articles and courses"
     },
@@ -100,9 +110,16 @@
         "knowledge.taxonomy.manage",
         "knowledge.courses.manage.own",
         "knowledge.courses.manage.any",
-        "knowledge.ai.use"
+        "knowledge.ai.use",
+        "knowledge.comment.write",
+        "knowledge.comment.moderate"
       ],
-      "description": "Edits, publishes and withdraws any article or course, and curates topics and tags"
+      "description": "Edits, publishes and withdraws any article or course, curates topics and tags, and moderates comments"
+    },
+    {
+      "key": "knowledge.learner",
+      "grants": ["knowledge.comment.write"],
+      "description": "Comments on lessons (anyone may read them and like a lesson)"
     }
   ],
   "routes": [
@@ -112,7 +129,7 @@
       "permission": "knowledge.content.create"
     }
   ],
-  "secrets": ["KNOWLEDGE_AI_API_KEY", "KNOWLEDGE_MEDIA_ACCESS_KEY", "KNOWLEDGE_MEDIA_SECRET_KEY"],
+  "secrets": ["KNOWLEDGE_AI_API_KEY", "KNOWLEDGE_MEDIA_ACCESS_KEY", "KNOWLEDGE_MEDIA_SECRET_KEY", "ENGAGEMENT_SALT"],
   "ui": {
     "glyph": "KN",
     "color": "#0e7490",

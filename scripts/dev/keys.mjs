@@ -253,6 +253,9 @@ function writeAdminEnv() {
 const appEnvAdditions = () => [
   // P4.1: the outbox relay publishes to the dev bus.
   line("ASAFARIM_NATS_URL", DEV.natsUrl),
+  // @asafarim/engagement: keys the guest visitor hash for likes. One throwaway value for every app in development;
+  // in production each app has its own (apps/knowledge/.env.production.example).
+  line("ENGAGEMENT_SALT", randomBytes(24).toString("base64url")),
 ];
 
 /** Append each `KEY=…` line whose key the file doesn't set yet. Returns true when it added anything. */

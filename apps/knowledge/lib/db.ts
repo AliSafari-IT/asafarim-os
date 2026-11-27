@@ -3,6 +3,7 @@
  * On first use it runs the migrations, once per process.
  */
 import { databaseNameOf, traceDatabasePool } from "@asafarim/telemetry";
+import { migrateEngagement } from "@asafarim/engagement";
 import pg from "pg";
 import { migrate } from "./migrations";
 
@@ -32,11 +33,13 @@ export function createKnowledgePool(url: string): pg.Pool {
   return p;
 }
 
-/** Migrate `p` (idempotent; safe with several instances). */
+/** Migrate `p` (idempotent; safe with several instances): Knowledge's own tables, then the engagement module's. */
 export async function prepare(p: pg.Pool): Promise<number[]> {
   const client = await p.connect();
   try {
-    return await migrate(client);
+    const applied = await migrate(client);
+    await migrateEngagement(client);
+    return applied;
   } finally {
     client.release();
   }

@@ -484,6 +484,26 @@ CREATE TABLE analytics_daily (
 );
 CREATE INDEX analytics_daily_kind_key ON analytics_daily (kind, key, day);`,
   },
+  {
+    version: 12,
+    name: "engagement: like and comment counts for lessons, modules and courses",
+    sql: `
+-- The likes and comments themselves are @asafarim/engagement's own tables (engagement_likes, engagement_comments),
+-- migrated by migrateEngagement in lib/db.ts. These are Knowledge's rolled-up counts of them (lib/engagement-rollups.ts):
+-- a lesson's under ('lesson', lesson_id), a module's under ('module', '<course id>:<module position>'), because
+-- course revisions, modules and lessons are immutable rows; a course's on the (mutable) course itself.
+CREATE TABLE engagement_rollups (
+  entity_type    text    NOT NULL CHECK (entity_type IN ('lesson', 'module')),
+  entity_id      text    NOT NULL CHECK (length(entity_id) BETWEEN 1 AND 200),
+  likes_count    integer NOT NULL DEFAULT 0 CHECK (likes_count >= 0),
+  comments_count integer NOT NULL DEFAULT 0 CHECK (comments_count >= 0),
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (entity_type, entity_id)
+);
+ALTER TABLE courses
+  ADD COLUMN likes_count    integer NOT NULL DEFAULT 0 CHECK (likes_count >= 0),
+  ADD COLUMN comments_count integer NOT NULL DEFAULT 0 CHECK (comments_count >= 0);`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

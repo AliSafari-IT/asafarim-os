@@ -6,6 +6,7 @@ import manifest from "../platform.app";
 import { feedAlternates } from "@/lib/feed";
 import { publicOrigin } from "@/lib/site";
 import "@asafarim/theme/theme.css";
+import "@asafarim/engagement/styles.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

@@ -3,6 +3,7 @@
 Read this first when you pick the work up in a new session or on another account. Then read
 `git log --oneline -15` on the work branch and run the checks in "Verify before continuing".
 
+- Status (2026-11-27): Phases 1–3 done and pushed to the PR; Phase 4 next.
 - Repo: `AliSafari-IT/asafarim-os` (the OS). Not `asafarim-platform` (a different, Next.js/Prisma monorepo;
   nothing was changed there for this work).
 - Work branch: `claude/serene-darwin-1d44kb` (push there; open a **draft** PR into `main`; `main` takes no direct pushes).
@@ -43,9 +44,18 @@ Full original brief is summarised in "Spec" below; the phase checklist is the so
 6. Rate limit: Redis sliding-window log (sorted set + one atomic Lua script), 15/min/IP on `likes/toggle`. Redis is **injected** through a minimal `RedisLike` (`eval(script, numKeys, ...args)`, which `ioredis` satisfies) so the package has no hard Redis dependency; an in-memory limiter with the same contract is provided for dev/tests. On Redis failure the default is **fail-open + warn** (DB unique constraints still prevent duplicate likes); configurable.
 7. Entity allow-list: handlers only accept `entityType`s the app registers (and may verify the entity exists) so nobody can write rows for arbitrary types/ids.
 
-## Open design question (decide before Phase 3)
+## Rollup design (decided by the owner, implemented in Phase 3)
 
-The brief adds `likes_count`/`comments_count` to `lessons`, `modules`, `courses`. In Knowledge there is no mutable `lessons`/`modules` table, and revisions are immutable by trigger. Proposed resolution (needs owner OK): keep `courses.likes_count/comments_count` as real columns on the mutable `courses` table (migration), and add one mutable table `engagement_rollups(entity_type, entity_id, likes_count, comments_count, PRIMARY KEY …)` in Knowledge for `lesson` and `module`, where the module key is a stable id (to be introduced) or `courseId:modulePosition`. The `onCountChange` hook resolves lesson → module → course from the **published** course revision and updates all three in the same transaction.
+Knowledge has no mutable `lessons`/`modules` table and revisions are immutable by trigger, so (owner's OK, 2026-11-27):
+`courses.likes_count/comments_count` are real columns on the mutable `courses` table, and one mutable table
+`engagement_rollups(entity_type 'lesson'|'module', entity_id, likes_count, comments_count)` holds lesson counts
+(`lesson_id`) and module counts (`<courseId>:<modulePosition>`). See `apps/knowledge/lib/engagement-rollups.ts`.
+
+Invariant: module and course counts = the sums of the lesson counts of the lessons in the course's **published**
+revision. `applyCountChange` (the `onCountChange` hook) keeps it per like/comment; `recountCourseEngagement` restores it
+inside `publishCourse` (lessons moved/added/removed). Every write to a course's rollups holds the course row lock
+(`SELECT … FOR UPDATE`), so a like and a publish cannot interleave. A withdrawn course only updates lesson counts; the
+next publish recounts.
 
 ## Version rules (owner's instruction)
 
@@ -84,19 +94,45 @@ Lessons from building it (keep in mind):
 - [x] Tests: `test/client.test.tsx` (jsdom, fake fetch) + integration tests for `GET /likes` and `authorRole`. 70 tests green with real Postgres 16 + Redis 7.
 - Version `0.1.0 → 0.2.0`. tsconfig gained `jsx: react-jsx` and the DOM lib.
 
-### Phase 3 — integrate into `apps/knowledge`
+### Phase 3 — integrate into `apps/knowledge` (DONE; knowledge `0.1.10 → 0.2.0`)
 
-- [ ] Rollup schema (see Open design question), migration appended to `lib/migrations.ts`.
-- [ ] Mount handlers at `app/api/engagement/[...path]/route.ts`; hook for lesson → module → course.
-- [ ] `platform.app.ts`: permission `knowledge.comment.write` (+ grant to roles), `routes` entry for `POST /api/engagement/comments` gated by it, `publicPaths` for `GET` reads and `POST /api/engagement/likes/toggle`; bump version; `pnpm platform:sync` + `pnpm platform:sync:check`.
-- [ ] UI placement (lesson page bottom, module accordions, course header).
-- [ ] `ENGAGEMENT_SALT` in `scripts/dev/keys.mjs` output (`.dev/knowledge.env`) and the production env (envage).
+- [x] Migration 12 (`lib/migrations.ts`): `engagement_rollups` + `courses.likes_count/comments_count`. `lib/db.ts`
+      `prepare()` runs `migrateEngagement` after Knowledge's own migrations (it opens its own transaction).
+- [x] `lib/engagement-rollups.ts`: `applyCountChange`, `recountCourseEngagement` (called in `publishCourse`),
+      `courseCounts`, `isEngageableLesson` (lesson of a published course with a public article), `lessonCourseOwner`.
+- [x] `lib/engagement.ts` + `app/api/engagement/[...path]/route.ts`: handlers built once per process; entity `lesson`
+      only; `canComment` = `gate("knowledge.comment.write")`; moderators = `knowledge.comment.moderate`; badge
+      "instructor" for the course owner, "moderator" for a moderator; in-memory limiter 15/min (one instance, as search).
+      Without `ENGAGEMENT_SALT` the route answers 503 and the pages render no like/comment UI.
+- [x] Manifest: permissions `knowledge.comment.write` (author, editor, new role `knowledge.learner`) and
+      `knowledge.comment.moderate` (editor); `publicPaths` `/api/engagement/**`; secret name `ENGAGEMENT_SALT`;
+      `platform.app.json` recompiled (`pnpm platform manifest compile apps/knowledge/platform.app.ts`).
+      **Deviation from the brief:** no gateway `routes` entry on `POST /api/engagement/comments`. The gateway answers a
+      POST with an expired 60 s access token with 401 and no renewal (#363, see the studio note in the manifest), which
+      would drop a comment. The app checks the permission on every request instead (as the studio actions do).
+- [x] UI: lesson page — `LikeButton` ("Helpful") under the article, `CommentSection` at the bottom (guest gets the
+      app's sign-in form); course page — `EngagementBadge` under the title; outline — a badge per module and lesson
+      (hidden while zero). Styles: `@asafarim/engagement/styles.css` imported in `app/layout.tsx`.
+- [x] `ENGAGEMENT_SALT`: dev — added to `.dev/app.env` by `scripts/dev/keys.mjs` (`appEnvAdditions`, so existing
+      files gain it); e2e — `playwright.config.ts`; production — documented in `apps/knowledge/.env.production.example`.
+      **Owner action:** add `ENGAGEMENT_SALT=<24 random bytes, base64url>` to `apps/knowledge/.env.production` and re-run
+      `pnpm env:encrypt:production`; until then production shows no likes/comments (nothing breaks).
+- [x] Tests: `test/engagement.integration.test.ts` (rollups, concurrency, republish recount, withdrawn course,
+      handlers' entity check), `test/manifest.test.ts`, e2e guest like journey in `e2e/courses.spec.ts`.
+- Grant `knowledge.learner` to readers (Admin console) for them to comment; anyone signed in without it sees
+  "can read comments but not write them yet".
 
 ### Phase 4 — hardening
 
 - [ ] `POST /api/engagement/likes/sync` (guest → user migration without double counting).
 - [ ] Publish `knowledge.comment.created.v1` through the outbox (schema in the manifest).
-- [ ] Optional nightly reconciliation (recount likes/comments, heal rollups) — owner was asked; default yes.
+- [ ] Optional nightly reconciliation (recount likes/comments, heal rollups) — owner was asked; default yes. With the
+      Phase 3 design it is: recount `engagement_rollups` lesson rows from `engagement_likes/comments`, then
+      `recountCourseEngagement` for every published course.
+- [ ] Origin/CSRF check on the mutating routes (see "Lessons" above). SameSite=Lax already keeps cross-site POSTs
+      from carrying the session; decide whether to add an explicit Origin check.
+- [ ] Redis limiter for Knowledge if it ever runs more than one instance (`createRedisRateLimiter`; Knowledge has no
+      `ioredis` today).
 - [ ] CI: `pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm platform:sync:check && pnpm env:check`.
 
 ## Verify before continuing
@@ -104,9 +140,16 @@ Lessons from building it (keep in mind):
 ```bash
 cd asafarim-os && git checkout claude/serene-darwin-1d44kb && pnpm install --frozen-lockfile=false
 pnpm --filter @asafarim/engagement typecheck && pnpm --filter @asafarim/engagement lint && pnpm --filter @asafarim/engagement test
+pnpm --filter @asafarim/engagement build   # Knowledge imports dist/
+pnpm --filter @asafarim/knowledge typecheck && pnpm --filter @asafarim/knowledge lint && pnpm --filter @asafarim/knowledge test
+pnpm platform:sync:check && pnpm platform manifest review knowledge && pnpm env:check
 ```
 
-Integration tests are skipped unless `ENGAGEMENT_TEST_DATABASE_URL` (and for the Redis limiter `ENGAGEMENT_TEST_REDIS_URL`) are set.
+Integration tests are skipped unless `ENGAGEMENT_TEST_DATABASE_URL` (and for the Redis limiter `ENGAGEMENT_TEST_REDIS_URL`) are set;
+Knowledge's need `KNOWLEDGE_TEST_DATABASE_URL` (a server where they may create a throwaway database). E2E:
+`KNOWLEDGE_E2E_ADMIN_URL=… pnpm --filter @asafarim/knowledge e2e` after `next build`. In the cloud sandbox turbo could
+not spawn tasks ("Exec format error"); building the dependencies with `pnpm --filter "@asafarim/knowledge^..." -r run build`
+works.
 
 ## Spec (condensed from the owner's brief)
 

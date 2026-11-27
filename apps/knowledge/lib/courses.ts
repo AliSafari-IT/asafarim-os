@@ -14,6 +14,7 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { Doc } from "./doc";
+import { recountCourseEngagement } from "./engagement-rollups";
 import { canCreateCourse, canManageCourse, seesAllCourses, type Actor } from "./policy";
 import { PAGE_SIZE, pageOf, type Page, type RevisionFormat } from "./content";
 import { decodeCursor } from "./cursor";
@@ -382,6 +383,8 @@ export async function publishCourse(
        WHERE id = $1`,
       [course.id, input.revisionId],
     );
+    // The course and module like/comment counts follow the lessons of the revision now public (lib/engagement.ts).
+    await recountCourseEngagement(c, course.id, input.revisionId);
     await audit(c, actor, "course.published", course.id, input.revisionId);
     return { ok: true, revisionId: input.revisionId } as const;
   });
@@ -568,16 +571,20 @@ export interface OutlineLesson {
 }
 
 export interface PublishedCourse {
+  /** The course's own id (stable across revisions): what its engagement counts are kept against. */
+  id: string;
   /** The published course revision this outline was read from. */
   revisionId: string;
   slug: string;
   title: string;
   summary: string;
   publishedAt: Date;
-  modules: { title: string; lessons: OutlineLesson[] }[];
+  /** `position` is the module's place in the revision: with the course id, the key of its engagement counts. */
+  modules: { position: number; title: string; lessons: OutlineLesson[] }[];
 }
 
 interface OutlineRow {
+  course_id: string;
   revision_id: string;
   course_slug: string;
   course_title: string;
@@ -592,7 +599,7 @@ interface OutlineRow {
 /** The published course and its outline: modules with at least one lesson a guest may open, in order. */
 export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string): Promise<PublishedCourse | null> {
   const { rows } = await pool.query<OutlineRow>(
-    `SELECT cr.id AS revision_id, c.slug AS course_slug, cr.title AS course_title, cr.summary AS course_summary, c.published_at,
+    `SELECT c.id AS course_id, cr.id AS revision_id, c.slug AS course_slug, cr.title AS course_title, cr.summary AS course_summary, c.published_at,
             m.position AS module_position, m.title AS module_title, l.lesson_id, r.title AS lesson_title
      FROM courses c JOIN course_revisions cr ON cr.id = c.published_revision_id
      LEFT JOIN course_modules m ON m.revision_id = cr.id
@@ -616,12 +623,13 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
     current.lessons.push({ lessonId: r.lesson_id, title: r.lesson_title! });
   }
   return {
+    id: first.course_id,
     revisionId: first.revision_id,
     slug: first.course_slug,
     title: first.course_title,
     summary: first.course_summary,
     publishedAt: first.published_at,
-    modules: modules.map(({ title, lessons }) => ({ title, lessons })),
+    modules,
   };
 }
 

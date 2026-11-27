@@ -410,6 +410,9 @@ importers:
       '@asafarim/app-sdk':
         specifier: workspace:*
         version: link:../../packages/app-sdk
+      '@asafarim/engagement':
+        specifier: workspace:*
+        version: link:../../packages/engagement
       '@asafarim/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry

@@ -1437,3 +1437,19 @@ main button.share-btn:hover {
 .insights-note {
   margin-top: 20px;
 }
+
+/* Likes and comments on lessons (@asafarim/engagement/styles.css draws the components themselves). */
+.lesson-like {
+  margin: 1.5rem 0 0.5rem;
+}
+.course-engagement {
+  margin: -0.25rem 0 1rem;
+}
+.course-outline .outline-badge {
+  font-size: 0.75rem;
+  font-weight: normal;
+  margin-left: 0.35rem;
+}
+.inline-sign-in {
+  display: inline;
+}

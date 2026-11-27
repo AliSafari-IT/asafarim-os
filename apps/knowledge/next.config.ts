@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
   devIndicators: false,
   // pg and the OpenTelemetry SDK (@asafarim/telemetry) use Node APIs; keep them out of the bundler.
   serverExternalPackages: ["pg", "@asafarim/telemetry"],
-  transpilePackages: ["@asafarim/app-sdk", "@asafarim/theme"],
+  transpilePackages: ["@asafarim/app-sdk", "@asafarim/engagement", "@asafarim/theme"],
   // unauthorized() and forbidden() answer 401 and 403 with app/unauthorized.tsx and app/forbidden.tsx.
   experimental: { authInterrupts: true },
   // The studio shows drafts: never stored by a cache, never indexed.

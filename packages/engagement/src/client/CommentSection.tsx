@@ -5,7 +5,7 @@
  * moderator may delete anyone's. Every write is checked again by the server, so these props only decide what the
  * page offers, never what is allowed. Deleting asks for confirmation inline (never `window.confirm`).
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   createEngagementClient,
   EngagementApiError,
@@ -36,6 +36,8 @@ export interface CommentSectionProps {
   viewer: CommentViewer | null;
   /** Where a guest signs in (the app's sign-in URL, returning to this page). */
   signInHref?: string;
+  /** What a guest is shown instead of the form, when a link is not enough (e.g. a sign-in form). Wins over signInHref. */
+  signIn?: ReactNode;
   /** Total visible comments the page already knows, for the heading before the list loads. */
   initialCount?: number;
   basePath?: string;
@@ -268,6 +270,7 @@ export function CommentSection({
   entityId,
   viewer,
   signInHref,
+  signIn,
   initialCount = 0,
   basePath,
   heading = "Comments",
@@ -356,6 +359,10 @@ export function CommentSection({
         <p className="engagement-note" data-testid="comment-no-permission">
           Your account can read comments but not write them yet.
         </p>
+      ) : signIn ? (
+        <div className="engagement-note" data-testid="comment-sign-in">
+          {signIn}
+        </div>
       ) : (
         <p className="engagement-note" data-testid="comment-sign-in">
           {signInHref ? <a href={signInHref}>Sign in</a> : "Sign in"} to join the conversation.
