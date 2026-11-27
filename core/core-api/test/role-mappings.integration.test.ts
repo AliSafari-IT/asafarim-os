@@ -43,6 +43,9 @@ describe.skipIf(!ADMIN_URL)("role mappings (integration)", () => {
     const url = new URL(ADMIN_URL!);
     url.pathname = `/${coreDb}`;
     pool = new pg.Pool({ connectionString: url.href, max: 4 });
+    // afterAll drops the database WITH (FORCE): a connection still closing then gets 57P01, which the pool emits as
+    // "error"; unhandled, it fails the run even though every test passed (as in events.integration.test.ts).
+    pool.on("error", () => undefined);
     await migrate(pool);
     // Two apps' catalogs, as registration would leave them (registration itself is tested elsewhere).
     for (const id of ["knowledge", "wiki"]) {

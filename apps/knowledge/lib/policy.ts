@@ -13,6 +13,8 @@ export const PERMISSIONS = {
   taxonomy: "knowledge.taxonomy.manage",
   coursesOwn: "knowledge.courses.manage.own",
   coursesAny: "knowledge.courses.manage.any",
+  commentWrite: "knowledge.comment.write",
+  commentModerate: "knowledge.comment.moderate",
 } as const;
 
 /** The signed-in person, as the studio gate established them. */

@@ -1,0 +1,53 @@
+{
+  "name": "@asafarim/engagement",
+  "version": "0.2.0",
+  "private": true,
+  "description": "ASafariM OS engagement module: likes and comments on any entity (entity_type + entity_id), mounted by each app into its OWN Postgres. Idempotent migrations, a Redis sliding-window rate limiter, guest visitor hashes, a transactional onCountChange rollup hook and framework-agnostic (Web Request/Response) handlers, plus React components (./client) and their stylesheet (./styles.css). Never imports an app.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./styles.css": "./styles.css"
+  },
+  "files": [
+    "dist",
+    "styles.css"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@asafarim/config": "workspace:*",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.5",
+    "ioredis": "^6.0.0",
+    "jsdom": "27.4.0",
+    "pg": "^8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  },
+  "peerDependencies": {
+    "pg": ">=8",
+    "react": ">=19"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}

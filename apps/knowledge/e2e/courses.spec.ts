@@ -47,3 +47,28 @@ test("an unknown course or lesson is not found", async ({ page }) => {
   expect((await page.goto("/courses/no-such-course"))?.status()).toBe(404);
   expect((await page.goto("/courses/ship-a-web-app/lessons/00000000-0000-4000-8000-000000000000"))?.status()).toBe(404);
 });
+
+test("a guest likes a lesson, sees it counted on the course, and is asked to sign in to comment", async ({ page }) => {
+  await page.goto("/courses/ship-a-web-app");
+  await page.getByTestId("start").click();
+  const like = page.getByTestId("like-button");
+  await expect(like).toHaveAttribute("aria-pressed", "false");
+  await like.click();
+  await expect(like).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("like-count")).toHaveText("1");
+  // Comments are public to read; writing one needs an account.
+  await expect(page.getByTestId("comments-empty")).toBeVisible();
+  await expect(page.getByTestId("comment-sign-in-button")).toBeVisible();
+  await expect(page.getByTestId("comment-form")).toHaveCount(0);
+
+  // The like survives a reload (the server remembers this guest) and rolls up to the course.
+  await page.reload();
+  await expect(page.getByTestId("like-button")).toHaveAttribute("aria-pressed", "true");
+  await page.goto("/courses/ship-a-web-app");
+  await expect(page.getByTestId("course-engagement")).toContainText("♥ 1");
+
+  // Undo, so the journey can run again on the same database.
+  await page.getByTestId("start").click();
+  await page.getByTestId("like-button").click();
+  await expect(page.getByTestId("like-button")).toHaveAttribute("aria-pressed", "false");
+});

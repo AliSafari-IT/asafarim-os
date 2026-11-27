@@ -4,6 +4,7 @@
  */
 import { viewKey } from "@/lib/analytics/classify";
 import { recordPageView } from "@/lib/analytics/server";
+import { EngagementBadge } from "@asafarim/engagement/client";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -11,6 +12,8 @@ import { CourseOutline } from "@/components/CourseOutline";
 import { TopBar } from "@/components/TopBar";
 import { getPublishedCourse } from "@/lib/courses";
 import { db } from "@/lib/db";
+import { engagementEnabled } from "@/lib/engagement";
+import { courseCounts } from "@/lib/engagement-rollups";
 import { isSlug } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +35,7 @@ export default async function CoursePage({ params }: Props) {
   if (!course) notFound();
   await recordPageView(viewKey.course(slug));
   const first = course.modules[0]?.lessons[0];
+  const counts = engagementEnabled() ? await courseCounts(await db(), course) : undefined;
   return (
     <>
       <TopBar next={`/courses/${slug}`} />
@@ -40,6 +44,11 @@ export default async function CoursePage({ params }: Props) {
           <Link href="/courses">← Courses</Link>
         </p>
         <h1 data-testid="course-title">{course.title}</h1>
+        {counts ? (
+          <p className="course-engagement" data-testid="course-engagement">
+            <EngagementBadge likes={counts.course.likes} comments={counts.course.comments} />
+          </p>
+        ) : null}
         {course.summary ? <p className="lead">{course.summary}</p> : null}
         {first ? (
           <p>
@@ -50,7 +59,7 @@ export default async function CoursePage({ params }: Props) {
         ) : (
           <p className="muted">No lessons are available right now.</p>
         )}
-        <CourseOutline course={course} />
+        <CourseOutline course={course} counts={counts} />
       </main>
     </>
   );

@@ -42,6 +42,8 @@ export default defineConfig({
       DATABASE_URL: E2E_DATABASE_URL,
       AUTH_SECRET: "knowledge-e2e-only-not-a-secret",
       AUTH_URL: `http://localhost:${PORT}`,
+      // Likes and comments on lessons are on (lib/engagement.ts).
+      ENGAGEMENT_SALT: "knowledge-e2e-only-engagement-salt",
     },
   },
 });

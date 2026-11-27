@@ -5,6 +5,7 @@
  */
 import { viewKey } from "@/lib/analytics/classify";
 import { recordPageView } from "@/lib/analytics/server";
+import { CommentSection, LikeButton } from "@asafarim/engagement/client";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -17,6 +18,9 @@ import { getPublishedLesson } from "@/lib/courses";
 import { parseDoc } from "@/lib/doc";
 import { feedAlternates } from "@/lib/feed";
 import { db } from "@/lib/db";
+import { commentViewer, ENGAGEMENT_BASE_PATH, engagementEnabled } from "@/lib/engagement";
+import { countsOf, courseCounts } from "@/lib/engagement-rollups";
+import { signInAction } from "@/app/actions";
 import { isSlug } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +51,10 @@ export default async function LessonPage({ params }: Props) {
   const parsed = lesson.doc ? parseDoc(lesson.doc) : null;
   const doc = parsed?.ok ? parsed.doc : null;
   const href = (id: string) => `/courses/${slug}/lessons/${id}`;
+  const engagement = engagementEnabled()
+    ? { counts: await courseCounts(await db(), lesson.course), viewer: await commentViewer() }
+    : null;
+  const own = engagement ? countsOf(engagement.counts.lessons, lessonId) : null;
   return (
     <>
       <TopBar next={href(lessonId)} />
@@ -60,6 +68,17 @@ export default async function LessonPage({ params }: Props) {
             {lesson.summary ? <p className="lead">{lesson.summary}</p> : null}
             {lesson.format === "tiptap" && doc ? <DocView doc={doc} /> : <Markdown markdown={lesson.body} />}
           </article>
+          {engagement && own ? (
+            <div className="lesson-like" data-testid="lesson-like">
+              <LikeButton
+                entityType="lesson"
+                entityId={lessonId}
+                initialCount={own.likes}
+                basePath={ENGAGEMENT_BASE_PATH}
+                label="Helpful"
+              />
+            </div>
+          ) : null}
           <p className="muted">
             Also published as an article:{" "}
             <Link href={`/articles/${lesson.articleSlug}`} data-testid="canonical">
@@ -84,9 +103,27 @@ export default async function LessonPage({ params }: Props) {
               </Link>
             )}
           </nav>
+          {engagement && own ? (
+            <CommentSection
+              entityType="lesson"
+              entityId={lessonId}
+              viewer={engagement.viewer}
+              initialCount={own.comments}
+              basePath={ENGAGEMENT_BASE_PATH}
+              signIn={
+                <form action={signInAction} className="inline-sign-in">
+                  <input type="hidden" name="next" value={href(lessonId)} />
+                  <button type="submit" className="secondary" data-testid="comment-sign-in-button">
+                    Sign in
+                  </button>{" "}
+                  to join the conversation.
+                </form>
+              }
+            />
+          ) : null}
         </div>
         <aside>
-          <CourseOutline course={lesson.course} current={lessonId} />
+          <CourseOutline course={lesson.course} current={lessonId} counts={engagement?.counts} />
         </aside>
       </main>
     </>

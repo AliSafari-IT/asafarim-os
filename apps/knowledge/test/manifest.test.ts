@@ -41,6 +41,18 @@ describe("knowledge manifest", () => {
     }
   });
 
+  it("keeps likes and comments public at the gateway; the app checks the comment permissions itself (#363)", () => {
+    expect(manifest.auth.publicPaths).toContain("/api/engagement/**");
+    for (const r of manifest.routes ?? []) expect(r.path.startsWith("/api/engagement"), r.path).toBe(false);
+    const keys = manifest.permissions.map((p) => p.key);
+    expect(keys).toEqual(expect.arrayContaining(["knowledge.comment.write", "knowledge.comment.moderate"]));
+    const roles = Object.fromEntries(manifest.roles.map((r) => [r.key, r.grants]));
+    expect(roles["knowledge.learner"]).toEqual(["knowledge.comment.write"]);
+    expect(roles["knowledge.editor"]).toContain("knowledge.comment.moderate");
+    expect(roles["knowledge.author"]).not.toContain("knowledge.comment.moderate");
+    expect(manifest.secrets).toContain("ENGAGEMENT_SALT");
+  });
+
   it("gives authors their own articles and courses only, and keeps any-item rights for editors", () => {
     const author = manifest.roles.find((r) => r.key === "knowledge.author")!;
     expect(author.grants.sort()).toEqual(
@@ -50,6 +62,7 @@ describe("knowledge manifest", () => {
         "knowledge.content.edit.own",
         "knowledge.content.publish.own",
         "knowledge.courses.manage.own",
+        "knowledge.comment.write",
       ].sort(),
     );
     expect(author.grants.some((g) => g.endsWith(".any"))).toBe(false);

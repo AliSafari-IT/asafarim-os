@@ -9,7 +9,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.1.10",
+  version: "0.2.0",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   // Live since #361. The dev gateway is generated from this; production routes it through
@@ -49,6 +49,10 @@ export default defineApp({
       "/api/public/**",
       // The RSS feed of the newest published articles (app/feed.xml/route.ts).
       "/feed.xml",
+      // Likes and comments on lessons (lib/engagement.ts): reading and liking are for everyone, guests included.
+      // Writing a comment needs knowledge.comment.write, checked by the app on every request; not by a gateway route,
+      // which would answer a comment POST with 401 once the 60 s access token expired (#363).
+      "/api/engagement/**",
       // Uploaded media (#359): the app answers each request itself, public only while a public revision uses the
       // asset and otherwise only for a signed-in person who may see it (lib/media/assets.ts), 404 to anyone else.
       "/media/**",
@@ -75,6 +79,11 @@ export default defineApp({
       description: "Edit, publish and withdraw any course",
     },
     {
+      key: "knowledge.comment.write",
+      description: "Write comments and replies on lessons, and edit or delete your own",
+    },
+    { key: "knowledge.comment.moderate", description: "Delete anyone's comments on lessons" },
+    {
       key: "knowledge.ai.use",
       description: "Ask the AI for proposals (outline, rewrite, summary, diagram) on articles you may edit",
     },
@@ -88,6 +97,7 @@ export default defineApp({
         "knowledge.content.publish.own",
         "knowledge.courses.manage.own",
         "knowledge.ai.use",
+        "knowledge.comment.write",
       ],
       description: "Writes, publishes and withdraws their own articles and courses",
     },
@@ -103,8 +113,16 @@ export default defineApp({
         "knowledge.courses.manage.own",
         "knowledge.courses.manage.any",
         "knowledge.ai.use",
+        "knowledge.comment.write",
+        "knowledge.comment.moderate",
       ],
-      description: "Edits, publishes and withdraws any article or course, and curates topics and tags",
+      description:
+        "Edits, publishes and withdraws any article or course, curates topics and tags, and moderates comments",
+    },
+    {
+      key: "knowledge.learner",
+      grants: ["knowledge.comment.write"],
+      description: "Comments on lessons (anyone may read them and like a lesson)",
     },
   ],
   routes: [
@@ -118,7 +136,8 @@ export default defineApp({
   ],
   // Names only: values never appear in a manifest. Optional: without the first the AI assistance is off (#360);
   // without the media store's keys uploads are off (#359).
-  secrets: ["KNOWLEDGE_AI_API_KEY", "KNOWLEDGE_MEDIA_ACCESS_KEY", "KNOWLEDGE_MEDIA_SECRET_KEY"],
+  // ENGAGEMENT_SALT keys guests' like hashes; without it likes and comments are off.
+  secrets: ["KNOWLEDGE_AI_API_KEY", "KNOWLEDGE_MEDIA_ACCESS_KEY", "KNOWLEDGE_MEDIA_SECRET_KEY", "ENGAGEMENT_SALT"],
   ui: {
     glyph: "KN",
     color: "#0e7490",
