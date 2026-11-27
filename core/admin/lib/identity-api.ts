@@ -100,16 +100,25 @@ export interface PersonProfile extends DirectoryPerson {
   pendingRequest: { id: string; apps: string[]; note: string | null; createdAt: string } | null;
 }
 
+/** What a suspend or reactivate answered: the outcome, whether anything changed, and the person now. */
+export interface AccountActionResult<O extends string> {
+  outcome: O;
+  changed: boolean;
+  sessionsEnded?: number;
+  user: DirectoryPerson | null;
+}
+
 /** identity's public URL: the console's OIDC issuer. */
 export const identityBase = () => (process.env.OIDC_ISSUER ?? "http://localhost:4010").replace(/\/$/, "");
 
 /** identity's own admin page, where requests are approved and connections revoked. */
 export const identityAdminUrl = () => `${identityBase()}/admin`;
 
-async function call<T>(idToken: string, path: string): Promise<T> {
+async function call<T>(idToken: string, path: string, method: "GET" | "POST" = "GET"): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${identityBase()}${path}`, {
+      method,
       headers: { authorization: `Bearer ${idToken}`, accept: "application/json" },
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
@@ -150,6 +159,23 @@ export function identityApi(idToken: string) {
     },
     /** One person; CoreApiError 404 when identity has no such account. */
     user: (id: string) => call<PersonProfile>(idToken, `/admin/v1/users/${encodeURIComponent(id)}`),
+    /**
+     * Suspend a person (identity ends their sessions). Refused with 409 for yourself (`self`), the last identity
+     * admin (`last_admin`) or an account with no access (`no_access`). A retry answers `already`.
+     */
+    suspend: (id: string) =>
+      call<AccountActionResult<"suspended" | "already">>(
+        idToken,
+        `/admin/v1/users/${encodeURIComponent(id)}/suspend`,
+        "POST",
+      ),
+    /** Lift a suspension. A retry answers `not_suspended`. */
+    reactivate: (id: string) =>
+      call<AccountActionResult<"reconnected" | "admissions_restored" | "not_suspended">>(
+        idToken,
+        `/admin/v1/users/${encodeURIComponent(id)}/reactivate`,
+        "POST",
+      ),
   };
 }
 

@@ -8,8 +8,10 @@
  */
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { CoreApiError } from "@/lib/core-api";
+import { identityApi } from "@/lib/identity-api";
 import { requireAdmin } from "@/lib/session";
-import { isSubject } from "@/lib/util";
+import { isSubject, withMessage } from "@/lib/util";
 import { directoryHref, USERS_QUERY_COOKIE } from "@/lib/directory";
 
 const STATES = new Set(["active", "suspended"]);
@@ -50,4 +52,63 @@ export async function openPerson(formData: FormData) {
   const subject = typeof raw === "string" ? raw.trim() : "";
   if (!isSubject(subject)) redirect("/admin/users?error=That+isn%27t+an+account+id.");
   redirect(`/admin/users/${encodeURIComponent(subject)}`);
+}
+
+const REFUSED: Record<string, string> = {
+  self: "You can't suspend your own account.",
+  last_admin: "That is the last identity admin with access. Make someone else an identity admin first.",
+  no_access: "That account has no access to suspend.",
+  not_found: "Identity has no such account.",
+  forbidden: "Only an identity admin can do that.",
+};
+
+/** Suspend or reactivate, through identity (which owns account state, checks the caller and audits it). */
+async function accountAction(formData: FormData, action: "suspend" | "reactivate") {
+  const admin = await requireAdmin();
+  const raw = formData.get("subject");
+  const subject = typeof raw === "string" ? raw.trim() : "";
+  if (!isSubject(subject)) redirect("/admin/users?error=That+isn%27t+an+account+id.");
+  const back = `/admin/users/${encodeURIComponent(subject)}`;
+  let result: { kind: "notice" | "error"; message: string };
+  try {
+    const api = identityApi(admin.idToken);
+    if (action === "suspend") {
+      const r = await api.suspend(subject);
+      result = {
+        kind: "notice",
+        message:
+          r.outcome === "already"
+            ? "Already suspended: nothing changed."
+            : `Suspended. ${r.sessionsEnded ?? 0} session${r.sessionsEnded === 1 ? "" : "s"} ended.`,
+      };
+    } else {
+      const r = await api.reactivate(subject);
+      result = {
+        kind: "notice",
+        message:
+          r.outcome === "not_suspended"
+            ? "Not suspended: nothing changed."
+            : r.outcome === "admissions_restored"
+              ? "Reactivated: their per-app admissions apply again."
+              : "Reactivated: they can sign in to every app again.",
+      };
+    }
+  } catch (err) {
+    result = {
+      kind: "error",
+      message:
+        err instanceof CoreApiError
+          ? (REFUSED[err.code] ?? `Identity refused: ${err.message}`)
+          : "Something went wrong. Nothing was changed.",
+    };
+  }
+  redirect(withMessage(back, result.kind, result.message));
+}
+
+export async function suspendPerson(formData: FormData) {
+  await accountAction(formData, "suspend");
+}
+
+export async function reactivatePerson(formData: FormData) {
+  await accountAction(formData, "reactivate");
 }

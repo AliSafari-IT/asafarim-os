@@ -231,6 +231,30 @@ export interface DirectoryProfile extends DirectoryEntry {
   pendingRequest: PendingRequest | null;
 }
 
+/** What an administrator's suspension through the Admin API did (`adminSuspend`). */
+export type SuspendOutcome =
+  /** Their access is suspended now. */
+  | "suspended"
+  /** It already was: nothing changed (a retry, or another admin was first). */
+  | "already"
+  /** Nothing to suspend: no connection and no admission (they can't sign in anywhere anyway). */
+  | "no_access"
+  /** Refused: an admin can't suspend themselves. */
+  | "self"
+  /** Refused: they are the last identity admin with access; nobody could administer identity afterwards. */
+  | "last_admin"
+  | "unknown";
+
+/** What reactivating did (`adminReactivate`). */
+export type ReactivateOutcome =
+  /** A global connection again (an admin's revocation lifted). */
+  | "reconnected"
+  /** Their per-app admissions apply again (a suspension of a public-only person lifted); never global. */
+  | "admissions_restored"
+  /** Not suspended: nothing changed (a retry, or another admin was first). */
+  | "not_suspended"
+  | "unknown";
+
 export type RequestOutcome = "created" | "updated" | "already_pending" | "already_connected";
 
 export interface IdentityStore {
@@ -472,6 +496,48 @@ async function principalFor(
 }
 
 const CONFLICT: VerifiedResult = { kind: "conflict", reason: "identifier_taken" };
+
+/**
+ * Revoke a person's access inside the caller's transaction (the principal row already locked): an active
+ * connection becomes revoked; a person with public admissions and no connection gets a revoked row of their own,
+ * marked so that reconnecting it restores only their admissions. false: they had no access to revoke.
+ */
+async function revokeWithin(
+  c: Queryable,
+  principalId: string,
+  actorId: string,
+  detail: Record<string, string | number | boolean | null>,
+): Promise<boolean> {
+  const { rowCount } = await c.query(
+    `UPDATE connections SET status = 'revoked', revoked_at = now(), revoked_by = $2
+     WHERE principal_id = $1 AND status = 'active'`,
+    [principalId, actorId],
+  );
+  if (rowCount) {
+    await writeAudit(c, {
+      event: "connection.revoked",
+      principalId,
+      actorId,
+      ...(Object.keys(detail).length ? { detail } : {}),
+    });
+    return true;
+  }
+  const suspended = await c.query(
+    `INSERT INTO connections (principal_id, status, revoked_at, revoked_by, source)
+     SELECT $1, 'revoked', now(), $2, 'suspension'
+      WHERE EXISTS (SELECT 1 FROM client_admissions WHERE principal_id = $1)
+     ON CONFLICT (principal_id) DO NOTHING`,
+    [principalId, actorId],
+  );
+  if (!suspended.rowCount) return false;
+  await writeAudit(c, {
+    event: "connection.revoked",
+    principalId,
+    actorId,
+    detail: { admissionsOnly: true, ...detail },
+  });
+  return true;
+}
 
 async function writeAudit(c: Queryable, e: AuditEntry): Promise<void> {
   await c.query(
@@ -872,27 +938,84 @@ export class PgIdentityStore implements IdentityStore {
     return inTransaction(this.pool, async (c) => {
       // Serialise with admitPublic and reconnect: suspension and admission can't interleave.
       await c.query("SELECT id FROM principals WHERE id = $1 FOR UPDATE", [principalId]);
-      const { rowCount } = await c.query(
-        `UPDATE connections SET status = 'revoked', revoked_at = now(), revoked_by = $2
-         WHERE principal_id = $1 AND status = 'active'`,
-        [principalId, actorId],
+      return revokeWithin(c, principalId, actorId, {});
+    });
+  }
+
+  /**
+   * Suspend a person for the Admin console (the Users page). The same change as `revoke` (identity's own admin
+   * page), with the guards an API needs: an admin can't suspend themselves, and the last identity admin with access
+   * can't be suspended (nobody could administer identity afterwards). Every identity admin's row is locked first, in
+   * id order, so two admins suspending each other at once can't both succeed. A retry changes nothing ("already").
+   * The change is audited as `connection.revoked` (via admin_api); a refusal as `admin.denied` with its reason.
+   */
+  async adminSuspend(principalId: string, actorId: string): Promise<SuspendOutcome> {
+    if (!isUuid(principalId)) return "unknown";
+    return inTransaction(this.pool, async (c) => {
+      await c.query("SELECT id FROM principals WHERE is_admin ORDER BY id FOR UPDATE");
+      const target = await c.query<{ is_admin: boolean; status: "active" | "revoked" | null }>(
+        `SELECT p.is_admin, c.status FROM principals p LEFT JOIN connections c ON c.principal_id = p.id
+          WHERE p.id = $1 FOR UPDATE OF p`,
+        [principalId],
       );
-      if (rowCount) {
-        await writeAudit(c, { event: "connection.revoked", principalId, actorId });
-        return true;
+      const t = target.rows[0];
+      if (!t) return "unknown";
+      const refuse = async (reason: "self" | "last_admin") => {
+        await writeAudit(c, {
+          event: "admin.denied",
+          principalId,
+          actorId,
+          detail: { via: "admin_api", action: "suspend", reason },
+        });
+        return reason;
+      };
+      if (principalId === actorId) return refuse("self");
+      if (t.status === "revoked") return "already";
+      if (t.is_admin && t.status === "active") {
+        const others = await c.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM principals p JOIN connections c ON c.principal_id = p.id
+            WHERE p.is_admin AND c.status = 'active' AND p.id <> $1`,
+          [principalId],
+        );
+        if ((others.rows[0]?.n ?? 0) === 0) return refuse("last_admin");
       }
-      // No active connection. A person who holds public admissions and no connection row is suspended by a
-      // revoked row of their own, marked so that reconnecting it restores their admissions and nothing more.
-      const suspended = await c.query(
-        `INSERT INTO connections (principal_id, status, revoked_at, revoked_by, source)
-         SELECT $1, 'revoked', now(), $2, 'suspension'
-          WHERE EXISTS (SELECT 1 FROM client_admissions WHERE principal_id = $1)
-         ON CONFLICT (principal_id) DO NOTHING`,
-        [principalId, actorId],
+      return (await revokeWithin(c, principalId, actorId, { via: "admin_api" })) ? "suspended" : "no_access";
+    });
+  }
+
+  /**
+   * Lift a suspension for the Admin console: an admin's revocation becomes a global connection again; a suspension
+   * of a public-only person restores only their admissions (as `reconnect`). A retry changes nothing
+   * ("not_suspended"). Audited as `connection.added` (via admin_api).
+   */
+  async adminReactivate(principalId: string, actorId: string): Promise<ReactivateOutcome> {
+    if (!isUuid(principalId)) return "unknown";
+    return inTransaction(this.pool, async (c) => {
+      const found = await c.query("SELECT id FROM principals WHERE id = $1 FOR UPDATE", [principalId]);
+      if (!found.rowCount) return "unknown";
+      const row = await c.query<{ source: string | null }>(
+        "SELECT source FROM connections WHERE principal_id = $1 AND status = 'revoked' FOR UPDATE",
+        [principalId],
       );
-      if (!suspended.rowCount) return false;
-      await writeAudit(c, { event: "connection.revoked", principalId, actorId, detail: { admissionsOnly: true } });
-      return true;
+      if (!row.rowCount) return "not_suspended";
+      if (row.rows[0]!.source === "suspension") {
+        await c.query("DELETE FROM connections WHERE principal_id = $1 AND status = 'revoked'", [principalId]);
+        await writeAudit(c, {
+          event: "connection.added",
+          principalId,
+          actorId,
+          detail: { reconnect: true, admissionsOnly: true, via: "admin_api" },
+        });
+        return "admissions_restored";
+      }
+      await grant(c, principalId, actorId, "admin");
+      await writeAudit(c, {
+        event: "connection.added",
+        principalId,
+        actorId,
+        detail: { reconnect: true, via: "admin_api" },
+      });
+      return "reconnected";
     });
   }
 

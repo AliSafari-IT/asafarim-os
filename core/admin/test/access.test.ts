@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { accessByApp, admissionFor, admissionText, personLabel, type IdentityFacts } from "../lib/access";
+import {
+  accessByApp,
+  accountAction,
+  admissionFor,
+  admissionText,
+  personLabel,
+  reactivateEffect,
+  suspendEffect,
+  type IdentityFacts,
+} from "../lib/access";
 import type { RoleMapping, SubjectGrant } from "../lib/core-api";
 
 const apps = [
@@ -86,5 +95,43 @@ describe("access summary", () => {
   it("labels a person by email, else a shortened account id", () => {
     expect(personLabel({ label: "a@example.test", id: "0190b6c4-0000-7000-8000-000000000001" })).toBe("a@example.test");
     expect(personLabel({ label: null, id: "0190b6c4-0000-7000-8000-000000000001" })).toBe("Account 0190b6c4…");
+  });
+});
+
+describe("account actions on a profile", () => {
+  const ID = "0190b6c4-0000-7000-8000-000000000009";
+  const p = (
+    over: Partial<{ state: "active" | "suspended"; scope: "global" | "apps" | "none"; isAdmin: boolean }>,
+  ) => ({
+    id: ID,
+    label: "mo@example.test",
+    admittedClients: ["knowledge"],
+    state: over.state ?? "active",
+    scope: over.scope ?? "global",
+    isAdmin: over.isAdmin ?? false,
+  });
+
+  it("offers Suspend to someone with access, Reactivate to a suspended person, and nothing for yourself or no access", () => {
+    expect(accountAction(p({}), "someone-else")).toBe("suspend");
+    expect(accountAction(p({ state: "suspended", scope: "none" }), "someone-else")).toBe("reactivate");
+    expect(accountAction(p({}), ID)).toBe("none-self");
+    expect(accountAction(p({ scope: "none" }), "someone-else")).toBe("none-no-access");
+  });
+
+  it("says what suspending does, naming the person, the apps, and an administrator's extra loss", () => {
+    expect(suspendEffect(p({}), [])).toBe(
+      "mo@example.test can't sign in to any app from now on, and every session they have ends now. Their roles stay stored but give them nothing while they are suspended. You can reactivate them at any time.",
+    );
+    expect(suspendEffect(p({ scope: "apps" }), [])).toContain("can't sign in to knowledge from now on");
+    const admin = suspendEffect(p({ isAdmin: true }), [{ role: "core.admin" }]);
+    expect(admin).toContain("they lose identity administration too");
+    expect(admin).toContain("They hold core.admin: they lose this console too");
+  });
+
+  it("says what reactivating does: every app again, or only the admissions of a public sign-up", () => {
+    expect(reactivateEffect(p({}), "admin")).toContain("can sign in to every app");
+    expect(reactivateEffect(p({}), "suspension")).toBe(
+      "mo@example.test can sign in again to the apps they were admitted to (knowledge), and nothing more.",
+    );
   });
 });

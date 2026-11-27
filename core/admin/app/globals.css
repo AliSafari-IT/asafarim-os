@@ -342,6 +342,12 @@ dialog.confirm {
   color: var(--ink);
   padding: 20px;
 }
+/* A long name or email in a confirmation wraps: the person must be visible in full before anything is confirmed. */
+dialog.confirm h2,
+dialog.confirm p,
+dialog.confirm .type-to-confirm {
+  overflow-wrap: anywhere;
+}
 dialog.confirm::backdrop {
   background: rgba(0, 0, 0, 0.5);
 }

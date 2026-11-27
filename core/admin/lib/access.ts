@@ -120,3 +120,40 @@ export function admissionText(a: Admission): string {
 
 export const STATE_TEXT = { active: "Active", suspended: "Suspended" } as const;
 export const SCOPE_TEXT = { global: "Every app", apps: "Some apps", none: "No app yet" } as const;
+
+/** Whether the profile offers Suspend or Reactivate for this person, and why not when neither. */
+export function accountAction(
+  person: Pick<DirectoryPerson, "id" | "state" | "scope">,
+  viewerId: string,
+): "suspend" | "reactivate" | "none-self" | "none-no-access" {
+  if (person.state === "suspended") return "reactivate";
+  if (person.id === viewerId) return "none-self";
+  return person.scope === "none" ? "none-no-access" : "suspend";
+}
+
+/** What suspending does, said before it is confirmed. */
+export function suspendEffect(
+  person: Pick<DirectoryPerson, "label" | "id" | "scope" | "admittedClients" | "isAdmin">,
+  grants: readonly Pick<SubjectGrant, "role">[],
+): string {
+  const who = personLabel(person);
+  const parts = [
+    `${who} can't sign in to ${person.scope === "global" ? "any app" : `${person.admittedClients.join(", ")}`} from now on, and every session they have ends now.`,
+    "Their roles stay stored but give them nothing while they are suspended.",
+  ];
+  if (person.isAdmin) parts.push("They are an identity admin: they lose identity administration too.");
+  if (grants.some((g) => g.role === "core.admin")) parts.push("They hold core.admin: they lose this console too.");
+  parts.push("You can reactivate them at any time.");
+  return parts.join(" ");
+}
+
+/** What reactivating does: a global connection again, or only the per-app admissions of a public sign-up. */
+export function reactivateEffect(
+  person: Pick<DirectoryPerson, "label" | "id" | "admittedClients">,
+  connectionSource: "admin" | "bootstrap" | "suspension" | null,
+): string {
+  const who = personLabel(person);
+  return connectionSource === "suspension"
+    ? `${who} can sign in again to the apps they were admitted to (${person.admittedClients.join(", ") || "none"}), and nothing more.`
+    : `${who} gets an approved connection again: they can sign in to every app, with the roles they hold.`;
+}

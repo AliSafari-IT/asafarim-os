@@ -59,6 +59,11 @@ async function localSignIn(
     : undefined;
   const challenges = new RedisOtpChallenges(redis);
   const limits = new RedisRateLimiter(redis);
+  const sessions = new RedisAuthSessions(redis);
+  const endProviderSessions = (principalId: string) =>
+    endSessionsOfAccount(redis, principalId, async (session) => {
+      if (oidcProvider) await notifySessionLogout(oidcProvider, session, logger);
+    });
   const signIn = createSignIn({
     issuer,
     homeUrl: config.homeUrl,
@@ -94,18 +99,26 @@ async function localSignIn(
     store,
     challenges,
     limits,
-    sessions: new RedisAuthSessions(redis),
+    sessions,
     flows: new RedisLoginFlows(redis),
-    endProviderSessions: (principalId) =>
-      endSessionsOfAccount(redis, principalId, async (session) => {
-        if (oidcProvider) await notifySessionLogout(oidcProvider, session, logger);
-      }),
+    endProviderSessions,
     endBrowserProviderSession: async (ctx) => {
       if (oidcProvider) await endBrowserSession(oidcProvider, ctx, logger);
     },
     log: logger,
   });
-  const auditApi = createAuditApi({ issuer, jwks, readers: config.auditReaders, store, log: logger });
+  const auditApi = createAuditApi({
+    issuer,
+    jwks,
+    readers: config.auditReaders,
+    store,
+    // A suspension from the Admin console ends their sessions as identity's own admin page does (sign-in.ts).
+    endSessions: async (principalId) => {
+      await sessions.destroyAllFor(principalId);
+      return endProviderSessions(principalId);
+    },
+    log: logger,
+  });
   // Trusted apps that show their own sign-in pages (headless.ts): only with email codes configured.
   const headless =
     config.email && headlessApps.size
