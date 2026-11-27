@@ -5,6 +5,7 @@
  */
 import { NextResponse } from "next/server";
 import { engagementHandlers } from "@/lib/engagement";
+import { wakeEventRelay } from "@/lib/event-relay";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,10 @@ async function handle(request: Request): Promise<Response> {
     );
   }
   try {
-    return (await handlers).handle(request);
+    const response = await (await handlers).handle(request);
+    // A new comment left knowledge.comment.created.v1 in the outbox: send it now rather than at the next poll.
+    if (response.status === 201) wakeEventRelay();
+    return response;
   } catch (err) {
     console.error(
       JSON.stringify({

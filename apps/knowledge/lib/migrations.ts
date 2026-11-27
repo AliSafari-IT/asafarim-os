@@ -4,6 +4,7 @@
  * twice. Never edit one that has shipped: add the next. A migration may also run `after` (TypeScript, in the same
  * transaction, after its SQL) when the data it needs is built in code, like the search projection.
  */
+import { OUTBOX_SQL } from "@asafarim/app-sdk/events";
 import { refreshSearchDocument } from "./search-index";
 
 interface Queryable {
@@ -503,6 +504,12 @@ CREATE TABLE engagement_rollups (
 ALTER TABLE courses
   ADD COLUMN likes_count    integer NOT NULL DEFAULT 0 CHECK (likes_count >= 0),
   ADD COLUMN comments_count integer NOT NULL DEFAULT 0 CHECK (comments_count >= 0);`,
+  },
+  {
+    version: 13,
+    name: "events: the outbox (knowledge.comment.created.v1), sent to the bus by the relay",
+    // The platform's outbox DDL (@asafarim/events), unchanged: CREATE … IF NOT EXISTS, so it is safe to run once here.
+    sql: OUTBOX_SQL,
   },
 ];
 

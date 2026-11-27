@@ -443,6 +443,9 @@ services:
       # Permission checks and self-registration: this stack's core-api, on os_core. Knowledge's database is on
       # os-postgres (core-api's install creates it), never the platform's Postgres.
       CORE_API_URL: http://os-core-api:4020
+      # The event bus (asafarim-os#259), on os_core like Flow's: empty unless the deploy runs os-nats. Without it the
+      # outbox relay stays off (one log line) and knowledge.comment.created.v1 waits in the outbox; nothing else changes.
+      ASAFARIM_NATS_URL: ${OS_NATS_URL:-}
     depends_on:
       - os-core-api
     healthcheck:

@@ -1,7 +1,7 @@
 {
   "id": "knowledge",
   "name": "ASafariM Knowledge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "platform": ">=0.1 <1",
   "owner": "ASafariM Digital",
   "domains": {
@@ -129,6 +129,14 @@
       "permission": "knowledge.content.create"
     }
   ],
+  "events": {
+    "publishes": [
+      {
+        "type": "knowledge.comment.created.v1",
+        "schema": "./events/knowledge.comment.created.v1.json"
+      }
+    ]
+  },
   "secrets": ["KNOWLEDGE_AI_API_KEY", "KNOWLEDGE_MEDIA_ACCESS_KEY", "KNOWLEDGE_MEDIA_SECRET_KEY", "ENGAGEMENT_SALT"],
   "ui": {
     "glyph": "KN",

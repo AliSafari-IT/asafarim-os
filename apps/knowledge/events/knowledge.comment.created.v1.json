@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "asafarim://knowledge/events/knowledge.comment.created.v1.json",
+  "title": "knowledge.comment.created.v1",
+  "description": "Someone commented on a lesson, or replied to a comment there. The comment's text is never carried, nor the author's name: only identifiers. A subscriber that needs more asks Knowledge for it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["commentId", "lessonId", "courseId", "parentId", "author", "createdAt"],
+  "properties": {
+    "commentId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "The comment id"
+    },
+    "lessonId": { "type": "string", "minLength": 1, "maxLength": 128, "description": "The lesson commented on" },
+    "courseId": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The course the lesson belongs to, or null if it can't be found"
+    },
+    "parentId": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "The comment this replies to, or null for a top-level comment"
+    },
+    "author": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "The subject (person) who wrote it"
+    },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

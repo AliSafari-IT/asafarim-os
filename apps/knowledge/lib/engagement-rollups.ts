@@ -167,6 +167,15 @@ export async function isEngageableLesson(pool: Pick<pg.Pool, "query">, lessonId:
   return (rowCount ?? 0) > 0;
 }
 
+/** The course a lesson belongs to (any revision names it: a lesson id is minted for one course), or null. */
+export async function lessonCourseId(c: Pick<pg.Pool, "query">, lessonId: string): Promise<string | null> {
+  const { rows } = await c.query<{ course_id: string }>(
+    "SELECT cr.course_id FROM course_lessons l JOIN course_revisions cr ON cr.id = l.revision_id WHERE l.lesson_id = $1 LIMIT 1",
+    [lessonId],
+  );
+  return rows[0]?.course_id ?? null;
+}
+
 /** The owner of the course a lesson belongs to (for the "instructor" badge), or null. */
 export async function lessonCourseOwner(pool: Pick<pg.Pool, "query">, lessonId: string): Promise<string | null> {
   const { rows } = await pool.query<{ owner_subject: string }>(

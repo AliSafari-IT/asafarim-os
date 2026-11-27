@@ -32,6 +32,8 @@ import {
   isEngageableLesson,
   lessonCourseOwner,
 } from "../lib/engagement-rollups";
+import { reconcileEngagement } from "../lib/engagement-reconcile";
+import { COMMENT_CREATED, publishCommentCreated } from "../lib/events";
 import { migrate } from "../lib/migrations";
 import type { Actor } from "../lib/policy";
 
@@ -80,6 +82,7 @@ describe.skipIf(!ADMIN_URL)("engagement on lessons, with rollups (PostgreSQL)", 
     service = createEngagementService({
       pool,
       onCountChange: (type, id, metric, delta, tx) => applyCountChange(tx, type, id, metric, delta),
+      onCommentCreated: (comment, tx) => publishCommentCreated(tx, comment),
     });
     for (const slug of ["one", "two", "three"]) {
       const a = ok(await createArticle(pool, alice, { slug, draft: { title: slug, summary: "", body: slug } }));
@@ -175,6 +178,41 @@ describe.skipIf(!ADMIN_URL)("engagement on lessons, with rollups (PostgreSQL)", 
     const sum = countsOf(n.lessons, lessons.a).likes + countsOf(n.lessons, lessons.c).likes;
     expect(n.course.likes).toBe(sum);
     expect(countsOf(n.modules, 0).likes).toBe(sum);
+  });
+
+  it("a new comment leaves knowledge.comment.created.v1 in the outbox, with identifiers and never the text", async () => {
+    const before = Number((await pool.query("SELECT count(*)::int AS n FROM asafarim_outbox")).rows[0].n);
+    const c = await service.createComment({ entity: lesson(lessons.a), user: user("writer"), body: "secret words" });
+    const { rows } = await pool.query<{ type: string; envelope: { subject: string; data: Record<string, unknown> } }>(
+      "SELECT type, envelope FROM asafarim_outbox ORDER BY seq DESC LIMIT 1",
+    );
+    expect(Number((await pool.query("SELECT count(*)::int AS n FROM asafarim_outbox")).rows[0].n)).toBe(before + 1);
+    expect(rows[0]!.type).toBe(COMMENT_CREATED);
+    expect(rows[0]!.envelope.subject).toBe(c.id);
+    expect(rows[0]!.envelope.data).toEqual({
+      commentId: c.id,
+      lessonId: lessons.a,
+      courseId,
+      parentId: null,
+      author: "writer",
+      createdAt: c.createdAt,
+    });
+    expect(JSON.stringify(rows[0]!.envelope)).not.toContain("secret words");
+    await service.deleteComment({ id: c.id, userId: "writer" });
+  });
+
+  it("the nightly recount heals counts that drifted from the rows, and changes nothing when they agree", async () => {
+    expect((await reconcileEngagement(pool)).lessons).toBe(0);
+    const truth = await counts();
+    await pool.query(
+      "UPDATE engagement_rollups SET likes_count = likes_count + 7, comments_count = 3 WHERE entity_type = 'lesson'",
+    );
+    await pool.query("UPDATE courses SET likes_count = 999, comments_count = 999");
+    const result = await reconcileEngagement(pool);
+    expect(result.lessons).toBeGreaterThan(0);
+    expect(result.courses).toBe(1);
+    expect(await counts()).toEqual(truth);
+    expect((await reconcileEngagement(pool)).lessons).toBe(0);
   });
 
   it("the handlers refuse a lesson that isn't engageable, and accept one that is", async () => {

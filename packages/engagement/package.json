@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/engagement",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "ASafariM OS engagement module: likes and comments on any entity (entity_type + entity_id), mounted by each app into its OWN Postgres. Idempotent migrations, a Redis sliding-window rate limiter, guest visitor hashes, a transactional onCountChange rollup hook and framework-agnostic (Web Request/Response) handlers, plus React components (./client) and their stylesheet (./styles.css). Never imports an app.",
   "type": "module",

@@ -87,6 +87,8 @@ export function createEngagementClient(options: { basePath?: string; fetch?: Fet
   const fetcher: Fetch = options.fetch ?? ((...args) => fetch(...args));
   return {
     likeState: (t: EntityTarget) => call<LikeState>(fetcher, `${base}/likes?${query(t)}`),
+    /** After sign-in: move this browser's guest likes to the account. */
+    syncLikes: () => call<{ moved: number; merged: number }>(fetcher, `${base}/likes/sync`, { method: "POST" }),
     toggleLike: (t: EntityTarget) =>
       call<LikeState>(fetcher, `${base}/likes/toggle`, { method: "POST", body: JSON.stringify(t) }),
     listComments: (t: EntityTarget, page: { limit?: number; offset?: number } = {}) => {
@@ -136,7 +138,22 @@ export function compactCount(n: number): string {
  * server answers, never trusted. Storage may be missing or throw (private windows); then nothing is remembered.
  */
 export const likedHint = {
-  key: (t: EntityTarget) => `asafarim.engagement.liked:${t.entityType}:${t.entityId}`,
+  prefix: "asafarim.engagement.liked:",
+  key: (t: EntityTarget) => `${likedHint.prefix}${t.entityType}:${t.entityId}`,
+  /** Whether this browser remembers liking anything (as a guest or not): only then is a sync worth a request. */
+  any(): boolean {
+    try {
+      const store = globalThis.localStorage;
+      if (!store) return false;
+      for (let i = 0; i < store.length; i++) {
+        const k = store.key(i);
+        if (k?.startsWith(likedHint.prefix) && store.getItem(k) === "1") return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  },
   read(t: EntityTarget): boolean | null {
     try {
       const v = globalThis.localStorage?.getItem(likedHint.key(t));
