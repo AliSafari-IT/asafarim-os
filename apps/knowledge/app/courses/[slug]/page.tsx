@@ -62,9 +62,10 @@ export default async function CoursePage({ params }: Props) {
               <p className="eyebrow">Course</p>
               <h1 data-testid="course-title">{course.title}</h1>
               {course.summary ? <p className="lead">{course.summary}</p> : null}
-              {lessons > 0 ? (
+              {lessons === 0 ? <p className="muted">No lessons are available right now.</p> : null}
+              {lessons > 0 || cards.length > 0 ? (
                 <div className="course-hero-actions">
-                  <CourseCallToAction />
+                  {lessons > 0 ? <CourseCallToAction /> : null}
                   {cards.length > 0 ? (
                     <Link
                       className="button-link secondary-link"
@@ -75,9 +76,7 @@ export default async function CoursePage({ params }: Props) {
                     </Link>
                   ) : null}
                 </div>
-              ) : (
-                <p className="muted">No lessons are available right now.</p>
-              )}
+              ) : null}
               <p className="course-facts" data-testid="course-facts">
                 <span>
                   {plural(lessons, "lesson", "lessons")}

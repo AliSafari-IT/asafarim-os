@@ -218,6 +218,7 @@ export function StudyDeck({
       onKeyDown={onKeyDown}
       onPointerDownCapture={noteFocus}
       onKeyDownCapture={noteFocus}
+      onClickCapture={noteFocus}
     >
       <StudyStats streak={streak} mastered={knownNow} totalCards={ids.length} coursePct={coursePct} />
       <div className="study-toolbar">
