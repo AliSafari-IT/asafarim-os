@@ -170,6 +170,9 @@ export default async function seed() {
       }),
     );
 
+    // A second course, still a draft and without an assessment: the Studio's Assessments list offers to start one.
+    ok(await createCourse(pool, author, { slug: "testing-in-practice", title: "Testing in practice" }));
+
     // After publication: one lesson's article is withdrawn, another's gets a new (unpublished) draft.
     ok(await withdrawArticle(pool, author, { id: extra.id }));
     ok(

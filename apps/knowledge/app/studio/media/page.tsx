@@ -7,6 +7,7 @@ import { deleteMediaAction } from "../media-actions";
 import { MediaUpload } from "@/components/MediaUpload";
 import { Notices } from "@/components/Notices";
 import { Pager } from "@/components/Pager";
+import { StudioTabs } from "@/components/StudioTabs";
 import { TopBar } from "@/components/TopBar";
 import { db } from "@/lib/db";
 import { listLibrary } from "@/lib/media/assets";
@@ -43,6 +44,7 @@ export default async function StudioMedia({ searchParams }: { searchParams: Prom
           <Link href="/studio">← Studio</Link>
         </p>
         <h1>Media</h1>
+        <StudioTabs actor={g.actor} current="media" />
         <Notices error={one(sp.error)} done={one(sp.done)} />
         {!on ? (
           <p className="muted" data-testid="media-off">

@@ -9,7 +9,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.7.2",
+  version: "0.7.3",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   // Live since #361. The dev gateway is generated from this; production routes it through
@@ -44,6 +44,7 @@ export default defineApp({
       "/articles/**",
       "/courses",
       "/courses/**",
+      "/assessments",
       "/search",
       "/topics/**",
       "/api/public/**",
@@ -149,6 +150,7 @@ export default defineApp({
     nav: [
       { label: "Articles", href: "/" },
       { label: "Courses", href: "/courses" },
+      { label: "Assessments", href: "/assessments" },
       { label: "Studio", href: "/studio" },
     ],
     status: "active",

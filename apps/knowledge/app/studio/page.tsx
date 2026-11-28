@@ -10,9 +10,10 @@ import { NewArticleForm } from "@/components/NewArticleForm";
 import { Notices } from "@/components/Notices";
 import { Pager } from "@/components/Pager";
 import { RowMenu } from "@/components/RowMenu";
+import { StudioTabs } from "@/components/StudioTabs";
 import { TopBar } from "@/components/TopBar";
 import { listStudioItems } from "@/lib/content";
-import { canCreateCourse, canEdit, canManageTaxonomy, seesAll, seesAllCourses, type Actor } from "@/lib/policy";
+import { canEdit, seesAll, type Actor } from "@/lib/policy";
 import { searchStudio } from "@/lib/search";
 import { db } from "@/lib/db";
 import { requireStudio } from "@/lib/studio";
@@ -56,27 +57,7 @@ export default async function Studio({ searchParams }: Props) {
           <p className="muted">Write, edit and publish your articles.</p>
         </header>
         <Notices error={error} done={done} />
-        <nav className="studio-tabs" aria-label="Studio sections">
-          <Link href="/studio" aria-current="page">
-            Articles
-          </Link>
-          <Link href="/studio/media" data-testid="media-link">
-            Media
-          </Link>
-          {canCreateCourse(g.actor) || seesAllCourses(g.actor) ? (
-            <Link href="/studio/courses" data-testid="courses-link">
-              Courses
-            </Link>
-          ) : null}
-          {canManageTaxonomy(g.actor) ? (
-            <Link href="/studio/taxonomy" data-testid="taxonomy-link">
-              Topics and tags
-            </Link>
-          ) : null}
-          <Link href="/studio/insights" data-testid="insights-link">
-            Insights
-          </Link>
-        </nav>
+        <StudioTabs actor={g.actor} current="articles" />
 
         <div className="studio-grid">
           <section className="studio-main" aria-label="Your articles">

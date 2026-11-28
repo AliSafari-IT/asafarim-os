@@ -1,5 +1,5 @@
 /**
- * The OS top bar on every page: the brand, the theme toggle and, for a signed-in person, the app
+ * The OS top bar on every page: the brand, Courses, Assessments and Search (one Menu button on a phone), the theme toggle and, for a signed-in person, the app
  * switcher and account menu. Guests get a sign-in button and nothing that needs core-api. The Studio
  * link is shown only to someone who holds knowledge.content.create (the studio re-checks it anyway).
  */
@@ -12,6 +12,7 @@ import { describeAccess } from "@/lib/gate";
 import { getPlatform } from "@/lib/platform";
 import { PERMISSIONS } from "@/lib/policy";
 import { KnowledgeMark } from "./KnowledgeMark";
+import { NavMenu } from "./NavMenu";
 import { SignOutIcon } from "./SignOutIcon";
 
 export const APP_NAME = "ASafariM Knowledge";
@@ -37,6 +38,9 @@ export async function TopBar({ next = "/" }: { next?: string }) {
           <Link href="/courses" className="nav-link" data-testid="courses-link">
             Courses
           </Link>
+          <Link href="/assessments" className="nav-link" data-testid="assessments-nav">
+            Assessments
+          </Link>
           <Link href="/search" className="nav-link" data-testid="search-link">
             Search
           </Link>
@@ -45,6 +49,14 @@ export async function TopBar({ next = "/" }: { next?: string }) {
               Studio
             </Link>
           ) : null}
+          <NavMenu
+            links={[
+              { href: "/courses", label: "Courses" },
+              { href: "/assessments", label: "Assessments" },
+              { href: "/search", label: "Search" },
+              ...(isAuthor ? [{ href: "/studio", label: "Studio" }] : []),
+            ]}
+          />
           <ThemeToggle />
           {subject ? (
             <>

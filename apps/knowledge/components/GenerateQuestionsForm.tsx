@@ -32,9 +32,10 @@ export function GenerateQuestionsForm(props: { courseId: string; lessons: Lesson
   if (!props.aiOn) {
     return (
       <section className="card" id="generate">
-        <h2>Generate with AI</h2>
+        <h2>Generate questions with AI</h2>
         <p className="muted">
-          AI assistance isn&apos;t set up for this publication, so questions can only be written by hand.
+          AI assistance isn&apos;t switched on for this site yet (the server needs its Claude API key), so for now
+          questions can only be written by hand below.
         </p>
       </section>
     );
@@ -42,11 +43,12 @@ export function GenerateQuestionsForm(props: { courseId: string; lessons: Lesson
   return (
     <form action={generateQuestionsAction} className="card generate-form" id="generate" data-testid="generate-form">
       <h2>
-        Generate with AI <span className="badge">Claude</span>
+        Generate questions with AI <span className="badge">Claude</span>
       </h2>
       <p className="muted">
         Claude reads the lessons of this course&apos;s draft and writes questions that test understanding, each tied to
-        the lesson it covers, with an explanation. They arrive as drafts: review, edit or delete them, then approve.
+        the lesson it covers, with an explanation. They arrive as drafts: review, edit or delete them, then approve. Run
+        it again any time to add more; you can also write or change questions yourself below.
       </p>
       <input type="hidden" name="course" value={props.courseId} />
       <label>

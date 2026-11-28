@@ -16,7 +16,9 @@ import {
   getAttempt,
   getLearnerAssessment,
   getStudioAssessment,
+  listAvailableAssessments,
   listMyAssessments,
+  listStudioAssessments,
   saveQuestion,
   startAttempt,
   submitAttempt,
@@ -321,6 +323,34 @@ describe.skipIf(!ADMIN_URL)("course assessments on PostgreSQL", () => {
     expect(s.learners).toBe(2);
     const promise = s.questions.find((q) => q.kind === "multiple")!;
     expect(promise.stats).toMatchObject({ asked: 2, correctPercent: 0, commonWrongOption: "sleeping" });
+  });
+
+  it("the Assessments dashboard lists every course the person manages, with or without an assessment", async () => {
+    const other = ok(await createCourse(pool, bob, { slug: "bobs-course", title: "Bob's course" }));
+    const mine = await listStudioAssessments(pool, alice);
+    expect(mine.map((r) => r.slug)).toEqual(["js"]);
+    expect(mine[0]).toMatchObject({
+      courseStatus: "published",
+      status: "open",
+      active: 3,
+      drafts: 0,
+      attempts: 2,
+      learners: 2,
+      average: 34,
+      passRate: 50,
+    });
+    expect(mine[0]!.lastAttemptAt).toBeInstanceOf(Date);
+    // Bob's new course has no assessment yet; it is listed (so one can be started), after the open one for an editor.
+    expect(await listStudioAssessments(pool, bob)).toMatchObject([
+      { courseId: other.id, status: null, active: 0, attempts: 0, average: null, passRate: null },
+    ]);
+    expect((await listStudioAssessments(pool, erin)).map((r) => r.slug)).toEqual(["js", "bobs-course"]);
+    // Without a course permission there is nothing to manage.
+    expect(await listStudioAssessments(pool, { subject: "alice", permissions: [] })).toEqual([]);
+  });
+
+  it("learners see the assessments they can take now", async () => {
+    expect(await listAvailableAssessments(pool)).toEqual([{ slug: "js", title: "JavaScript", questions: 3 }]);
   });
 
   it("deleting questions never changes a past result, and too few approved closes it", async () => {
