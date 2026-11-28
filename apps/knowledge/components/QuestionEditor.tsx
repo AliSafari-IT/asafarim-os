@@ -18,7 +18,7 @@ import {
   type QuestionOption,
 } from "@/lib/assessment-core";
 import { uploadFile } from "@/lib/media-nodes";
-import { checkCoverSvg, checkImageUrl, svgDataUrl } from "@/lib/media/validate";
+import { checkCoverSvg, checkImageUrl, isAssetId, svgDataUrl } from "@/lib/media/validate";
 import { ERRORS } from "@/lib/messages";
 
 type ImageSource = "none" | "url" | "svg" | "upload";
@@ -96,8 +96,8 @@ export function QuestionEditor(props: {
       ? svgDataUrl(svgCheck.svg)
       : source === "url" && urlOk
         ? urlOk
-        : source === "upload" && asset
-          ? `/media/${asset}`
+        : source === "upload" && isAssetId(asset)
+          ? `/media/${encodeURIComponent(asset)}`
           : "";
   const imageProblem =
     source === "svg" && svgCheck && !svgCheck.ok
