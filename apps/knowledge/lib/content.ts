@@ -11,6 +11,7 @@ import type pg from "pg";
 import { decodeCursor, encodeCursor } from "./cursor";
 import { checkRevisionMedia, recordRevisionMedia } from "./media/assets";
 import { readingMinutes } from "./reading-time";
+import { articleThumbnail, type Thumbnail } from "./thumbnail";
 import { refreshSearchDocument } from "./search-index";
 import { canCreate, canEdit, canPublish, canView, seesAll, type Actor } from "./policy";
 import type { Doc } from "./doc";
@@ -72,6 +73,8 @@ export interface PublishedArticle {
   readingMinutes: number;
   topic: { slug: string; name: string } | null;
   level: string | null;
+  /** The picture its card shows: the first image in the published revision (lib/thumbnail.ts), or null. */
+  thumbnail: Thumbnail | null;
 }
 
 /** One page of a list, newest first, and the cursor of the next (older) page, or null on the last one. */
@@ -501,6 +504,7 @@ const toPublished = (r: PublicRow): PublishedArticle => ({
   readingMinutes: readingMinutes(r.body),
   topic: r.topic_slug && r.topic_name ? { slug: r.topic_slug, name: r.topic_name } : null,
   level: r.level,
+  thumbnail: articleThumbnail(r),
 });
 
 /** Published articles, newest first, one page at a time (keyset on published_at, id): what a guest may list. */

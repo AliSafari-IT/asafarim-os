@@ -1,7 +1,8 @@
 /**
  * The public home page: published articles only. Open to anyone (no permission on "/" at the gateway);
  * listPublished can only read the revision each item's published pointer names. Each card says who wrote the
- * article, when, and how long it takes to read; the newest one is featured.
+ * article, when, and how long it takes to read; the newest one is featured. A card whose article has an image shows
+ * the first one as a round thumbnail beside the text (lib/thumbnail.ts); one without keeps the full-width text.
  */
 import { ArticleTags } from "@/components/ArticleTags";
 import Link from "next/link";
@@ -61,34 +62,46 @@ export default async function Home({ searchParams }: Props) {
           <ul className="article-list feed" data-testid="articles">
             {articles.map((a, i) => {
               const featured = i === 0 && !after;
+              const classes = ["card", "article-card", featured ? "featured" : "", a.thumbnail ? "has-thumb" : ""];
               return (
-                <li
-                  key={a.slug}
-                  className={featured ? "card article-card featured" : "card article-card"}
-                  data-testid="article-card"
-                >
-                  {featured || a.topic || a.level ? (
-                    <p className="chips">
-                      {featured ? <span className="chip latest">Latest</span> : null}
-                      {a.topic ? (
-                        <Link href={`/topics/${a.topic.slug}`} className="chip">
-                          {a.topic.name}
-                        </Link>
-                      ) : null}
-                      {a.level ? <span className="chip level">{capitalise(a.level)}</span> : null}
-                    </p>
+                <li key={a.slug} className={classes.filter(Boolean).join(" ")} data-testid="article-card">
+                  {a.thumbnail ? (
+                    // Decorative: the title link names the card, and the picture repeats what the article shows.
+                    // A plain <img>, like the article body: sources are /media/:id, another site, or a data: URL.
+                    <img
+                      className="article-thumb"
+                      src={a.thumbnail.src}
+                      alt=""
+                      loading={featured ? "eager" : "lazy"}
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                      data-testid="article-thumb"
+                    />
                   ) : null}
-                  <h2>
-                    <Link href={`/articles/${a.slug}`}>{a.title}</Link>
-                  </h2>
-                  {a.summary ? <p className="article-summary">{a.summary}</p> : null}
-                  <ArticleTags tags={a.tags} />
-                  <ArticleByline
-                    authorName={a.authorName}
-                    publishedAt={a.publishedAt}
-                    readingMinutes={a.readingMinutes}
-                    compact
-                  />
+                  <div className="article-card-body">
+                    {featured || a.topic || a.level ? (
+                      <p className="chips">
+                        {featured ? <span className="chip latest">Latest</span> : null}
+                        {a.topic ? (
+                          <Link href={`/topics/${a.topic.slug}`} className="chip">
+                            {a.topic.name}
+                          </Link>
+                        ) : null}
+                        {a.level ? <span className="chip level">{capitalise(a.level)}</span> : null}
+                      </p>
+                    ) : null}
+                    <h2>
+                      <Link href={`/articles/${a.slug}`}>{a.title}</Link>
+                    </h2>
+                    {a.summary ? <p className="article-summary">{a.summary}</p> : null}
+                    <ArticleTags tags={a.tags} />
+                    <ArticleByline
+                      authorName={a.authorName}
+                      publishedAt={a.publishedAt}
+                      readingMinutes={a.readingMinutes}
+                      compact
+                    />
+                  </div>
                 </li>
               );
             })}
