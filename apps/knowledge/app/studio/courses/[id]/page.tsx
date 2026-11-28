@@ -350,6 +350,17 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
           ) : null}
         </section>
 
+        <section className="card" id="assessment" data-testid="studio-assessment-link">
+          <h2>Assessment</h2>
+          <p className="muted">
+            Questions learners answer to check what they learned (single answer or multiple correct), generated with AI
+            from the lessons or written by hand, with each learner&apos;s weak areas tracked over attempts.
+          </p>
+          <Link className="button-link" href={`/studio/courses/${course.id}/assessment`}>
+            Manage the assessment
+          </Link>
+        </section>
+
         {pending ? (
           <div className="publish-bar" role="status" data-testid="publish-bar">
             <span>
