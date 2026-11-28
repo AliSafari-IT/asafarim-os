@@ -586,6 +586,90 @@ ALTER TABLE course_revisions
   ADD COLUMN cover_svg text NOT NULL DEFAULT '' CHECK (length(cover_svg) <= 100000),
   ADD CONSTRAINT course_revisions_one_cover CHECK (cover_url = '' OR cover_svg = '');`,
   },
+  {
+    version: 18,
+    name: "course assessments: a question bank per course, learners' attempts (graded server-side) and AI generation",
+    sql: `
+-- A course's assessment (lib/assessments.ts). Unlike study cards it is not part of the course revisions: its questions
+-- are edited in place (create, edit, delete), and every attempt keeps its own copy of the questions it asked, so an
+-- edit never changes a learner's past result. Learners see it while the course is published and it is open.
+CREATE TABLE assessments (
+  course_id             text PRIMARY KEY REFERENCES courses (id),
+  status                text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'open')),
+  questions_per_attempt integer NOT NULL DEFAULT 10 CHECK (questions_per_attempt BETWEEN 3 AND 30),
+  pass_percent          integer NOT NULL DEFAULT 70 CHECK (pass_percent BETWEEN 1 AND 100),
+  -- Bumped by every change to the settings or the questions: a form names the version it showed (stale = refused).
+  version               integer NOT NULL DEFAULT 0 CHECK (version >= 0),
+  updated_at            timestamptz NOT NULL DEFAULT now()
+);
+
+-- One question. options: [{"id", "text", "correct"}], 2 to 6 of them; 'single' has exactly one correct option,
+-- 'multiple' at least one. lesson_id is the course lesson it tests (stable across course revisions), or NULL.
+-- The optional picture is an https address, SVG code (checked like a course cover) or an uploaded image: at most one.
+CREATE TABLE assessment_questions (
+  id             text PRIMARY KEY,
+  course_id      text NOT NULL REFERENCES assessments (course_id),
+  position       integer NOT NULL CHECK (position >= 0),
+  kind           text NOT NULL CHECK (kind IN ('single', 'multiple')),
+  prompt         text NOT NULL CHECK (length(prompt) BETWEEN 1 AND 1000),
+  options        jsonb NOT NULL CHECK (jsonb_typeof(options) = 'array' AND jsonb_array_length(options) BETWEEN 2 AND 6),
+  explanation    text NOT NULL DEFAULT '' CHECK (length(explanation) <= 2000),
+  lesson_id      text CHECK (length(lesson_id) <= 100),
+  difficulty     text NOT NULL DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard')),
+  status         text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active')),
+  source         text NOT NULL DEFAULT 'author' CHECK (source IN ('author', 'ai')),
+  image_url      text NOT NULL DEFAULT '' CHECK (length(image_url) <= 2048),
+  image_svg      text NOT NULL DEFAULT '' CHECK (length(image_svg) <= 100000),
+  image_asset_id text REFERENCES media_assets (id),
+  image_alt      text NOT NULL DEFAULT '' CHECK (length(image_alt) <= 200),
+  created_by     text NOT NULL,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT assessment_questions_one_image CHECK (
+    (image_url <> '')::int + (image_svg <> '')::int + (image_asset_id IS NOT NULL)::int <= 1
+  )
+);
+CREATE INDEX assessment_questions_course ON assessment_questions (course_id, position);
+CREATE INDEX assessment_questions_asset ON assessment_questions (image_asset_id) WHERE image_asset_id IS NOT NULL;
+
+-- One learner's attempt. questions is the copy asked, with the answers (graded on the server, never sent before
+-- submitting); answers maps question id -> chosen option ids. A learner has at most one unsubmitted attempt per
+-- course, and may start the next one only RETAKE_DAYS after submitting (lib/assessments.ts).
+CREATE TABLE assessment_attempts (
+  id           text PRIMARY KEY,
+  course_id    text NOT NULL REFERENCES courses (id),
+  subject      text NOT NULL,
+  started_at   timestamptz NOT NULL DEFAULT now(),
+  deadline     timestamptz NOT NULL,
+  submitted_at timestamptz,
+  questions    jsonb NOT NULL,
+  answers      jsonb,
+  points       numeric(6, 2),
+  correct      integer,
+  total        integer NOT NULL CHECK (total BETWEEN 1 AND 30),
+  score        integer CHECK (score BETWEEN 0 AND 100),
+  pass_percent integer NOT NULL,
+  expired      boolean NOT NULL DEFAULT false
+);
+CREATE UNIQUE INDEX assessment_attempts_one_open ON assessment_attempts (course_id, subject) WHERE submitted_at IS NULL;
+CREATE INDEX assessment_attempts_learner ON assessment_attempts (subject, course_id, started_at DESC);
+CREATE INDEX assessment_attempts_course ON assessment_attempts (course_id, submitted_at) WHERE submitted_at IS NOT NULL;
+
+CREATE TABLE assessment_audit_events (
+  id          bigserial PRIMARY KEY,
+  actor       text NOT NULL,
+  action      text NOT NULL,
+  course_id   text NOT NULL,
+  question_id text,
+  detail      text NOT NULL DEFAULT '',
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- The AI log also records assessment generation, against the course (item_id is a course id then).
+ALTER TABLE ai_jobs DROP CONSTRAINT ai_jobs_operation_check;
+ALTER TABLE ai_jobs ADD CONSTRAINT ai_jobs_operation_check
+  CHECK (operation IN ('outline', 'improve', 'summary', 'mermaid', 'assessment'));`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

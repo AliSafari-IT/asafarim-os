@@ -25,6 +25,11 @@ export interface GenerateRequest {
   /** The JSON Schema the answer must follow. */
   schema: Record<string, unknown>;
   maxTokens: number;
+  /**
+   * For long answers (an assessment of up to 30 questions): stream the response, so a large max_tokens never meets
+   * an HTTP timeout, and allow this long instead of AI_TIMEOUT_MS.
+   */
+  long?: { timeoutMs: number };
 }
 
 export interface GenerateAnswer {
@@ -136,7 +141,11 @@ export function createAnthropicProvider(
     async generate(req) {
       let response: Anthropic.Beta.BetaMessage;
       try {
-        response = await client.beta.messages.create({ ...params(req), max_tokens: req.maxTokens });
+        response = req.long
+          ? await client.beta.messages
+              .stream({ ...params(req), max_tokens: req.maxTokens }, { timeout: req.long.timeoutMs })
+              .finalMessage()
+          : await client.beta.messages.create({ ...params(req), max_tokens: req.maxTokens });
       } catch (err) {
         if (err instanceof Anthropic.APIConnectionTimeoutError) throw new AiError("timeout", undefined, "timeout");
         if (err instanceof Anthropic.APIError) throw new AiError("unavailable", undefined, `http_${err.status ?? "?"}`);

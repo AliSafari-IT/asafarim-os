@@ -9,7 +9,7 @@ import { defineApp } from "@asafarim/app-manifest";
 export default defineApp({
   id: "knowledge",
   name: "ASafariM Knowledge",
-  version: "0.6.1",
+  version: "0.7.1",
   platform: ">=0.1 <1",
   owner: "ASafariM Digital",
   // Live since #361. The dev gateway is generated from this; production routes it through
@@ -85,7 +85,8 @@ export default defineApp({
     { key: "knowledge.comment.moderate", description: "Delete anyone's comments on lessons" },
     {
       key: "knowledge.ai.use",
-      description: "Ask the AI for proposals (outline, rewrite, summary, diagram) on articles you may edit",
+      description:
+        "Ask the AI for proposals (outline, rewrite, summary, diagram) on articles you may edit, and for assessment questions on courses you manage",
     },
   ],
   roles: [
