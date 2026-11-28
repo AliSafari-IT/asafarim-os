@@ -71,6 +71,13 @@ export const ERRORS: Record<string, string> = {
   course_too_many_cards: "A course can have at most 200 study cards.",
   course_invalid_card: "A card needs a front (up to 300 characters) and a back (up to 1,000).",
   course_unknown_card: "That study card doesn't exist any more.",
+  course_invalid_cover_svg: "The cover's SVG code isn't valid: it must be one well-formed <svg>…</svg> element.",
+  course_unsafe_cover_svg:
+    "The cover's SVG code has something Knowledge doesn't allow (a script, an event handler such as onclick, embedded HTML or an entity declaration). Remove it and save again.",
+  course_external_cover_svg:
+    "The cover's SVG code links to another file (an href, src, url(…) or @import pointing elsewhere). A cover must be self-contained.",
+  course_cover_svg_too_large:
+    "The cover's SVG code is too long (at most 100 000 characters). Simplify or optimise it first.",
   course_invalid_cover:
     "The cover needs an https image address on a named site (no IP address or localhost), and alt text of at most 200 characters.",
   course_lesson_unavailable:
@@ -94,6 +101,8 @@ export const ERRORS: Record<string, string> = {
   image_url_invalid:
     "That image address can't be used: it must start with https:// and name a website (not an IP address or localhost).",
   svg_invalid: "That isn't SVG code: it must be one <svg>…</svg> element.",
+  svg_external:
+    "That SVG links to another file (an href, src, url(…) or @import pointing elsewhere). A cover must be self-contained: inline the shapes or embed the picture as data, then paste it again.",
   svg_too_large: "That SVG code is too long (at most 100 000 characters). Simplify or optimise it first.",
   svg_unsafe:
     "That SVG contains script, an event handler (onclick…), embedded HTML or an entity declaration. Remove them and paste it again.",

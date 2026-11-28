@@ -8,6 +8,7 @@
  */
 import pg from "pg";
 import { createArticle, publishRevision, saveDraft, withdrawArticle } from "../lib/content";
+import { COVER_SVG } from "./cover";
 import { createCourse, editCourse, publishCourse, type CourseEdit } from "../lib/courses";
 import { parseDoc } from "../lib/doc";
 import { classify, createTag } from "../lib/taxonomy";
@@ -76,7 +77,7 @@ export default async function seed() {
       { op: "add_lesson", module: 1, articleSlug: "build-the-api" },
       { op: "add_lesson", module: 1, articleSlug: "deploy-it" },
       { op: "add_lesson", module: 1, articleSlug: "bonus-tuning" },
-      { op: "cover", url: "https://images.example.org/ship-a-web-app.svg", alt: "A rocket over a browser window" },
+      { op: "cover", url: "", svg: COVER_SVG, alt: "A rocket over a browser window" },
       { op: "add_card", front: "What does a course lesson pin?", back: "One published revision of its article." },
       {
         op: "add_card",

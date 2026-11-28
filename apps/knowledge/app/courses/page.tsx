@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Pager } from "@/components/Pager";
 import { TopBar } from "@/components/TopBar";
 import { auth } from "@/lib/auth";
-import { listPublishedCourses } from "@/lib/courses";
+import { coverSrc, listPublishedCourses } from "@/lib/courses";
 import { db } from "@/lib/db";
 import { describeAccess } from "@/lib/gate";
 import { one, type SearchParams } from "@/lib/params";
@@ -48,13 +48,13 @@ export default async function CoursesPage({ searchParams }: Props) {
             {courses.map((c) => (
               <li
                 key={c.slug}
-                className={c.cover.url ? "card course-card has-cover" : "card"}
+                className={coverSrc(c.cover) ? "card course-card has-cover" : "card"}
                 data-testid="course-card"
               >
-                {c.cover.url ? (
+                {coverSrc(c.cover) ? (
                   <img
                     className="course-card-cover"
-                    src={c.cover.url}
+                    src={coverSrc(c.cover)}
                     alt=""
                     loading="lazy"
                     decoding="async"

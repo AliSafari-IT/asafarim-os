@@ -101,7 +101,12 @@ export async function editCourseAction(formData: FormData) {
       edit = { op: "update_lesson", lessonId };
       break;
     case "cover":
-      edit = { op: "cover", url: field(formData, "url"), alt: field(formData, "alt") };
+      edit = {
+        op: "cover",
+        url: field(formData, "source") === "svg" ? "" : field(formData, "url"),
+        svg: field(formData, "source") === "svg" ? field(formData, "svg") : "",
+        alt: field(formData, "alt"),
+      };
       break;
     case "add_card":
       edit = { op: "add_card", front: field(formData, "front"), back: field(formData, "back") };
@@ -131,6 +136,12 @@ export async function editCourseAction(formData: FormData) {
     const q = new URLSearchParams(r.ok ? { done: "course_card_saved" } : { error: `course_${r.error}` });
     q.set("at", "cards");
     redirect(`${back}?${q}#study-cards`);
+  }
+  // The cover form is below the course header; land back on it, with its notice there.
+  if (edit.op === "cover") {
+    const q = new URLSearchParams(r.ok ? { done: "course_saved" } : { error: `course_${r.error}` });
+    q.set("at", "cover");
+    redirect(`${back}?${q}#cover`);
   }
   outcome(back, r, "course_saved");
 }

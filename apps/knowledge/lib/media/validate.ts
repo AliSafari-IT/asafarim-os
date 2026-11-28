@@ -242,6 +242,100 @@ export function checkSvg(
 
 export const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
+const XLINK_NAMESPACE = "http://www.w3.org/1999/xlink";
+
+/** A start tag with its attributes (quoted values may hold ">"). */
+const SVG_TAG = /<([A-Za-z_][\w.:-]*)((?:\s+[^\s=/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*\/?>/g;
+const SVG_ATTRIBUTE = /([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+/** The text of each <style> element, CDATA or not. */
+const SVG_STYLE = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
+
+/** An attribute value as the browser reads it: XML's entities and character references decoded. */
+function decodeXml(text: string): string {
+  return text.replace(/&(amp|lt|gt|quot|apos|#\d{1,7}|#x[0-9A-Fa-f]{1,6});/g, (_, e: string) => {
+    if (e[0] === "#") {
+      const n = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      try {
+        return String.fromCodePoint(n);
+      } catch {
+        return "";
+      }
+    }
+    return { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" }[e as "amp"];
+  });
+}
+
+/** A link target inside the picture: "#an-id", or an embedded raster image. */
+const LOCAL_TARGET = /^\s*(?:#|data:image\/(?:png|jpeg|gif|webp)[;,])/i;
+/** CSS that reaches outside: a url(…) that isn't "#an-id", or an @import. */
+const CSS_EXTERNAL = [/url\((?!\s*["']?\s*#)/i, /@import/i];
+
+/**
+ * Whether SVG code reaches outside itself: an href / xlink:href / src whose value isn't "#an-id" or an embedded raster
+ * image, or CSS (a style attribute, a presentation attribute such as fill, a <style> element) with a url(…) that isn't
+ * "#an-id" or an @import. Only attribute values and <style> text count, decoded, so a picture whose visible text says
+ * "url()" is fine. Browsers don't fetch any of this for an SVG shown in an <img>, but a course cover is meant to be
+ * self-contained, so the cover check refuses it (checkCoverSvg).
+ */
+function svgReachesOut(svg: string): boolean {
+  for (const tag of svg.matchAll(SVG_TAG)) {
+    for (const [, name, dq, sq] of (tag[2] ?? "").matchAll(SVG_ATTRIBUTE)) {
+      const value = decodeXml(dq ?? sq ?? "");
+      const local = name!.toLowerCase().replace(/^[^:]*:/, "");
+      if ((local === "href" || local === "src") && !LOCAL_TARGET.test(value)) return true;
+      if (CSS_EXTERNAL.some((re) => re.test(value))) return true;
+    }
+  }
+  for (const [, css] of svg.matchAll(SVG_STYLE)) {
+    if (CSS_EXTERNAL.some((re) => re.test(decodeXml(css ?? "")))) return true;
+  }
+  return false;
+}
+
+/**
+ * The namespace prefixes used in element and attribute names (other than xml and xmlns) that the code never
+ * declares. A browser shows nothing for an SVG image with one: SVG copied out of an HTML page often uses xlink:href
+ * without declaring xlink, since HTML doesn't need it.
+ */
+function undeclaredPrefixes(svg: string): Set<string> {
+  const used = new Set<string>();
+  const declared = new Set<string>();
+  for (const tag of svg.matchAll(SVG_TAG)) {
+    const el = /^([^:]+):/.exec(tag[1]!);
+    if (el) used.add(el[1]!);
+    for (const [, name] of (tag[2] ?? "").matchAll(SVG_ATTRIBUTE)) {
+      const m = /^([^:]+):(.+)$/.exec(name!);
+      if (!m) continue;
+      if (m[1] === "xmlns") declared.add(m[2]!);
+      else used.add(m[1]!);
+    }
+  }
+  for (const p of declared) used.delete(p);
+  used.delete("xml");
+  return used;
+}
+
+/**
+ * checkSvg, then the stricter rules for a course cover: line endings as a form submits them (so the live check in the
+ * studio and the server count the same characters), an undeclared xlink prefix declared on the root (any other
+ * undeclared prefix is invalid), and no references to other files (svgReachesOut).
+ */
+export function checkCoverSvg(
+  raw: unknown,
+): { ok: true; svg: string } | { ok: false; error: "svg_invalid" | "svg_too_large" | "svg_unsafe" | "svg_external" } {
+  const r = checkSvg(typeof raw === "string" ? raw.replace(/\r\n?/g, "\n") : raw);
+  if (!r.ok) return r;
+  let svg = r.svg;
+  const missing = undeclaredPrefixes(svg);
+  if (missing.delete("xlink")) {
+    const at = svgRootStart(svg);
+    svg = `${svg.slice(0, at)}<svg xmlns:xlink="${XLINK_NAMESPACE}"${svg.slice(at + 4)}`;
+    if (svg.length > MEDIA_LIMITS.svg) return { ok: false, error: "svg_too_large" };
+  }
+  if (missing.size) return { ok: false, error: "svg_invalid" };
+  return svgReachesOut(svg) ? { ok: false, error: "svg_external" } : { ok: true, svg };
+}
+
 /** Where an attribute's value sits in the code (between its quotes). */
 type ValueSpan = { from: number; to: number };
 

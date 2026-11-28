@@ -14,7 +14,7 @@ import { CourseOutline, ModuleCards, courseShape } from "@/components/CourseOutl
 import { CourseCallToAction, CourseProgressProvider, ProgressMeter } from "@/components/CourseProgress";
 import { CourseStats } from "@/components/StudyStats";
 import { TopBar } from "@/components/TopBar";
-import { getPublishedCards } from "@/lib/courses";
+import { coverSrc, getPublishedCards } from "@/lib/courses";
 import { db } from "@/lib/db";
 import { engagementEnabled } from "@/lib/engagement";
 import { courseCounts } from "@/lib/engagement-rollups";
@@ -48,7 +48,7 @@ export default async function CoursePage({ params }: Props) {
   const lessons = course.modules.reduce((n, m) => n + m.lessons.length, 0);
   const counts = engagementEnabled() ? await courseCounts(await db(), course) : undefined;
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  const cover = course.cover.url;
+  const cover = coverSrc(course.cover);
   return (
     <>
       <TopBar next={`/courses/${slug}`} />
