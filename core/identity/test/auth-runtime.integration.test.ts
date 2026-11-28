@@ -726,18 +726,30 @@ if (!CONFIGURED) {
         const r = await browserSignIn(app, "refresh-2b@example.test");
         const before = await peek(app, r.appJar);
         clock.offset = 11 * 60_000;
-        delayTokenMs = 400; // longer than a lease renewal interval (5000/3 ms is too long for a test, so shorten the lease)
+        // Hold the token grant open far longer than a lease renewal interval, so the runtime is still waiting on the provider
+        // when the lock disappears and its next renewal notices. The default lease (30 s, renewed every 10 s) is too long for a
+        // test, so shorten it, but not so far that a busy CI runner (event loop or Redis stalled for ~100 ms) lets it expire on
+        // its own: with a 90 ms lease that happened, the key was already gone when the test looked for it, and the run failed.
+        const leaseMs = 300;
+        delayTokenMs = 1200;
         const shortLease = makeAuth(A, app.base, {
-          bounds: { ...BOUNDS, refreshLeaseMs: 90 },
+          bounds: { ...BOUNDS, refreshLeaseMs: leaseMs },
           prefix: app.redisPrefix,
         });
         const pending = shortLease.current(reqWith(r.appJar), { touch: false }).then(
           (h) => ({ ok: true as const, h }),
           (e: unknown) => ({ ok: false as const, e }),
         );
-        await sleep(120); // the first lease renewal has happened; now another process "takes over": the lock key vanishes
-        const lockKeys = await redis.keys(`${app.redisPrefix}:l:*`);
-        expect(lockKeys.length).toBe(1);
+        // Wait for the runtime to take the lock (polling, not a fixed sleep: how long that takes depends on the runner), then
+        // let one renewal interval pass so the lease is really being renewed. Now another process "takes over": the key vanishes.
+        let lockKeys: string[] = [];
+        for (const deadline = Date.now() + 5000; lockKeys.length === 0 && Date.now() < deadline;) {
+          lockKeys = await redis.keys(`${app.redisPrefix}:l:*`);
+          if (lockKeys.length === 0) await sleep(10);
+        }
+        expect(lockKeys.length, "the refresh took its lock").toBe(1);
+        await sleep(leaseMs / 3 + 20);
+        expect(await redis.exists(...lockKeys), "the lease is kept alive by renewal").toBe(1);
         await redis.del(...lockKeys);
         const out = await pending;
         expect(out.ok).toBe(false);
