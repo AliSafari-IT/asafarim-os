@@ -1,21 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-
-/** The seeded course's cover lives on another site; the browser gets this drawing instead of going online. */
-const COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500">
-<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#cfe3f1"/><stop offset="1" stop-color="#e8f1e4"/></linearGradient></defs>
-<rect width="800" height="500" fill="url(#g)"/>
-<rect x="140" y="150" width="420" height="270" rx="18" fill="#fff" stroke="#0f4c6e" stroke-width="6"/>
-<rect x="140" y="150" width="420" height="44" rx="18" fill="#0f4c6e"/>
-<circle cx="172" cy="172" r="7" fill="#fff"/><circle cx="196" cy="172" r="7" fill="#fff"/>
-<path d="M600 90 l40 40 -90 120 -40 -40z" fill="#e07a5f"/><circle cx="600" cy="150" r="14" fill="#fff"/>
-<path d="M520 250 l-30 60 50 -20z" fill="#f2cc8f"/>
-<path d="M200 260h200M200 300h300M200 340h160" stroke="#9db4c3" stroke-width="14" stroke-linecap="round"/>
-</svg>`;
-async function fakeCover(target: Page | BrowserContext) {
-  await target.route("https://images.example.org/**", (route) =>
-    route.fulfill({ contentType: "image/svg+xml", body: COVER_SVG }),
-  );
-}
+import { expect, test } from "@playwright/test";
 
 /**
  * A guest studies a course's flip cards: flip, mark, next / previous by button and keyboard, a review round of only
@@ -86,9 +69,13 @@ test("a guest studies a course's flip cards", async ({ page }) => {
 });
 
 test("the course page shows its cover, the learner's tiles and the modules as cards", async ({ page }) => {
-  await fakeCover(page);
   await page.goto("/courses/ship-a-web-app");
-  await expect(page.getByTestId("course-cover")).toHaveAttribute("alt", "A rocket over a browser window");
+  // The cover is SVG code pasted in the studio (e2e/seed.ts): shown as a picture from a data: URL, never as markup.
+  const cover = page.getByTestId("course-cover");
+  await expect(cover).toHaveAttribute("alt", "A rocket over a browser window");
+  await expect(cover).toHaveAttribute("src", /^data:image\/svg\+xml;charset=utf-8,%3Csvg/);
+  expect(await cover.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
+  expect(await page.locator("main svg[viewBox='0 0 800 500']").count()).toBe(0);
   await expect(page.getByTestId("course-facts")).toContainText("across 2 modules");
   await expect(page.getByTestId("stat-streak-value")).toHaveText("0 days");
   await expect(page.getByTestId("stat-mastered-value")).toHaveText("0 of 3");
@@ -116,7 +103,6 @@ test("study page screenshots", async ({ browser }) => {
       ["phone", { width: 390, height: 844 }],
     ] as const) {
       const ctx = await browser.newContext({ colorScheme: scheme, viewport, deviceScaleFactor: 2 });
-      await fakeCover(ctx);
       const page = await ctx.newPage();
       await page.goto("/courses/ship-a-web-app/cards");
       await page.screenshot({ path: `${SHOTS}/cards-front-${scheme}-${name}.png`, fullPage: true });

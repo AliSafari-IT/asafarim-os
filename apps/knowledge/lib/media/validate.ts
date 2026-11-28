@@ -242,6 +242,26 @@ export function checkSvg(
 
 export const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
+/**
+ * A reference in SVG code to anything outside it: an href (or xlink:href, src) that isn't "#an-id" or an embedded
+ * raster image, a CSS url(…) that isn't "#an-id", or an @import. Browsers don't fetch these for an SVG shown in an
+ * <img>, but a course cover is meant to be self-contained, so the cover check refuses them (checkCoverSvg).
+ */
+const SVG_EXTERNAL = [
+  /\s(?:[a-z]+:)?(?:href|src)\s*=\s*(["'])(?!\s*(?:#|data:image\/(?:png|jpeg|gif|webp)[;,]))/i,
+  /url\(\s*(?!(?:&quot;|["'])?\s*#)/i,
+  /@import/i,
+];
+
+/** checkSvg, then no references to other files (SVG_EXTERNAL): the stricter check for a course cover. */
+export function checkCoverSvg(
+  raw: unknown,
+): { ok: true; svg: string } | { ok: false; error: "svg_invalid" | "svg_too_large" | "svg_unsafe" | "svg_external" } {
+  const r = checkSvg(raw);
+  if (!r.ok) return r;
+  return SVG_EXTERNAL.some((re) => re.test(r.svg)) ? { ok: false, error: "svg_external" } : r;
+}
+
 /** Where an attribute's value sits in the code (between its quotes). */
 type ValueSpan = { from: number; to: number };
 

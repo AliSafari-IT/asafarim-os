@@ -19,7 +19,7 @@ import type { Doc } from "./doc";
 import { canCreateCourse, canManageCourse, seesAllCourses, type Actor } from "./policy";
 import { PAGE_SIZE, pageOf, type Page, type RevisionFormat } from "./content";
 import { decodeCursor } from "./cursor";
-import { checkImageUrl } from "./media/validate";
+import { checkCoverSvg, checkImageUrl, svgDataUrl } from "./media/validate";
 
 type Pool = Pick<pg.Pool, "connect" | "query">;
 type Client = Pick<pg.PoolClient, "query">;
@@ -56,14 +56,21 @@ export interface CourseDraft {
   summary: string;
   modules: { title: string; lessons: LessonRef[] }[];
   cards: StudyCard[];
-  /** The cover image: an https address ('' = none) and its alt text. */
+  /** The cover image: an https address or SVG code (at most one; both '' = none) and its alt text. */
   cover: CourseCover;
 }
 
 export interface CourseCover {
   url: string;
+  /** Pasted SVG code, checked by checkCoverSvg; shown as a data: URL in an <img>, never as markup. */
+  svg: string;
   alt: string;
 }
+
+export const NO_COVER: CourseCover = { url: "", svg: "", alt: "" };
+
+/** What an <img> shows for a cover: the address, or the SVG code as a data: URL; '' when there is no cover. */
+export const coverSrc = (cover: CourseCover) => cover.url || (cover.svg ? svgDataUrl(cover.svg) : "");
 
 export type CourseStatus = "draft" | "published" | "withdrawn";
 
@@ -87,7 +94,18 @@ export type CourseError =
   | "too_many_cards"
   | "invalid_card"
   | "unknown_card"
-  | "invalid_cover";
+  | "invalid_cover"
+  | "invalid_cover_svg"
+  | "unsafe_cover_svg"
+  | "external_cover_svg"
+  | "cover_svg_too_large";
+
+const COVER_SVG_ERRORS = {
+  svg_invalid: "invalid_cover_svg",
+  svg_unsafe: "unsafe_cover_svg",
+  svg_external: "external_cover_svg",
+  svg_too_large: "cover_svg_too_large",
+} as const satisfies Record<string, CourseError>;
 
 export type CourseResult<T> = ({ ok: true } & T) | { ok: false; error: CourseError; detail?: string };
 
@@ -159,8 +177,8 @@ async function readCards(c: Pick<Pool, "query">, revisionId: string): Promise<St
 /** A course revision as stored: its modules in order, each with its lessons in order. */
 async function readDraft(c: Pick<Pool, "query">, revisionId: string): Promise<CourseDraft> {
   const rev = (
-    await c.query<{ title: string; summary: string; cover_url: string; cover_alt: string }>(
-      "SELECT title, summary, cover_url, cover_alt FROM course_revisions WHERE id = $1",
+    await c.query<{ title: string; summary: string; cover_url: string; cover_svg: string; cover_alt: string }>(
+      "SELECT title, summary, cover_url, cover_svg, cover_alt FROM course_revisions WHERE id = $1",
       [revisionId],
     )
   ).rows[0]!;
@@ -181,7 +199,7 @@ async function readDraft(c: Pick<Pool, "query">, revisionId: string): Promise<Co
     title: rev.title,
     summary: rev.summary,
     cards: await readCards(c, revisionId),
-    cover: { url: rev.cover_url, alt: rev.cover_alt },
+    cover: { url: rev.cover_url, svg: rev.cover_svg, alt: rev.cover_alt },
     modules: modules.map((m) => ({
       title: m.title,
       lessons: lessons
@@ -198,9 +216,19 @@ async function insertRevision(c: Client, courseId: string, draft: CourseDraft, a
   );
   const id = randomUUID();
   await c.query(
-    `INSERT INTO course_revisions (id, course_id, number, title, summary, author, cover_url, cover_alt)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [id, courseId, rows[0]!.n + 1, draft.title, draft.summary, author, draft.cover.url, draft.cover.alt],
+    `INSERT INTO course_revisions (id, course_id, number, title, summary, author, cover_url, cover_svg, cover_alt)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      id,
+      courseId,
+      rows[0]!.n + 1,
+      draft.title,
+      draft.summary,
+      author,
+      draft.cover.url,
+      draft.cover.svg,
+      draft.cover.alt,
+    ],
   );
   if (draft.modules.length) {
     await c.query(
@@ -276,7 +304,7 @@ export async function createCourse(
     summary: (input.summary ?? "").trim(),
     modules: [],
     cards: [],
-    cover: { url: "", alt: "" },
+    cover: NO_COVER,
   };
   const bad = checkDraft(draft);
   if (bad) return { ok: false, error: bad };
@@ -308,7 +336,7 @@ export type CourseEdit =
   | { op: "edit_card"; cardId: string; front: string; back: string }
   | { op: "move_card"; cardId: string; delta: -1 | 1 }
   | { op: "remove_card"; cardId: string }
-  | { op: "cover"; url: string; alt: string };
+  | { op: "cover"; url: string; svg?: string; alt: string };
 
 const findLesson = (d: CourseDraft, lessonId: string) => {
   for (const [mi, m] of d.modules.entries()) {
@@ -396,12 +424,19 @@ async function applyEdit(c: Client, d: CourseDraft, edit: CourseEdit): Promise<C
       return next;
     }
     case "cover": {
-      // An empty address removes the cover; otherwise an https image on a named host (lib/media/validate.ts).
-      if (!edit.url.trim()) return { ...next, cover: { url: "", alt: "" } };
-      const url = checkImageUrl(edit.url);
+      // SVG code (checked like an article's pasted SVG, and self-contained), else an https image on a named host (lib/media/validate.ts);
+      // neither removes the cover.
       const alt = cleanTitle(edit.alt);
-      if (!url || alt.length > COURSE_LIMITS.coverAlt) return "invalid_cover";
-      return { ...next, cover: { url, alt } };
+      if (alt.length > COURSE_LIMITS.coverAlt) return "invalid_cover";
+      if (edit.svg?.trim()) {
+        const svg = checkCoverSvg(edit.svg);
+        if (!svg.ok) return COVER_SVG_ERRORS[svg.error];
+        return { ...next, cover: { url: "", svg: svg.svg, alt } };
+      }
+      if (!edit.url.trim()) return { ...next, cover: NO_COVER };
+      const url = checkImageUrl(edit.url);
+      if (!url) return "invalid_cover";
+      return { ...next, cover: { url, svg: "", alt } };
     }
     case "remove_card": {
       const at = cardAt(edit.cardId);
@@ -689,9 +724,10 @@ export async function listPublishedCourses(
     published_at: Date;
     lessons: number;
     cover_url: string;
+    cover_svg: string;
     cover_alt: string;
   }>(
-    `SELECT c.id, c.published_at::text AS at_key, c.slug, r.title, r.summary, c.published_at, r.cover_url, r.cover_alt,
+    `SELECT c.id, c.published_at::text AS at_key, c.slug, r.title, r.summary, c.published_at, r.cover_url, r.cover_svg, r.cover_alt,
             (SELECT count(*)::int FROM course_lessons l JOIN content_items i ON i.id = l.item_id
              WHERE l.revision_id = r.id AND i.published_revision_id IS NOT NULL) AS lessons
      FROM courses c JOIN course_revisions r ON r.id = c.published_revision_id
@@ -709,7 +745,7 @@ export async function listPublishedCourses(
       summary: r.summary,
       publishedAt: r.published_at,
       lessons: r.lessons,
-      cover: { url: r.cover_url, alt: r.cover_alt },
+      cover: { url: r.cover_url, svg: r.cover_svg, alt: r.cover_alt },
     }),
   );
 }
@@ -753,6 +789,7 @@ interface OutlineRow {
   lesson_summary: string | null;
   cards: number;
   cover_url: string;
+  cover_svg: string;
   cover_alt: string;
 }
 
@@ -762,7 +799,7 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
     `SELECT c.id AS course_id, cr.id AS revision_id, c.slug AS course_slug, cr.title AS course_title, cr.summary AS course_summary, c.published_at,
             m.position AS module_position, m.title AS module_title, l.lesson_id, l.item_id, r.title AS lesson_title, r.summary AS lesson_summary,
             (SELECT count(*)::int FROM course_cards k WHERE k.revision_id = cr.id) AS cards,
-            cr.cover_url, cr.cover_alt
+            cr.cover_url, cr.cover_svg, cr.cover_alt
      FROM courses c JOIN course_revisions cr ON cr.id = c.published_revision_id
      LEFT JOIN course_modules m ON m.revision_id = cr.id
      LEFT JOIN course_lessons l ON l.revision_id = cr.id AND l.module_position = m.position
@@ -798,7 +835,7 @@ export async function getPublishedCourse(pool: Pick<Pool, "query">, slug: string
     publishedAt: first.published_at,
     modules,
     cards: first.cards,
-    cover: { url: first.cover_url, alt: first.cover_alt },
+    cover: { url: first.cover_url, svg: first.cover_svg, alt: first.cover_alt },
   };
 }
 

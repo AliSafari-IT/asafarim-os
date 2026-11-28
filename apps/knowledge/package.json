@@ -1,6 +1,6 @@
 {
   "name": "@asafarim/knowledge",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "ASafariM Knowledge: technical publishing and learning on ASafariM OS (#354). Phase 0: drafts, revisions, publish, public read and withdraw.",
   "scripts": {

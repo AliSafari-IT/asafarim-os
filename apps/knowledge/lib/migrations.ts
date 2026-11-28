@@ -576,6 +576,16 @@ ALTER TABLE course_revisions
   ADD COLUMN cover_url text NOT NULL DEFAULT '' CHECK (length(cover_url) <= 2048),
   ADD COLUMN cover_alt text NOT NULL DEFAULT '' CHECK (length(cover_alt) <= 200);`,
   },
+  {
+    version: 17,
+    name: "course cover as SVG code: pasted SVG, checked like an article's, as an alternative to an image address",
+    sql: `
+-- SVG code an author pasted (lib/media/validate.ts checkSvg: one well-formed <svg>, no script, event handler, foreign
+-- HTML or entity declaration), shown only as a data: URL in an <img>. At most one of cover_url and cover_svg is set.
+ALTER TABLE course_revisions
+  ADD COLUMN cover_svg text NOT NULL DEFAULT '' CHECK (length(cover_svg) <= 100000),
+  ADD CONSTRAINT course_revisions_one_cover CHECK (cover_url = '' OR cover_svg = '');`,
+  },
 ];
 
 /** Apply every migration not yet recorded, in one transaction under the advisory lock. Returns the versions applied. */

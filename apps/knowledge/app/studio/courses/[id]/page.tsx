@@ -6,6 +6,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { editCourseAction, publishCourseAction, withdrawCourseAction } from "../../course-actions";
+import { CoverForm } from "@/components/CoverForm";
 import { Notices } from "@/components/Notices";
 import { TopBar } from "@/components/TopBar";
 import { COURSE_LIMITS, getStudioCourse, listLessonChoices, type StudioLesson } from "@/lib/courses";
@@ -80,6 +81,7 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
   const cards = (n: number) => `${n} study ${n === 1 ? "card" : "cards"}`;
   // A card change shows its notice next to the cards, where the author is.
   const atCards = one(sp.at) === "cards";
+  const atCover = one(sp.at) === "cover";
   const modules = (n: number) => `${n} ${n === 1 ? "module" : "modules"}`;
   const publishForm = (testid: string) => (
     <form action={publishCourseAction} className="inline">
@@ -102,7 +104,7 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
         <h1 data-testid="course-title">
           {course.title} <span className={`badge ${course.status}`}>{course.status}</span>
         </h1>
-        {atCards ? null : <Notices error={one(sp.error)} done={one(sp.done)} detail={one(sp.detail)} />}
+        {atCards || atCover ? null : <Notices error={one(sp.error)} done={one(sp.done)} detail={one(sp.detail)} />}
 
         <section
           className={pending ? "card publication-pending" : "card"}
@@ -159,37 +161,14 @@ export default async function StudioCoursePage({ params, searchParams }: Props) 
           </button>
         </form>
 
-        <form action={editCourseAction} className="card" data-testid="course-cover-form">
-          <h2>Cover image</h2>
-          <p className="muted">
-            Optional. Shown on the right of the course page header and on the courses list: an https address of an image
-            on another site. Leave the address empty to remove it.
-          </p>
-          <input type="hidden" name="id" value={course.id} />
-          <input type="hidden" name="revision" value={course.draftRevisionId} />
-          <input type="hidden" name="op" value="cover" />
-          {course.cover.url ? (
-            <img className="studio-cover-preview" src={course.cover.url} alt="" referrerPolicy="no-referrer" />
-          ) : null}
-          <label>
-            Image address
-            <input
-              name="url"
-              type="url"
-              inputMode="url"
-              placeholder="https://…"
-              defaultValue={course.cover.url}
-              maxLength={2000}
-            />
-          </label>
-          <label>
-            Alt text <span className="muted">(what the image shows, for screen readers)</span>
-            <input name="alt" defaultValue={course.cover.alt} maxLength={COURSE_LIMITS.coverAlt} />
-          </label>
-          <button type="submit" className="secondary" data-testid="save-cover">
-            Save cover
-          </button>
-        </form>
+        <CoverForm
+          key={course.draftRevisionId}
+          courseId={course.id}
+          revisionId={course.draftRevisionId}
+          cover={course.cover}
+          altLimit={COURSE_LIMITS.coverAlt}
+        />
+        {atCover ? <Notices error={one(sp.error)} done={one(sp.done)} detail={one(sp.detail)} /> : null}
 
         <datalist id="lesson-choices">
           {choices.map((a) => (
