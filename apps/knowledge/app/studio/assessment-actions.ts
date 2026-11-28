@@ -51,6 +51,38 @@ export async function saveSettingsAction(formData: FormData) {
   back(courseId, r.ok ? { done: "assessment_settings_saved" } : { error: `assessment_${r.error}` }, "settings");
 }
 
+/** "New assessment" on the dashboard: go to the chosen course's assessment, at the AI generator. */
+export async function startAssessmentAction(formData: FormData) {
+  const courseId = field(formData, "course");
+  if (!isUuid(courseId)) redirect("/studio/assessments?error=assessment_pick_course");
+  redirect(`/studio/courses/${courseId}/assessment#generate`);
+}
+
+/** Open or close an assessment from the Assessments dashboard, keeping its other settings; back to the dashboard. */
+export async function setAssessmentStatusAction(formData: FormData) {
+  const courseId = field(formData, "course");
+  if (!isUuid(courseId)) redirect("/studio/assessments?error=course_not_found");
+  const g = await studioGate();
+  if (!g.ok) redirect(g.status === 401 ? "/studio" : `/studio/assessments?error=${g.error}`);
+  const status = field(formData, "status") === "open" ? "open" : "draft";
+  const r = await updateSettings(await db(), g.actor, {
+    courseId,
+    version: int(formData, "version"),
+    status,
+    questionsPerAttempt: int(formData, "perAttempt"),
+    passPercent: int(formData, "passPercent"),
+  });
+  refresh();
+  revalidatePath("/studio/assessments");
+  redirect(
+    `/studio/assessments?${new URLSearchParams(
+      r.ok
+        ? { done: status === "open" ? "assessment_opened" : "assessment_closed" }
+        : { error: `assessment_${r.error}`, course: courseId },
+    )}`,
+  );
+}
+
 function parseOptions(raw: string): QuestionOption[] {
   try {
     const v: unknown = JSON.parse(raw);

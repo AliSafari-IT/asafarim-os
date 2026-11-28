@@ -65,3 +65,12 @@ test("home page screenshots", async ({ browser }) => {
     }
   }
 });
+
+test("on a phone the top bar's links fold into a menu that includes Assessments", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/");
+  await expect(page.getByTestId("assessments-nav")).toBeHidden();
+  await page.getByTestId("nav-menu").locator("summary").click();
+  await page.getByTestId("nav-menu").getByRole("link", { name: "Assessments" }).click();
+  await expect(page).toHaveURL(/\/assessments$/);
+});

@@ -75,3 +75,24 @@ test("a learner takes a course assessment and sees where to study more", async (
   await expect(page.getByTestId("attempt-list").locator("li")).toHaveCount(1);
   await capture(page, "insights");
 });
+
+test("Assessments in the top bar lists what can be taken, and where the learner stands", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("assessments-nav").click();
+  await expect(page).toHaveURL(/\/assessments$/);
+  const card = page.getByTestId("available-assessment").filter({ hasText: "Ship a web app" });
+  await expect(card).toContainText("Sign in to take it.");
+
+  await signIn(page, "e2e-newcomer");
+  await page.goto("/assessments");
+  await expect(card).toContainText("Not taken yet.");
+  await card.getByRole("link", { name: "Start" }).click();
+  await expect(page).toHaveURL(/\/courses\/ship-a-web-app\/assessment$/);
+
+  // The learner from the first test has a result: it shows, with the retake lock, and links to the insights.
+  await signIn(page, "e2e-learner");
+  await page.goto("/assessments");
+  await expect(page.getByTestId("my-assessments")).toContainText("Ship a web app");
+  await expect(card).toContainText("Next attempt from");
+  await capture(page, "assessments-home");
+});

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { createCourseAction } from "../course-actions";
 import { Notices } from "@/components/Notices";
 import { Pager } from "@/components/Pager";
+import { StudioTabs } from "@/components/StudioTabs";
 import { TopBar } from "@/components/TopBar";
 import { listStudioCourses, type CourseStatus } from "@/lib/courses";
 import { db } from "@/lib/db";
@@ -50,6 +51,7 @@ export default async function StudioCourses({ searchParams }: Props) {
           <Link href="/studio">← Studio</Link>
         </p>
         <h1>Courses</h1>
+        <StudioTabs actor={g.actor} current="courses" />
         <Notices error={one(sp.error)} done={one(sp.done)} />
         {canCreate ? (
           <form action={createCourseAction} className="card" data-testid="new-course">

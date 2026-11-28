@@ -1,7 +1,7 @@
 {
   "id": "knowledge",
   "name": "ASafariM Knowledge",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "platform": ">=0.1 <1",
   "owner": "ASafariM Digital",
   "domains": {
@@ -30,6 +30,7 @@
       "/articles/**",
       "/courses",
       "/courses/**",
+      "/assessments",
       "/search",
       "/topics/**",
       "/api/public/**",
@@ -149,6 +150,10 @@
       {
         "label": "Courses",
         "href": "/courses"
+      },
+      {
+        "label": "Assessments",
+        "href": "/assessments"
       },
       {
         "label": "Studio",

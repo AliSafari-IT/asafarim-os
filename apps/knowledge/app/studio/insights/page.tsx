@@ -6,6 +6,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { InsightsView } from "@/components/InsightsView";
 import { Notices } from "@/components/Notices";
+import { StudioTabs } from "@/components/StudioTabs";
 import { TopBar } from "@/components/TopBar";
 import { getInsights, parsePeriod } from "@/lib/analytics/store";
 import { db } from "@/lib/db";
@@ -46,6 +47,7 @@ export default async function InsightsPage({ searchParams }: Props) {
           <Link href="/studio">← Studio</Link>
         </p>
         <h1>Insights</h1>
+        <StudioTabs actor={g.actor} current="insights" />
         {insights ? (
           <InsightsView insights={insights} siteWide={siteWide} />
         ) : (

@@ -42,7 +42,7 @@ import {
 } from "./assessment-core";
 import { getPublishedCourse, type PublishedCourse } from "./courses";
 import { checkCoverSvg, checkImageUrl, isAssetId } from "./media/validate";
-import { canManageCourse, seesAll, type Actor } from "./policy";
+import { canCreateCourse, canManageCourse, seesAll, seesAllCourses, type Actor } from "./policy";
 
 type Pool = Pick<pg.Pool, "connect" | "query">;
 type Client = Pick<pg.PoolClient, "query">;
@@ -901,4 +901,119 @@ export async function listMyAssessments(pool: Pick<Pool, "query">, subject: stri
     latestAt: r.latest_at,
     nextAttemptAt: nextAttemptAt(r.latest_at),
   }));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Overviews: the studio's Assessments dashboard and the learner's list of assessments to take
+
+export interface StudioAssessmentRow {
+  courseId: string;
+  slug: string;
+  title: string;
+  courseStatus: "draft" | "published" | "withdrawn";
+  /** null: nobody has started an assessment for this course yet. */
+  status: AssessmentStatus | null;
+  version: number;
+  questionsPerAttempt: number;
+  passPercent: number;
+  active: number;
+  drafts: number;
+  attempts: number;
+  learners: number;
+  /** Mean score of submitted attempts, 0 to 100; null before the first one. */
+  average: number | null;
+  /** Share of submitted attempts at or above the pass mark they were taken with, 0 to 100. */
+  passRate: number | null;
+  lastAttemptAt: Date | null;
+  updatedAt: Date;
+}
+
+/**
+ * Every course this person may manage, with its assessment at a glance: their own courses, or every course for
+ * someone who manages them all. Courses without an assessment are listed too, so one can be started from here.
+ */
+export async function listStudioAssessments(pool: Pick<Pool, "query">, actor: Actor): Promise<StudioAssessmentRow[]> {
+  if (!canCreateCourse(actor)) return [];
+  const { rows } = await pool.query<{
+    course_id: string;
+    slug: string;
+    title: string;
+    published_revision_id: string | null;
+    withdrawn_at: Date | null;
+    status: AssessmentStatus | null;
+    version: number | null;
+    questions_per_attempt: number | null;
+    pass_percent: number | null;
+    active: number;
+    drafts: number;
+    attempts: number;
+    learners: number;
+    average: number | null;
+    passed: number;
+    last_attempt_at: Date | null;
+    updated_at: Date;
+  }>(
+    `SELECT c.id AS course_id, c.slug, r.title, c.published_revision_id, c.withdrawn_at,
+            a.status, a.version, a.questions_per_attempt, a.pass_percent,
+            coalesce(q.active, 0)::int AS active, coalesce(q.drafts, 0)::int AS drafts,
+            coalesce(t.attempts, 0)::int AS attempts, coalesce(t.learners, 0)::int AS learners,
+            t.average, coalesce(t.passed, 0)::int AS passed, t.last_attempt_at,
+            greatest(c.updated_at, a.updated_at) AS updated_at
+     FROM courses c
+     JOIN course_revisions r ON r.id = c.draft_revision_id
+     LEFT JOIN assessments a ON a.course_id = c.id
+     LEFT JOIN (
+       SELECT course_id, count(*) FILTER (WHERE status = 'active') AS active, count(*) FILTER (WHERE status = 'draft') AS drafts
+       FROM assessment_questions GROUP BY course_id
+     ) q ON q.course_id = c.id
+     LEFT JOIN (
+       SELECT course_id, count(*) AS attempts, count(DISTINCT subject) AS learners, round(avg(score))::int AS average,
+              count(*) FILTER (WHERE score >= pass_percent) AS passed, max(submitted_at) AS last_attempt_at
+       FROM assessment_attempts WHERE submitted_at IS NOT NULL GROUP BY course_id
+     ) t ON t.course_id = c.id
+     WHERE $1::boolean OR c.owner_subject = $2
+     ORDER BY (a.status = 'open') DESC NULLS LAST, (a.course_id IS NOT NULL) DESC, greatest(c.updated_at, a.updated_at) DESC, c.id
+     LIMIT 500`,
+    [seesAllCourses(actor), actor.subject],
+  );
+  return rows.map((r) => ({
+    courseId: r.course_id,
+    slug: r.slug,
+    title: r.title,
+    courseStatus: r.published_revision_id ? "published" : r.withdrawn_at ? "withdrawn" : "draft",
+    status: r.status,
+    version: r.version ?? 0,
+    questionsPerAttempt: r.questions_per_attempt ?? DEFAULT_SETTINGS.questionsPerAttempt,
+    passPercent: r.pass_percent ?? DEFAULT_SETTINGS.passPercent,
+    active: r.active,
+    drafts: r.drafts,
+    attempts: r.attempts,
+    learners: r.learners,
+    average: r.attempts ? r.average : null,
+    passRate: r.attempts ? Math.round((100 * r.passed) / r.attempts) : null,
+    lastAttemptAt: r.last_attempt_at,
+    updatedAt: r.updated_at,
+  }));
+}
+
+export interface AvailableAssessment {
+  slug: string;
+  title: string;
+  /** Questions an attempt asks. */
+  questions: number;
+}
+
+/** Published courses whose assessment a signed-in learner can take now, by course title. */
+export async function listAvailableAssessments(pool: Pick<Pool, "query">): Promise<AvailableAssessment[]> {
+  const { rows } = await pool.query<{ slug: string; title: string }>(
+    `SELECT c.slug, r.title FROM assessments a
+     JOIN courses c ON c.id = a.course_id JOIN course_revisions r ON r.id = c.published_revision_id
+     WHERE a.status = 'open'
+       AND (SELECT count(*) FROM assessment_questions q WHERE q.course_id = a.course_id AND q.status = 'active') >= $1
+     ORDER BY lower(r.title), c.slug LIMIT 100`,
+    [ASSESSMENT_LIMITS.minPerAttempt],
+  );
+  // The course page's own check (only questions about lessons that are public now) decides the final count.
+  const found = await Promise.all(rows.map(async (r) => ({ ...r, teaser: await assessmentTeaser(pool, r.slug) })));
+  return found.flatMap((f) => (f.teaser ? [{ slug: f.slug, title: f.title, questions: f.teaser.questions }] : []));
 }

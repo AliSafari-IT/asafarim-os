@@ -5,6 +5,7 @@ import Link from "next/link";
 import { forbidden } from "next/navigation";
 import { createTagAction, createTopicAction } from "../actions";
 import { Notices } from "@/components/Notices";
+import { StudioTabs } from "@/components/StudioTabs";
 import { TopBar } from "@/components/TopBar";
 import { db } from "@/lib/db";
 import { canManageTaxonomy } from "@/lib/policy";
@@ -40,6 +41,7 @@ export default async function TaxonomyPage({ searchParams }: Props) {
           <Link href="/studio">← Studio</Link>
         </p>
         <h1>Topics and tags</h1>
+        <StudioTabs actor={g.actor} current="taxonomy" />
         <Notices error={error} done={done} detail={detail} />
 
         <section className="card" data-testid="topics">

@@ -105,11 +105,15 @@ export default async function StudioAssessmentPage({ params, searchParams }: Pro
     <>
       <TopBar next={base} />
       <main className="wide">
-        <p>
-          <Link href={`/studio/courses/${course.id}`}>← {course.title}</Link>
-        </p>
+        <nav className="breadcrumbs" aria-label="Breadcrumb">
+          <Link href="/studio/assessments" data-testid="back-to-assessments">
+            ← Assessments
+          </Link>
+          <span aria-hidden="true"> · </span>
+          <Link href={`/studio/courses/${course.id}`}>{course.title}</Link>
+        </nav>
         <h1 data-testid="assessment-title">
-          Assessment{" "}
+          {course.title}: assessment{" "}
           <span className={`badge ${settings.status === "open" ? "published" : ""}`}>
             {settings.status === "open" ? "open" : "closed"}
           </span>
@@ -155,42 +159,6 @@ export default async function StudioAssessmentPage({ params, searchParams }: Pro
           </div>
         </section>
 
-        <form action={saveSettingsAction} className="card" id="settings" data-testid="assessment-settings">
-          <h2>Settings</h2>
-          <input type="hidden" name="course" value={course.id} />
-          <input type="hidden" name="version" value={settings.version} />
-          <div className="editor-grid">
-            <label>
-              Learners
-              <select name="status" defaultValue={settings.status} data-testid="assessment-status">
-                <option value="draft">Closed (only you see it)</option>
-                <option value="open">Open to learners</option>
-              </select>
-            </label>
-            <label>
-              Questions per attempt
-              <input
-                type="number"
-                name="perAttempt"
-                min={ASSESSMENT_LIMITS.minPerAttempt}
-                max={ASSESSMENT_LIMITS.maxPerAttempt}
-                defaultValue={settings.questionsPerAttempt}
-                required
-              />
-            </label>
-            <label>
-              Pass mark (%)
-              <input type="number" name="passPercent" min={1} max={100} defaultValue={settings.passPercent} required />
-            </label>
-          </div>
-          {course.status !== "published" ? (
-            <p className="muted">The course isn&apos;t published yet: learners will see the assessment once it is.</p>
-          ) : null}
-          <button type="submit" className="secondary" data-testid="save-settings">
-            Save settings
-          </button>
-        </form>
-
         <GenerateQuestionsForm courseId={course.id} lessons={lessons} aiOn={aiConfigFromEnv() !== null} />
 
         {creating || editQuestion ? (
@@ -214,8 +182,8 @@ export default async function StudioAssessmentPage({ params, searchParams }: Pro
               </span>
             </h2>
             <div className="actions">
-              <Link className="button-link" href={`${base}?new=1#editor`} data-testid="new-question">
-                + New question
+              <Link className="button-link secondary-link" href={`${base}?new=1#editor`} data-testid="new-question">
+                + Write a question yourself
               </Link>
               {drafts > 0 ? (
                 <Op op="approve_drafts" label={`Approve all ${drafts} drafts`} testid="approve-drafts" />
@@ -345,6 +313,42 @@ export default async function StudioAssessmentPage({ params, searchParams }: Pro
             </ol>
           )}
         </section>
+
+        <form action={saveSettingsAction} className="card" id="settings" data-testid="assessment-settings">
+          <h2>Settings</h2>
+          <input type="hidden" name="course" value={course.id} />
+          <input type="hidden" name="version" value={settings.version} />
+          <div className="editor-grid">
+            <label>
+              Learners
+              <select name="status" defaultValue={settings.status} data-testid="assessment-status">
+                <option value="draft">Closed (only you see it)</option>
+                <option value="open">Open to learners</option>
+              </select>
+            </label>
+            <label>
+              Questions per attempt
+              <input
+                type="number"
+                name="perAttempt"
+                min={ASSESSMENT_LIMITS.minPerAttempt}
+                max={ASSESSMENT_LIMITS.maxPerAttempt}
+                defaultValue={settings.questionsPerAttempt}
+                required
+              />
+            </label>
+            <label>
+              Pass mark (%)
+              <input type="number" name="passPercent" min={1} max={100} defaultValue={settings.passPercent} required />
+            </label>
+          </div>
+          {course.status !== "published" ? (
+            <p className="muted">The course isn&apos;t published yet: learners will see the assessment once it is.</p>
+          ) : null}
+          <button type="submit" className="secondary" data-testid="save-settings">
+            Save settings
+          </button>
+        </form>
       </main>
     </>
   );
