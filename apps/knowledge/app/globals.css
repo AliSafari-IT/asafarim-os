@@ -1173,6 +1173,28 @@ main.home {
 .article-card.featured .article-summary {
   -webkit-line-clamp: 4;
 }
+/* A card whose article has an image (lib/thumbnail.ts): a round picture on the left, the text in a column beside it. */
+.article-card.has-thumb {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+.article-thumb {
+  flex: none;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+}
+.article-card-body {
+  flex: 1;
+  min-width: 0;
+}
+.article-card-body > :last-child {
+  margin-bottom: 0;
+}
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -1321,6 +1343,13 @@ main button.share-btn:hover {
   }
   .article-card.featured h2 {
     font-size: 1.45rem;
+  }
+  .article-card.has-thumb {
+    gap: 14px;
+  }
+  .article-thumb {
+    width: 64px;
+    height: 64px;
   }
 }
 .home-actions {

@@ -4,7 +4,8 @@
  *
  * Seeded: four published articles; a published course "Ship a web app" with three lessons in two modules, plus a
  * fourth lesson whose article is withdrawn after the course was published, and three study cards; then a new draft of the first lesson's
- * article, which the published course must not show. And an article with a YouTube video (#359).
+ * article, which the published course must not show. And an article with a YouTube video (#359), and one whose
+ * first image is SVG code (the home page's card thumbnail).
  */
 import pg from "pg";
 import { createArticle, publishRevision, saveDraft, withdrawArticle } from "../lib/content";
@@ -120,6 +121,29 @@ export default async function seed() {
       }),
     );
     ok(await publishRevision(pool, author, { id: demo.id, revisionId: demo.revisionId }));
+
+    // The home page's card thumbnail: an article whose first image is SVG code (no network needed to show it).
+    const picture = parseDoc({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "A picture says it all." }] },
+        {
+          type: "image",
+          attrs: {
+            svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120"><rect width="200" height="120" fill="#0b6bcb"/><circle cx="150" cy="40" r="22" fill="#ffd166"/><path d="M0 120 70 50l40 40 30-25 60 55z" fill="#06d6a0"/></svg>',
+            alt: "A landscape with a sun over green hills",
+          },
+        },
+      ],
+    });
+    if (!picture.ok) throw new Error(picture.error);
+    const pictured = ok(
+      await createArticle(pool, author, {
+        slug: "picture-post",
+        draft: { title: "Picture post", summary: "An article with an image.", body: picture.text, doc: picture.doc },
+      }),
+    );
+    ok(await publishRevision(pool, author, { id: pictured.id, revisionId: pictured.revisionId }));
   } finally {
     await pool.end();
   }
