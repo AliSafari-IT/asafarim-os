@@ -20,7 +20,7 @@ import type pg from "pg";
 import { pageOf, PAGE_SIZE, type Page } from "../content";
 import { decodeCursor } from "../cursor";
 import { mediaAssetIds, type Doc } from "../doc";
-import { canCreate, canView, seesAll, type Actor } from "../policy";
+import { canCreate, canManageCourse, canView, seesAll, type Actor } from "../policy";
 import type { MediaStore } from "./store";
 import { checkUploadRequest, isAssetId, SNIFF_BYTES, sniffMatches, type MediaKind, type MediaType } from "./validate";
 
@@ -221,7 +221,14 @@ const PUBLIC_USE = `
              JOIN course_lessons l ON l.item_revision_id = rm.revision_id
              JOIN courses co ON co.published_revision_id = l.revision_id
              JOIN content_items i ON i.id = l.item_id AND i.published_revision_id IS NOT NULL
-             WHERE rm.asset_id = a.id)`;
+             WHERE rm.asset_id = a.id)
+  OR EXISTS (SELECT 1 FROM assessment_questions q
+             JOIN assessments s ON s.course_id = q.course_id AND s.status = 'open'
+             JOIN courses co ON co.id = q.course_id AND co.published_revision_id IS NOT NULL
+             WHERE q.image_asset_id = a.id AND q.status = 'active')`;
+
+/** Assessment questions that show it (lib/assessments.ts): like a revision's use, it keeps the asset. */
+const QUESTION_USE = "EXISTS (SELECT 1 FROM assessment_questions q WHERE q.image_asset_id = a.id)";
 
 /**
  * The asset `actor` (null for a guest) may read, with whether it is public; null otherwise (missing, not ready, or
@@ -244,6 +251,14 @@ export async function readableAsset(
   if (row.is_public) return { asset, isPublic: true };
   if (!actor) return null;
   if (actor.subject === asset.ownerSubject || seesAll(actor)) return { asset, isPublic: false };
+  // A course manager previewing an image a co-manager put on one of the course's assessment questions.
+  const managed = await pool.query<{ owner_subject: string }>(
+    `SELECT DISTINCT co.owner_subject FROM assessment_questions q JOIN courses co ON co.id = q.course_id
+     WHERE q.image_asset_id = $1`,
+    [id],
+  );
+  if (managed.rows.some((r) => canManageCourse(actor, { ownerSubject: r.owner_subject })))
+    return { asset, isPublic: false };
   // Someone who may see an article that uses it (its owner, reading an editor's image in their own draft).
   const { rows } = await pool.query<{ owner_subject: string }>(
     `SELECT DISTINCT i.owner_subject FROM content_revision_media rm
@@ -269,7 +284,8 @@ export async function listLibrary(
   const after = decodeCursor(opts.after);
   const { rows } = await pool.query<AssetRow & { uses: number; at_key: string }>(
     `SELECT a.*, a.created_at::text AS at_key,
-            (SELECT count(*)::int FROM content_revision_media rm WHERE rm.asset_id = a.id) AS uses
+            (SELECT count(*)::int FROM content_revision_media rm WHERE rm.asset_id = a.id)
+              + (SELECT count(*)::int FROM assessment_questions q WHERE q.image_asset_id = a.id) AS uses
      FROM media_assets a
      WHERE a.owner_subject = $1 AND a.status = 'ready' AND ($2::text IS NULL OR a.kind = $2)
        AND ($3::timestamptz IS NULL OR (a.created_at, a.id) < ($3::timestamptz, $4::text))
@@ -307,7 +323,11 @@ export async function deleteAsset(
     const row = (await c.query<AssetRow>("SELECT * FROM media_assets WHERE id = $1 FOR UPDATE", [id])).rows[0];
     if (!row || row.status === "deleting" || (row.owner_subject !== actor.subject && !seesAll(actor)))
       return { ok: false, error: "not_found" } as const;
-    const used = await c.query("SELECT 1 FROM content_revision_media WHERE asset_id = $1 LIMIT 1", [id]);
+    const used = await c.query(
+      `SELECT 1 FROM content_revision_media WHERE asset_id = $1
+       UNION ALL SELECT 1 FROM assessment_questions WHERE image_asset_id = $1 LIMIT 1`,
+      [id],
+    );
     if (used.rowCount) return { ok: false, error: "media_in_use" } as const;
     await markDeleting(c, id);
     await audit(c, `user:${actor.subject}`, "media.deleted", id);
@@ -335,6 +355,7 @@ export async function cleanupMedia(pool: Pool, store: MediaStore, now = new Date
           OR (a.status IN ('pending', 'rejected') AND a.created_at < $1)
           OR (a.status = 'ready' AND a.created_at < $2
               AND NOT EXISTS (SELECT 1 FROM content_revision_media rm WHERE rm.asset_id = a.id)
+              AND NOT ${QUESTION_USE}
               AND NOT EXISTS (SELECT 1 FROM draft_autosaves d WHERE strpos(d.doc::text, a.id) > 0))
        ORDER BY a.created_at LIMIT 500
        FOR UPDATE SKIP LOCKED`,

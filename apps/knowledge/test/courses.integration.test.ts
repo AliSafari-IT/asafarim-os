@@ -11,6 +11,7 @@ import {
   createCourse,
   editCourse,
   getPublishedCards,
+  coverSrc,
   getPublishedCourse,
   getPublishedLesson,
   getStudioCourse,
@@ -363,6 +364,7 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
     ]);
     expect((await getStudioCourse(pool, erin, c.id))!.cover).toEqual({
       url: "https://images.example.org/a.png",
+      svg: "",
       alt: "A chart",
     });
     ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev, publication: await shown(erin, c.id) }));
@@ -374,9 +376,63 @@ describe.skipIf(!ADMIN_URL)("courses on PostgreSQL", () => {
       ).toEqual({ ok: false, error: "invalid_cover" });
     }
     await edit(erin, c.id, [{ op: "cover", url: "", alt: "ignored" }]);
-    expect((await getStudioCourse(pool, erin, c.id))!.cover).toEqual({ url: "", alt: "" });
+    expect((await getStudioCourse(pool, erin, c.id))!.cover).toEqual({ url: "", svg: "", alt: "" });
     // Guests keep the published cover until the next publish.
     expect((await getPublishedCourse(pool, "covered"))!.cover.url).toBe("https://images.example.org/a.png");
+  });
+
+  it("takes pasted SVG code as a cover, refuses unsafe SVG, and keeps only one cover source", async () => {
+    const c = ok(await createCourse(pool, erin, { slug: "svg-covered", title: "SVG covered" }));
+    let rev = await edit(erin, c.id, [
+      { op: "add_module", title: "A" },
+      { op: "add_lesson", module: 0, articleSlug: "intro" },
+      { op: "cover", url: "https://images.example.org/a.png", alt: "" },
+      {
+        op: "cover",
+        url: "https://ignored.example.org/b.png",
+        svg: ' <svg viewBox="0 0 4 3"><defs><linearGradient id="g"/></defs><rect fill="url(#g)" width="4" height="3"/><use href="#g"/></svg> ',
+        alt: "Shapes",
+      },
+    ]);
+    const cover = (await getStudioCourse(pool, erin, c.id))!.cover;
+    expect(cover.url).toBe("");
+    expect(cover.alt).toBe("Shapes");
+    expect(cover.svg).toContain('xmlns="http://www.w3.org/2000/svg"');
+    expect(coverSrc(cover)).toMatch(/^data:image\/svg\+xml;charset=utf-8,%3Csvg/);
+    ok(await publishCourse(pool, erin, { id: c.id, revisionId: rev, publication: await shown(erin, c.id) }));
+    expect((await getPublishedCourse(pool, "svg-covered"))!.cover.svg).toBe(cover.svg);
+    expect((await listPublishedCourses(pool)).items.find((s) => s.slug === "svg-covered")!.cover.svg).toBe(cover.svg);
+
+    const refused: [string, string][] = [
+      ["<svg><script>alert(1)</script></svg>", "unsafe_cover_svg"],
+      ['<svg onload="alert(1)"><rect/></svg>', "unsafe_cover_svg"],
+      ['<svg><image href="https://tracker.example.org/x.png"/></svg>', "external_cover_svg"],
+      ['<svg><use xlink:href="other.svg#a"/></svg>', "external_cover_svg"],
+      ['<svg><rect style="fill: url(https://x.example.org/p.svg)"/></svg>', "external_cover_svg"],
+      ["<svg><style>@import 'https://x.example.org/a.css';</style></svg>", "external_cover_svg"],
+      ['<svg><a href="javascript:alert(1)"><rect/></a></svg>', "unsafe_cover_svg"],
+      ["<div>not svg</div>", "invalid_cover_svg"],
+      ["<svg><rect></svg>", "invalid_cover_svg"],
+      [`<svg>${"<rect/>".repeat(20_000)}</svg>`, "cover_svg_too_large"],
+    ];
+    for (const [svg, error] of refused) {
+      expect(
+        await editCourse(pool, erin, {
+          id: c.id,
+          expectedRevisionId: rev,
+          edit: { op: "cover", url: "", svg, alt: "" },
+        }),
+      ).toEqual({ ok: false, error });
+    }
+    // Back to an address: the SVG goes.
+    rev = await edit(erin, c.id, [{ op: "cover", url: "https://images.example.org/c.png", svg: "  ", alt: "" }]);
+    expect((await getStudioCourse(pool, erin, c.id))!.cover).toEqual({
+      url: "https://images.example.org/c.png",
+      svg: "",
+      alt: "",
+    });
+    // The database refuses a revision with both, whatever the code does.
+    await expect(pool.query("UPDATE course_revisions SET cover_svg = '<svg/>' WHERE id = $1", [rev])).rejects.toThrow();
   });
 
   it("pages through course lists without repeating or skipping one", async () => {

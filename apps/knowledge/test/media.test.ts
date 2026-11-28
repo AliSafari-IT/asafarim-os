@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { mediaAssetIds, parseDoc } from "@/lib/doc";
 import {
+  checkCoverSvg,
   checkImageUrl,
   checkSvg,
   checkUploadRequest,
@@ -326,5 +327,56 @@ describe("images without an upload: an https address or SVG code", () => {
 
   it("shows SVG only as a data: URL", () => {
     expect(svgDataUrl("<svg></svg>")).toBe("data:image/svg+xml;charset=utf-8,%3Csvg%3E%3C%2Fsvg%3E");
+  });
+});
+
+describe("a course cover's SVG (checkCoverSvg)", () => {
+  const NS = 'xmlns="http://www.w3.org/2000/svg"';
+
+  it("keeps references inside the picture, however they are written, and url() in visible text", () => {
+    for (const svg of [
+      `<svg ${NS}><defs><linearGradient id="g"/></defs><rect fill="url(#g)"/></svg>`,
+      `<svg ${NS}><rect fill="url( &quot;#g&quot; )"/></svg>`,
+      `<svg ${NS}><rect style="fill: url('#g')"/></svg>`,
+      `<svg ${NS}><rect fill="url(&#x23;g)"/></svg>`,
+      `<svg ${NS}><use href="#a"/><image href="data:image/png;base64,iVBORw0KGgo="/></svg>`,
+      `<svg ${NS}><text>How to use url() and @import in CSS</text></svg>`,
+      `<svg ${NS}><style><![CDATA[ .a { fill: url(#g) } ]]></style></svg>`,
+    ])
+      expect(checkCoverSvg(svg), svg).toEqual({ ok: true, svg });
+  });
+
+  it("refuses references to other files, also when entities hide them", () => {
+    for (const svg of [
+      `<svg ${NS}><image href="https://x.example.org/a.png"/></svg>`,
+      `<svg ${NS} xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="other.svg#a"/></svg>`,
+      `<svg ${NS}><image href="&#104;ttps://x.example.org/a.png"/></svg>`,
+      `<svg ${NS}><rect fill="url(other.svg#g)"/></svg>`,
+      `<svg ${NS}><rect style="fill: url(&quot;https://x.example.org/p.svg&quot;)"/></svg>`,
+      `<svg ${NS}><style>@import "https://x.example.org/a.css";</style></svg>`,
+      `<svg ${NS}><image a=">" href="//x.example.org/a.png"/></svg>`,
+    ])
+      expect(checkCoverSvg(svg), svg).toEqual({ ok: false, error: "svg_external" });
+  });
+
+  it("declares an undeclared xlink prefix (SVG copied out of HTML), and refuses any other undeclared prefix", () => {
+    expect(checkCoverSvg('<svg><defs><rect id="t"/></defs><use xlink:href="#t"/></svg>')).toEqual({
+      ok: true,
+      svg: `<svg xmlns:xlink="http://www.w3.org/1999/xlink" ${NS}><defs><rect id="t"/></defs><use xlink:href="#t"/></svg>`,
+    });
+    const declared = `<svg ${NS} xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="#t"/></svg>`;
+    expect(checkCoverSvg(declared)).toEqual({ ok: true, svg: declared });
+    expect(checkCoverSvg(`<svg ${NS}><rect inkscape:label="a"/></svg>`)).toEqual({ ok: false, error: "svg_invalid" });
+    expect(checkCoverSvg(`<svg ${NS} xml:space="preserve"><rect/></svg>`)).toMatchObject({ ok: true });
+  });
+
+  it("counts a pasted SVG the same in the studio (LF) and after a form submits it (CRLF)", () => {
+    const body = "<rect/>\n".repeat(12_000);
+    const lf = `<svg ${NS}>\n${body}</svg>`;
+    expect(lf.length).toBeLessThan(100_000);
+    const crlf = lf.replace(/\n/g, "\r\n");
+    expect(crlf.length).toBeGreaterThan(100_000);
+    expect(checkCoverSvg(lf)).toEqual({ ok: true, svg: lf });
+    expect(checkCoverSvg(crlf)).toEqual({ ok: true, svg: lf });
   });
 });
